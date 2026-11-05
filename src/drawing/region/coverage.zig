@@ -141,6 +141,12 @@ const Builder = struct {
 
     fn stroke(self: *Builder, path: Path, paint: DisplayList.Pen, transform: g.Transform) !Path {
         const tolerance = try localTolerance(self.options.tolerance, transform);
+        if (paint.profile != null) {
+            var expanded = try pen.profiledOutline(self.allocator, path, &paint, try self.strokeOptions(paint, tolerance));
+            defer expanded.deinit();
+            try self.consume(expanded);
+            return self.region(expanded, transform, .nonzero);
+        }
         var dashed: ?Path = null;
         defer if (dashed) |*value| value.deinit();
         const center = if (paint.dash.len == 0) path else value: {
@@ -180,7 +186,7 @@ const Builder = struct {
         };
         var outline: ?Path = null;
         defer if (outline) |*value| value.deinit();
-        if (styled.style.pen) |paint| if (paint.color.a != 0 and (paint.nib != null or paint.width != 0)) {
+        if (styled.style.pen) |paint| if (paint.color.a != 0 and (paint.needsGeometry() or paint.width != 0)) {
             outline = try self.stroke(styled.path, paint, transform);
         };
         if (fill == null and outline == null) return;

@@ -35,6 +35,7 @@ const Budget = struct {
     fn style(self: *Budget, value: DisplayList.Style) !void {
         if (value.pen) |pen| {
             try self.consume(pen.dash.len);
+            if (pen.profile) |p| try self.consume(p.positions.len);
             if (pen.nib) |nib| if (nib == .polygon) try self.consume(nib.polygon.len);
         }
     }

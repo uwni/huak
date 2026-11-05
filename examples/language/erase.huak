@@ -1,5 +1,5 @@
 import paint.*
-import pen.{pencircle, makepen, profile_outline}
+import pen.{pencircle, makepen}
 
 setup_typst {
     set text(font: "Libertinus Serif", size: 12pt, fill: rgb("#193f43"))
@@ -12,7 +12,7 @@ copper := rgb(0.92,0.54,0.34)
 
 // Each specimen uses the same three layers. The grid lies between the two
 // erased objects. Its fine rules remain visible through every footprint.
-fn specimen(caption:text, detail:text, sweep:path, brush:any = false) -> picture
+fn specimen(caption:text, detail:text, sweep:path, brush:pen) -> picture
     tile := picture()
     drawing tile do
         band := rectangle((0pt,0pt),190pt,44pt) filled ink
@@ -26,17 +26,12 @@ fn specimen(caption:text, detail:text, sweep:path, brush:any = false) -> picture
         +band
         +grid
         +curve
-        if brush == false then
-            erase sweep from [curve, band]
-        else
-            erase sweep from [curve, band] with brush
-        end
+        erase sweep from [curve, band] with brush
     end
 
     sample := picture()
     drawing sample do
-        if brush == false then +sweep filled ink
-        else +draw sweep with brush end
+        +draw sweep with brush
     end
     row := picture()
     drawing row do
@@ -57,9 +52,8 @@ chisel := makepen((-7pt,-2pt) -- (-4pt,-4pt) -- (7pt,2pt) -- (5pt,5pt) -- cycle,
 italic := pencircle(12pt,ink).transformed(scale(1,0.25)).transformed(rotate(35deg))
 broken_italic := pen(ink,cap:"butt",dash:[17pt,8pt],dash_phase:3pt,nib:italic)
 
-// Positions are fractions of traveled arc length. Widths are full physical
-// widths. Both the filled sample and the erased sample use this exact outline.
-pressure := profile_outline(wave,[0,0.22,0.51,0.76,1],[1pt,15pt,3pt,12pt,1pt],"round","round",4,0.025pt)
+// Each stop pairs a fraction of the contour's arc length with a full width.
+pressure := pen(ink,cap:"round",join:"round",profile:[[0,1pt],[0.22,15pt],[0.51,3pt],[0.76,12pt],[1,1pt]])
 
 page := picture(556pt,359pt)
 drawing page do
@@ -74,6 +68,6 @@ drawing page do
     +specimen(typ[*Faceted nib*],typ[#text(size: 9pt)[Four-sided chisel]],corners,chisel) shifted (18pt,172pt)
     +specimen(typ[*Hobby spline*],typ[#text(size: 9pt)[Round nib, 6 pt]],wave,pen(ink,6pt,cap:"round")) shifted (18pt,119pt)
     +specimen(typ[*Italic dashes*],typ[#text(size: 9pt)[Slanted elliptical nib]],wave,broken_italic) shifted (18pt,66pt)
-    +specimen(typ[*Pressure sweep*],typ[#text(size: 9pt)[1 → 15 → 3 → 12 → 1 pt]],pressure) shifted (18pt,13pt)
+    +specimen(typ[*Pressure sweep*],typ[#text(size: 9pt)[1 → 15 → 3 → 12 → 1 pt]],wave,pressure) shifted (18pt,13pt)
 end
 default page

@@ -275,19 +275,41 @@ the separation and error bounds above.
 
 ## Shared monotone-coordinate reduction
 
+The curve-pair dispatcher tries this reduction before it calls TSect. Tests of
+subdivision call TSect directly so the reduction cannot hide a numerical error.
+
 `shared_coordinate.zig` handles equal-degree quadratic or cubic curves whose
 corresponding controls share an exactly equal coordinate. Strictly monotone
 controls make that coordinate injective: equality of curve positions requires
 `t = u`. Matching controls in reverse order instead requires `u = 1 - t`.
-The remaining coordinate difference is a scalar Bézier polynomial, solved by
-the existing `Quad.horizontalIntersect` or `Cubic.horizontalIntersect` helper.
+If all aligned controls also agree in the other coordinate, the curves
+coincide over their full length. Both exact and near queries return the two
+endpoints of that interval, pairing parameters in the matching direction.
+Injectivity rules out additional parameter pairs, including self-crossings.
 
-Every control difference must be finite and exactly representable: TwoDiff's
-low component must be zero. Power-of-two normalization must round-trip each
-difference without loss. A zero polynomial, nonmatching controls, a nonmonotone
-shared coordinate, or any failed arithmetic qualification retains the general
-intersection path and its coincidence semantics. Every solved root also passes
-the original source-point residual predicate before results are committed.
+For a nonzero difference, near queries use the general intersection path to
+retain near-endpoint observations. Exact queries solve the scalar Bézier
+polynomial with `Quad.horizontalIntersect` or `Cubic.horizontalIntersect`.
+Every control difference must be finite, with a zero TwoDiff low component,
+and must round-trip through power-of-two normalization. Nonmatching controls,
+a nonmonotone shared coordinate, or failed arithmetic checks defer to the
+general intersection path. Every solved root also passes the original
+source-point residual predicate before results are committed.
 Parameters stay in the original source domains; stored points are evaluated
 on the first original curve. This reduction uses no caller tolerance or new
 root solver, and does not label isolated roots as coincident intervals.
+
+## Perpendicular probes in TSect
+
+To test coincidence, TSect intersects the other curve with the normal through
+a sampled point. The scalar projection is a cross product: its absolute value
+equals the distance to that line times the length of its direction vector.
+A short tangent used to shrink the residual enough for an inaccurate root to
+pass the scalar check and then fail the point comparison. At `t = 1/4` in the
+regression curve, that disagreement split a continuous overlap into pieces.
+
+TSect divides the normal by `min(1, max(abs(dx), abs(dy)))` and passes the
+origin and direction separately. The resulting normal has length at least
+one and a length at least as large as the input normal. The existing scalar
+threshold therefore bounds geometric distance without relaxing its previous
+limit. A zero tangent has no normal direction.

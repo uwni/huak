@@ -27,17 +27,17 @@ pub const Owner = struct {
         return (@as(u64, self.owner_index) << 32) | (@as(u64, index) + 1);
     }
 
-    pub fn hasExplicitNib(self: *const Owner, index: Scene.Index) bool {
-        return hasNib(self.scene.object(index));
+    pub fn hasGeometricStroke(self: *const Owner, index: Scene.Index) bool {
+        return hasGeometricStrokeInSubtree(self.scene.object(index));
     }
 
-    fn hasNib(object_: Scene.Object) bool {
+    fn hasGeometricStrokeInSubtree(object_: Scene.Object) bool {
         const command = object_.scene.getNode(object_.index) catch return false;
         if (command.* == .path) {
-            if (command.path.style.pen) |pen| if (pen.nib != null) return true;
+            if (command.path.style.pen) |pen| if (pen.needsGeometry()) return true;
         }
         var children = object_.scene.children(object_.index) catch return false;
-        while (children.next()) |child| if (hasNib(child)) return true;
+        while (children.next()) |child| if (hasGeometricStrokeInSubtree(child)) return true;
         return false;
     }
 
@@ -45,7 +45,7 @@ pub const Owner = struct {
         switch (track.property) {
             .path, .stroke_width, .stroke, .fill => {
                 const index = std.math.cast(Scene.Index, track.target - 1) orelse return error.InvalidAnimationTarget;
-                if (self.hasExplicitNib(index)) return error.UnsupportedNibAnimation;
+                if (self.hasGeometricStroke(index)) return error.UnsupportedNibAnimation;
             },
             else => {},
         }

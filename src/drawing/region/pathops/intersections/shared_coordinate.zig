@@ -11,6 +11,9 @@ const Curve = curves.Curve;
 /// the existing scalar intersector solves the remaining coordinate difference.
 pub fn intersect(first: Curve, second: Curve, result: *Intersections) bool {
     if (first == .line or second == .line or std.meta.activeTag(first) != std.meta.activeTag(second)) return false;
+    // Near queries retain TSect's endpoint observations except for a proven
+    // full overlap, which requires matching endpoints in one orientation.
+    if (result.allow_near and !first.first().eql(second.first()) and !first.first().eql(second.last())) return false;
     return alongAxis(.x, first, second, result) or alongAxis(.y, first, second, result);
 }
 
@@ -46,8 +49,17 @@ fn alongAxis(comptime axis: curves.Axis, first: Curve, second: Curve, result: *I
             differences[index] = difference.hi;
             maximum = @max(maximum, @abs(difference.hi));
         }
-        // The zero polynomial retains the original coincidence semantics.
-        if (!shared or maximum == 0) continue;
+        if (!shared) continue;
+        if (maximum == 0) {
+            // The shared coordinate is injective. Identical aligned controls
+            // give one overlapping interval with no other parameter pairs.
+            result.reset();
+            result.setMax(if (first == .cubic) 13 else 8);
+            _ = result.insertCoincident(0, if (reversed) 1 else 0, first.first());
+            _ = result.insertCoincident(1, if (reversed) 0 else 1, first.last());
+            return true;
+        }
+        if (result.allow_near) continue;
         const exponent = std.math.frexp(maximum).exponent;
         var exact_scaling = true;
         for (differences[0..count]) |*difference| {
@@ -107,7 +119,7 @@ test "shared monotone coordinate solves captured false coincidence and overflow 
         if (swapped != 0) std.mem.swap(curves.Cubic, &a, &b);
         const first: Curve = .{ .cubic = a };
         const second: Curve = .{ .cubic = b };
-        var result: Intersections = .{};
+        var result: Intersections = .{ .allow_near = false };
         try std.testing.expect(intersect(first, second, &result));
         try std.testing.expectEqual(@as(usize, 1), result.used);
         const times = [2]f64{ if (reversed & 1 == 0) case.time else 1 - case.time, if (reversed & 2 == 0) case.time else 1 - case.time };
@@ -124,9 +136,9 @@ test "shared monotone coordinate solves captured false coincidence and overflow 
     };
 }
 
-test "shared monotone coordinate leaves nonqualifying and coincident curves on the original path" {
+test "shared coordinate leaves uncertified curves on the subdivision path" {
     const base: curves.Cubic = .{ .points = .{ .{ .x = 0, .y = 1 }, .{ .x = 1, .y = 1 }, .{ .x = 2, .y = 1 }, .{ .x = 3, .y = 1 } } };
-    var result: Intersections = .{ .max = 2 };
+    var result: Intersections = .{ .max = 2, .allow_near = false };
     _ = result.insert(0.25, 0.5, .{ .x = 7, .y = 8 });
     const original = result;
     var second = base;
@@ -148,6 +160,7 @@ test "shared monotone coordinate leaves nonqualifying and coincident curves on t
     second.points[1].y = 0;
     try std.testing.expect(!intersect(.{ .cubic = first }, .{ .cubic = second }, &result));
     try std.testing.expectEqualDeep(original, result);
-    try std.testing.expect(!intersect(.{ .cubic = base }, .{ .cubic = base }, &result));
+    const loop: Curve = .{ .cubic = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 3, .y = 3 }, .{ .x = -2, .y = 3 }, .{ .x = 1, .y = 0 } } } };
+    try std.testing.expect(!intersect(loop, loop, &result));
     try std.testing.expectEqualDeep(original, result);
 }

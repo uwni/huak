@@ -166,30 +166,25 @@ pub fn mostOutside(self: *const Intersections, start: f64, end: f64, origin: Poi
     return result;
 }
 pub fn intersectRay(self: *Intersections, curve: Curve, line: Line) usize {
+    return self.intersectRayFrom(curve, line.points[0], line.points[1].sub(line.points[0]));
+}
+pub fn intersectRayFrom(self: *Intersections, curve: Curve, origin: Point, direction: Point) usize {
     return switch (curve) {
-        .line => |value| self.lineRay(value, line),
-        .quad => |value| self.quadRay(value, line),
-        .cubic => |value| self.cubicRay(value, line),
+        .line => |value| self.lineRayFrom(value, origin, direction),
+        inline .quad, .cubic => |value| line_curve.ray(@TypeOf(value), self, value, origin, direction),
     };
 }
-pub fn quadRay(self: *Intersections, quad: Quad, line: Line) usize {
-    return line_curve.ray(Quad, self, quad, line);
-}
-pub fn cubicRay(self: *Intersections, cubic: Cubic, line: Line) usize {
-    return line_curve.ray(Cubic, self, cubic, line);
-}
-pub fn lineRay(self: *Intersections, a: Line, b: Line) usize {
+fn lineRayFrom(self: *Intersections, a: Line, origin: Point, b_length: Point) usize {
     self.max = 2;
     const a_length = a.points[1].sub(a.points[0]);
-    const b_length = b.points[1].sub(b.points[0]);
     const denominator = b_length.y * a_length.x - a_length.y * b_length.x;
     if (!n.approximatelyZero(denominator)) {
-        const ab = a.points[0].sub(b.points[0]);
+        const ab = a.points[0].sub(origin);
         self.parameters[0][0] = (ab.y * b_length.x - b_length.y * ab.x) / denominator;
         self.parameters[1][0] = (ab.y * a_length.x - a_length.y * ab.x) / denominator;
         self.computePoints(a, 1);
     } else {
-        if (!n.almostEqualUlps(a_length.x * a.points[0].y - a_length.y * a.points[0].x, a_length.x * b.points[0].y - a_length.y * b.points[0].x)) {
+        if (!n.almostEqualUlps(a_length.x * a.points[0].y - a_length.y * a.points[0].x, a_length.x * origin.y - a_length.y * origin.x)) {
             self.used = 0;
             return 0;
         }
@@ -322,9 +317,7 @@ pub fn curveCurve(self: *Intersections, allocator: std.mem.Allocator, first: Cur
         std.mem.swap([13]f64, &self.parameters[0], &self.parameters[1]);
         return count;
     }
-    // The Boolean graph needs TSect's near-end topology. Algebraic
-    // reduction is for callers that reject those optional observations.
-    if (!self.allow_near and @import("intersections/shared_coordinate.zig").intersect(first, second, self)) return self.used;
+    if (@import("intersections/shared_coordinate.zig").intersect(first, second, self)) return self.used;
     // Match SkIntersections' cubic/quad overload: the higher degree
     // curve owns TSect's capacity and the stored parameters are restored
     // to the caller's operand order after subdivision.
@@ -682,12 +675,16 @@ test "TSect rejects curved hull overlaps without a true event" {
     try std.testing.expectEqual(@as(usize, 0), try result.curveCurve(std.testing.allocator, a, b));
 }
 
-test "TSect detects exact coincident cubic endpoints" {
+test "curve dispatch returns exact coincident cubic endpoints under either near policy" {
     const a: Curve = .{ .cubic = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 2 }, .{ .x = 2, .y = 2 }, .{ .x = 3, .y = 0 } } } };
-    var result: Intersections = .{};
-    try std.testing.expectEqual(@as(usize, 2), try result.curveCurve(std.testing.allocator, a, a));
-    try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[0][0..result.used]);
-    try std.testing.expectEqual(@as(u16, 3), result.coincident[0]);
+    for ([_]bool{ false, true }) |allow_near| for ([_]bool{ false, true }) |reversed| {
+        var result: Intersections = .{ .allow_near = allow_near };
+        const b = if (reversed) a.reverse() else a;
+        try std.testing.expectEqual(@as(usize, 2), try result.curveCurve(std.testing.allocator, a, b));
+        try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[0][0..result.used]);
+        try std.testing.expectEqualSlices(f64, if (reversed) &.{ 1, 0 } else &.{ 0, 1 }, result.parameters[1][0..result.used]);
+        try std.testing.expectEqual([2]u16{ 3, 3 }, result.coincident);
+    };
 }
 
 test "caller near policy retains native graph endpoint observations" {

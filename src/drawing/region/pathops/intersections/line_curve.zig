@@ -8,11 +8,10 @@ const curve_types = @import("../curve.zig");
 const Line = curve_types.Line;
 const Intersections = @import("../Intersections.zig");
 
-pub fn ray(comptime Curve: type, result: *Intersections, curve: Curve, line: Line) usize {
+pub fn ray(comptime Curve: type, result: *Intersections, curve: Curve, origin: Point, direction: Point) usize {
     var rotated = curve;
-    const direction = line.points[1].sub(line.points[0]);
     for (&rotated.points, curve.points) |*out, point| {
-        const relative = point.sub(line.points[0]);
+        const relative = point.sub(origin);
         out.* = .{
             .x = @mulAdd(f64, relative.y, direction.x, -(relative.x * direction.y)),
             .y = if (Curve == curve_types.Cubic) @mulAdd(f64, relative.y, direction.y, relative.x * direction.x) else relative.y * direction.y + relative.x * direction.x,

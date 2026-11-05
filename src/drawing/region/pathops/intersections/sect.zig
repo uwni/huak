@@ -24,9 +24,14 @@ pub const Coincident = struct {
     }
     pub fn setPerp(self: *Coincident, first: Curve, t: f64, point: Point, second: Curve) void {
         const direction = first.dxdyAtT(t);
-        const perpendicular: curves.Line = .{ .points = .{ point, .{ .x = point.x + direction.y, .y = point.y - direction.x } } };
+        // The ray solver checks an absolute projection residual. A short
+        // normal scales that residual down; keep its dominant component at
+        // least one so the projection cannot disguise a spatial error.
+        const scale = @min(1, @max(@abs(direction.x), @abs(direction.y)));
+        if (scale == 0) return self.init();
+        const normal: Point = .{ .x = direction.y / scale, .y = -direction.x / scale };
         var result: Intersections = .{};
-        const used = result.intersectRay(second, perpendicular);
+        const used = result.intersectRayFrom(second, point, normal);
         if (used == 0 or used == 3) {
             self.init();
             return;
@@ -1283,23 +1288,28 @@ pub fn intersect(allocator: Allocator, a: Curve, b: Curve, result: *Intersection
 }
 
 test "TSect exact f64 coincidence retains two endpoints after Cardano cancellation" {
-    // Captured from XOR of a curved dashed square-pen stroke and its source
-    // sections. A different acos rounding broke perpendicular coincidence and
-    // generated more than the original thirteen-candidate capacity.
+    // The first missed perpendicular on Linux was at t=1/4. Exercise TSect
+    // directly so the shared-coordinate reduction cannot mask a bad projection.
     const curve: Curve = .{ .cubic = .{ .points = .{
         .{ .x = -0.024495747539559964, .y = 0.39813037455249123 },
         .{ .x = -0.016348717241902566, .y = 0.3996600153767855 },
         .{ .x = -0.008181573494766448, .y = 0.40097353160273985 },
         .{ .x = 0, .y = 0.4020709232303551 },
     } } };
-    var result: Intersections = .{};
-    try std.testing.expectEqual(@as(usize, 2), try intersect(std.testing.allocator, curve, curve, &result));
-    try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[0][0..result.used]);
-    try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[1][0..result.used]);
-    try std.testing.expectEqual(@as(u16, 3), result.coincident[0]);
-    try std.testing.expect(!result.overflow);
-    for (result.points[0..result.used], result.parameters[0][0..result.used]) |point, time| {
-        try std.testing.expect(point.eql(curve.ptAtT(time)));
+    for ([_]bool{ false, true }) |reversed| {
+        const other = if (reversed) curve.reverse() else curve;
+        var result: Intersections = .{};
+        try std.testing.expectEqual(@as(usize, 2), try intersect(std.testing.allocator, curve, other, &result));
+        try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[0][0..result.used]);
+        try std.testing.expectEqualSlices(f64, if (reversed) &.{ 1, 0 } else &.{ 0, 1 }, result.parameters[1][0..result.used]);
+        try std.testing.expectEqual([2]u16{ 3, 3 }, result.coincident);
+        try std.testing.expect(!result.overflow);
+        for (result.points[0..result.used], result.parameters[0][0..result.used]) |point, time| {
+            try std.testing.expect(point.eql(curve.ptAtT(time)));
+        }
+        var normal_hit: Coincident = .{};
+        normal_hit.setPerp(curve, 0.25, curve.ptAtT(0.25), other);
+        try std.testing.expect(normal_hit.match);
     }
 }
 

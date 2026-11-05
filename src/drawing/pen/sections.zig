@@ -27,6 +27,7 @@ const Run = struct { first: usize, end: usize, closed: bool };
 /// closed ranges. Union coverage before clipping the original stroke once.
 pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, paint: DisplayList.Pen, ranges: []const Range, options: outline.Options) ![]Path {
     try DisplayList.validateStyle(&.{ .pen = paint });
+    if (paint.profile != null) return error.UnsupportedProfileSections;
     if (ranges.len > options.max_segments or source.segments.items.len > options.max_segments *| 2 +| 1) return error.StrokeWorkLimit;
     {
         var contours: std.ArrayList(Contour) = .empty;

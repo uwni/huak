@@ -105,24 +105,13 @@ pub fn strokeTracing(allocator: Allocator, path: Path, width: f64, options: Opti
 /// construction uses the existing bounded centerline subdivision; Boolean
 /// operations on ordinary input curves remain independent of subdivision.
 pub fn profileTracing(allocator: Allocator, path: Path, positions: []const f64, widths: []const f64, options: Options) !Path {
-    if (positions.len < 2 or positions.len != widths.len) return error.InvalidProfile;
+    const profile: @import("../pen/WidthProfile.zig") = .{ .positions = positions, .widths = widths };
     if (positions.len > options.max_vertices) return error.GeometryWorkLimit;
     try validate(options);
     if (path.segments.items.len > options.max_segments *| 2 +| 1) return error.GeometryWorkLimit;
-    if (positions[0] != 0 or positions[positions.len - 1] != 1) return error.InvalidProfile;
-    var slope: f64 = 0;
-    var constant = true;
-    for (positions, widths, 0..) |position, width, index| {
-        if (!std.math.isFinite(position) or !std.math.isFinite(width) or width < 0) return error.InvalidProfile;
-        constant = constant and width == widths[0];
-        if (index == 0) continue;
-        if (position <= positions[index - 1]) return error.InvalidProfile;
-        const change = @abs(width - widths[index - 1]) / (position - positions[index - 1]);
-        if (!std.math.isFinite(change)) return error.InvalidProfile;
-        slope = @max(slope, change);
-    }
+    const slope = try profile.maxSlope();
     for (path.segments.items) |segment| if (segment == .close and widths[0] != widths[widths.len - 1]) return error.DiscontinuousClosedProfile;
-    if (constant) {
+    if (slope == 0) {
         if (path.segments.items.len == 0) return Path.init(allocator);
         return strokeTracing(allocator, path, widths[0], options);
     }

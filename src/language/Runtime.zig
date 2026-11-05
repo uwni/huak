@@ -409,11 +409,11 @@ fn place(self: *Runtime, destination: Value, value: Value, transform: ?g.Transfo
     const source = try self.objectValue(value, true);
     if (try source.owner.scene.parentObject(source.index)) |parent| _ = try self.objectValue(objectHandle(parent), true);
     // A new descendant must satisfy the tracks on all destination ancestors.
-    if (source.owner.hasExplicitNib(source.index)) try checkNibAncestors(target);
+    if (source.owner.hasGeometricStroke(source.index)) try checkStrokeAncestors(target);
     try target.owner.scene.place(target.index, source.owner.scene.object(source.index), transform);
     return value;
 }
-fn checkNibAncestors(instance: Instance) !void {
+fn checkStrokeAncestors(instance: Instance) !void {
     var ancestor: ?Scene.Object = instance.owner.scene.object(instance.index);
     while (ancestor) |node| : (ancestor = try node.scene.parentObject(node.index)) {
         const owner: *SceneOwner = @fieldParentPtr("scene", node.scene);
@@ -711,7 +711,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const target = instance.owner;
             if (id == .animate) {
                 const property = try string(args[1]);
-                if ((std.mem.eql(u8, property, "path") or std.mem.eql(u8, property, "stroke_width") or std.mem.eql(u8, property, "stroke") or std.mem.eql(u8, property, "fill")) and target.hasExplicitNib(instance.index)) return error.UnsupportedNibAnimation;
+                if ((std.mem.eql(u8, property, "path") or std.mem.eql(u8, property, "stroke_width") or std.mem.eql(u8, property, "stroke") or std.mem.eql(u8, property, "fill")) and target.hasGeometricStroke(instance.index)) return error.UnsupportedNibAnimation;
                 try target.animation_state.animate(instance.index, property, try sequence(args[2]), if (hasArgument(args, 3)) try string(args[3]) else "linear", self);
             } else {
                 try target.animation_state.motion(instance.index, args[1], try sequence(args[2]), if (hasArgument(args, 3)) try string(args[3]) else "auto", self);
@@ -730,7 +730,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                     var style = command.path.style.*;
                     if (hasArgument(args, 1)) style.fill = if (args[1] == .boolean and !args[1].boolean) null else try self.color(args[1]);
                     if (hasArgument(args, 2)) style.pen = if (args[2] == .boolean and !args[2].boolean) null else try self.penValue(args[2]);
-                    if (style.pen) |stroke| if (stroke.nib != null) try checkNibAncestors(instance);
+                    if (style.pen) |stroke| if (stroke.needsGeometry()) try checkStrokeAncestors(instance);
                     try instance.owner.scene.setStyle(instance.index, &style);
                 },
                 .object_transform => try instance.owner.scene.applyTransform(instance.index, try self.transformValue(args[1])),
@@ -881,7 +881,31 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 // this constructor independently specifies all paint state.
                 value.nib = try effectiveNib(try self.penValue(args[7]));
             }
-            try DisplayList.validateStyle(&.{ .pen = value });
+            if (hasArgument(args, 8)) {
+                if (hasArgument(args, 1) or value.nib != null or value.dash.len != 0) {
+                    self.native_message = "profile supplies the full width of a solid circular pen; omit width, nib, and dash";
+                    return error.InvalidPen;
+                }
+                const stops = try sequence(args[8]);
+                const positions = try own.alloc(f64, stops.len);
+                const widths = try own.alloc(f64, stops.len);
+                for (stops, positions, widths) |stop, *position, *width| {
+                    const pair = try sequence(stop);
+                    if (pair.len != 2) {
+                        self.native_message = "each pen profile stop needs [fraction, full_width]";
+                        return error.InvalidProfile;
+                    }
+                    position.* = try numeric(pair[0]);
+                    width.* = try lengthPoints(pair[1]);
+                }
+                const profile = try own.create(pen_geometry.WidthProfile);
+                profile.* = .{ .positions = positions, .widths = widths };
+                value.profile = profile;
+            }
+            DisplayList.validateStyle(&.{ .pen = value }) catch |err| {
+                if (err == error.InvalidProfile) self.native_message = "pen profile fractions must increase from 0 to 1 and widths must be finite and nonnegative";
+                return err;
+            };
             return self.store(DisplayList.Pen, &self.pens, value, .pen);
         },
         .pencircle, .pensquare => {
@@ -911,6 +935,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             var options: pen_geometry.StrokeOptions = .{};
             if (hasArgument(args, 2)) options.tolerance = try lengthPoints(args[2]);
             const brush = try self.penValue(args[1]);
+            if (brush.profile != null) return self.pathResult(try pen_geometry.profiledOutline(own, try self.path(args[0]), &brush, options));
             options.cap = brush.cap;
             options.join = brush.join;
             options.miter_limit = brush.miter_limit;
@@ -1390,6 +1415,7 @@ fn validateCanvas(w: f64, h: f64) !void {
 }
 
 fn effectiveNib(value: DisplayList.Pen) !pen_geometry.Nib {
+    if (value.profile != null) return error.ProfileHasNoFixedNib;
     if (value.nib) |nib| return nib;
     if (!std.math.isFinite(value.width) or value.width < 0) return error.InvalidPen;
     return .{ .ellipse = .scaling(value.width, value.width) };
@@ -1792,7 +1818,7 @@ test "animated ancestors constrain placed subtrees and style changes without rej
     _ = try runtime.invoke(a, .animate, &.{ moving, .{ .string = "rotate" }, keys });
     _ = try runtime.invoke(a, .append, &.{ moving, source });
     try std.testing.expect((try testOwner(source).scene.parentObject(source.object.index)).?.eql(testOwner(moving).scene.object(moving.object.index)));
-    try std.testing.expect(testOwner(source).hasExplicitNib(source.object.index));
+    try std.testing.expect(testOwner(source).hasGeometricStroke(source.object.index));
     var selected = try target.view(a, group.object.index);
     defer selected.deinit();
     try std.testing.expectEqual(@as(usize, 1), selected.tracks.items.len);
@@ -2000,6 +2026,16 @@ test "aggregate runtime sparse optional builtin slots retain host defaults" {
     try std.testing.expectEqual(default_pen.cap, brush.cap);
     try std.testing.expectEqual(default_pen.miter_limit, brush.miter_limit);
     try std.testing.expectEqual(DisplayList.Join.round, brush.join);
+    const first_stop = types.listView(&.{ .{ .int = 0 }, .{ .int = 2 } });
+    const last_stop = types.listView(&.{ .{ .int = 1 }, .{ .int = 12 } });
+    var profile_args = [_]Value{ red, .omitted, .omitted, .omitted, .omitted, .omitted, .omitted, .omitted, types.listView(&.{ first_stop, last_stop }) };
+    const pressure = try runtime.penValue(try runtime.invoke(a, .pen, &profile_args));
+    try std.testing.expectEqualSlices(f64, &.{ 2, 12 }, pressure.profile.?.widths);
+    profile_args[8] = types.listView(&.{ first_stop, first_stop, last_stop });
+    try std.testing.expectError(error.InvalidProfile, runtime.invoke(a, .pen, &profile_args));
+    profile_args[8] = types.listView(&.{ first_stop, last_stop });
+    profile_args[5] = types.listView(&.{.{ .int = 3 }});
+    try std.testing.expectError(error.InvalidPen, runtime.invoke(a, .pen, &profile_args));
     const circle = try runtime.penValue(try runtime.invoke(a, .pencircle, &.{ .omitted, red }));
     try std.testing.expectEqual(DisplayList.Color{ .r = 1, .g = 0, .b = 0 }, circle.color);
     try std.testing.expectEqual(g.Transform{}, circle.nib.?.ellipse);

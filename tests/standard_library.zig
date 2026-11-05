@@ -1008,6 +1008,19 @@ test "erase keeps live siblings in paint order with parent-space dashed strokes"
             \\end
             \\assert(not ink(plate,5pt,10pt) and ink(plate,5pt,14pt))
             \\assert(not ink(plate,22pt,14pt) and ink(plate,22pt,19pt))
+            \\stops:=[[0,2pt],[0.5,14pt],[1,2pt]]
+            \\pressure:=pen(rgb(0,0,1),profile:stops,join:"round")
+            \\stops += [1,99pt]
+            \\reference_mask:=rectangle((0pt,0pt),44pt,20pt) filled rgb(1,0,0)
+            \\export profiled:=picture(44pt,20pt)
+            \\drawing profiled do
+            \\    painted:=draw centerline with pressure
+            \\    +painted
+            \\    +reference_mask
+            \\    erase centerline from [reference_mask] with painted.pen
+            \\    assert(ink(painted,22pt,14pt) and not ink(painted,5pt,14pt))
+            \\    assert(not ink(reference_mask,22pt,14pt) and ink(reference_mask,5pt,14pt))
+            \\end
             \\label_obj:=typ[Live label] at (0pt,25pt)
             \\drawing page do
             \\    +label_obj
@@ -1021,6 +1034,9 @@ test "erase keeps live siblings in paint order with parent-space dashed strokes"
         defer machine.deinit();
         try execute(&machine);
         const page = machine.getGlobal("page").?;
+        var pressure_svg = try runtime.render(machine.getGlobal("profiled").?, .svg);
+        defer pressure_svg.deinit();
+        try t.expect(std.mem.indexOf(u8, pressure_svg.bytes(), "<clipPath") != null);
         var svg = try runtime.render(page, .svg);
         defer svg.deinit();
         try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);

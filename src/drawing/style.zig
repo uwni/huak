@@ -2,6 +2,7 @@
 const std = @import("std");
 const g = @import("geometry.zig");
 const Nib = @import("pen/nib.zig").Nib;
+const WidthProfile = @import("pen/WidthProfile.zig");
 
 pub const Color = struct {
     r: f64 = 0,
@@ -31,20 +32,34 @@ pub const Pen = struct {
     dash_phase: f64 = 0,
     /// Explicit physical nib, independent of the centerline and width field.
     nib: ?Nib = null,
+    /// Borrowed from the caller; the style pool retains an immutable snapshot.
+    profile: ?*const WidthProfile = null,
+
+    pub fn needsGeometry(self: *const Pen) bool {
+        return self.nib != null or self.profile != null;
+    }
+
+    pub fn maxWidth(self: *const Pen) f64 {
+        return if (self.profile) |p| std.mem.max(f64, p.widths) else self.width;
+    }
 
     /// Replace borrowed arrays with owned copies. Failure leaves this value
     /// unchanged; release successful copies with freeData or their arena.
     pub fn cloneData(self: *Pen, allocator: std.mem.Allocator) !void {
         const dash = try allocator.dupe(f64, self.dash);
         errdefer allocator.free(dash);
+        const profile = if (self.profile) |p| try p.clone(allocator) else null;
+        errdefer if (profile) |p| p.destroy(allocator);
         if (self.nib) |*value| if (value.* == .polygon) {
             value.* = .{ .polygon = try allocator.dupe(g.Point, value.polygon) };
         };
         self.dash = dash;
+        self.profile = profile;
     }
 
     pub fn freeData(self: *const Pen, allocator: std.mem.Allocator) void {
         allocator.free(self.dash);
+        if (self.profile) |p| p.destroy(allocator);
         if (self.nib) |nib| if (nib == .polygon) allocator.free(nib.polygon);
     }
 };
@@ -191,7 +206,8 @@ pub const Pool = struct {
     fn dataSize(value: *const Style) usize {
         const pen = value.pen orelse return 0;
         const vertices = if (pen.nib) |nib| (if (nib == .polygon) nib.polygon.len else 0) else 0;
-        return pen.dash.len * @sizeOf(f64) + vertices * @sizeOf(g.Point);
+        const profile_bytes = if (pen.profile) |p| @sizeOf(WidthProfile) + (p.positions.len + p.widths.len) * @sizeOf(f64) else 0;
+        return profile_bytes + pen.dash.len * @sizeOf(f64) + vertices * @sizeOf(g.Point);
     }
 };
 
@@ -209,6 +225,10 @@ const ValueContext = struct {
             h = hashBytes(h, bits(&[_]f64{ pen.width, pen.miter_limit, pen.dash_phase }));
             h = hashBytes(h, &.{ @backingInt(pen.cap), @backingInt(pen.join), @intFromBool(pen.nib != null) });
             h = hashBytes(h, bits(pen.dash));
+            if (pen.profile) |p| {
+                h = hashBytes(h, bits(p.positions));
+                h = hashBytes(h, bits(p.widths));
+            }
             if (pen.nib) |*nib| {
                 h = hashBytes(h, &.{@backingInt(std.meta.activeTag(nib.*))});
                 h = switch (nib.*) {
@@ -229,6 +249,11 @@ const ValueContext = struct {
             if (!std.mem.eql(u8, bits(&pen.color), bits(&other.color))) return false;
             if (!std.mem.eql(u8, bits(&[_]f64{ pen.width, pen.miter_limit, pen.dash_phase }), bits(&[_]f64{ other.width, other.miter_limit, other.dash_phase }))) return false;
             if (!std.mem.eql(u8, bits(pen.dash), bits(other.dash))) return false;
+            if ((pen.profile != null) != (other.profile != null)) return false;
+            if (pen.profile) |p| {
+                if (!std.mem.eql(u8, bits(p.positions), bits(other.profile.?.positions))) return false;
+                if (!std.mem.eql(u8, bits(p.widths), bits(other.profile.?.widths))) return false;
+            }
             if (pen.nib) |*nib| {
                 if (std.meta.activeTag(nib.*) != std.meta.activeTag(other.nib.?)) return false;
                 switch (nib.*) {
@@ -286,6 +311,15 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     style.pen.?.dash_phase = -0.0;
     try std.testing.expect(saved != try pool.intern(&style));
     try std.testing.expectEqual(@as(u64, @bitCast(@as(f64, -0.0))), @as(u64, @bitCast((try pool.intern(&style)).pen.?.dash_phase)));
+
+    var widths = [_]f64{ 2, 14, 2 };
+    const pressure: Style = .{ .pen = .{ .profile = &.{ .positions = &.{ 0, 0.5, 1 }, .widths = &widths } } };
+    const first_profile = try pool.intern(&pressure);
+    try std.testing.expect(first_profile.pen.?.profile.? != pressure.pen.?.profile.?);
+    try std.testing.expect(first_profile == try pool.intern(&pressure));
+    widths[1] = 8;
+    try std.testing.expect(first_profile != try pool.intern(&pressure));
+    try std.testing.expectEqual(@as(f64, 14), first_profile.pen.?.maxWidth());
 }
 
 test "immutable styles share equal values own slices and preserve float bits across OOM" {

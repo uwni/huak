@@ -22,6 +22,12 @@ pub fn resolve(allocator: std.mem.Allocator, segments: []const Path.Segment, pen
     var center = Path.init(allocator);
     center.segments.items = @constCast(segments);
     center.segments.capacity = segments.len;
+    if (pen.profile != null) {
+        var outline = try pens.profiledOutline(allocator, center, pen, options);
+        if (outline.segments.items.len != 0) return .{ .path = outline, .style = .{ .fill = pen.color } };
+        outline.deinit();
+        return null;
+    }
     var dashed: ?Path = null;
     defer if (dashed) |*value| value.deinit();
     if (pen.dash.len != 0) {

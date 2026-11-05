@@ -35,8 +35,8 @@ pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: 
             .push => |*group| try builder.group(group.transform, group.clip, id),
             .pop => try builder.endScope(),
             .path => |*draw| {
-                if (draw.style.pen) |*pen| if (pen.nib != null) {
-                    try builder.nibPath(draw, strokes[stroke_index], id);
+                if (draw.style.pen) |*pen| if (pen.needsGeometry()) {
+                    try builder.resolvedPath(draw, strokes[stroke_index], id);
                     stroke_index += 1;
                     continue;
                 };
@@ -100,7 +100,7 @@ const NativeSegments = struct {
         for (picture.commands.items) |*command| {
             const range = switch (command.*) {
                 .path => |*draw| range: {
-                    if (draw.style.fill == null) if (draw.style.pen) |pen| if (pen.nib != null) continue;
+                    if (draw.style.fill == null) if (draw.style.pen) |pen| if (pen.needsGeometry()) continue;
                     break :range draw.path;
                 },
                 .push => |*group| group.clip orelse continue,
@@ -176,7 +176,7 @@ const Builder = struct {
             if (command.* != .path) continue;
             const draw = &command.path;
             const pen = if (draw.style.pen) |*value| value else continue;
-            if (pen.nib == null) continue;
+            if (!pen.needsGeometry()) continue;
             var stroke = (try physical.resolve(self.arena.child_allocator, try picture.range(draw.path), pen, options)) orelse {
                 try strokes.append(memory, null);
                 continue;
@@ -218,7 +218,7 @@ const Builder = struct {
         try self.append(raw);
     }
 
-    fn nibPath(self: *Builder, draw: *const DisplayList.PathCommand, stroke: ?Stroke, id: u64) !void {
+    fn resolvedPath(self: *Builder, draw: *const DisplayList.PathCommand, stroke: ?Stroke, id: u64) !void {
         const grouped = draw.style.fill != null and id != 0;
         if (grouped) try self.group(draw.transform, null, id);
         const placement: g.Transform = if (grouped) .{} else draw.transform;

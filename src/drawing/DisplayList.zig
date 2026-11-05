@@ -240,7 +240,7 @@ pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
                         box = .{ .min = b.min.add(offset.min), .max = b.max.add(offset.max) };
                     } else {
                         const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
-                        const radius = pen.width * norm * (if (pen.join == .miter) pen.miter_limit else if (pen.cap == .square) @as(f64, 1) else @as(f64, 0.5));
+                        const radius = pen.maxWidth() * norm * (if (pen.join == .miter) pen.miter_limit else if (pen.cap == .square) @as(f64, 1) else @as(f64, 0.5));
                         if (!std.math.isFinite(radius)) return error.NonFinite;
                         box = b.expanded(radius);
                     }
