@@ -1,0 +1,38 @@
+name: Publish nightly
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-${{ inputs.component }}-${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ inputs.component }}-*
+          merge-multiple: true
+          path: dist
+      - name: Publish prerelease for this commit
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          tag="$COMPONENT-nightly-$GITHUB_SHA"
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft); then
+            if [[ "$draft" == false ]]; then exit 0; fi
+            gh release upload "$tag" ./*.tar.gz --clobber
+            gh release edit "$tag" --draft=false
+          else
+            gh release create "$tag" ./*.tar.gz --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "$COMPONENT nightly ${GITHUB_SHA:0:12}" --notes "Built from $GITHUB_SHA."
+          fi

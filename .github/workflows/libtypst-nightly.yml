@@ -1,0 +1,68 @@
+name: libtypst nightly
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'libtypst/**'
+      - '!libtypst/**/*.md'
+      - '.github/workflows/libtypst-nightly.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux-x86_64, library: libtypst.so }
+          - { runner: macos-15, platform: macos-arm64, library: libtypst.dylib }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: libtypst
+    env:
+      RUSTUP_TOOLCHAIN: "1.92.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: libtypst
+      - name: Install PDF text extraction for the C ABI test
+        run: |
+          if ! command -v pdftotext >/dev/null; then
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              sudo apt-get update && sudo apt-get install -y poppler-utils
+            else
+              brew install poppler
+            fi
+          fi
+      - name: Verify header, build the library and test its native ABI
+        run: |
+          cargo run --locked --release --features headers --bin headers
+          git diff --exit-code -- include/libtypst.h
+          cargo build --locked --release --lib
+          cargo test --locked --release
+      - name: Package library and public header
+        run: tar -czf ../libtypst-${{ matrix.platform }}.tar.gz include/libtypst.h -C target/release ${{ matrix.library }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libtypst-${{ matrix.platform }}
+          path: libtypst-${{ matrix.platform }}.tar.gz
+          compression-level: 0
+          overwrite: true
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-nightly.yml
+    with:
+      component: libtypst

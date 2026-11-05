@@ -4,6 +4,8 @@ A reusable native library for Typst compilation, content layout, native scenes a
 
 The implementation uses public Typst 0.15.1 APIs without modifying upstream sources. `Cargo.lock` pins the dependency graph. Library filenames follow platform conventions: `libtypst.so`, `libtypst.dylib` and `typst.dll`.
 
+[Nightly releases](https://github.com/uwni/huak/releases?q=libtypst-nightly) provide the native library and its matching `include/libtypst.h` for Linux x86_64 and macOS arm64. Each release tag identifies the source commit.
+
 ## Build and verify
 
 Run in this package directory with Rust 1.92 or later:

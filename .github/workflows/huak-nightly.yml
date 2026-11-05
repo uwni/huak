@@ -1,0 +1,58 @@
+name: Huak nightly
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'build.zig'
+      - 'build.zig.zon'
+      - 'cli/**'
+      - 'src/**'
+      - 'stdlib/**'
+      - 'apps/formatter/**'
+      - 'apps/language_server/**'
+      - 'libtypst/include/**'
+      - '.github/workflows/huak-nightly.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, platform: linux-x86_64, library: libtypst.so }
+          - { runner: macos-15, platform: macos-arm64, library: libtypst.dylib }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: "0.17.1"
+      - name: Build and test the desktop tools
+        run: |
+          zig build install test-backend test-cli-options \
+            -Doptimize=ReleaseSafe -Dcpu=baseline -Druntime-libtypst=${{ matrix.library }}
+          zig-out/bin/huak --help
+      - name: Package executables
+        run: tar -czf huak-${{ matrix.platform }}.tar.gz -C zig-out/bin huak huak-fmt huak-lsp
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: huak-${{ matrix.platform }}
+          path: huak-${{ matrix.platform }}.tar.gz
+          compression-level: 0
+          overwrite: true
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-nightly.yml
+    with:
+      component: huak

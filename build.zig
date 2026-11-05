@@ -79,7 +79,10 @@ fn addLibraries(b: *std.Build, config: Configuration) Libraries {
     const engine = engineModules(b, config.target, config.optimize, true);
     const tooling = b.addModule("huak_tooling", .{ .root_source_file = b.path("src/tooling.zig"), .target = config.target, .optimize = config.optimize, .link_libc = true, .imports = &.{ engine.native, engine.standard_library, engine.csv } });
     const defaults = b.addOptions();
-    defaults.addOptionPathUntracked("library_path", config.library);
+    if (b.option([]const u8, "runtime-libtypst", "Default library name or path for the installed desktop tools")) |path|
+        defaults.addOption([]const u8, "library_path", path)
+    else
+        defaults.addOptionPathUntracked("library_path", config.library);
     return .{ .binding = engine.binding, .native = engine.native, .huak = engine.huak, .tooling = .{ .name = "huak_tooling", .module = tooling }, .options = .{ .name = "host_options", .module = defaults.createModule() }, .xml = engine.xml };
 }
 

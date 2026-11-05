@@ -14,12 +14,20 @@ import paint.*
 r := 15mm
 default drawing picture() do
     +draw circle((0mm, 0mm), r)
-    +draw ((0mm, 0mm) -- (r, 0mm))
+    +draw (0mm, 0mm) -- (r, 0mm)
     +typ[$r$] at (r / 2, 1mm)
 end
 ```
 
 ## 构建与运行
+
+可以分别下载 [Huak nightly](https://github.com/uwni/huak/releases?q=huak-nightly) 和 [libtypst nightly](https://github.com/uwni/huak/releases?q=libtypst-nightly)。两个组件按各自的变更发布，标签包含对应的提交哈希。选择相同平台的压缩包（Linux x86_64 或 macOS arm64）并解压到同一目录，即可运行：
+
+```sh
+./huak run circle.huak --libtypst ./libtypst.dylib --output circle.svg
+```
+
+Linux 上将库名换为 `./libtypst.so`。
 
 在 macOS 或 Linux 上准备 Zig 0.17.1 和 Rust 1.92，在仓库根目录构建并导出上面的图。
 
