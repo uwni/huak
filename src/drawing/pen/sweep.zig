@@ -79,15 +79,11 @@ pub fn expand(a: std.mem.Allocator, path: Path, nib: Nib, motion: *const Motion,
     }
     var boundary = try builder.boundary.contours();
     defer boundary.deinit();
-    var result = try regions.combine(a, boundary, Path.init(a), .unite, .{
+    return regions.normalizeStroke(a, boundary, .{
         .tolerance = budget,
-        .max_segments = options.max_vertices,
         .max_vertices = options.max_vertices,
         .max_depth = options.max_depth,
     });
-    errdefer result.deinit();
-    if (boundary.segments.items.len != 0 and result.segments.items.len == 0) return error.PrecisionRange;
-    return result;
 }
 
 // Compensate arc-length sums. Both traversals must use identical arithmetic

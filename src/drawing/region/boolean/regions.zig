@@ -80,7 +80,7 @@ pub fn trace(g: *graph.Graph, result_allocator: types.Allocator, operation: api.
     for (g.edges.items, 0..) |*edge, i| {
         const index = faces.items[g.half_edges.items[2 * i].face].component;
         const component = &components.items[index];
-        const box = graph.controlBounds(&edge.cubic, 0);
+        const box = edge.cubic.controlBounds();
         bounds[index] = if (component.edge_len == 0) box else bounds[index].unite(box);
         component.edge_len += 1;
     }
@@ -181,7 +181,7 @@ pub fn trace(g: *graph.Graph, result_allocator: types.Allocator, operation: api.
             while (j < length and continued(g, last, contour.items[(start + j) % length])) : (j += 1) last = contour.items[(start + j) % length];
             const half = &g.half_edges.items[first];
             const edge = &g.edges.items[half.edge];
-            const values = if (first == last) half.cubic.* else graph.getPart(&g.sources[edge.curve].cubic, !edge.straight, times(g, first)[0], times(g, last)[1], g.vertices.items[half.from].point, g.vertices.items[g.half_edges.items[last].to].point);
+            const values = if (first == last) half.cubic.* else graph.snappedPart(&g.sources[edge.curve].cubic, !edge.straight, times(g, first)[0], times(g, last)[1], g.vertices.items[half.from].point, g.vertices.items[g.half_edges.items[last].to].point);
             if (result.segments.items.len == begin) try result.moveTo(values.p0);
             if (edge.straight) {
                 // CLOSE carries the exact final straight endpoint itself.
@@ -215,9 +215,9 @@ fn continued(g: *const graph.Graph, first: usize, second: usize) bool {
 }
 fn rayWinding(p: Point, v: *const geometry.Cubic) i32 {
     var winding: i32 = 0;
-    const bounds = graph.controlBounds(v, 0);
+    const bounds = v.controlBounds();
     if (p.y < bounds.min.y or p.y > bounds.max.y or p.x >= bounds.max.x) return 0;
-    const mono = curves.getMonoCurves(v, false);
+    const mono = curves.yMonotoneParts(v);
     for (mono.items[0..mono.len]) |*curve| {
         const y0 = curve.p0.y;
         const y3 = curve.p3.y;

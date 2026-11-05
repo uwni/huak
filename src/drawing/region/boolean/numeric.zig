@@ -7,16 +7,11 @@ pub const MACHINE_EPSILON: f64 = 1.12e-16;
 pub const CURVETIME_EPSILON: f64 = 1e-8;
 pub const GEOMETRIC_EPSILON: f64 = 1e-7;
 pub const TRIGONOMETRIC_EPSILON: f64 = 1e-8;
-pub const ANGULAR_EPSILON: f64 = 1e-5;
-pub const KAPPA: f64 = 4 * (@sqrt(@as(f64, 2)) - 1) / 3;
 pub fn clamp(value: f64, min: f64, max: f64) f64 {
     return if (value < min) min else if (value > max) max else value;
 }
 pub fn isZero(value: f64) bool {
     return value >= -EPSILON and value <= EPSILON;
-}
-pub fn isMachineZero(value: f64) bool {
-    return value >= -MACHINE_EPSILON and value <= MACHINE_EPSILON;
 }
 pub fn getEpsilon(magnitude: f64, epsilon: ?f64) f64 {
     return @max(EPSILON, magnitude * 4 * MACHINE_EPSILON, epsilon orelse 0);

@@ -7,38 +7,14 @@ const geometry = @import("../../geometry.zig");
 const n = @import("numeric.zig");
 const Cubic = geometry.Cubic;
 pub const Point = types.Point;
-pub const Times = struct { items: [3]f64 = undefined, len: usize = 0 };
 pub const MonoCurves = struct { items: [3]Cubic = undefined, len: usize = 0 };
-pub const Classification = struct {
-    kind: enum { line, quadratic, serpentine, cusp, loop, arch },
-    roots: Times = .{},
-};
-pub fn subdivide(v: *const Cubic, t: f64) [2]Cubic {
-    const u = 1 - t;
-    const x4 = u * v.p0.x + t * v.p1.x;
-    const y4 = u * v.p0.y + t * v.p1.y;
-    const x5 = u * v.p1.x + t * v.p2.x;
-    const y5 = u * v.p1.y + t * v.p2.y;
-    const x6 = u * v.p2.x + t * v.p3.x;
-    const y6 = u * v.p2.y + t * v.p3.y;
-    const x7 = u * x4 + t * x5;
-    const y7 = u * y4 + t * y5;
-    const x8 = u * x5 + t * x6;
-    const y8 = u * y5 + t * y6;
-    const x9 = u * x7 + t * x8;
-    const y9 = u * y7 + t * y8;
-    return .{
-        .{ .p0 = v.p0, .p1 = .{ .x = x4, .y = y4 }, .p2 = .{ .x = x7, .y = y7 }, .p3 = .{ .x = x9, .y = y9 } },
-        .{ .p0 = .{ .x = x9, .y = y9 }, .p1 = .{ .x = x8, .y = y8 }, .p2 = .{ .x = x6, .y = y6 }, .p3 = v.p3 },
-    };
-}
 pub fn getPart(v: *const Cubic, from_: f64, to_: f64) Cubic {
     const flip = from_ > to_;
     const from = if (flip) to_ else from_;
     const to = if (flip) from_ else to_;
     var part = v.*;
-    if (from > 0) part = subdivide(&part, from)[1];
-    if (to < 1) part = subdivide(&part, (to - from) / (1 - from))[0];
+    if (from > 0) part = part.split(from).right;
+    if (to < 1) part = part.split((to - from) / (1 - from)).left;
     return if (flip) part.reversed() else part;
 }
 pub fn isCollinear(x1: f64, y1: f64, x2: f64, y2: f64) bool {
@@ -70,12 +46,12 @@ pub fn isStraight(v: *const Cubic) bool {
 pub fn hasHandles(v: *const Cubic) bool {
     return !n.isZero(v.p1.x - v.p0.x) or !n.isZero(v.p1.y - v.p0.y) or !n.isZero(v.p2.x - v.p3.x) or !n.isZero(v.p2.y - v.p3.y);
 }
-pub fn getMonoCurves(v: *const Cubic, comptime dir: bool) MonoCurves {
+pub fn yMonotoneParts(v: *const Cubic) MonoCurves {
     var result: MonoCurves = .{};
-    const o0 = if (dir) v.p0.x else v.p0.y;
-    const o1 = if (dir) v.p1.x else v.p1.y;
-    const o2 = if (dir) v.p2.x else v.p2.y;
-    const o3 = if (dir) v.p3.x else v.p3.y;
+    const o0 = v.p0.y;
+    const o1 = v.p1.y;
+    const o2 = v.p2.y;
+    const o3 = v.p3.y;
     if (((o0 >= o1) == (o1 >= o2) and (o1 >= o2) == (o2 >= o3)) or isStraight(v)) {
         result.items[0] = v.*;
         result.len = 1;
@@ -91,15 +67,15 @@ pub fn getMonoCurves(v: *const Cubic, comptime dir: bool) MonoCurves {
         result.len = 1;
     } else {
         if (count > 1 and roots[0] > roots[1]) std.mem.swap(f64, &roots[0], &roots[1]);
-        var parts = subdivide(v, roots[0]);
-        result.items[0] = parts[0];
+        var parts = v.split(roots[0]);
+        result.items[0] = parts.left;
         result.len = 1;
         if (count > 1) {
-            parts = subdivide(&parts[1], (roots[1] - roots[0]) / (1 - roots[0]));
-            result.items[result.len] = parts[0];
+            parts = parts.right.split((roots[1] - roots[0]) / (1 - roots[0]));
+            result.items[result.len] = parts.left;
             result.len += 1;
         }
-        result.items[result.len] = parts[1];
+        result.items[result.len] = parts.right;
         result.len += 1;
     }
     return result;
@@ -149,7 +125,7 @@ pub fn getPoint(v: *const Cubic, t: f64) Point {
 fn pointWithCoefficients(v: *const Cubic, c: *const [10]f64, t: f64) Point {
     return .{ .x = getCoordinate(v.p0.x, v.p3.x, c[0], c[1], c[2], t), .y = getCoordinate(v.p0.y, v.p3.y, c[3], c[4], c[5], t) };
 }
-fn tangent(v: *const Cubic, t: f64, normalized: bool) Point {
+pub fn getTangent(v: *const Cubic, t: f64) Point {
     const c = getCoefficients(v);
     var x: f64 = undefined;
     var y: f64 = undefined;
@@ -163,63 +139,19 @@ fn tangent(v: *const Cubic, t: f64, normalized: bool) Point {
         x = (3 * c[0] * t + 2 * c[1]) * t + c[2];
         y = (3 * c[3] * t + 2 * c[4]) * t + c[5];
     }
-    if (normalized) {
-        if (x == 0 and y == 0 and (t < n.CURVETIME_EPSILON or t > 1 - n.CURVETIME_EPSILON)) {
-            x = c[8] - c[6];
-            y = c[9] - c[7];
-        }
-        const len = @sqrt(x * x + y * y);
-        if (len != 0) {
-            x /= len;
-            y /= len;
-        }
+    if (x == 0 and y == 0 and (t < n.CURVETIME_EPSILON or t > 1 - n.CURVETIME_EPSILON)) {
+        x = c[8] - c[6];
+        y = c[9] - c[7];
+    }
+    const len = @sqrt(x * x + y * y);
+    if (len != 0) {
+        x /= len;
+        y /= len;
     }
     return .{ .x = x, .y = y };
 }
-pub fn getTangent(v: *const Cubic, t: f64) Point {
-    return tangent(v, t, true);
-}
-pub fn getWeightedTangent(v: *const Cubic, t: f64) Point {
-    return tangent(v, t, false);
-}
-pub fn getNormal(v: *const Cubic, t: f64) Point {
-    const p = tangent(v, t, true);
-    return .{ .x = p.y, .y = -p.x };
-}
-pub fn getWeightedNormal(v: *const Cubic, t: f64) Point {
-    const p = tangent(v, t, false);
-    return .{ .x = p.y, .y = -p.x };
-}
-pub fn getCurvature(v: *const Cubic, t: f64) f64 {
-    const p = tangent(v, t, false);
-    const c = getCoefficients(v);
-    const x2 = 6 * c[0] * t + 2 * c[1];
-    const y2 = 6 * c[3] * t + 2 * c[4];
-    const d = std.math.pow(f64, p.x * p.x + p.y * p.y, @as(f64, 3) / 2);
-    return if (d != 0) (p.x * y2 - p.y * x2) / d else 0;
-}
-fn classification(kind: @FieldType(Classification, "kind"), t1: ?f64, t2: ?f64) Classification {
-    var result: Classification = .{ .kind = kind };
-    const low = n.CURVETIME_EPSILON;
-    const high = 1 - low;
-    const ok1 = if (t1) |t| t > low and t < high else false;
-    const ok2 = if (t2) |t| t > low and t < high else false;
-    if (t1 != null and (!(ok1 or ok2) or (kind == .loop and !(ok1 and ok2)))) {
-        result.kind = .arch;
-        return result;
-    }
-    if (ok1) {
-        result.roots.items[result.roots.len] = t1.?;
-        result.roots.len += 1;
-    }
-    if (ok2) {
-        result.roots.items[result.roots.len] = t2.?;
-        result.roots.len += 1;
-    }
-    if (result.roots.len == 2 and result.roots.items[0] > result.roots.items[1]) std.mem.swap(f64, &result.roots.items[0], &result.roots.items[1]);
-    return result;
-}
-pub fn classify(v: *const Cubic) Classification {
+/// The loop branch of Paper's cubic classification gives two distinct interior parameters.
+pub fn selfIntersectionTimes(v: *const Cubic) ?[2]f64 {
     const a1 = v.p0.x * (v.p3.y - v.p2.y) + v.p0.y * (v.p2.x - v.p3.x) + v.p3.x * v.p2.y - v.p3.y * v.p2.x;
     const a2 = v.p1.x * (v.p0.y - v.p3.y) + v.p1.y * (v.p3.x - v.p0.x) + v.p0.x * v.p3.y - v.p0.y * v.p3.x;
     const a3 = v.p2.x * (v.p1.y - v.p0.y) + v.p2.y * (v.p0.x - v.p1.x) + v.p1.x * v.p0.y - v.p1.y * v.p0.x;
@@ -235,12 +167,28 @@ pub fn classify(v: *const Cubic) Classification {
     d1 *= s;
     d2 *= s;
     d3 *= s;
-    if (n.isZero(d1)) return if (n.isZero(d2)) classification(if (n.isZero(d3)) .line else .quadratic, null, null) else classification(.serpentine, d3 / (3 * d2), null);
+    if (n.isZero(d1)) return null;
     const d = 3 * d2 * d2 - 4 * d1 * d3;
-    if (n.isZero(d)) return classification(.cusp, d2 / (2 * d1), null);
-    const f1 = if (d > 0) @sqrt(d / 3) else @sqrt(-d);
-    const f2 = 2 * d1;
-    return classification(if (d > 0) .serpentine else .loop, (d2 + f1) / f2, (d2 - f1) / f2);
+    if (d >= -n.EPSILON) return null;
+    const root = @sqrt(-d);
+    const denominator = 2 * d1;
+    const a = (d2 + root) / denominator;
+    const b = (d2 - root) / denominator;
+    const low = n.CURVETIME_EPSILON;
+    const high = 1 - low;
+    if (!(a > low and a < high and b > low and b < high)) return null;
+    return .{ @min(a, b), @max(a, b) };
+}
+
+test "cubic loop returns ordered interior times and excludes an endpoint-only contact" {
+    const cubic: Cubic = .{ .p0 = .zero, .p1 = .{ .x = -16, .y = 3 }, .p2 = .{ .x = -16, .y = -10 }, .p3 = .{ .x = 0, .y = 9 } };
+    for ([_]Cubic{ cubic, cubic.reversed() }) |v| {
+        const times = selfIntersectionTimes(&v) orelse return error.TestUnexpectedResult;
+        try std.testing.expectApproxEqAbs(@as(f64, 0.25), times[0], 1e-12);
+        try std.testing.expectApproxEqAbs(@as(f64, 0.75), times[1], 1e-12);
+    }
+    const loop = getPart(&cubic, 0.25, 0.75);
+    try std.testing.expect(selfIntersectionTimes(&loop) == null);
 }
 const LengthIntegrand = struct {
     ax: f64,
@@ -267,10 +215,10 @@ fn lengthWithIntegrand(v: *const Cubic, a_: f64, b: f64, ds: ?*const LengthInteg
     if (isStraight(v)) {
         var c = v.*;
         if (b < 1) {
-            c = subdivide(&c, b)[0];
+            c = c.split(b).left;
             a /= b;
         }
-        if (a > 0) c = subdivide(&c, a)[1];
+        if (a > 0) c = c.split(a).right;
         const dx = c.p3.x - c.p0.x;
         const dy = c.p3.y - c.p0.y;
         return @sqrt(dx * dx + dy * dy);
@@ -314,27 +262,26 @@ pub fn getTimeAt(v: *const Cubic, offset: f64, start_: ?f64) ?f64 {
     return n.findRoot(&context, Context.f, Context.df, start + offset / range_length, a, b, 32, n.EPSILON);
 }
 fn pointDistance(a: Point, b: Point) f64 {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return @sqrt(dx * dx + dy * dy);
+    const d = a.sub(b);
+    return @sqrt(d.dot(d));
 }
-/// Sufficient distance certificate: all controls on the far side of the
-/// piece's chord line put the whole curve there as well, so the point's
-/// perpendicular distance to that line lower-bounds its distance to the curve.
-pub fn beyondChord(v: *const Cubic, p: Point, epsilon: f64) bool {
-    const vx = v.p3.x - v.p0.x;
-    const vy = v.p3.y - v.p0.y;
-    const length = @sqrt(vx * vx + vy * vy);
-    if (length == 0) return false;
-    const cross = (p.x - v.p0.x) * vy - (p.y - v.p0.y) * vx;
-    if (cross == 0) return false;
-    const positive = cross > 0;
-    const first = (v.p1.x - v.p0.x) * vy - (v.p1.y - v.p0.y) * vx;
-    const second = (v.p2.x - v.p0.x) * vy - (v.p2.y - v.p0.y) * vx;
-    if (first != 0 and (first > 0) == positive) return false;
-    if (second != 0 and (second > 0) == positive) return false;
-    const magnitude = @abs(p.x) + @abs(p.y) + @abs(v.p0.x) + @abs(v.p0.y) + @abs(v.p3.x) + @abs(v.p3.y);
-    return @abs(cross) > (epsilon + 16384 * std.math.floatEps(f64) * magnitude) * length;
+pub fn withinDistance(a: Point, b: Point, epsilon: f64) bool {
+    const d = a.sub(b);
+    return d.dot(d) <= epsilon * epsilon;
+}
+/// The projection of a Bézier onto the chord normal is contained in the
+/// interval spanned by its four projected controls. Distance from this strip
+/// lower-bounds distance to the curve, including when its handles straddle the chord.
+pub fn outsideChordStrip(v: *const Cubic, p: Point, epsilon: f64) bool {
+    const chord = v.p3.sub(v.p0);
+    const projection = p.sub(v.p0).cross(chord);
+    const first = v.p1.sub(v.p0).cross(chord);
+    const second = v.p2.sub(v.p0).cross(chord);
+    const gap = @max(@min(0, first, second) - projection, projection - @max(0, first, second));
+    const magnitude = @max(@abs(p.x), @abs(p.y), @abs(v.p0.x), @abs(v.p0.y), @abs(v.p1.x), @abs(v.p1.y), @abs(v.p2.x), @abs(v.p2.y), @abs(v.p3.x), @abs(v.p3.y));
+    // Underflow in a squared chord must only widen the acceptance strip.
+    const length = @sqrt(@max(chord.dot(chord), std.math.floatMin(f64)));
+    return gap > (epsilon + 16384 * std.math.floatEps(f64) * magnitude) * length;
 }
 
 pub fn getTimeOf(v: *const Cubic, point: Point, tolerance: ?f64) ?f64 {
@@ -343,8 +290,8 @@ pub fn getTimeOf(v: *const Cubic, point: Point, tolerance: ?f64) ?f64 {
         magnitude = @max(magnitude, @abs(p.x), @abs(p.y));
     }
     const epsilon = if (tolerance != null and tolerance.? != 0) tolerance.? else n.getEpsilon(magnitude, n.GEOMETRIC_EPSILON);
-    if (pointDistance(.{ .x = v.p0.x, .y = v.p0.y }, point) <= epsilon) return 0;
-    if (pointDistance(.{ .x = v.p3.x, .y = v.p3.y }, point) <= epsilon) return 1;
+    if (pointDistance(v.p0, point) <= epsilon) return 0;
+    if (pointDistance(v.p3, point) <= epsilon) return 1;
     const coefficients = getCoefficients(v);
     var roots: [3]f64 = undefined;
     inline for (0..2) |i| {
@@ -394,18 +341,4 @@ pub fn getNearestTime(v: *const Cubic, point: Point) ?f64 {
         if (!refine.run(refine.min_t - step) and !refine.run(refine.min_t + step)) step /= 2;
     }
     return refine.min_t;
-}
-pub fn getPeaks(v: *const Cubic) Times {
-    const c = getCoefficients(v);
-    const ax = c[0];
-    const bx = c[1];
-    const cx = c[2];
-    const ay = c[3];
-    const by = c[4];
-    const cy = c[5];
-    var result: Times = .{};
-    const count = n.solveCubic(9 * (ax * ax + ay * ay), 9 * (ax * bx + by * ay), 2 * (bx * bx + by * by) + 3 * (cx * ax + cy * ay), cx * bx + by * cy, &result.items, n.CURVETIME_EPSILON, 1 - n.CURVETIME_EPSILON);
-    result.len = @intCast(@max(0, count));
-    std.mem.sort(f64, result.items[0..result.len], {}, std.sort.asc(f64));
-    return result;
 }

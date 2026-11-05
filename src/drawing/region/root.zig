@@ -65,19 +65,16 @@ pub fn profileStroke(allocator: Allocator, path: Path, positions: []const f64, w
     return normalizeStroke(allocator, tracing, options);
 }
 
-fn normalizeStroke(allocator: Allocator, tracing: Path, options: Options) !Path {
-    var empty = Path.init(allocator);
-    defer empty.deinit();
+/// Resolve the nonzero fill of a generated stroke outline into an owned path.
+pub fn normalizeStroke(allocator: Allocator, tracing: Path, options: Options) !Path {
     var settings = options;
     settings.fill_rule = .nonzero;
     // Envelope construction already applies its own source/work budget. Its
     // resulting tracing can contain several boundary spans per source span.
     settings.max_segments = options.max_vertices;
-    var result = try combine(allocator, tracing, empty, .unite, settings);
-    if (tracing.segments.items.len != 0 and result.segments.items.len == 0) {
-        result.deinit();
-        return error.PrecisionRange;
-    }
+    var result = try combine(allocator, tracing, Path.init(allocator), .unite, settings);
+    errdefer result.deinit();
+    if (tracing.segments.items.len != 0 and result.segments.items.len == 0) return error.PrecisionRange;
     return result;
 }
 

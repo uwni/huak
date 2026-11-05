@@ -5,8 +5,7 @@ CPU Skia PathOps with float storage, and lib2geom PathIntersectionGraph. The
 experimental programs, native adapters, dependency manifest and extracted
 research dependencies have been removed after the production binary64 Skia
 PathOps migration. The JSON files remain unchanged as historical evidence.
-The current production algorithm is a [pure Zig translation](../../src/drawing/region/pathops/README.md),
-with no C++ geometry library or private geometry C bridge.
+Current region operations use the [Paper.js-derived Zig Boolean kernel](../../src/drawing/region/boolean/README.md).
 
 Current deterministic inputs and the independent coverage/control-point checks
 live in [tests/fixtures/regions](../../tests/fixtures/regions). The production

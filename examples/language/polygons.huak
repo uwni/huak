@@ -3,7 +3,6 @@ import paint.{rgb, pen, translate, rectangle, circle, draw, fill, label, picture
 import geometry.{offset, clip_region, clip_lines}
 import pen.stroke_path
 import regions.*
-# Region operations use the pure Zig, f64 translation of Skia PathOps.
 param tolerance: length = 0.01mm
 setup_typst {
     set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#26354b"))

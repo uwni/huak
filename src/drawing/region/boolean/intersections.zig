@@ -22,7 +22,6 @@ pub const Event = struct {
     first: LocationInfo,
     second: LocationInfo,
     point: Point,
-    overlap: bool,
 };
 
 const CurveLength = struct { offset: f64 = undefined, total: f64 = -1 };
@@ -86,16 +85,16 @@ const Builder = struct {
         return self.sameLocation(a.first, b.first) and self.sameLocation(a.second, b.second);
     }
 
-    fn search(self: *Builder, event: Event, index: usize, direction: isize) !?usize {
+    fn hasNearbyEvent(self: *const Builder, event: Event, index: usize, direction: isize) bool {
         const length: isize = @intCast(self.events.items.len);
         var i: isize = @as(isize, @intCast(index)) + direction;
         while (i >= -1 and i <= length) : (i += direction) {
             const k: usize = @intCast(@mod(i, length));
             const candidate = self.events.items[k];
-            if (!isClose(event.point, candidate.point, 1e-7)) break;
-            if (self.sameEvent(event, candidate)) return k;
+            if (!curve.withinDistance(event.point, candidate.point, 1e-7)) break;
+            if (self.sameEvent(event, candidate)) return true;
         }
-        return null;
+        return false;
     }
 
     fn addLocation(self: *Builder, c1: usize, time1: ?f64, c2: usize, time2: ?f64, overlap: bool) !void {
@@ -112,17 +111,13 @@ const Builder = struct {
             @memset(self.lengths, .{});
         }
         const start = self.location(c1, t1);
-        const event: Event = .{ .first = start, .second = self.location(c2, t2), .point = curve.getPoint(&self.sources[start.location.curve].cubic, start.location.time), .overlap = overlap };
+        const event: Event = .{ .first = start, .second = self.location(c2, t2), .point = curve.getPoint(&self.sources[start.location.curve].cubic, start.location.time) };
         var left: isize = 0;
         var right: isize = @as(isize, @intCast(self.events.items.len)) - 1;
         while (left <= right) {
             const middle: usize = @intCast(@divTrunc(left + right, 2));
             const other = self.events.items[middle];
-            const found: ?usize = if (self.sameEvent(event, other)) middle else (try self.search(event, middle, -1)) orelse (try self.search(event, middle, 1));
-            if (found) |index| {
-                if (overlap) self.events.items[index].overlap = true;
-                return;
-            }
+            if (self.sameEvent(event, other) or self.hasNearbyEvent(event, middle, -1) or self.hasNearbyEvent(event, middle, 1)) return;
             const first = event.first.location;
             const second = other.first.location;
             const contour1 = self.sources[first.curve].contour;
@@ -131,11 +126,6 @@ const Builder = struct {
             if (before) right = @as(isize, @intCast(middle)) - 1 else left = @as(isize, @intCast(middle)) + 1;
         }
         try self.events.insert(self.allocator, @intCast(left), event);
-    }
-
-    fn addSelfIntersection(self: *Builder, index: usize) !void {
-        const info = curve.classify(&self.sources[index].cubic);
-        if (info.kind == .loop) try self.addLocation(index, info.roots.items[0], index, info.roots.items[1], false);
     }
 
     fn addLineIntersection(self: *Builder, a: *const Cubic, b: *const Cubic, c1: usize, c2: usize) !void {
@@ -210,15 +200,15 @@ const Builder = struct {
                 }
             } else if (!(self.epsilon != 0 and try self.addImplicitIntersections(a, b, c1, c2, flip, t_min_new, t_max_new, u_min, u_max))) {
                 if (t_max_new - t_min_new > u_difference) {
-                    const parts = curve.subdivide(&a, 0.5);
+                    const parts = a.split(0.5);
                     const t = (t_min_new + t_max_new) / 2;
-                    try self.addCurveIntersections(b, parts[0], c2, c1, !flip, recursion, calls, u_min, u_max, t_min_new, t);
-                    try self.addCurveIntersections(b, parts[1], c2, c1, !flip, recursion, calls, u_min, u_max, t, t_max_new);
+                    try self.addCurveIntersections(b, parts.left, c2, c1, !flip, recursion, calls, u_min, u_max, t_min_new, t);
+                    try self.addCurveIntersections(b, parts.right, c2, c1, !flip, recursion, calls, u_min, u_max, t, t_max_new);
                 } else {
-                    const parts = curve.subdivide(&b, 0.5);
+                    const parts = b.split(0.5);
                     const u = (u_min + u_max) / 2;
-                    try self.addCurveIntersections(parts[0], a, c2, c1, !flip, recursion, calls, u_min, u, t_min_new, t_max_new);
-                    try self.addCurveIntersections(parts[1], a, c2, c1, !flip, recursion, calls, u, u_max, t_min_new, t_max_new);
+                    try self.addCurveIntersections(parts.left, a, c2, c1, !flip, recursion, calls, u_min, u, t_min_new, t_max_new);
+                    try self.addCurveIntersections(parts.right, a, c2, c1, !flip, recursion, calls, u, u_max, t_min_new, t_max_new);
                 }
             }
         } else if (u_difference == 0 or u_difference >= 1e-9) {
@@ -344,8 +334,9 @@ pub fn collect(allocator: Allocator, scratch: Allocator, sources: []const Source
     }
     var builder: Builder = .{ .allocator = allocator, .scratch = scratch, .sources = sources, .epsilon = epsilon, .magnitude = magnitude };
     defer builder.deinit();
-    for (sources, 0..) |_, index| {
-        try builder.addSelfIntersection(index);
+    for (sources, 0..) |*source, index| {
+        if (curve.selfIntersectionTimes(&source.cubic)) |times|
+            try builder.addLocation(index, times[0], index, times[1], false);
         for (candidates[index].items) |other| {
             if (other > index) try builder.pair(index, other);
         }
@@ -353,12 +344,6 @@ pub fn collect(allocator: Allocator, scratch: Allocator, sources: []const Source
     const result = builder.events;
     builder.events = .empty;
     return result;
-}
-
-fn isClose(a: Point, b: Point, epsilon: f64) bool {
-    const dx = a.x - b.x;
-    const dy = a.y - b.y;
-    return dx * dx + dy * dy <= epsilon * epsilon;
 }
 
 const BaselineDistance = struct {
@@ -918,13 +903,23 @@ test "shared-endpoint certificate recognizes a single tangency" {
     try t.expect(sharedEndpoint(&first, &closed) == null);
 }
 
-test "chord distance certificate only rejects points beyond tolerance" {
+test "chord strip keeps tolerance contacts on both sides and for a zero chord" {
     const t = std.testing;
     const arch: Cubic = .{ .p0 = .{ .x = 0, .y = 0 }, .p1 = .{ .x = 0, .y = 3 }, .p2 = .{ .x = 10, .y = 3 }, .p3 = .{ .x = 10, .y = 0 } };
-    try t.expect(curve.beyondChord(&arch, .{ .x = 5, .y = -1 }, 0.5));
-    try t.expect(!curve.beyondChord(&arch, .{ .x = 5, .y = -0.1 }, 0.5));
-    try t.expect(!curve.beyondChord(&arch, .{ .x = 5, .y = 2 }, 0.5));
+    try t.expect(curve.outsideChordStrip(&arch, .{ .x = 5, .y = -1 }, 0.5));
+    try t.expect(!curve.outsideChordStrip(&arch, .{ .x = 5, .y = -0.1 }, 0.5));
+    try t.expect(!curve.outsideChordStrip(&arch, .{ .x = 5, .y = 2 }, 0.5));
+    var s = arch;
+    s.p1.y = -2;
+    try t.expect(curve.outsideChordStrip(&s, .{ .x = 5, .y = 4 }, 0.5));
+    try t.expect(curve.outsideChordStrip(&s, .{ .x = 5, .y = -3 }, 0.5));
+    try t.expect(!curve.outsideChordStrip(&s, .{ .x = 5, .y = 3.5 }, 0.5));
+    try t.expect(!curve.outsideChordStrip(&s, .{ .x = 5, .y = -2.5 }, 0.5));
+    s.p3 = s.p0;
+    try t.expect(!curve.outsideChordStrip(&s, s.at(0.4), 0));
+    const tiny = Cubic.line(.zero, .{ .x = 1e-200, .y = 0 });
+    try t.expect(!curve.outsideChordStrip(&tiny, .{ .x = 0, .y = 0.1 }, 0.5));
     const line: Cubic = .{ .p0 = .{ .x = 0, .y = 0 }, .p1 = .{ .x = 0, .y = 0 }, .p2 = .{ .x = 10, .y = 0 }, .p3 = .{ .x = 10, .y = 0 } };
-    try t.expect(curve.beyondChord(&line, .{ .x = 5, .y = 1 }, 0.5));
-    try t.expect(!curve.beyondChord(&line, .{ .x = 5, .y = 0.25 }, 0.5));
+    try t.expect(curve.outsideChordStrip(&line, .{ .x = 5, .y = 1 }, 0.5));
+    try t.expect(!curve.outsideChordStrip(&line, .{ .x = 5, .y = 0.25 }, 0.5));
 }

@@ -1,7 +1,7 @@
 # Historical exact curve-region experiment
 
 This is a historical candidate experiment. Production now uses the
-[pure Zig Skia PathOps port](../../src/drawing/region/pathops/README.md);
+[Paper.js-derived Zig Boolean kernel](../../src/drawing/region/boolean/README.md);
 CGAL is not part of the production build. The isolated C++ research sources,
 build scripts and dependency manifest have been removed. This document retains
 the experiment's scope, provenance and measurements; it is not a runnable

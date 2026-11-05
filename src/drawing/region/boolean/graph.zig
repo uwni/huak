@@ -35,7 +35,22 @@ pub const HalfEdge = struct {
 const Directions = struct { start: f64, width: f64 };
 const SortEntry = struct { index: usize, directions: Directions = undefined, point: Point = undefined, angle: f64 = undefined };
 const Interval = struct { first: Cut, last: Cut };
-const Piece = struct { cubic: Cubic, first: Cut, last: Cut };
+const Candidate = struct {
+    coordinate: f64,
+    vertex: usize,
+
+    fn less(_: void, a: Candidate, b: Candidate) bool {
+        return a.coordinate < b.coordinate;
+    }
+    fn compare(coordinate: f64, candidate: Candidate) std.math.Order {
+        return std.math.order(coordinate, candidate.coordinate);
+    }
+    fn inRange(sorted: []const Candidate, low: f64, high: f64) []const Candidate {
+        const start = std.sort.lowerBound(Candidate, sorted, low, compare);
+        const tail = sorted[start..];
+        return tail[0..std.sort.upperBound(Candidate, tail, high, compare)];
+    }
+};
 
 /// Arrangement stored in the caller's arena; sources stay borrowed through tracing.
 /// Completed edges and vertices do not borrow the construction workspace.
@@ -47,7 +62,7 @@ pub const Graph = struct {
 
     pub fn init(allocator: Allocator, scratch: Allocator, sources: []const types.Source, candidates: []const std.ArrayList(usize), intersections: []const intersection.Event, epsilon: f64) !Graph {
         var result: Graph = .{ .sources = sources };
-        var builder: Builder = .{ .graph = &result, .allocator = scratch, .storage = allocator, .sources = sources, .epsilon = epsilon, .cuts = try scratch.alloc(std.ArrayList(Cut), sources.len) };
+        var builder: Builder = .{ .graph = &result, .allocator = scratch, .storage = allocator, .epsilon = epsilon, .cuts = try scratch.alloc(std.ArrayList(Cut), sources.len) };
         try builder.build(candidates, intersections);
         return result;
     }
@@ -58,49 +73,70 @@ const Builder = struct {
     graph: *Graph,
     allocator: Allocator,
     storage: Allocator,
-    sources: []const types.Source,
     epsilon: f64,
     cuts: []std.ArrayList(Cut),
     samples: std.ArrayList(Sample) = .empty,
 
     fn build(self: *Builder, candidates: []const std.ArrayList(usize), intersections: []const intersection.Event) !void {
         const allocator = self.allocator;
-        const sources = self.sources;
+        const sources = self.graph.sources;
         const epsilon = self.epsilon;
         try self.createSamples(intersections);
         try self.createVertices();
         const marks = try allocator.alloc(usize, self.graph.vertices.items.len);
         @memset(marks, none);
-        var pixels: std.ArrayList(usize) = .empty;
+        var pixels: std.ArrayList(Candidate) = .empty;
+        var nearby: std.ArrayList(usize) = .empty;
         var pieces: std.ArrayList(Interval) = .empty;
         for (sources, 0..) |*source, i| {
             pixels.clearRetainingCapacity();
-            const bounds = controlBounds(&source.cubic, 2 * epsilon);
+            const bounds = source.cubic.controlBounds().expanded(2 * epsilon);
+            // Build one index per source along its larger spatial extent.
+            const axis: usize = @intFromBool(bounds.height() > bounds.width());
             for (candidates[i].items) |other| for (self.cuts[other].items) |cut| {
                 const vertex = self.vertexIndex(cut.sample);
                 if (marks[vertex] == i) continue;
                 marks[vertex] = i;
-                if (inBounds(self.graph.vertices.items[vertex].point, bounds)) try pixels.append(allocator, vertex);
+                const point = self.graph.vertices.items[vertex].point;
+                if (bounds.contains(point)) try pixels.append(allocator, .{ .vertex = vertex, .coordinate = if (axis == 0) point.x else point.y });
             };
-            std.mem.sort(usize, pixels.items, {}, std.sort.asc(usize));
+            std.mem.sort(Candidate, pixels.items, {}, Candidate.less);
             if (pixels.items.len == 0) continue;
+            const handles = curves.hasHandles(&source.cubic);
             sortCuts(self.cuts[i].items);
             pieces.clearRetainingCapacity();
             const list = self.cuts[i].items;
             for (list[1..], list[0 .. list.len - 1]) |last, first| try pieces.append(allocator, .{ .first = first, .last = last });
             while (pieces.pop()) |interval| {
-                const piece = self.makePiece(i, interval.first, interval.last);
-                for (pixels.items) |vertex_index| {
+                const first = self.vertexIndex(interval.first.sample);
+                const last = self.vertexIndex(interval.last.sample);
+                // Endpoints cannot split their own interval. Peel them before
+                // constructing its Bézier, retaining a sorted search range.
+                var candidates_left = pixels.items;
+                while (candidates_left.len > 0 and (candidates_left[0].vertex == first or candidates_left[0].vertex == last))
+                    candidates_left = candidates_left[1..];
+                if (candidates_left.len == 0) continue;
+                const piece = snappedPart(&source.cubic, handles, interval.first.time, interval.last.time, self.graph.vertices.items[first].point, self.graph.vertices.items[last].point);
+                // Snapping moves controls. Query the new piece's own bounds.
+                const box = piece.controlBounds().expanded(epsilon);
+                nearby.clearRetainingCapacity();
+                for (Candidate.inRange(candidates_left, box.low(axis), box.high(axis))) |candidate| {
+                    if (candidate.vertex == first or candidate.vertex == last) continue;
+                    const point = self.graph.vertices.items[candidate.vertex].point;
+                    if (box.contains(point) and !curves.outsideChordStrip(&piece, point, epsilon))
+                        try nearby.append(allocator, candidate.vertex);
+                }
+                // The first accepted vertex determines how subsequent splits snap.
+                std.mem.sort(usize, nearby.items, {}, std.sort.asc(usize));
+                for (nearby.items) |vertex_index| {
                     const vertex = self.graph.vertices.items[vertex_index];
-                    if (self.vertexIndex(piece.first.sample) == vertex_index or self.vertexIndex(piece.last.sample) == vertex_index or !inBounds(vertex.point, controlBounds(&piece.cubic, epsilon))) continue;
-                    if (curves.beyondChord(&piece.cubic, vertex.point, epsilon)) continue;
-                    const time = curves.getNearestTime(&piece.cubic, vertex.point) orelse continue;
-                    if (time > 0 and time < 1 and close(vertex.point, curves.getPoint(&piece.cubic, time), epsilon)) {
-                        const original_time = if (hasHandles(&source.cubic)) piece.first.time + (piece.last.time - piece.first.time) * time else curves.getNearestTime(&source.cubic, vertex.point) orelse return error.GeometryFailed;
+                    const time = curves.getNearestTime(&piece, vertex.point) orelse continue;
+                    if (time > 0 and time < 1 and curves.withinDistance(vertex.point, curves.getPoint(&piece, time), epsilon)) {
+                        const original_time = if (handles) interval.first.time + (interval.last.time - interval.first.time) * time else curves.getNearestTime(&source.cubic, vertex.point) orelse return error.GeometryFailed;
                         const cut: Cut = .{ .time = original_time, .sample = vertex.sample };
                         try self.cuts[i].append(allocator, cut);
-                        try pieces.append(allocator, .{ .first = piece.first, .last = cut });
-                        try pieces.append(allocator, .{ .first = cut, .last = piece.last });
+                        try pieces.append(allocator, .{ .first = interval.first, .last = cut });
+                        try pieces.append(allocator, .{ .first = cut, .last = interval.last });
                         break;
                     }
                 }
@@ -108,7 +144,7 @@ const Builder = struct {
         }
         var short: std.ArrayList([2]usize) = .empty;
         var edge_capacity: usize = 0;
-        for (self.cuts, 0..) |*cuts, i| {
+        for (self.cuts, sources) |*cuts, *source| {
             edge_capacity = try std.math.add(usize, edge_capacity, cuts.items.len - 1);
             sortCuts(cuts.items);
             for (cuts.items[1..], cuts.items[0 .. cuts.items.len - 1]) |last, first| {
@@ -121,8 +157,8 @@ const Builder = struct {
                 // The vertex chord lower-bounds the piece length. Pieces at
                 // least the threshold apart cannot be merged as short.
                 if (delta.dot(delta) >= 16 * epsilon * epsilon) continue;
-                const part = self.makePiece(i, first, last);
-                if (shortLength(&part.cubic, 4 * epsilon)) try short.append(allocator, .{ first.sample, last.sample });
+                const part = snappedPart(&source.cubic, curves.hasHandles(&source.cubic), first.time, last.time, first_point, last_point);
+                if (shortLength(&part, 4 * epsilon)) try short.append(allocator, .{ first.sample, last.sample });
             }
         }
         for (short.items) |pair| self.samples.items[self.root(pair[0])].parent = self.root(pair[1]);
@@ -130,15 +166,19 @@ const Builder = struct {
         try self.graph.edges.ensureTotalCapacityPrecise(self.storage, edge_capacity);
         const by_vertex = try allocator.alloc(std.ArrayList(usize), self.graph.vertices.items.len);
         @memset(by_vertex, .empty);
-        for (self.cuts, 0..) |cuts, i| for (cuts.items[1..], cuts.items[0 .. cuts.items.len - 1]) |last, first| {
-            const from = self.vertexIndex(first.sample);
-            const to = self.vertexIndex(last.sample);
-            const part = self.makePiece(i, first, last);
-            if (from == to and shortLength(&part.cubic, 4 * epsilon)) continue;
-            var weights: [2]i32 = .{ 0, 0 };
-            weights[sources[i].operand] = 1;
-            try self.addEdge(by_vertex, .{ .cubic = part.cubic, .from = from, .to = to, .windings = weights, .curve = i, .time1 = first.time, .time2 = last.time, .straight = !hasHandles(&sources[i].cubic) });
-        };
+        const vertices = self.graph.vertices.items;
+        for (self.cuts, sources, 0..) |cuts, *source, i| {
+            const handles = curves.hasHandles(&source.cubic);
+            for (cuts.items[1..], cuts.items[0 .. cuts.items.len - 1]) |last, first| {
+                const from = self.vertexIndex(first.sample);
+                const to = self.vertexIndex(last.sample);
+                const part = snappedPart(&source.cubic, handles, first.time, last.time, vertices[from].point, vertices[to].point);
+                if (from == to and shortLength(&part, 4 * epsilon)) continue;
+                var weights: [2]i32 = .{ 0, 0 };
+                weights[source.operand] = 1;
+                try self.addEdge(by_vertex, .{ .cubic = part, .from = from, .to = to, .windings = weights, .curve = i, .time1 = first.time, .time2 = last.time, .straight = !handles });
+            }
+        }
         // Edges are complete before their values are borrowed. Both orientations
         // stay stable for the operation arena's lifetime.
         const half_edge_count = try std.math.mul(usize, self.graph.edges.items.len, 2);
@@ -154,7 +194,7 @@ const Builder = struct {
         const cursors = try allocator.dupe(usize, offsets[0..self.graph.vertices.items.len]);
         const reversed = try self.storage.alloc(Cubic, self.graph.edges.items.len);
         for (self.graph.edges.items, reversed, 0..) |*edge, *back, i| {
-            back.* = reverse(edge.cubic);
+            back.* = edge.cubic.reversed();
             self.graph.half_edges.appendAssumeCapacity(.{ .edge = i, .cubic = &edge.cubic, .from = edge.from, .to = edge.to });
             self.graph.half_edges.appendAssumeCapacity(.{ .edge = i, .cubic = back, .from = edge.to, .to = edge.from });
             outgoing_edges[cursors[edge.from]] = 2 * i;
@@ -178,7 +218,7 @@ const Builder = struct {
 
     fn createSamples(self: *Builder, intersections: []const intersection.Event) !void {
         const allocator = self.allocator;
-        const sources = self.sources;
+        const sources = self.graph.sources;
         const epsilon = self.epsilon;
         @memset(self.cuts, .empty);
         // Paired parameters are one topological event, even when independently
@@ -316,9 +356,6 @@ const Builder = struct {
             self.samples.items[i].vertex = index;
         }
     }
-    fn makePiece(self: *Builder, index: usize, first: Cut, last: Cut) Piece {
-        return .{ .cubic = getPart(&self.sources[index].cubic, hasHandles(&self.sources[index].cubic), first.time, last.time, self.graph.vertices.items[self.vertexIndex(first.sample)].point, self.graph.vertices.items[self.vertexIndex(last.sample)].point), .first = first, .last = last };
-    }
     fn addEdge(self: *Builder, by_vertex: []std.ArrayList(usize), edge: Edge) !void {
         const first = @min(edge.from, edge.to);
         const last = @max(edge.from, edge.to);
@@ -409,7 +446,7 @@ const Builder = struct {
         for (sorted) |*entry| entry.angle = @mod(entry.angle - start + std.math.tau, std.math.tau);
         std.mem.sort(SortEntry, sorted, self, struct {
             fn less(ctx: *Builder, first: SortEntry, second: SortEntry) bool {
-                if (close(first.point, second.point, ctx.epsilon)) {
+                if (curves.withinDistance(first.point, second.point, ctx.epsilon)) {
                     const orientation = ctx.side(&ctx.graph.half_edges.items[first.index], &ctx.graph.half_edges.items[second.index]);
                     if (orientation != 0) return orientation < 0;
                 }
@@ -436,10 +473,6 @@ fn sortCuts(cuts: []Cut) void {
         }
     }.less);
 }
-pub const hasHandles = curves.hasHandles;
-pub fn reverse(v: Cubic) Cubic {
-    return v.reversed();
-}
 /// The chord is a lower bound on arc length, so a chord at least the length
 /// threshold already proves the threshold cannot match. Only pieces with a
 /// short chord run the length integration.
@@ -449,17 +482,6 @@ fn shortLength(v: *const Cubic, threshold: f64) bool {
     if (dx * dx + dy * dy >= threshold * threshold) return false;
     return curves.getLength(v, 0, 1) < threshold;
 }
-fn close(a: Point, b: Point, epsilon: f64) bool {
-    const d = a.sub(b);
-    return d.dot(d) <= epsilon * epsilon;
-}
-pub inline fn controlBounds(v: *const Cubic, epsilon: f64) geometry.BBox {
-    return v.controlBounds().expanded(epsilon);
-}
-fn inBounds(p: Point, bounds: geometry.BBox) bool {
-    return bounds.contains(p);
-}
-
 fn directions(v: *const Cubic) ?Directions {
     var angles: [3]f64 = undefined;
     var count: usize = 0;
@@ -485,7 +507,7 @@ fn directions(v: *const Cubic) ?Directions {
     }
     return if (to - from < std.math.pi) .{ .start = @mod(angles[0] + from + std.math.tau, std.math.tau), .width = to - from } else null;
 }
-pub fn getPart(v: *const Cubic, handles: bool, first: f64, last: f64, a: Point, b: Point) Cubic {
+pub fn snappedPart(v: *const Cubic, handles: bool, first: f64, last: f64, a: Point, b: Point) Cubic {
     if (!handles) return .{ .p0 = a, .p1 = a, .p2 = b, .p3 = b };
     var part = curves.getPart(v, first, last);
     const da = a.sub(part.p0);
@@ -495,6 +517,19 @@ pub fn getPart(v: *const Cubic, handles: bool, first: f64, last: f64, a: Point, 
     part.p2 = part.p2.add(db);
     part.p3 = part.p3.add(db);
     return part;
+}
+
+test "piece lookup retains all vertices on either bound, including zero-width ranges" {
+    const vertices = [_]Candidate{
+        .{ .coordinate = -1, .vertex = 4 },
+        .{ .coordinate = 0, .vertex = 3 },
+        .{ .coordinate = 0, .vertex = 2 },
+        .{ .coordinate = 1, .vertex = 1 },
+        .{ .coordinate = 1, .vertex = 0 },
+    };
+    try std.testing.expectEqualSlices(Candidate, vertices[1..], Candidate.inRange(&vertices, 0, 1));
+    try std.testing.expectEqualSlices(Candidate, vertices[1..3], Candidate.inRange(&vertices, 0, 0));
+    try std.testing.expectEqual(0, Candidate.inRange(&vertices, 0.25, 0.75).len);
 }
 
 fn checkConstructionLifetime(allocator: Allocator) !void {

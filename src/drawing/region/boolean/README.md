@@ -76,8 +76,15 @@ so the normal's zero mask can be reused across controls. The dot product and
 its error bound keep their scalar expressions. Candidate curves use ordinary
 iteration rather than forcing two copies of the complete hull classifier.
 
-The graph's nearest-time probe first rejects a vertex farther than the
-tolerance from the piece chord. Short-span merges compare the vertex chord
+Graph construction sorts each source's eligible vertices along its wider
+coordinate axis. Each snapped piece queries the inclusive interval of its own
+control box. Projecting the four controls onto the chord normal gives a strip
+containing the entire Bézier. Vertices outside that strip by more than the
+tolerance and rounding margin can be discarded before nearest-point queries.
+The surviving vertices are probed in their original ID order, preserving the
+choice of the first accepted split when several vertices qualify.
+
+Short-span merges compare the vertex chord
 with the length threshold before integrating, zero-length length queries
 return zero, a start location reuses the contour offset, cut and vertex-fan
 capacities are reserved from known counts, a line-distance evaluation shares
