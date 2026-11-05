@@ -1,5 +1,6 @@
 import math.sin
 import paint.*
+import pen.profile_outline
 
 setup_typst {
     set text(font: "Libertinus Serif", size: 11pt)
@@ -24,7 +25,7 @@ fn pulsed(curve:path, width:length) -> path
     end
     return profile_outline(curve, positions, widths, "round", "round")
 end
-mixfix _ pulsed _ in path
+mixfix(pulsed) _ pulsed _ in path
 
 custom_curve := (15mm, 10mm) ~~ (50mm, 16mm) ~~ (105mm, 8mm) ~~ (160mm, 15mm)
 

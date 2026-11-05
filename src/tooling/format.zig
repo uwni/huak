@@ -238,11 +238,11 @@ test "formatter anchors nested delimiter continuation and closes to the opening 
 }
 
 test "formatter preserves prefix adjacency units unary signs and statement separators" {
-    try expectFormat("import math.PI as pi\nfn wrap(x:int)->int return 2*x end\nmixfix wrap _ in addition\na:=wrap (2)+3\nb:=wrap(2)+3\npoints:=(1cm,2mm)--(-2cm,+4mm); turn:=2 pi rad\n", "import math.PI as pi\nfn wrap(x:int)->int return 2*x end\nmixfix wrap _ in addition\na := wrap (2)+3\nb := wrap(2)+3\npoints := (1cm, 2mm)--(-2cm, +4mm); turn := 2 pi rad\n", .{});
+    try expectFormat("import math.PI as pi\nfn wrap(x:int)->int return 2*x end\nmixfix(wrap) wrap _ in addition\na:=wrap (2)+3\nb:=wrap(2)+3\npoints:=(1cm,2mm)--(-2cm,+4mm); turn:=2 pi rad\n", "import math.PI as pi\nfn wrap(x:int)->int return 2*x end\nmixfix(wrap) wrap _ in addition\na := wrap (2)+3\nb := wrap(2)+3\npoints := (1cm, 2mm)--(-2cm, +4mm); turn := 2 pi rad\n", .{});
 }
 
 test "formatter leaves the distinct execution results of spaced prefixes and adjacent calls intact" {
-    const input = "fn wrap(x:int)->int return 2*x end\nmixfix wrap _ in addition\na:=wrap (2)+3\nb:=wrap(2)+3\n";
+    const input = "fn wrap(x:int)->int return 2*x end\nmixfix(wrap) wrap _ in addition\na:=wrap (2)+3\nb:=wrap(2)+3\n";
     var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
     defer frontend.deinit();
     var diagnostic: ?source.Diagnostic = null;

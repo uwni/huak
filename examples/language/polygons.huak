@@ -1,5 +1,8 @@
 import drawing.drawing
-import paint.{rgb, pen, translate, rectangle, circle, region_union, region_intersection, region_difference, region_xor, offset, stroke_path, clip_region, clip_lines, draw, fill, label, picture}
+import paint.{rgb, pen, translate, rectangle, circle, draw, fill, label, picture}
+import geometry.{offset, clip_region, clip_lines}
+import pen.stroke_path
+import regions.*
 # Region operations use the pure Zig, f64 translation of Skia PathOps.
 param tolerance: length = 0.01mm
 setup_typst {
@@ -24,7 +27,8 @@ drawing plate do
     +label(subtitle, (10mm, 140mm))
     a := circle((-5mm, 0mm), 11mm)
     b := circle((5mm, 0mm), 11mm)
-    regions := [region_union(a, b, tolerance), region_intersection(a, b, tolerance), region_difference(a, b, tolerance), region_xor(a, b, tolerance)]
+    // With default tolerance: [a union b, a inter b, a minus b, a xor b].
+    regions := [union(a, b, tolerance), inter(a, b, tolerance), minus(a, b, tolerance), xor(a, b, tolerance)]
     union_title := typ[
     *Union*
 ]
@@ -71,7 +75,7 @@ drawing plate do
     expanded := stroke_path(center, 5mm, "round", "round", 4, tolerance)
     +fill(expanded, orange, translate((77mm, 52mm)))
     +draw(center, guide, translate((77mm, 52mm)))
-    ring := region_difference(circle((0mm, 0mm), 13mm), circle((0mm, 0mm), 7mm), tolerance)
+    ring := minus(circle((0mm, 0mm), 13mm), circle((0mm, 0mm), 7mm), tolerance)
     window := rectangle((-3mm, -15mm), 18mm, 30mm)
     cut := clip_region(ring, (-3mm, -15mm), (15mm, 15mm), tolerance)
     +fill(cut, blue, translate((127mm, 52mm)))

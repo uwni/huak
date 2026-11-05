@@ -1,4 +1,5 @@
 import paint.*
+import assertions.assert
 
 export plate := picture(100mm, 60mm)
 default plate

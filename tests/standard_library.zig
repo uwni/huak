@@ -45,6 +45,15 @@ test "standard root exports module namespaces and preserves nested native and so
             \\import std.collections as data
             \\import std.paint.circle as disk
             \\import geometry.circle as native_disk
+            \\import paint.*
+            \\fn minus(x:int, y:int) -> int return x-y end
+            \\a:=native_disk((0,0),10); b:=native_disk((4,0),10)
+            \\remainder:=block
+            \\    import regions.minus
+            \\    return a minus b
+            \\end
+            \\import regions.minus as cut_by
+            \\ensure(minus(7,3)==4 and len(remainder)>0 and len(a minus b)==len(remainder))
             \\export disk, native_disk
             \\direct:=library.math.sin(library.math.PI/2)
             \\aliased:=m.sin(m.PI/2)
@@ -53,7 +62,7 @@ test "standard root exports module namespaces and preserves nested native and so
             \\ensure(direct==1 and aliased==1 and selected==1)
             \\ensure(defaults["present"]==3 and defaults["missing"]==5)
             \\plate:=picture(20mm,20mm)
-            \\object.append(plate, library.object.fill((disk with center (10mm,10mm) radius 4mm), library.color.rgb(0,0.5,1)))
+            \\object.append(plate, library.object.fill((circle with center (10mm,10mm) radius 4mm), library.color.rgb(0,0.5,1)))
             \\export plate
         , optimize);
         defer program.deinit();
@@ -64,7 +73,7 @@ test "standard root exports module namespaces and preserves nested native and so
             root = module;
         };
         try t.expect(root != null);
-        const names = [_][]const u8{ "math", "geometry", "color", "pen", "transform", "picture", "object", "text", "animation", "solver", "assertions", "collections", "brush", "engraving", "paint", "weave" };
+        const names = [_][]const u8{ "math", "geometry", "color", "pen", "transform", "picture", "object", "text", "animation", "solver", "assertions", "collections", "brush", "engraving", "paint", "weave", "regions" };
         try t.expectEqual(names.len, root.?.exports.len);
         for (root.?.exports) |exposed| {
             try t.expect(exposed.target == .namespace);
@@ -103,28 +112,38 @@ test "narrow assertions import does not load drawing policies or standard root" 
 test "standard mixfix defaults preserve native calls bytecode work and repeated executions" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
+    const imports =
+        \\import paint.*
+        \\import geometry.{region_union, region_intersection, region_difference, region_xor}
+        \\import regions.*
+        \\
+    ;
     const sources = [_][]const u8{
-        \\import paint.{translate, draw, fill, append};import paint.*
-        \\export circle, rectangle, pen, picture, rgb, tapered, rainbow, tube
-        \\blue:=rgb(0.1,0.3,0.8)
-        \\plate:=picture(60mm,40mm)
-        \\object.append(plate, object.draw(circle((40mm,20mm),10mm), pen(blue,0.5mm)))
-        \\object.append(plate, object.fill(rectangle((2mm,2mm),20mm,3mm), blue))
-        \\curve:=joined(joined((1mm,10mm)--(2mm,10mm),(2mm,10mm)~~(10mm,14mm)~~(20mm,10mm)),(20mm,10mm)--(21mm,10mm))
-        \\object.append(plate, object.fill(tapered(curve,1mm), blue))
-        \\plate.append(copy(rainbow(curve,0.5mm)), translate((0mm,8mm)))
-        \\plate.append(copy(tube(curve,2mm)), translate((0mm,16mm)))
+        imports ++
+            \\export circle, rectangle, pen, picture, rgb, tapered, rainbow, tube
+            \\blue:=rgb(0.1,0.3,0.8)
+            \\plate:=picture(60mm,40mm)
+            \\object.append(plate, object.draw(circle((40mm,20mm),10mm), pen(blue,0.5mm)))
+            \\object.append(plate, object.fill(rectangle((2mm,2mm),20mm,3mm), blue))
+            \\curve:=joined(joined((1mm,10mm)--(2mm,10mm),(2mm,10mm)~~(10mm,14mm)~~(20mm,10mm)),(20mm,10mm)--(21mm,10mm))
+            \\a:=rectangle((0,0),12,12);b:=rectangle((8,2),12,10);c:=circle((14,7),4)
+            \\object.append(plate, object.fill(region_difference(region_xor(region_union(a,region_intersection(b,c)),b),c),blue))
+            \\object.append(plate, object.fill(tapered(curve,1mm), blue))
+            \\plate.append(copy(rainbow(curve,0.5mm)), translate((0mm,8mm)))
+            \\plate.append(copy(tube(curve,2mm)), translate((0mm,16mm)))
         ,
-        \\import paint.{translate, draw, fill, append};import paint.*
-        \\export circle, rectangle, pen, picture, rgb, tapered, rainbow, tube
-        \\blue:=rgb with red 0.1 green 0.3 blue 0.8
-        \\plate:=picture with width 60mm height 40mm
-        \\object.append(plate, object.draw((circle with center (40mm,20mm) radius 10mm), (pen with color blue width 0.5mm)))
-        \\object.append(plate, object.fill((rectangle with origin (2mm,2mm) width 20mm height 3mm), blue))
-        \\curve:=(1mm,10mm)--(2mm,10mm) & (2mm,10mm)~~(10mm,14mm)~~(20mm,10mm) & (20mm,10mm)--(21mm,10mm)
-        \\object.append(plate, object.fill((tapered along curve width 1mm), blue))
-        \\plate.append(copy((rainbow along curve width 0.5mm)), translate((0mm,8mm)))
-        \\plate.append(copy((tube along curve diameter 2mm)), translate((0mm,16mm)))
+        imports ++
+            \\export circle, rectangle, pen, picture, rgb, tapered, rainbow, tube
+            \\blue:=rgb with red 0.1 green 0.3 blue 0.8
+            \\plate:=picture with width 60mm height 40mm
+            \\object.append(plate, object.draw((circle with center (40mm,20mm) radius 10mm), (pen with color blue width 0.5mm)))
+            \\object.append(plate, object.fill((rectangle with origin (2mm,2mm) width 20mm height 3mm), blue))
+            \\curve:=(1mm,10mm)--(2mm,10mm) & (2mm,10mm)~~(10mm,14mm)~~(20mm,10mm) & (20mm,10mm)--(21mm,10mm)
+            \\a:=rectangle((0,0),12,12);b:=rectangle((8,2),12,10);c:=circle((14,7),4)
+            \\object.append(plate, object.fill(a union b inter c xor b minus c,blue))
+            \\object.append(plate, object.fill((tapered along curve width 1mm), blue))
+            \\plate.append(copy((rainbow along curve width 0.5mm)), translate((0mm,8mm)))
+            \\plate.append(copy((tube along curve diameter 2mm)), translate((0mm,16mm)))
         ,
     };
     for ([_]bool{ false, true }) |optimize| {
@@ -175,7 +194,7 @@ test "paint prelude reexports canonical functions without wrappers" {
             \\import paint.sphere as ball
             \\import "std/paint.huak" as paint_module
             \\export sphere, ball
-            \\export pic:=picture(30mm,30mm);append(pic, copy(ball 4mm))
+            \\export pic:=picture(30mm,30mm);append(pic, copy(sphere 4mm))
         , optimize);
         defer program.deinit();
         var paint_modules: usize = 0;
@@ -199,7 +218,7 @@ test "standard brushes and engraving compose with user profiles retained text an
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import math.cos;import paint.{rgb, translate, rectangle, circle, path, smooth, transformed, profile_outline, fill, label, picture};import math;import brush
+        \\import math.cos;import paint.{rgb, translate, rectangle, circle, path, smooth, transformed, fill, label, picture};import pen.profile_outline;import math;import brush
         \\import engraving
         \\fn user_outline(curve:path, width:length) -> path
         \\    positions:=[]; widths:=[]
@@ -225,7 +244,6 @@ test "standard brushes and engraving compose with user profiles retained text an
     for ([_]bool{ false, true }) |optimize| {
         var program = try compile(&library, source, optimize);
         defer program.deinit();
-        try t.expectEqual(@as(usize, 15), program.modules.len);
         var library_function = false;
         for (program.functions) |function| {
             if (std.mem.eql(u8, function.name, "rainbow")) library_function = true;
@@ -256,6 +274,8 @@ test "standard module private functions and unknown modules remain diagnosed" {
             .{ .source = "import std.circle", .message = "does not export 'circle'" },
             .{ .source = "import std.assert", .message = "does not export 'assert'" },
             .{ .source = "import std.paint.brush", .message = "does not export 'brush'" },
+            .{ .source = "import paint.minus", .message = "does not export 'minus'" },
+            .{ .source = "import paint.timeline", .message = "does not export 'timeline'" },
             .{ .source = "import \"std/missing.huak\" as missing", .message = "unknown standard library module" },
             .{ .source = "import paint.{path, picture};rainbow(picture(640, 480),path((0,0),(10,0)),1mm,10)", .message = "unknown function 'rainbow'" },
         }) |case| {
@@ -272,7 +292,7 @@ test "standard drawing recipes return whole-object handles including empty strok
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.*
+        \\import paint.*;import animation.{timeline, animate}
         \\import brush
         \\import engraving
         \\pic:=picture(100,100)
@@ -304,7 +324,7 @@ test "standard brushes avoid pen-up bridges and zero-width PDF hairlines" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.{rgb, rectangle, circle, path, clipped, picture};import brush
+        \\import paint.{rgb, rectangle, circle, path, picture};import geometry.clipped;import brush
         \\import engraving
         \\ink:=rgb(0,0,0); pic:=picture(640, 480)
         \\curve:=path((0,0),(10,0))
@@ -343,7 +363,7 @@ test "standard directional envelope mixfix aliases and ordinary calls share the 
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const sources = [_][]const u8{
-        \\import paint.{rgb, pensquare, rectangle, fill, picture};import paint.envelope as side
+        \\import paint.{rgb, rectangle, fill, picture};import pen.pensquare;import paint.envelope as side
         \\export side
         \\brush:=pensquare(4pt)
         \\curve:=rectangle((20,20),60,40)
@@ -351,11 +371,11 @@ test "standard directional envelope mixfix aliases and ordinary calls share the 
         \\pic:=picture(100,80)
         \\object.append(pic, object.fill(boundary, rgb(0.1,0.4,0.8)))
         ,
-        \\import paint.{rgb, pensquare, rectangle, fill, picture};import paint.envelope as side
+        \\import paint.{rgb, rectangle, fill, picture};import pen.pensquare;import paint.envelope as side
         \\export side
         \\brush:=pensquare(4pt)
         \\curve:=rectangle((20,20),60,40)
-        \\boundary:=side of curve with brush
+        \\boundary:=envelope of curve with brush
         \\pic:=picture(100,80)
         \\object.append(pic, object.fill(boundary, rgb(0.1,0.4,0.8)))
         ,
@@ -429,12 +449,13 @@ test "drawing word notation composes the same pictures as ordinary calls" {
     defer library.deinit();
     const source =
         \\import drawing.drawing
-        \\import paint.{rgb, pen, smooth, profile_outline, bounds, picture, append};import assertions.assert
+        \\import paint.{rgb, pen, smooth, bounds, picture, append};import pen.profile_outline;import assertions.assert
         \\import paint
+        \\fn draw(value:int)->int return value+1 end
         \\fn pulsed(curve:path, width:length) -> path
         \\    return profile_outline(curve,[0,0.5,1],[width/2,width,width/2],"round","round")
         \\end
-        \\mixfix _ pulsed _ in path
+        \\mixfix(pulsed) _ pulsed _ in path
         \\curve:=smooth([(5mm,20mm),(20mm,28mm),(40mm,18mm)])
         \\ink:=rgb(0.1,0.3,0.6)
         \\outline_pen:=pen(ink,0.5mm)
@@ -442,6 +463,8 @@ test "drawing word notation composes the same pictures as ordinary calls" {
         \\words:=picture(100mm,70mm)
         \\ordinary:=picture(100mm,70mm)
         \\drawing words do
+        \\    assert(draw(7)==8)
+        \\    +fill curve
         \\    +curve paint.tapered 2mm paint.filled ink
         \\    +curve paint.rainbow 1mm paint.shifted (0,-8mm)
         \\    +paint.sphere 4mm paint.shifted (65mm,30mm)
@@ -450,6 +473,7 @@ test "drawing word notation composes the same pictures as ordinary calls" {
         \\    +draw curve with outline_pen
         \\    +caption paint.at (5mm,60mm)
         \\end
+        \\append(ordinary, paint.fill(curve))
         \\append(ordinary, copy(paint.filled(paint.tapered(curve,2mm),ink)))
         \\append(ordinary, copy(paint.shifted(paint.rainbow(curve,1mm),(0,-8mm))))
         \\append(ordinary, copy(paint.shifted(paint.sphere(4mm),(65mm,30mm))))
@@ -462,7 +486,6 @@ test "drawing word notation composes the same pictures as ordinary calls" {
     for ([_]bool{ false, true }) |optimize| {
         var program = try compile(&library, source, optimize);
         defer program.deinit();
-        try t.expectEqual(@as(usize, 15), program.modules.len);
         var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
         defer runtime.deinit();
         var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
@@ -519,7 +542,11 @@ test "composed pictures are independent snapshots and word roles preserve target
         defer machine.deinit();
         try execute(&machine);
         for ([_][]const u8{
-            "import paint.append;import paint\nmixfix append _ in logical_or\nappend paint.sphere 1mm",
+            "import drawing.drawing; drawing picture() do draw((0,0)--(1,1)) end",
+            "import drawing.drawing; drawing picture() do fill(geometry.circle((0,0),1)) end",
+            "import drawing.drawing; drawing picture() do filldraw(geometry.circle((0,0),1),color.rgb(0,0,0),pen(color.rgb(1,0,0))) end",
+            "import drawing.drawing; drawing picture() do label(typ[Title],(0,0)) end",
+            "import paint.append;import paint\nmixfix(append) append _ in logical_or\nappend paint.sphere 1mm",
             "import drawing.drawing;import paint.{path, fill, picture};import paint\npic:=picture(640, 480); drawing pic do; fill path((0,0),(1,1)) paint.shifted (0,0);end",
             "import drawing.drawing;import paint.picture;import paint\npic:=picture(640, 480); drawing pic do; paint.at typ[Missing position];end",
             "import paint\nvalue:=paint.brush.rainbow",
@@ -535,7 +562,7 @@ test "cut composes many holes in one clip and preserves native text canvas and o
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const input =
-        \\import paint.{translate, fill, label, append};import paint.*
+        \\import paint.{translate, fill, label, append};import paint.*;import geometry.compound
         \\source:=picture(120pt,40pt)
         \\alias:=source
         \\object.append(source, object.fill(rectangle((-10pt,-5pt),150pt,50pt), rgb(0.1,0.3,0.7)))
@@ -636,12 +663,13 @@ test "cut validates static input and tolerance without changing aliases" {
             .{ .call = "cut(source,hole,-1pt)", .message = "cut tolerance must be positive" },
             .{ .call = "cut(source,42)", .message = "region requires a path, text, or object" },
             .{ .call = "region(source,0pt)", .message = "region tolerance must be positive" },
-            .{ .setup = "import paint.{timeline, animate};source.timeline(2); animate(id,\"opacity\",[[0,0],[1,1]])", .call = "cut(source,hole)", .message = "cut requires a static object" },
-            .{ .setup = "import paint.{circle, fill, picture, timeline, animate};cutter:=picture(640, 480); id=object.append(cutter, object.fill(circle((5pt,5pt),2pt))); cutter.timeline(2); animate(id,\"opacity\",[[0,0],[1,1]])", .call = "cut(source,cutter)", .message = "operation requires a static object" },
+            .{ .setup = "import animation.{timeline, animate};source.timeline(2); animate(id,\"opacity\",[[0,0],[1,1]])", .call = "cut(source,hole)", .message = "cut requires a static object" },
+            .{ .setup = "import paint.{circle, fill, picture};import animation.{timeline, animate};cutter:=picture(640, 480); id=object.append(cutter, object.fill(circle((5pt,5pt),2pt))); cutter.timeline(2); animate(id,\"opacity\",[[0,0],[1,1]])", .call = "cut(source,cutter)", .message = "operation requires a static object" },
         };
         for (cases) |fixture| {
             const input = try std.fmt.allocPrint(t.allocator,
-                \\import paint.{{region, fill, timeline, animate}};import paint.*
+                \\import paint.*
+                \\import object.region
                 \\source:=picture(80pt,60pt); alias:=source
                 \\id:=object.append(source, object.fill(rectangle((0pt,0pt),20pt,20pt)))
                 \\hole:=rectangle((5pt,5pt),2pt,2pt)
@@ -664,7 +692,8 @@ test "cut validates static input and tolerance without changing aliases" {
             try t.expect(machine.getGlobal("result") == null);
         }
         var program = try compile(&library,
-            \\import paint.{fill, timeline};import paint.*
+            \\import paint.*
+            \\import animation.timeline
             \\source:=picture(80pt,60pt)
             \\object.append(source, object.fill(rectangle((0pt,0pt),20pt,20pt)))
             \\source.timeline(2)
@@ -690,7 +719,10 @@ test "cut outlines independent picture primitives without cancelling overlaps or
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const input =
-        \\import paint.{reverse, region, region_intersection, fill, label, outlines};import paint.*
+        \\import paint.*
+        \\import geometry.{compound, region_intersection}
+        \\import object.{outlines, region}
+        \\import assertions.assert
         \\source:=picture(120pt,60pt); alias:=source
         \\object.append(source, object.fill(rectangle((0pt,0pt),80pt,60pt), rgb(0.1,0.3,0.7)))
         \\object.append(source, object.label(typ[Native source text], (4pt,45pt)))
@@ -773,7 +805,7 @@ test "outline picture workers retain independent geometry after their borrowed o
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const input =
-        \\import paint.{rgb, circle, fill, label, outlines, picture, append};caption:=typ[Worker Ω]
+        \\import paint.{rgb, circle, fill, label, picture, append};import object.outlines;caption:=typ[Worker Ω]
         \\source:=picture(100pt,60pt)
         \\object.append(source, object.label(caption, (10pt,30pt)))
         \\object.append(source, object.fill(circle((70pt,25pt),8pt), rgb(0.2,0.4,0.8)))
@@ -827,7 +859,7 @@ test "object cut retains overflowing native text images and paint without outlin
     defer library.deinit();
     for ([_]bool{ false, true }) |optimize| {
         var program = try compile(&library,
-            \\import paint.*
+            \\import paint.*;import geometry.region_xor;import object.region;import assertions.assert
             \\source:=picture()
             \\words:=typ[#box(width:1pt,height:20pt)[#text(size:20pt)[WWW]]]
             \\object.append(source, label(words, (10pt,30pt)))
@@ -869,7 +901,7 @@ test "object instances retain native text local copies world snapshots and indep
     defer library.deinit();
     for ([_]bool{ false, true }) |optimize| {
         var program = try compile(&library,
-            \\import paint.*
+            \\import paint.*;import assertions.assert
             \\root:=picture()
             \\g:=object.append(root, picture(transform: translate((20pt,0pt))))
             \\curve:=rectangle((0pt,0pt),10pt,10pt)
@@ -930,7 +962,7 @@ test "erase keeps live siblings in paint order with parent-space dashed strokes"
     defer library.deinit();
     for ([_]bool{ false, true }) |optimize| {
         var program = try compile(&library,
-            \\import paint.*
+            \\import paint.*;import geometry.region_intersection;import pen.{pensquare, profile_outline};import object.region;import assertions.assert
             \\fn ink(obj:object, x:length, y:length) -> bool
             \\    return len(region_intersection(region(obj),rectangle((x,y),0.5pt,0.5pt)))>0
             \\end
@@ -1023,7 +1055,7 @@ test "standalone path and text objects need no drawing container" {
     defer library.deinit();
     for ([_]bool{ false, true }) |optimize| {
         var program = try compile(&library,
-            \\import paint.*
+            \\import paint.*;import assertions.assert
             \\curve:=rectangle((0pt,0pt),20pt,10pt)
             \\plain:=object(curve)
             \\assert(plain.kind=="path" and plain.parent==false)
@@ -1050,7 +1082,7 @@ test "standalone path and text objects need no drawing container" {
             \\assert(len(plate.children)==3)
             \\other:=picture(150pt,60pt)
             \\other.append(copy(plate))
-            \\mixfix _ append _ in path
+            \\mixfix(append) _ append _ in path
             \\drawing other do
             \\    +fill_obj
             \\    object.append(other, stroke_obj)

@@ -1,4 +1,6 @@
 import paint.*
+import geometry.region_intersection
+import object.region
 import weave
 import assertions.assert
 import geometry.path_crossings

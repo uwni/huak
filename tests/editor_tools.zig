@@ -173,10 +173,10 @@ test "formatter preserves scoped mixfix declarations and call labels" {
     const input =
         \\import paint.*
         \\fn combine_digits(left:int,right:int)->int return left*10+right end
-        \\mixfix combine_digits from _ to _ in unary
+        \\mixfix(combine_digits) combine_digits from _ to _ in unary
         \\fn figure()->picture
         \\if true then
-        \\mixfix combine_digits left _ right _ in unary
+        \\mixfix(combine_digits) combine_digits left _ right _ in unary
         \\inside:=combine_digits left 2 right 3
         \\end
         \\outside:=combine_digits from 4 to 5
@@ -187,10 +187,10 @@ test "formatter preserves scoped mixfix declarations and call labels" {
     const expected =
         \\import paint.*
         \\fn combine_digits(left:int, right:int)->int return left*10+right end
-        \\mixfix combine_digits from _ to _ in unary
+        \\mixfix(combine_digits) combine_digits from _ to _ in unary
         \\fn figure()->picture
         \\    if true then
-        \\        mixfix combine_digits left _ right _ in unary
+        \\        mixfix(combine_digits) combine_digits left _ right _ in unary
         \\        inside := combine_digits left 2 right 3
         \\    end
         \\    outside := combine_digits from 4 to 5
@@ -212,11 +212,11 @@ test "formatter preserves scoped mixfix declarations and call labels" {
 test "envelope tooling uses builtin metadata for signatures and preserves imported mixfix formatting" {
     var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
     defer frontend.deinit();
-    const source = "import paint.*;import paint.envelope as side\nbrush:=pensquare(4pt)\ncurve:=(0,0)--(20,0)\nedge:=side of curve with brush\nplain:=envelope(curve,brush,0.01pt)\n";
+    const source = "import paint.*;import pen.pensquare;import paint.envelope as side\nbrush:=pensquare(4pt)\ncurve:=(0,0)--(20,0)\nedge:=envelope of curve with brush\nplain:=envelope(curve,brush,0.01pt)\n";
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     const formatted = try tooling.format.format(&frontend, source, "/tmp/envelope-editor.huak", &diagnostic);
     defer t.allocator.free(formatted);
-    try t.expect(std.mem.indexOf(u8, formatted, "edge := side of curve with brush") != null);
+    try t.expect(std.mem.indexOf(u8, formatted, "edge := envelope of curve with brush") != null);
     try t.expect(std.mem.indexOf(u8, formatted, "plain := envelope(curve, brush, 0.01pt)") != null);
     const again = try tooling.format.format(&frontend, formatted, "/tmp/envelope-editor.huak", &diagnostic);
     defer t.allocator.free(again);
@@ -287,8 +287,8 @@ test "language server shares mixfix metadata across unsaved imports formatting a
     defer output.deinit();
     const dependency = "file:///tmp/mixfix-editor-library.huak";
     const uri = "file:///tmp/mixfix-editor-root.huak";
-    const module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix combine_digits from _ to _ in unary\n";
-    const changed_module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix combine_digits from _ plus _ in unary\n";
+    const module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix(combine_digits) digits from _ to _ in unary\n";
+    const changed_module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix(combine_digits) digits from _ plus _ in unary\n";
     const source = "import paint.*;import \"mixfix-editor-library.huak\".combine_digits as digits\nfn figure()->picture\nvalue:=digits from 2 to 3\nreturn picture(640, 480)\nend\nexport circle\nexport plate:=figure();default plate\n";
     const changed_source = "import paint.*;import \"mixfix-editor-library.huak\".combine_digits as digits\nfn figure()->picture\nvalue:=digits from 2 plus 3\nreturn picture(640, 480)\nend\nexport circle\nexport plate:=figure();default plate\n";
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = dependency, .version = 1, .text = module } } }, .{}), &output.writer);
@@ -361,28 +361,29 @@ test "mixfix semantic colors follow syntax scopes and leave embedded content unt
     const a = arena.allocator();
     const source =
         "fn combine(a:int,b:int)->int return a+b end\r\n" ++
-        "mixfix combine from _ to _ in unary\r\n" ++
+        "mixfix(combine) combine from _ as _ in unary\r\n" ++
         "fn twice(v:int)->int return v*2 end\r\n" ++
-        "mixfix twice _ in unary\r\n" ++
+        "mixfix(twice) twice _ in unary\r\n" ++
         "fn shifted(a:int,b:int)->int return a+b end\r\n" ++
-        "mixfix _ shifted _ in addition\r\n" ++
-        "from:=2;to:=3\r\n" ++
-        "label:=\"🙂\"; answer:=combine from twice from to to // from to\r\n" ++
+        "mixfix(shifted) _ shifted _ in addition\r\n" ++
+        "from:=2;as:=3\r\n" ++
+        "label:=\"🙂\"; answer:=combine from twice from as as // from as\r\n" ++
         "if true then\r\n" ++
-        " mixfix combine left _ right _ in unary\r\n" ++
-        " inner:=combine left from right (to shifted from)\r\n" ++
+        " mixfix(combine) combine left _ right _ in unary\r\n" ++
+        " inner:=combine left from right (as shifted from)\r\n" ++
         "end\r\n" ++
-        "outer:=combine from from to to\r\n";
+        "outer:=combine from from as as\r\n";
     const data = try tooling.semantic_tokens.collect(&frontend, a, source, "/tmp/semantic-scopes.huak");
-    try expectSemanticRow(source, data, 1, &.{ .{ "combine", .function }, .{ "from", .keyword }, .{ "_", .operator }, .{ "to", .keyword }, .{ "_", .operator } });
-    try expectSemanticRow(source, data, 5, &.{ .{ "_", .operator }, .{ "shifted", .function }, .{ "_", .operator } });
-    try expectSemanticRow(source, data, 7, &.{ .{ "combine", .function }, .{ "from", .keyword }, .{ "twice", .function }, .{ "from", .variable }, .{ "to", .keyword }, .{ "to", .variable } });
-    try expectSemanticRow(source, data, 10, &.{ .{ "combine", .function }, .{ "left", .keyword }, .{ "from", .variable }, .{ "right", .keyword }, .{ "to", .variable }, .{ "shifted", .function }, .{ "from", .variable } });
-    try expectSemanticRow(source, data, 12, &.{ .{ "combine", .function }, .{ "from", .keyword }, .{ "from", .variable }, .{ "to", .keyword }, .{ "to", .variable } });
+    try expectSemanticRow(source, data, 1, &.{ .{ "combine", .function }, .{ "combine", .keyword }, .{ "from", .keyword }, .{ "_", .operator }, .{ "as", .keyword }, .{ "_", .operator } });
+    try expectSemanticRow(source, data, 5, &.{ .{ "shifted", .function }, .{ "_", .operator }, .{ "shifted", .keyword }, .{ "_", .operator } });
+    try expectSemanticRow(source, data, 7, &.{ .{ "combine", .function }, .{ "from", .keyword }, .{ "twice", .function }, .{ "from", .variable }, .{ "as", .keyword }, .{ "as", .variable } });
+    try expectSemanticRow(source, data, 10, &.{ .{ "combine", .function }, .{ "left", .keyword }, .{ "from", .variable }, .{ "right", .keyword }, .{ "as", .variable }, .{ "shifted", .function }, .{ "from", .variable } });
+    try expectSemanticRow(source, data, 12, &.{ .{ "combine", .function }, .{ "from", .keyword }, .{ "from", .variable }, .{ "as", .keyword }, .{ "as", .variable } });
 
-    const qualified = "import paint as p\ncenter:=(0,0); radius:=2\np.circle with center center radius radius\n";
+    const qualified = "import paint as p\ncenter:=(0,0); radius:=2\np.circle with center center radius radius\nmixfix(p.circle) disk at _ radius _ in unary\n";
     const qualified_data = try tooling.semantic_tokens.collect(&frontend, a, qualified, "/tmp/semantic-qualified.huak");
     try expectSemanticRow(qualified, qualified_data, 2, &.{ .{ "p", .namespace }, .{ "circle", .function }, .{ "with", .keyword }, .{ "center", .keyword }, .{ "center", .variable }, .{ "radius", .keyword }, .{ "radius", .variable } });
+    try expectSemanticRow(qualified, qualified_data, 3, &.{ .{ "p", .namespace }, .{ "circle", .function }, .{ "disk", .keyword }, .{ "at", .keyword }, .{ "_", .operator }, .{ "radius", .keyword }, .{ "_", .operator } });
 
     const example_path = "examples/language/mixfix.huak";
     const example = try std.Io.Dir.cwd().readFileAlloc(t.io, example_path, a, .unlimited);
@@ -532,7 +533,7 @@ test "standalone language server resolves standard module tree and nested native
             1 => {},
             2 => {
                 const items = response.get("result").?.object.get("items").?.array.items;
-                try t.expectEqual(@as(usize, 16), items.len);
+                try t.expectEqual(@as(usize, 17), items.len);
                 var has_weave = false;
                 for (items) |item| {
                     try t.expectEqual(@as(i64, 9), item.object.get("kind").?.integer);
@@ -575,7 +576,7 @@ test "inlay hints use syntax imports native Typst and UTF16 positions across edi
         \\import drawing.drawing
         \\import "huak-inlay-dependency.huak".{wrap as enclosed}
         \\export fn bad()->int
-        \\    if enclosed 1 > 0 then
+        \\    if wrap 1 > 0 then
         \\        label:=typ[end #text("end")]
         \\    text:="🙂"; end
         \\end
@@ -593,7 +594,7 @@ test "inlay hints use syntax imports native Typst and UTF16 positions across edi
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = "file:///tmp/huak-inlay-dependency.huak", .version = 1, .text = "export wrap;mixfix wrap _ in addition;fn wrap(x:int)->int return x end" } } }, .{}), &output.writer);
+    try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = "file:///tmp/huak-inlay-dependency.huak", .version = 1, .text = "export wrap;mixfix(wrap) wrap _ in addition;fn wrap(x:int)->int return x end" } } }, .{}), &output.writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = source } } }, .{}), &output.writer);
     const range: tooling.position.Range = .{ .start = .{ .line = 0, .character = 0 }, .end = tooling.position.at(source, source.len) };
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 11, .method = "textDocument/inlayHint", .params = .{ .textDocument = .{ .uri = uri }, .range = range } }, .{}), &output.writer);

@@ -194,7 +194,7 @@ fn compareInfixCalls(a: std.mem.Allocator) !void {
         \\ associativity left
         \\end
         \\fn combine(a:int,b:int)->int;return a+b;end
-        \\mixfix _ combine _ in accumulating
+        \\mixfix(combine) _ combine _ in accumulating
         \\param count=10000
         \\total:=0
         \\for i in 1:count do

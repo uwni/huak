@@ -6,6 +6,10 @@
 // their boolean union, so the letters become transparent gaps. Split the
 // remaining compound path into subpaths and give each area its own colour.
 import paint.*
+import geometry.subpaths
+import transform.compose
+import object.region
+import regions.{union, minus}
 
 tolerance := 0.001mm
 palette := [
@@ -43,17 +47,14 @@ a := letter(typ[a], compose(rotate(-105.81deg), translate((31.91mm, 44.88mm))))
 k := letter(typ[K], translate((24.6mm, 8.65mm)))
 
 // Union the four glyph regions before subtracting them from the seal.
-letters := region_union(
-    region_union(h, u),
-    region_union(a, k)
-)
+letters := h union u union a union k
 
 // Pentagon from the source SVG, flipped to y-up.
 pentagon := (43.04mm, 43.35mm) -- (13.55mm, 48.02mm) -- (0mm, 21.42mm) --
     (21.11mm, 0.31mm) -- (47.71mm, 13.87mm) -- cycle
 
 plate := picture with width 58.67mm height 49.67mm
-areas := subpaths(region_difference(pentagon, letters, tolerance))
+areas := subpaths(minus(pentagon, letters, tolerance))
 for i in 0:len(areas)-1 do
     object.append(plate, fill(areas[i], palette[i % len(palette)]))
 end

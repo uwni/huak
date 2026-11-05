@@ -1,6 +1,7 @@
 // One retained cubic, three convex polygon nibs. Export plate as SVG or PDF;
 // overlap and dashes are also available as independent picture exports.
 import paint.*
+import pen.{pensquare, makepen, makepath, stroke_outline}
 
 setup_typst {
     set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#26354b"))

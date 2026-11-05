@@ -44,7 +44,7 @@ pub const Diagnostic = source.Diagnostic;
 const Symbol = struct { index: u32, kind: Type, readonly: bool = false, inferable: bool = false, available_after: usize = 0 };
 const Names = std.StringHashMapUnmanaged(Symbol);
 const Binding = struct { symbol: Symbol, local: bool, declaration: usize = 0, module: ?u32 = null, initializer: ?u32 = null };
-const ImportedSymbol = struct { module: u32, initializer: ?u32 = null, target: CallTarget };
+const CallableTarget = struct { target: CallTarget, module: ?u32 = null, initializer: ?u32 = null };
 const CallTarget = @FieldType(bc.Export, "target");
 const ExpressionDefault = struct { expression: *ast.Expr, function: u32, kind: Type, span: Span };
 const CallParameters = struct {
@@ -443,8 +443,18 @@ const Compiler = struct {
         for (self.build.modules[member.module].exports) |exposed| if (std.mem.eql(u8, member.name, exposed.name)) return exposed;
         unreachable;
     }
-    fn importInitializer(self: *const Compiler, span: Span) u32 {
-        for (self.environment.unit.imports.items) |item| if (item.span.start == span.start) return item.initializer;
+    fn importInitializer(self: *const Compiler, span: Span) ?u32 {
+        const unit = self.environment.unit;
+        for (unit.imports.items, 0..) |item, i| {
+            if (item.span.start != span.start) continue;
+            // Leading top-level imports have run before any subsequent block or function can execute.
+            const leading = @min(i, unit.script.statements.len);
+            for (unit.imports.items[0..leading], unit.script.statements[0..leading]) |prior, statement| {
+                if (statement.value != .imported or statement.span.start != prior.span.start) break;
+                if (prior.initializer == item.initializer) return null;
+            }
+            return item.initializer;
+        }
         unreachable;
     }
     fn collectImportedSymbols(self: *Compiler) !void {
@@ -490,7 +500,10 @@ const Compiler = struct {
         if (self.environment.group_names.get(name.name)) |id| return id;
         return precedence.builtinNamed(name.name) orelse self.fail(name.span, "unknown precedence group '{s}'", .{name.name});
     }
-    pub fn operatorGroup(self: *Compiler, name: ast.OperatorName, leading: bool) anyerror!u32 {
+    pub fn operatorGroup(self: *Compiler, mixed: @FieldType(@FieldType(ast.Expr, "value"), "mixfix_call")) anyerror!u32 {
+        if (mixed.qualified) |binding| return self.groupNamed(binding.form.group);
+        const name = mixed.operator;
+        const leading = mixed.leading;
         if (name.namespace) |alias| {
             const owner = self.imported(alias, name.span) orelse return self.fail(name.span, "unknown module namespace '{s}'", .{alias});
             const exposed = try self.importedExport(owner, name.name, name.span);
@@ -531,7 +544,7 @@ const Compiler = struct {
         for (self.environment.unit.headers.operators) |header| {
             const statement = header.statement;
             const binding = statement.value.mixfix_binding;
-            const name = binding.name;
+            const name = binding.target.name;
             const group = binding.form.group;
             const call = self.environment.unit.resolverAt(statement.span.start).callable(header.scope, name);
             var enclosing: ?Parser.ScopeId = header.scope;
@@ -540,12 +553,12 @@ const Compiler = struct {
                 expansion = true;
                 break;
             };
-            if (expansion) continue;
-            if (call.shadowed) {
+            if (binding.target.namespace == null and expansion) continue;
+            if (binding.target.namespace == null and call.shadowed) {
                 _ = try self.groupNamed(group);
                 continue;
             }
-            const target = self.callTarget(name, call.member);
+            const target = if (binding.target.namespace != null) (try self.qualifiedTarget(binding.target)).target else self.callTarget(name, call.member);
             const arity = binding.form.arity();
             switch (target orelse return self.fail(statement.span, "mixfix binding requires a callable function '{s}'", .{name})) {
                 inline .function, .builtin => |index, kind| {
@@ -673,19 +686,38 @@ const Compiler = struct {
     fn copyMixfix(self: *Compiler, form: ast.MixfixForm) !bc.MixfixForm {
         const group = try self.groupNamed(form.group);
         const parts = try self.allocator.dupe(?[]const u8, form.parts);
-        return .{ .parts = parts, .group = group, .symbol = form.symbol };
+        return .{ .head = form.head, .parts = parts, .group = group };
     }
-    fn compileImportedCall(self: *Compiler, context: *Context, imported_symbol: ImportedSymbol, call: @FieldType(@FieldType(ast.Expr, "value"), "call"), skip: usize, span: Span) anyerror!Type {
+    fn qualifiedTarget(self: *Compiler, name: ast.OperatorName) !CallableTarget {
+        const previous = self.environment;
+        self.environment = self.build.environments[name.module.?];
+        defer self.environment = previous;
+        const namespace = name.namespace.?;
+        const unit = self.environment.unit;
+        const resolver = unit.resolverAt(name.span.start);
+        const scope = unit.scopeAt(name.span.start);
+        if (self.imported(namespace, name.span)) |module| {
+            const exposed = try self.importedExport(module, name.name, name.span);
+            const root = namespace[0 .. std.mem.indexOfScalar(u8, namespace, '.') orelse namespace.len];
+            return .{ .target = exposed.target, .module = module, .initializer = resolver.namespaceInitializer(scope, root) };
+        }
+        if (resolver.readable(scope, namespace) == null) if (builtin.Namespace.parse(namespace)) |native| {
+            const signature = builtin.namespaceLookup(native, name.name) orelse return self.fail(name.span, "{s} has no function '{s}'", .{ namespace, name.name });
+            return .{ .target = .{ .builtin = signature.id } };
+        };
+        return self.fail(name.span, "unknown module namespace '{s}'", .{namespace});
+    }
+    fn compileResolvedCall(self: *Compiler, context: *Context, imported_symbol: CallableTarget, call: @FieldType(@FieldType(ast.Expr, "value"), "call"), skip: usize, span: Span) anyerror!Type {
         const target = imported_symbol.target;
         if (target == .global) {
             const kind = self.build.types.items[target.global];
             if (kind != .function and kind != .any) return self.fail(span, "export '{s}' is not callable", .{call.name});
-            try context.checkImport(imported_symbol.module, imported_symbol.initializer, span);
+            if (imported_symbol.module) |module| try context.checkImport(module, imported_symbol.initializer, span);
             _ = try context.emit(.load_global, target.global, 0, span);
             return self.dynamicCall(context, call, skip, span);
         }
         if (target != .function and target != .builtin and target != .record) return self.fail(span, "export '{s}' is not a function or struct", .{call.name});
-        try context.checkImport(imported_symbol.module, imported_symbol.initializer, span);
+        if (imported_symbol.module) |module| try context.checkImport(module, imported_symbol.initializer, span);
         return self.compileCall(context, target, call, skip, span);
     }
     fn callFunction(self: *const Compiler, index: u32) bc.Function {
@@ -760,7 +792,9 @@ const Compiler = struct {
             const call = inner.value.call;
             var target: ?CallTarget = null;
             var skip: usize = 0;
-            if (call.dot and call.args.len != 0) {
+            if (call.qualified) |name| {
+                target = (self.qualifiedTarget(name.*) catch return null).target;
+            } else if (call.dot and call.args.len != 0) {
                 if (ungroup(call.args[0]).value == .name) if (self.defaultNamespace(context, ungroup(call.args[0]).value.name, inner.span)) |native| {
                     const signature = builtin.namespaceLookup(native, call.name) orelse return null;
                     return self.builtinResult(context, signature, call.args[1..]);
@@ -948,7 +982,7 @@ const Compiler = struct {
                 try self.parameters.append(.{ .name = parameter.name, .kind = binding.kind, .default = default, .global = binding.index, .span = span, .module = self.environment.module_index });
             },
             .imported => {
-                _ = try context.emit(.import_module, self.importInitializer(span), 0, span);
+                if (self.importInitializer(span)) |module| _ = try context.emit(.import_module, module, 0, span);
             },
             .function => |function| {
                 if (!context.entry or context.block_depth != 1) return self.fail(span, "functions must be declared at script top level", .{});
@@ -962,11 +996,11 @@ const Compiler = struct {
                 if (!context.entry or context.block_depth != 1) return self.fail(span, "precedence declarations must be at script top level", .{});
             },
             .mixfix_binding => |binding| {
-                if (context.resolve(binding.name, span)) |value| {
+                if (binding.target.namespace == null) if (context.resolve(binding.target.name, span)) |value| {
                     try self.require(.function, value.symbol.kind, span);
                     if (value.local and span.start < value.symbol.available_after)
                         return self.fail(span, "mixfix function used before its declaration is complete", .{});
-                }
+                };
             },
             .setup_typst => |code| {
                 if (!context.entry or context.block_depth != 1) return self.fail(span, "setup_typst must be at script top level", .{});
@@ -1244,6 +1278,7 @@ const Compiler = struct {
                 return result;
             },
             .call => |call| {
+                if (call.qualified) |name| return self.compileResolvedCall(context, try self.qualifiedTarget(name.*), call, 0, span);
                 if (call.dot and std.mem.eql(u8, call.name, "with")) {
                     try self.require(.function, try self.compileExpression(context, call.args[0]), call.args[0].span);
                     for (call.args[1..]) |arg| _ = try self.compileExpression(context, arg);
@@ -1258,7 +1293,7 @@ const Compiler = struct {
                 }
                 if (call.dot and call.args.len != 0) if (self.moduleExpression(call.args[0])) |module_index| {
                     const exposed = try self.importedExport(module_index, call.name, span);
-                    return self.compileImportedCall(context, .{ .module = module_index, .initializer = self.moduleInitializer(call.args[0]), .target = exposed.target }, call, 1, span);
+                    return self.compileResolvedCall(context, .{ .module = module_index, .initializer = self.moduleInitializer(call.args[0]), .target = exposed.target }, call, 1, span);
                 };
                 const scoped_call = self.environment.unit.resolverAt(span.start).callable(self.environment.unit.scopeAt(span.start), call.name);
                 if (context.resolve(call.name, span)) |binding| {
@@ -1275,7 +1310,7 @@ const Compiler = struct {
                 if (scoped_call.namespace) |module_index| {
                     try context.checkImport(module_index, scoped_call.namespace_initializer, span);
                 } else if (scoped_call.member) |member| if (member.module != self.environment.module_index) {
-                    return self.compileImportedCall(context, .{ .module = member.module, .initializer = member.initializer, .target = target }, call, 0, span);
+                    return self.compileResolvedCall(context, .{ .module = member.module, .initializer = member.initializer, .target = target }, call, 0, span);
                 };
                 return self.compileCall(context, target, call, 0, span);
             },
@@ -1897,7 +1932,7 @@ test "block values keep lexical bindings and return to the nearest block" {
         \\    return a
         \\end
         \\fn combine(a:int, b:int) -> int; return a+b; end
-        \\mixfix combine _ with _ in unary
+        \\mixfix(combine) combine _ with _ in unary
         \\continued := block
         \\    a := combine 10
         \\        with a
@@ -1933,7 +1968,7 @@ test "explicit partial application retains values and ordinary mixfix calls" {
         \\third := g(b:2,c:10)
         \\fourth := block
         \\    add := add.with(1,c:3)
-        \\    mixfix add _ in unary
+        \\    mixfix(add) add _ in unary
         \\    return add 2
         \\end
         \\size := len.with("abc")
@@ -1986,7 +2021,7 @@ test "expanded blocks bind arguments once and expose local commands without capt
         \\end
         \\expand_block accumulate(target:dict)
         \\    place := put.with(target: target)
-        \\    mixfix place _ in unary
+        \\    mixfix(place) place _ in unary
         \\    ...
         \\    target["finished"] = target["finished"] + 1
         \\    return target["sum"]
@@ -2043,9 +2078,7 @@ fn sameMixfix(left: [2]?bc.MixfixForm, right: [2]?bc.MixfixForm) bool {
             continue;
         }
         if (one.?.group != two.?.group or one.?.parts.len != two.?.parts.len) return false;
-        if (one.?.symbol == null or two.?.symbol == null) {
-            if (one.?.symbol != null or two.?.symbol != null) return false;
-        } else if (!std.mem.eql(u8, one.?.symbol.?, two.?.symbol.?)) return false;
+        if (!std.mem.eql(u8, one.?.head, two.?.head)) return false;
         for (one.?.parts, two.?.parts) |a, b| {
             if (a == null or b == null) {
                 if (a != null or b != null) return false;
@@ -2074,7 +2107,7 @@ test "reexported native templates retain their own group in nested blocks" {
             return .{ .name = "brush.huak", .source =
             \\import object.draw as paint
             \\precedence stroke_scope above addition;end
-            \\mixfix paint _ in stroke_scope
+            \\mixfix(paint) paint _ in stroke_scope
             \\export paint
             };
         }
@@ -2084,7 +2117,7 @@ test "reexported native templates retain their own group in nested blocks" {
         for ([_]bool{ false, true }) |grouped| {
             const input = try std.fmt.allocPrint(
                 std.testing.allocator,
-                "import \"brush\".paint;import \"brush\" as brush\nimport geometry.joined as join\nmixfix _ join _ in addition\np:=path((0,0),(1,1));q:=path((1,1),(2,2))\nblock\n{s} {s}\nend",
+                "import \"brush\".paint;import \"brush\" as brush\nimport geometry.joined as join\nmixfix(join) _ join _ in addition\np:=path((0,0),(1,1));q:=path((1,1),(2,2))\nblock\n{s} {s}\nend",
                 .{ head, if (grouped) "(p join q)" else "p join q" },
             );
             defer std.testing.allocator.free(input);
@@ -2107,8 +2140,8 @@ test "ordinary and dot record calls retain their signatures" {
         \\struct Broken;end
         \\fn ordinary(value:Broken)->int return 4 end
         \\fn plain(value:Empty)->int return 3 end
-        \\mixfix ordinary _ in unary
-        \\mixfix plain _ in unary
+        \\mixfix(ordinary) ordinary _ in unary
+        \\mixfix(plain) plain _ in unary
         \\mixed:=ordinary Broken()
         \\mixed_plain:=plain Empty()
         \\first:=ordinary(Broken())
@@ -2499,7 +2532,7 @@ test "infix and ordinary calls produce the same checked and optimized instructio
         \\ above addition
         \\ associativity left
         \\end
-        \\mixfix _ combine _ in combine_group
+        \\mixfix(combine) _ combine _ in combine_group
         \\fn combine(a:int,b:int)->int;return a*10+b;end
         \\
     ;
@@ -2560,7 +2593,7 @@ test "imported global exports retain value syntax over a same-named private pref
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: []const u8) !ResolvedSource {
             return .{ .name = "dependency.huak", .source =
             \\fn same(x:int)->int;return x;end
-            \\mixfix same _ in unary
+            \\mixfix(same) same _ in unary
             \\same:=0; if true then;same=3;end
             \\export same
             };
@@ -2590,11 +2623,11 @@ fn prefixDrawingAllocationExercise(allocator: std.mem.Allocator) !void {
         \\    return target
         \\end
         \\import object.{fill, draw}; import geometry.reverse
-        \\mixfix draw _ in logical_or
+        \\mixfix(draw) draw _ in logical_or
         \\export paint
-        \\mixfix paint _ in logical_or
+        \\mixfix(paint) paint _ in logical_or
         \\fn paint(p:path)->object;return fill(p);end
-        \\mixfix reverse _ in unary
+        \\mixfix(reverse) reverse _ in unary
         \\export pic:=picture(640, 480)
         \\curve:=path((0,0),(10,10))
         \\drawing pic do
@@ -2621,7 +2654,7 @@ fn infixAllocationExercise(allocator: std.mem.Allocator) !void {
         \\ above path
         \\ associativity left
         \\end
-        \\mixfix _ combine _ in transform
+        \\mixfix(combine) _ combine _ in transform
         \\export transform
         \\export combine
         \\fn combine(a:int,b:int)->int;return a*10+b;end
@@ -2718,8 +2751,8 @@ test "default output is picture-only and independent from module exports" {
 test "function export modifiers and mixed export lists reuse ordinary compilation" {
     const modified =
         \\precedence stage below addition; above path; associativity left end
-        \\mixfix double _ in unary
-        \\mixfix _ combined _ in stage
+        \\mixfix(double) double _ in unary
+        \\mixfix(combined) _ combined _ in stage
         \\export fn double(x:int)->int return x*2 end
         \\fn combined(a:int,b:int)->int return a*10+b end
         \\value:=double(3)
@@ -2727,8 +2760,8 @@ test "function export modifiers and mixed export lists reuse ordinary compilatio
     ;
     const ordinary =
         \\precedence stage below addition; above path; associativity left end
-        \\mixfix double _ in unary
-        \\mixfix _ combined _ in stage
+        \\mixfix(double) double _ in unary
+        \\mixfix(combined) _ combined _ in stage
         \\fn double(x:int)->int return x*2 end
         \\fn combined(a:int,b:int)->int return a*10+b end
         \\value:=double(3)
@@ -2832,9 +2865,9 @@ test "variadic aliases preserve ordinary dot prefix and infix call roles" {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: []const u8) !ResolvedSource {
             return .{ .name = "library.huak", .source =
             \\export fn count(values:int...)->int return len(values) end
-            \\mixfix count _ in unary
+            \\mixfix(count) count _ in unary
             \\export fn plus(head:int,tail:int...)->int return head+tail[0] end
-            \\mixfix _ plus _ in addition
+            \\mixfix(plus) _ plus _ in addition
             };
         }
     };
@@ -2844,9 +2877,9 @@ test "variadic aliases preserve ordinary dot prefix and infix call roles" {
         var program = try compile(std.testing.allocator,
             \\import "library.huak".{count as size,plus as combine}
             \\a:=size(1,2,3)
-            \\b:=size 9
+            \\b:=count 9
             \\c:=4.combine(6,7)
-            \\d:=4 combine 6
+            \\d:=4 plus 6
         , "root.huak", .{ .optimize = optimize, .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } } }, &diagnostic);
         defer program.deinit();
         var machine = try @import("Machine.zig").init(std.testing.allocator, &program, .{}, .{});
@@ -2864,8 +2897,8 @@ test "variadic calls check fixed prefixes and declared element types" {
         "fn f(head:int,tail:pair...);end;f()",
         "fn f(head:int,tail:pair...);end;f(1,2)",
         "fn f(values:missing...);end",
-        "fn f(a:int,b:int,c:int,rest...);end;mixfix _ f _ in addition",
-        "fn f(a:int,b:int,c:int,rest...);end;mixfix f _ in unary",
+        "fn f(a:int,b:int,c:int,rest...);end;mixfix(f) _ f _ in addition",
+        "fn f(a:int,b:int,c:int,rest...);end;mixfix(f) f _ in unary",
     };
     for (invalid) |input| {
         var diagnostic: ?Diagnostic = null;
@@ -2877,8 +2910,8 @@ test "variadic calls check fixed prefixes and declared element types" {
 test "reexported operator groups must agree when the same function is imported twice" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
-            if (std.mem.eql(u8, path, "base")) return .{ .name = "base.huak", .source = "export fn f(a:int,b:int)->int return a+b end;mixfix _ f _ in addition" };
-            return .{ .name = "bridge.huak", .source = "import \"base\".f;mixfix _ f _ in multiplication;export f" };
+            if (std.mem.eql(u8, path, "base")) return .{ .name = "base.huak", .source = "export fn f(a:int,b:int)->int return a+b end;mixfix(f) _ f _ in addition" };
+            return .{ .name = "bridge.huak", .source = "import \"base\".f;mixfix(f) _ f _ in multiplication;export f" };
         }
     };
     var context: u8 = 0;
@@ -3496,7 +3529,7 @@ test "task planning skips ordinary scripts without allocating and bounds helper 
 
 test "mixfix uses ordinary bytecode and evaluates argument slots once in order" {
     const declarations =
-        \\mixfix combine from _ with _ in unary
+        \\mixfix(combine) combine from _ with _ in unary
         \\export fn combine(a:int,b:int)->int return a*100+b*10 end
         \\calls:=[]
         \\fn record(value:int)->int calls+=value; return value end
@@ -3540,9 +3573,9 @@ const MixfixModules = struct {
     fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
         if (std.mem.eql(u8, path, "forms")) return .{ .name = "forms.huak", .source =
         \\precedence phrase above logical_or; below addition end
-        \\mixfix combine from _ with _ in phrase
+        \\mixfix(combine) combine from _ with _ in phrase
         \\export fn combine(a:int,b:int)->int return a*100+b*10 end
-        \\mixfix len of _ in unary
+        \\mixfix(len) len of _ in unary
         \\export len
         };
         if (std.mem.eql(u8, path, "bridge")) return .{ .name = "bridge.huak", .source =
@@ -3559,15 +3592,15 @@ test "mixfix imports preserve alias scope native identity and private precedence
         \\precedence phrase above multiplication end
         \\import "bridge" as library
         \\import "forms".combine as make
-        \\a:=library.build from 1 with 2+3
-        \\b:=make from 1 with 2+3
-        \\n:=library.count of [7,8,9]
+        \\a:=library.combine from 1 with 2+3
+        \\b:=combine from 1 with 2+3
+        \\n:=library.len of [7,8,9]
         \\inner:=0
         \\if true then
-        \\    mixfix make first _ second _ in unary
+        \\    mixfix(make) make first _ second _ in unary
         \\    inner=make first 1 second 2+3
         \\end
-        \\outer:=make from 1 with 2+3
+        \\outer:=combine from 1 with 2+3
         \\ordinary:=library.count([1,2])
         \\export make
     ;
@@ -3601,7 +3634,7 @@ test "mixfix imported native calls check module initialization before argument e
         \\fn source()->list calls+=1; return [7] end
         \\answer:=early()
         \\import "bridge".count
-        \\fn early()->int; return count of source(); end
+        \\fn early()->int; return len of source(); end
     , "early.huak", .{ .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = MixfixModules.resolve } } }, &diagnostic);
     defer program.deinit();
     var machine = try @import("Machine.zig").init(std.testing.allocator, &program, .{}, .{});
@@ -3613,12 +3646,12 @@ test "mixfix imported native calls check module initialization before argument e
 
 test "mixfix declarations validate callable arity groups and unused branches" {
     const cases = [_][]const u8{
-        "mixfix missing from _ with _ in unary",
-        "mixfix len from _ with _ in unary",
-        "fn f(a:int,b:int)->int return a+b end; mixfix f from _ in unary",
-        "fn f(a:int,b:int)->int return a+b end; mixfix f from _ with _ in missing",
-        "if false then mixfix missing from _ with _ in unary end",
-        "fn f(a:int,b:int)->int return a+b end; mixfix f from _ with _ in unary; value:=f from 1 with true",
+        "mixfix(missing) missing from _ with _ in unary",
+        "mixfix(len) len from _ with _ in unary",
+        "fn f(a:int,b:int)->int return a+b end; mixfix(f) f from _ in unary",
+        "fn f(a:int,b:int)->int return a+b end; mixfix(f) f from _ with _ in missing",
+        "if false then mixfix(missing) missing from _ with _ in unary end",
+        "fn f(a:int,b:int)->int return a+b end; mixfix(f) f from _ with _ in unary; value:=f from 1 with true",
     };
     for (cases) |input| {
         var diagnostic: ?Diagnostic = null;
@@ -3630,7 +3663,7 @@ test "mixfix declarations validate callable arity groups and unused branches" {
 fn mixfixAllocationExercise(allocator: std.mem.Allocator) !void {
     var context: u8 = 0;
     var diagnostic: ?Diagnostic = null;
-    var program = try compile(allocator, "import \"bridge\".{build,count}; result:=build from 1 with (count of [1,2])", "root.huak", .{ .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = MixfixModules.resolve } } }, &diagnostic);
+    var program = try compile(allocator, "import \"bridge\".{build,count}; result:=combine from 1 with (len of [1,2])", "root.huak", .{ .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = MixfixModules.resolve } } }, &diagnostic);
     defer program.deinit();
 }
 
@@ -3688,8 +3721,8 @@ test "an explicit dynamic void slice stop never becomes an open endpoint" {
 test "function defaults retain ordinary dot and both mixfix call forms" {
     const input =
         \\fn combine(a:int,b:int=2)->int return a*10+b end
-        \\mixfix combine _ with _ in unary
-        \\mixfix _ combine _ in addition
+        \\mixfix(combine) combine _ with _ in unary
+        \\mixfix(combine) _ combine _ in addition
         \\plain:=combine(3)
         \\value:=3
         \\dot:=value.combine()
@@ -3781,7 +3814,7 @@ test "function defaults stay attached to aliases namespaces and reexports" {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
             if (std.mem.eql(u8, path, "library")) return .{ .name = "library.huak", .source =
             \\export fn add(a:int,b:int=4)->int return a+b end
-            \\mixfix add to _ in unary
+            \\mixfix(add) add to _ in unary
             };
             return .{ .name = "bridge.huak", .source = "import \"library\".add as sum;export sum" };
         }
@@ -3793,7 +3826,7 @@ test "function defaults stay attached to aliases namespaces and reexports" {
             \\import "bridge" as tools
             \\import "library".add as total
             \\a:=tools.sum(3)
-            \\b:=tools.sum to 4
+            \\b:=tools.add to 4
             \\c:=total(5)
             \\export total
         , "default-aliases.huak", .{ .optimize = optimize, .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } } }, &diagnostic);
@@ -4500,11 +4533,11 @@ test "symbolic mixfix is lexical and nested expansion forwards its insertion" {
         \\fn twice(x:int)->int return x*2 end
         \\fn difference(a:int,b:int)->int return a-b end
         \\a := block
-        \\    mixfix twice as + _ in unary
+        \\    mixfix(twice) + _ in unary
         \\    return +3 + 4
         \\end
         \\b := block
-        \\    mixfix _ difference as + _ in addition
+        \\    mixfix(difference) _ + _ in addition
         \\    return 20 + 2*3
         \\end
         \\c := +3 + 4

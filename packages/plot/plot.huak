@@ -16,33 +16,33 @@ end
 precedence insertion
     below attributes
 end
-mixfix figure with width _ height _ in unary
-mixfix axis of _ at _ in unary
-mixfix lines x _ y _ in unary
-mixfix scatter x _ y _ in unary
-mixfix bar categories _ values _ in unary
-mixfix hist _ in unary
-mixfix heatmap _ in unary
-mixfix colormap _ in unary
-mixfix errorbars x _ y _ errors _ in unary
-mixfix band x _ lower _ upper _ in unary
-mixfix area x _ y _ in unary
-mixfix boxplot categories _ samples _ in unary
-mixfix hline _ in unary
-mixfix vline _ in unary
-mixfix annotate _ at _ text _ in unary
-mixfix marker _ in unary
-mixfix custom_marker _ in unary
-mixfix _ styled _ in attributes
-mixfix _ named _ in attributes
-mixfix _ marked _ in attributes
-mixfix _ sized _ in attributes
-mixfix _ on_axes x _ y _ in attributes
-mixfix arrow from _ to _ in unary
-mixfix _ arrowed _ in attributes
-mixfix render _ in unary
-mixfix link_x of _ axes _ in unary
-mixfix link_y of _ axes _ in unary
+mixfix(figure) figure with width _ height _ in unary
+mixfix(axis) axis of _ at _ in unary
+mixfix(lines) lines x _ y _ in unary
+mixfix(scatter) scatter x _ y _ in unary
+mixfix(bar) bar categories _ values _ in unary
+mixfix(hist) hist _ in unary
+mixfix(heatmap) heatmap _ in unary
+mixfix(colormap) colormap _ in unary
+mixfix(errorbars) errorbars x _ y _ errors _ in unary
+mixfix(band) band x _ lower _ upper _ in unary
+mixfix(area) area x _ y _ in unary
+mixfix(boxplot) boxplot categories _ samples _ in unary
+mixfix(hline) hline _ in unary
+mixfix(vline) vline _ in unary
+mixfix(annotate) annotate _ at _ text _ in unary
+mixfix(marker) marker _ in unary
+mixfix(custom_marker) custom_marker _ in unary
+mixfix(styled) _ styled _ in attributes
+mixfix(named) _ named _ in attributes
+mixfix(marked) _ marked _ in attributes
+mixfix(sized) _ sized _ in attributes
+mixfix(on_axes) _ on_axes x _ y _ in attributes
+mixfix(arrow) arrow from _ to _ in unary
+mixfix(arrowed) _ arrowed _ in attributes
+mixfix(render) render _ in unary
+mixfix(link_x) link_x of _ axes _ in unary
+mixfix(link_y) link_y of _ axes _ in unary
 
 fn set_title(target:Axis, value:text); configure(target,{"title":value}); end
 fn set_xlabel(target:Axis, value:text); configure(target,{"xlabel":value}); end
@@ -69,20 +69,20 @@ export expand_block plotting(target:Axis)
     ylim := set_ylim.with(target:target)
     legend := set_legend.with(target:target)
     colorbar := set_colorbar.with(target:target)
-    mixfix add as + _ in insertion
-    mixfix settings _ in logical_or
-    mixfix side _ with _ in logical_or
-    mixfix remap _ ticks _ to _ in logical_or
-    mixfix breaks _ over _ gap _ in logical_or
-    mixfix title _ in logical_or
-    mixfix xlabel _ in logical_or
-    mixfix ylabel _ in logical_or
-    mixfix xscale _ in logical_or
-    mixfix yscale _ in logical_or
-    mixfix xlim _ in logical_or
-    mixfix ylim _ in logical_or
-    mixfix legend _ in logical_or
-    mixfix colorbar _ in logical_or
+    mixfix(add) + _ in insertion
+    mixfix(settings) settings _ in logical_or
+    mixfix(side) side _ with _ in logical_or
+    mixfix(remap) remap _ ticks _ to _ in logical_or
+    mixfix(breaks) breaks _ over _ gap _ in logical_or
+    mixfix(title) title _ in logical_or
+    mixfix(xlabel) xlabel _ in logical_or
+    mixfix(ylabel) ylabel _ in logical_or
+    mixfix(xscale) xscale _ in logical_or
+    mixfix(yscale) yscale _ in logical_or
+    mixfix(xlim) xlim _ in logical_or
+    mixfix(ylim) ylim _ in logical_or
+    mixfix(legend) legend _ in logical_or
+    mixfix(colorbar) colorbar _ in logical_or
     ...
     return target
 end

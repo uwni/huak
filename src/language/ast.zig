@@ -8,11 +8,10 @@ pub const Binary = enum { add, subtract, multiply, divide, remainder, power, equ
 pub const PathJoin = enum { straight, smooth };
 pub const PathJoinExpr = struct { left: *Expr, right: *Expr, kind: PathJoin };
 pub const OperatorName = struct { namespace: ?[]const u8 = null, name: []const u8, span: Span, module: ?u32 = null };
-/// A null part is one argument; words delimit arguments without becoming
-/// global keywords. The function head is stored by its binding, not repeated.
+pub const MixfixBinding = struct { target: OperatorName, form: MixfixForm };
+/// The head is the first literal in the template. Null parts are argument slots.
 pub const MixfixForm = struct {
-    /// Optional symbolic spelling; the ordinary function name remains callable.
-    symbol: ?[]const u8 = null,
+    head: []const u8,
     parts: []const ?[]const u8,
     group: OperatorName,
     /// One argument precedes the function word; parts follow that word.
@@ -58,12 +57,12 @@ pub const Expr = struct {
         cycle: void,
         // Word operators are deliberately unresolved until every module's
         // declarations are available. Parentheses remain a binding barrier.
-        mixfix_call: struct { operator: OperatorName, args: []const *Expr, leading: bool = false },
+        mixfix_call: struct { operator: OperatorName, args: []const *Expr, leading: bool = false, qualified: ?*const MixfixBinding = null },
         grouped: *Expr,
         // Dot calls use the same node: receiver.f(args) becomes f(receiver, args).
         // Names are empty for entirely positional calls, otherwise aligned with
         // args; positional arguments and the receiver have a null name.
-        call: struct { name: []const u8, args: []const *Expr, argument_names: []const ?[]const u8 = &.{}, dot: bool = false, mixed: bool = false },
+        call: struct { name: []const u8, args: []const *Expr, argument_names: []const ?[]const u8 = &.{}, dot: bool = false, mixed: bool = false, qualified: ?*const OperatorName = null },
         index: struct { object: *Expr, index: *Expr },
         slice: struct { object: *Expr, range: Range },
         member: struct { object: *Expr, name: []const u8 },
@@ -110,7 +109,7 @@ pub const Stmt = struct {
         typst_expose: []const ExportName,
         imported: struct { path: []const u8, bare: bool = false, namespace_path: []const []const u8 = &.{}, form: ImportForm },
         precedence_group: struct { name: []const u8, relations: []const Relation, associativity: Associativity = .none },
-        mixfix_binding: struct { name: []const u8, form: MixfixForm },
+        mixfix_binding: MixfixBinding,
     },
 };
 

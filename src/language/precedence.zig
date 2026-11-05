@@ -185,7 +185,7 @@ fn Binding(comptime Resolver: type) type {
                 .mixfix_call => |mixed| {
                     if (mixed.args.len < 1 + @as(usize, @intFromBool(mixed.leading))) return self.fail(mixed.operator.span, "missing mixfix arguments", .{});
                     if (mixed.leading) try self.flatten(mixed.args[0], depth + 1);
-                    const group = try self.resolver.operatorGroup(mixed.operator, mixed.leading);
+                    const group = try self.resolver.operatorGroup(mixed);
                     if (group >= self.table.groups.items.len) return self.fail(mixed.operator.span, "invalid precedence group", .{});
                     try self.append(.{ .operator = .{ .group = group, .span = mixed.operator.span, .kind = .{ .custom_mixfix = mixed } } });
                     try self.flatten(mixed.args[mixed.args.len - 1], depth + 1);
@@ -212,7 +212,7 @@ fn Binding(comptime Resolver: type) type {
                     @memcpy(arguments[offset..], mixed.args);
                     arguments[arguments.len - 1] = right;
                     if (mixed.leading) arguments[offset] = self.values.pop() orelse return self.fail(operator.span, "missing left operator operand", .{});
-                    break :result try self.create(.{ .start = if (mixed.leading) arguments[offset].span.start else mixed.operator.span.start, .end = right.span.end }, .{ .call = .{ .name = mixed.operator.name, .args = arguments, .dot = offset != 0, .mixed = true } });
+                    break :result try self.create(.{ .start = if (mixed.leading) arguments[offset].span.start else mixed.operator.span.start, .end = right.span.end }, .{ .call = .{ .name = mixed.operator.name, .args = arguments, .dot = offset != 0, .mixed = true, .qualified = if (mixed.qualified) |binding| &binding.target else null } });
                 },
                 .binary, .path_join => result: {
                     const left = self.values.pop() orelse return self.fail(operator.span, "missing left operator operand", .{});
@@ -320,7 +320,7 @@ test "group limits and every allocation failure release table storage" {
 
 const TestResolver = struct {
     id: Id,
-    pub fn operatorGroup(self: *TestResolver, _: ast.OperatorName, _: bool) !Id {
+    pub fn operatorGroup(self: *TestResolver, _: anytype) !Id {
         return self.id;
     }
 };
@@ -365,7 +365,7 @@ test "drawing prefix operands include native paths and their word styles" {
     defer table.deinit();
     var context: FixityResolver = .{ .prefix = builtinId(.logical_or), .infix = builtinId(.path) };
     var diagnostic: ?source.Diagnostic = null;
-    const original = try testExpression(a, "mixfix wrap _ in logical_or\nanswer:=wrap a~~b shade ink");
+    const original = try testExpression(a, "mixfix(wrap) wrap _ in logical_or\nanswer:=wrap a~~b shade ink");
     const result = try resolve(a, &table, original, &context, &diagnostic);
     const draw = result.value.call;
     try std.testing.expect(draw.mixed);
@@ -383,7 +383,7 @@ test "custom prefixes bind arithmetic with the same unary rules and lower to ord
     defer table.deinit();
     var context: TestResolver = .{ .id = builtinId(.unary) };
     var diagnostic: ?source.Diagnostic = null;
-    const original = try testExpression(a, "mixfix wrap _ in unary\nanswer:=wrap -2^3+4");
+    const original = try testExpression(a, "mixfix(wrap) wrap _ in unary\nanswer:=wrap -2^3+4");
     try std.testing.expect(hasCustom(original));
     const result = try resolve(a, &table, original, &context, &diagnostic);
     try std.testing.expectEqual(ast.Binary.add, result.value.binary.op);
@@ -395,7 +395,7 @@ test "custom prefixes bind arithmetic with the same unary rules and lower to ord
     try std.testing.expectEqual(ast.Unary.negate, call.args[0].value.unary.op);
     try std.testing.expectEqual(ast.Binary.power, call.args[0].value.unary.operand.value.binary.op);
     // Normal calls remain barriers regardless of the function's prefix role.
-    const normal = try testExpression(a, "mixfix wrap _ in unary\nanswer:=wrap(1)+2");
+    const normal = try testExpression(a, "mixfix(wrap) wrap _ in unary\nanswer:=wrap(1)+2");
     try std.testing.expect(!hasCustom(normal));
     try std.testing.expect(!normal.value.binary.left.value.call.mixed);
 }
@@ -408,13 +408,13 @@ test "nested prefixes associate right and explicit grouping limits their operand
     defer table.deinit();
     var context: TestResolver = .{ .id = builtinId(.addition) };
     var diagnostic: ?source.Diagnostic = null;
-    const original = try testExpression(a, "mixfix wrap _ in addition\nanswer:=wrap wrap 1+2");
+    const original = try testExpression(a, "mixfix(wrap) wrap _ in addition\nanswer:=wrap wrap 1+2");
     const result = try resolve(a, &table, original, &context, &diagnostic);
     try std.testing.expectEqualStrings("wrap", result.value.call.name);
     const inner = result.value.call.args[0];
     try std.testing.expectEqualStrings("wrap", inner.value.call.name);
     try std.testing.expectEqual(ast.Binary.add, inner.value.call.args[0].value.binary.op);
-    const grouped = try resolve(a, &table, try testExpression(a, "mixfix wrap _ in addition\nanswer:=(wrap 1)+2"), &context, &diagnostic);
+    const grouped = try resolve(a, &table, try testExpression(a, "mixfix(wrap) wrap _ in addition\nanswer:=(wrap 1)+2"), &context, &diagnostic);
     // Grouped components are compiled by the caller in their own binding pass.
     try std.testing.expectEqual(ast.Binary.add, grouped.value.binary.op);
     try std.testing.expect(grouped.value.binary.left.value == .grouped);
@@ -424,8 +424,8 @@ test "nested prefixes associate right and explicit grouping limits their operand
 const FixityResolver = struct {
     prefix: Id,
     infix: Id,
-    pub fn operatorGroup(self: *FixityResolver, _: ast.OperatorName, leading: bool) !Id {
-        return if (leading) self.infix else self.prefix;
+    pub fn operatorGroup(self: *FixityResolver, mixed: anytype) !Id {
+        return if (mixed.leading) self.infix else self.prefix;
     }
 };
 
@@ -438,7 +438,7 @@ test "prefix and infix roles resolve independently and unrelated groups require 
     const isolated = try table.add("isolated", 0, .none, .{ .start = 0, .end = 0 });
     var context: FixityResolver = .{ .prefix = builtinId(.unary), .infix = builtinId(.addition) };
     var diagnostic: ?source.Diagnostic = null;
-    const original = try testExpression(a, "mixfix wrap _ in unary\nanswer:=wrap 2 blend 3*4");
+    const original = try testExpression(a, "mixfix(wrap) wrap _ in unary\nanswer:=wrap 2 blend 3*4");
     const result = try resolve(a, &table, original, &context, &diagnostic);
     try std.testing.expectEqualStrings("blend", result.value.call.name);
     try std.testing.expect(result.value.call.mixed);
@@ -448,7 +448,7 @@ test "prefix and infix roles resolve independently and unrelated groups require 
     try std.testing.expectError(error.LanguageError, resolve(a, &table, original, &context, &diagnostic));
     try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unrelated") != null);
     diagnostic = null;
-    const safe = try resolve(a, &table, try testExpression(a, "mixfix wrap _ in unary\nanswer:=wrap +(2+3)"), &context, &diagnostic);
+    const safe = try resolve(a, &table, try testExpression(a, "mixfix(wrap) wrap _ in unary\nanswer:=wrap +(2+3)"), &context, &diagnostic);
     try std.testing.expectEqual(ast.Unary.positive, safe.value.call.args[0].value.unary.op);
     try std.testing.expect(safe.value.call.args[0].value.unary.operand.value == .grouped);
 }
@@ -464,7 +464,7 @@ test "qualified prefix lowering retains its exported namespace and a single oper
     const Lookup = struct {
         fn lookup(_: *anyopaque, name: ast.OperatorName, leading: bool) ?@import("Parser.zig").MixfixLookup.Binding {
             const matches = !leading and name.namespace != null and std.mem.eql(u8, name.namespace.?, "ops") and std.mem.eql(u8, name.name, "wrap");
-            return if (matches) .{ .form = .{ .parts = &.{null}, .group = .{ .name = "unary", .span = name.span } } } else null;
+            return if (matches) .{ .form = .{ .head = name.name, .parts = &.{null}, .group = .{ .name = "unary", .span = name.span } } } else null;
         }
     };
     var parser = try @import("Parser.zig").init(a, "answer:=ops.wrap values[0]+2", .{ .mixfix = .{ .ptr = &context, .vtable = &.{ .lookup = Lookup.lookup } } }, &diagnostic);
@@ -563,7 +563,7 @@ fn bindingAllocationExercise(allocator: Allocator) !void {
     try table.above(id, builtinId(.path));
     var context: TestResolver = .{ .id = id };
     var diagnostic: ?source.Diagnostic = null;
-    const result = try resolve(arena.allocator(), &table, try testExpression(arena.allocator(), "mixfix wrap _ in path\nanswer:=not wrap -1+2 ops.blend 3^4 == 9"), &context, &diagnostic);
+    const result = try resolve(arena.allocator(), &table, try testExpression(arena.allocator(), "mixfix(wrap) wrap _ in path\nanswer:=not wrap -1+2 ops.blend 3^4 == 9"), &context, &diagnostic);
     try std.testing.expectEqual(ast.Unary.logical_not, result.value.unary.op);
 }
 
@@ -595,8 +595,8 @@ test "long unresolved operator chains fail before overflowing the compiler stack
 }
 
 const MixfixTestResolver = struct {
-    pub fn operatorGroup(_: @This(), name: ast.OperatorName, leading: bool) !Id {
-        return builtinId(if (leading) .path else if (std.mem.eql(u8, name.name, "append")) .logical_or else .unary);
+    pub fn operatorGroup(_: @This(), mixed: anytype) !Id {
+        return builtinId(if (mixed.leading) .path else if (std.mem.eql(u8, mixed.operator.name, "append")) .logical_or else .unary);
     }
 };
 
@@ -608,8 +608,8 @@ fn mixfixBindingExercise(allocator: Allocator) !void {
     defer table.deinit();
     var diagnostic: ?source.Diagnostic = null;
     const original = try testExpression(a,
-        \\mixfix append _ in logical_or
-        \\mixfix combine with left _ right _ in unary
+        \\mixfix(append) append _ in logical_or
+        \\mixfix(combine) combine with left _ right _ in unary
         \\answer:=append combine with left (1+2) right 3+4 filled ink
     );
     const result = try resolve(a, &table, original, MixfixTestResolver{}, &diagnostic);
@@ -627,7 +627,7 @@ fn mixfixBindingExercise(allocator: Allocator) !void {
     try std.testing.expectEqual(@as(u64, 3), combined.args[1].value.integer);
     try std.testing.expectEqual(@as(u64, 4), added.right.value.integer);
 
-    const leading = try testExpression(a, "mixfix _ crop from _ to _ in addition;answer:=1+2 crop from (3*4) to 5*6+7");
+    const leading = try testExpression(a, "mixfix(crop) _ crop from _ to _ in addition;answer:=1+2 crop from (3*4) to 5*6+7");
     var addition: TestResolver = .{ .id = builtinId(.addition) };
     const bounded = try resolve(a, &table, leading, &addition, &diagnostic);
     try std.testing.expectEqual(ast.Binary.add, bounded.value.binary.op);
@@ -657,7 +657,7 @@ test "mixfix binding retains namespace calls and reports unrelated outer groups"
         fn lookup(_: *anyopaque, name: ast.OperatorName, leading: bool) ?@import("Parser.zig").MixfixLookup.Binding {
             if (leading) return null;
             if (name.namespace == null or !std.mem.eql(u8, name.namespace.?, "ops") or !std.mem.eql(u8, name.name, "combine")) return null;
-            return .{ .form = .{ .parts = &.{ "with", "left", null, "right", null }, .group = .{ .name = "unary", .span = name.span } } };
+            return .{ .form = .{ .head = name.name, .parts = &.{ "with", "left", null, "right", null }, .group = .{ .name = "unary", .span = name.span } } };
         }
     };
     var parser = try @import("Parser.zig").init(a, "answer:=ops.combine with left 1 right (2+3)", .{ .mixfix = .{ .ptr = &context, .vtable = &.{ .lookup = Lookup.lookup } } }, &diagnostic);
@@ -671,7 +671,7 @@ test "mixfix binding retains namespace calls and reports unrelated outer groups"
 
     const isolated = try table.add("isolated", 0, .none, .{ .start = 0, .end = 0 });
     var unrelated: TestResolver = .{ .id = isolated };
-    const expression = try testExpression(a, "mixfix f from _ to _ in isolated;answer:=f from 1 to 2+3");
+    const expression = try testExpression(a, "mixfix(f) f from _ to _ in isolated;answer:=f from 1 to 2+3");
     try std.testing.expectError(error.LanguageError, resolve(a, &table, expression, &unrelated, &diagnostic));
     try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unrelated") != null);
 }

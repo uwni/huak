@@ -1,4 +1,4 @@
-import paint.{rgb, pen, pencircle, pensquare, makepen, makepath, penoffset, stroke_outline, translate, scale, rotate, path, smooth, transformed, draw, fill, label, picture};import assertions.assert
+import paint.{rgb, pen, translate, scale, rotate, path, smooth, transformed, draw, fill, label, picture};import pen.{pencircle, pensquare, makepen, makepath, penoffset, stroke_outline};import assertions.assert
 export pic:=picture(12cm,8cm)
 default pic
 blue:=rgb(0.1,0.3,0.8)

@@ -23,12 +23,12 @@ pub fn run(ctx: *h.Harness) !void {
         \\fn condition()->bool events+=1; return true end
         \\fn message()->string events+=2; return "unused" end
         \\assert(condition(),message()); assert(events==[1,2])
-        \\mixfix assert _ in logical_or
+        \\mixfix(assert) assert _ in logical_or
         \\assert true
-        \\mixfix _ ensure _ in comparison
+        \\mixfix(ensure) _ ensure _ in comparison
         \\true ensure "infix"
         \\if true then
-        \\    mixfix assert that _ message _ in logical_or
+        \\    mixfix(assert) assert that _ message _ in logical_or
         \\    assert that true message "mixfix"
         \\end
         \\assert true

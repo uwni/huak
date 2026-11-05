@@ -24,7 +24,7 @@ pub const MixfixLookup = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
-    pub const Binding = struct { form: ast.MixfixForm, target: ?[]const u8 = null };
+    pub const Binding = struct { form: ast.MixfixForm, target: ?[]const u8 = null, qualified: ?*const ast.MixfixBinding = null };
 
     pub inline fn lookup(self: MixfixLookup, name: ast.OperatorName, leading: bool) ?Binding {
         return self.vtable.lookup(self.ptr, name, leading);
@@ -213,8 +213,7 @@ fn statement(self: *Parser) anyerror!*ast.Stmt {
                     }
                     break :form .{ .selected = try bindings.toOwnedSlice() };
                 }
-            } else if (try self.accept(.kw_as)) form: {
-                const alias = try self.expect(.identifier, "expected import namespace alias");
+            } else if (try self.importAlias()) |alias| form: {
                 finish = alias.span;
                 break :form .{ .namespace = self.text(alias) };
             } else .{ .namespace = try self.importNamespace(path, path_span) };
@@ -417,7 +416,7 @@ fn expression(self: *Parser, minimum: u8) anyerror!*ast.Expr {
     var left = try self.prefix();
     while (true) {
         if (self.mixfix_boundary) |boundary| {
-            if (self.current.kind == .identifier and self.lexer.nesting == boundary.nesting and
+            if (self.lexer.nesting == boundary.nesting and
                 std.mem.eql(u8, self.text(self.current), boundary.word)) break;
         }
         if (self.current.kind == .identifier or self.current.kind == .kw_in) {
@@ -462,8 +461,11 @@ fn expression(self: *Parser, minimum: u8) anyerror!*ast.Expr {
         }
         if (self.current.kind == .identifier and minimum == 0) {
             const operator = try self.operatorName();
-            const form = try self.mixfixName(self.current, operator, true, false) orelse
-                MixfixLookup.Binding{ .form = .{ .parts = &.{null}, .group = operator, .leading = true } };
+            const form = try self.mixfixName(self.current, operator, true, false) orelse unresolved: {
+                if (self.options.mixfix != null) return self.fail(operator.span, "no matching mixfix declaration for '{s}'", .{operator.name});
+                // Standalone syntax parsing can leave word operators for the precedence pass.
+                break :unresolved MixfixLookup.Binding{ .form = .{ .head = operator.name, .parts = &.{null}, .group = operator, .leading = true } };
+            };
             left = try self.mixfixCall(operator, form, left);
             continue;
         }
@@ -696,29 +698,25 @@ fn callHead(allocator: std.mem.Allocator, lexer: *Lexer, current: *Lexer.Token) 
 fn mixfixBinding(self: *Parser) !*ast.Stmt {
     const start = self.current.span;
     try self.advance();
+    _ = try self.expect(.lparen, "expected '(' before mixfix target");
+    const target = try self.operatorName();
+    _ = try self.expect(.rparen, "expected ')' after mixfix target");
     const leading = self.current.kind == .identifier and std.mem.eql(u8, self.text(self.current), "_");
     if (leading) try self.advance();
-    const name = try self.expect(.identifier, "expected a mixfix function name");
-    if (std.mem.eql(u8, self.text(name), "_")) return self.fail(name.span, "expected a mixfix function name", .{});
-    var symbol: ?[]const u8 = null;
-    if (try self.accept(.kw_as)) {
-        if (!Lexer.isOperator(self.current.kind)) return self.fail(self.current.span, "expected a symbolic operator after 'as'", .{});
-        symbol = self.text(self.current);
-        try self.advance();
-    }
+    const head = try self.templateToken();
+    if (std.mem.eql(u8, self.text(head), "_")) return self.fail(head.span, "expected a mixfix word or symbol before the next argument", .{});
     var parts: std.array_list.Managed(?[]const u8) = .init(self.allocator);
     while (self.current.kind != .kw_in) {
         while (self.current.kind == .newline) try self.advance();
         if (self.current.kind == .kw_in) break;
         if (parts.items.len == 256) return self.fail(self.current.span, "mixfix template exceeds 256 parts", .{});
-        const token = try self.expect(.identifier, "expected a mixfix word, '_' argument, or 'in' group");
+        const token = try self.templateToken();
         const word = self.text(token);
         if (std.mem.eql(u8, word, "_")) {
             if (parts.items.len != 0 and parts.items[parts.items.len - 1] == null)
                 return self.fail(token.span, "mixfix arguments must be preceded by a word", .{});
             try parts.append(null);
         } else {
-            if (units.unitNamed(word) != null) return self.fail(token.span, "unit '{s}' cannot be a mixfix word", .{word});
             try parts.append(word);
         }
     }
@@ -727,7 +725,17 @@ fn mixfixBinding(self: *Parser) !*ast.Stmt {
     try self.advance();
     while (self.current.kind == .newline) try self.advance();
     const group = try self.operatorName();
-    return self.createStmt(.join(start, group.span), .{ .mixfix_binding = .{ .name = self.text(name), .form = .{ .symbol = symbol, .parts = try parts.toOwnedSlice(), .group = group, .leading = leading } } });
+    return self.createStmt(.join(start, group.span), .{ .mixfix_binding = .{ .target = target, .form = .{ .head = self.text(head), .parts = try parts.toOwnedSlice(), .group = group, .leading = leading } } });
+}
+
+fn templateToken(self: *Parser) !Lexer.Token {
+    const token = self.current;
+    if (token.kind != .identifier and !Lexer.isOperator(token.kind))
+        return self.fail(token.span, "expected a mixfix word, symbol or '_' argument", .{});
+    if (units.unitNamed(self.text(token)) != null)
+        return self.fail(token.span, "unit '{s}' cannot be a mixfix word", .{self.text(token)});
+    try self.advance();
+    return token;
 }
 
 fn mixfixName(self: *Parser, current: Lexer.Token, name: ast.OperatorName, leading: bool, symbolic: bool) !?MixfixLookup.Binding {
@@ -741,15 +749,14 @@ fn mixfixName(self: *Parser, current: Lexer.Token, name: ast.OperatorName, leadi
         while (scope) |id| : (scope = headers.scopes[id].parent) {
             for (headers.operators) |declaration| {
                 if (declaration.scope != id or declaration.statement.value != .mixfix_binding) continue;
-                const binding = declaration.statement.value.mixfix_binding;
-                if (binding.form.leading == leading and std.mem.eql(u8, binding.form.symbol orelse binding.name, name.name))
-                    break :form MixfixLookup.Binding{ .form = binding.form, .target = if (binding.form.symbol != null) binding.name else null };
+                const binding = &declaration.statement.value.mixfix_binding;
+                if (binding.form.leading == leading and std.mem.eql(u8, binding.form.head, name.name))
+                    break :form MixfixLookup.Binding{ .form = binding.form, .target = binding.target.name, .qualified = if (binding.target.namespace != null) binding else null };
             }
         }
         return null;
     };
     const form = found.form;
-    if (form.symbol != null and found.target == null) return null;
     if (form.leading != leading or form.parts.len == 0 or form.parts.len > 256 or form.parts[form.parts.len - 1] != null)
         return self.fail(name.span, "invalid mixfix template", .{});
     for (form.parts, 0..) |part, index| {
@@ -807,7 +814,7 @@ fn mixfixCall(self: *Parser, head: ast.OperatorName, binding: MixfixLookup.Bindi
             var look = self.lexer;
             var token = self.current;
             while (token.kind == .newline) token = try look.next();
-            const matches = token.kind == .identifier and std.mem.eql(u8, self.lexer.source[token.span.start..token.span.end], part.?);
+            const matches = std.mem.eql(u8, self.text(token), part.?);
             if (!matches and switch (self.current.kind) {
                 .newline, .semicolon, .eof, .kw_end, .kw_else, .kw_elseif, .kw_then, .kw_do, .comma, .rparen, .rbracket, .rbrace => true,
                 else => false,
@@ -815,7 +822,7 @@ fn mixfixCall(self: *Parser, head: ast.OperatorName, binding: MixfixLookup.Bindi
         }
         while (self.current.kind == .newline) try self.advance();
         if (part) |word| {
-            if (self.current.kind != .identifier or !std.mem.eql(u8, self.text(self.current), word))
+            if (!std.mem.eql(u8, self.text(self.current), word))
                 return self.fail(self.current.span, "expected mixfix word '{s}'", .{word});
             try self.advance();
         } else {
@@ -831,7 +838,7 @@ fn mixfixCall(self: *Parser, head: ast.OperatorName, binding: MixfixLookup.Bindi
             try arguments.append(try self.expression(if (index + 1 == form.parts.len) 1 else 0));
         }
     }
-    return self.createExpr(.join(if (left) |operand| operand.span else name.span, arguments.items[arguments.items.len - 1].span), .{ .mixfix_call = .{ .operator = name, .args = try arguments.toOwnedSlice(), .leading = form.leading } });
+    return self.createExpr(.join(if (left) |operand| operand.span else name.span, arguments.items[arguments.items.len - 1].span), .{ .mixfix_call = .{ .operator = name, .args = try arguments.toOwnedSlice(), .leading = form.leading, .qualified = binding.qualified } });
 }
 
 fn functionHeader(self: *Parser, scanner: ?*HeaderScanner) !FunctionHeader {
@@ -978,12 +985,13 @@ fn importBinding(self: *Parser) !ast.ImportBinding {
     return self.importBindingAfter(name);
 }
 fn importBindingAfter(self: *Parser, name: Lexer.Token) !ast.ImportBinding {
-    const alias = if (try self.accept(.kw_as))
-        try self.expect(.identifier, "expected a local name after 'as'")
-    else alias: {
-        break :alias name;
-    };
+    const alias = try self.importAlias() orelse name;
     return .{ .name = self.text(name), .alias = self.text(alias), .span = .join(name.span, alias.span) };
+}
+fn importAlias(self: *Parser) !?Lexer.Token {
+    if (self.current.kind != .identifier or !std.mem.eql(u8, self.text(self.current), "as")) return null;
+    try self.advance();
+    return try self.expect(.identifier, "expected a local name after 'as'");
 }
 fn importNamespace(self: *Parser, path: []const u8, span: source.Span) ![]const u8 {
     const name = std.fs.path.stem(path);
@@ -1417,7 +1425,7 @@ test "prefix declarations are available before their source position and preserv
     var diagnostic: ?source.Diagnostic = null;
     var parser = try Parser.init(arena.allocator(),
         \\x:=wrap 1+2
-        \\mixfix wrap _ in addition
+        \\mixfix(wrap) wrap _ in addition
         \\ordinary:=wrap(1+2)
         \\spaced:=wrap (1+2)
         \\grouped:=(wrap)(1)
@@ -1428,7 +1436,7 @@ test "prefix declarations are available before their source position and preserv
     const first = script.statements[0].value.assignment.value.value.mixfix_call;
     try std.testing.expectEqualStrings("wrap", first.operator.name);
     try std.testing.expectEqual(ast.Binary.add, first.args[0].value.binary.op);
-    try std.testing.expectEqualStrings("wrap", script.statements[1].value.mixfix_binding.name);
+    try std.testing.expectEqualStrings("wrap", script.statements[1].value.mixfix_binding.target.name);
     try std.testing.expectEqualStrings("wrap", script.statements[2].value.assignment.value.value.call.name);
     try std.testing.expectEqualStrings("wrap", script.statements[3].value.assignment.value.value.mixfix_call.operator.name);
     try std.testing.expect(script.statements[3].value.assignment.value.value.mixfix_call.args[0].value == .grouped);
@@ -1447,7 +1455,7 @@ test "spaced prefix coordinate groups work in drawing and qualified calls" {
                 std.mem.eql(u8, ns, "paint") and std.mem.eql(u8, name.name, "sphere")
             else
                 std.mem.eql(u8, name.name, "draw") or std.mem.eql(u8, name.name, "fill");
-            return if (matches) .{ .form = .{ .parts = &.{null}, .group = .{ .name = "unary", .span = name.span } } } else null;
+            return if (matches) .{ .form = .{ .head = name.name, .parts = &.{null}, .group = .{ .name = "unary", .span = name.span } } } else null;
         }
     };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -1482,7 +1490,7 @@ test "qualified prefix lookup preserves namespaced ordinary calls" {
     const Lookup = struct {
         fn lookup(_: *anyopaque, name: ast.OperatorName, leading: bool) ?MixfixLookup.Binding {
             const matches = !leading and name.namespace != null and std.mem.eql(u8, name.namespace.?, "tools") and std.mem.eql(u8, name.name, "wrap");
-            return if (matches) .{ .form = .{ .parts = &.{null}, .group = .{ .name = "unary", .span = name.span } } } else null;
+            return if (matches) .{ .form = .{ .head = name.name, .parts = &.{null}, .group = .{ .name = "unary", .span = name.span } } } else null;
         }
     };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -1506,7 +1514,7 @@ test "qualified prefix lookup preserves namespaced ordinary calls" {
 test "header scans reuse native Typst block ranges and ignore embedded declarations" {
     const Blocks = struct {
         fn block(_: *anyopaque, input: []const u8) !usize {
-            const fixture = if (input[0] == '{') "{\nimport \"ignored\" as ignored\nmixfix hidden _ in addition\n}" else "[\n#let prefix = \"@\"\n]";
+            const fixture = if (input[0] == '{') "{\nimport \"ignored\" as ignored\nmixfix(hidden) hidden _ in addition\n}" else "[\n#let prefix = \"@\"\n]";
             try std.testing.expect(std.mem.startsWith(u8, input, fixture));
             return fixture.len;
         }
@@ -1517,24 +1525,24 @@ test "header scans reuse native Typst block ranges and ignore embedded declarati
     var context: u8 = 0;
     const options: Options = .{ .source_parser = .{ .ptr = &context, .vtable = &.{ .block = Blocks.block } } };
     const headers = try scanHeaders(arena.allocator(),
-        \\mixfix visible _ in addition
+        \\mixfix(visible) visible _ in addition
         \\setup_typst {
         \\import "ignored" as ignored
-        \\mixfix hidden _ in addition
+        \\mixfix(hidden) hidden _ in addition
         \\}
         \\text:=typ[
         \\#let prefix = "@"
         \\]
         \\import "actual" as actual
         \\block
-        \\    mixfix nested _ in addition
+        \\    mixfix(nested) nested _ in addition
         \\end
     , options, &diagnostic);
     try std.testing.expectEqual(@as(usize, 1), headers.imports.len);
     try std.testing.expectEqualStrings("actual", headers.imports[0].statement.value.imported.path);
     try std.testing.expectEqual(@as(usize, 2), headers.operators.len);
     try std.testing.expectEqual(@as(ScopeId, 0), headers.operators[0].scope);
-    try std.testing.expectEqualStrings("visible", headers.operators[0].statement.value.mixfix_binding.name);
+    try std.testing.expectEqualStrings("visible", headers.operators[0].statement.value.mixfix_binding.target.name);
     try std.testing.expect(headers.operators[1].scope != 0);
 }
 
@@ -1574,8 +1582,8 @@ test "precedence declarations use contextual attributes and qualified names" {
         \\ below arithmetic.addition
         \\ associativity left
         \\end
-        \\mixfix _ scaled _ in transform
-        \\mixfix _ shifted _ in common.transform
+        \\mixfix(scaled) _ scaled _ in transform
+        \\mixfix(shifted) _ shifted _ in common.transform
         \\left:=1;right:=2;none:=3;above:=4;below:=5;associativity:=6
     , .{}, &diagnostic);
     const script = try parser.parse();
@@ -1591,7 +1599,7 @@ test "precedence declarations use contextual attributes and qualified names" {
     try std.testing.expectEqual(.below, group.relations[1].direction);
     try std.testing.expectEqualStrings("arithmetic", group.relations[1].target.namespace.?);
     try std.testing.expectEqualStrings("addition", group.relations[1].target.name);
-    try std.testing.expectEqualStrings("scaled", script.statements[1].value.mixfix_binding.name);
+    try std.testing.expectEqualStrings("scaled", script.statements[1].value.mixfix_binding.target.name);
     try std.testing.expectEqualStrings("common", script.statements[2].value.mixfix_binding.form.group.namespace.?);
     const contextual = [_][]const u8{ "left", "right", "none", "above", "below", "associativity" };
     for (contextual, script.statements[3..]) |name, stmt| try std.testing.expectEqualStrings(name, stmt.value.assignment.name);
@@ -1619,10 +1627,10 @@ test "precedence syntax rejects malformed duplicated and unknown attributes" {
         .{ .code = "precedence g\nunknown x\nend", .message = "unknown precedence attribute" },
         .{ .code = "precedence g\nabove x below y\nend", .message = "between precedence attributes" },
         .{ .code = "precedence g\nabove x\n", .message = "unterminated precedence group" },
-        .{ .code = "mixfix _ f _", .message = "expected a mixfix word" },
-        .{ .code = "mixfix _ f _ in", .message = "operator or precedence group name" },
-        .{ .code = "mixfix _ f _ in x.", .message = "name after namespace" },
-        .{ .code = "mixfix _ ns.f _ in x", .message = "expected a mixfix word" },
+        .{ .code = "mixfix(f) _ f _", .message = "expected a mixfix word" },
+        .{ .code = "mixfix(f) _ f _ in", .message = "operator or precedence group name" },
+        .{ .code = "mixfix(f) _ f _ in x.", .message = "name after namespace" },
+        .{ .code = "mixfix(f) _ ns.f _ in x", .message = "expected a mixfix word" },
     };
     for (cases) |case| {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -1993,11 +2001,11 @@ test "header scans share import forms and keep exported function bodies scoped" 
         \\import paint.{stroke as line, fill}
         \\export fn render()->int
         \\    import hidden.*
-        \\    mixfix nested _ in addition
+        \\    mixfix(nested) nested _ in addition
         \\    return 1
         \\end
         \\import "helpers.huak".*
-        \\mixfix visible _ in addition
+        \\mixfix(visible) visible _ in addition
     , .{}, &diagnostic);
     try std.testing.expectEqual(@as(usize, 3), headers.imports.len);
     try std.testing.expectEqualStrings("line", headers.imports[0].statement.value.imported.form.selected[0].alias);
@@ -2008,9 +2016,9 @@ test "header scans share import forms and keep exported function bodies scoped" 
     try std.testing.expectEqual(@as(ScopeId, 0), headers.imports[2].scope);
     try std.testing.expectEqual(@as(usize, 2), headers.operators.len);
     try std.testing.expectEqual(@as(ScopeId, 1), headers.operators[0].scope);
-    try std.testing.expectEqualStrings("nested", headers.operators[0].statement.value.mixfix_binding.name);
+    try std.testing.expectEqualStrings("nested", headers.operators[0].statement.value.mixfix_binding.target.name);
     try std.testing.expectEqual(@as(ScopeId, 0), headers.operators[1].scope);
-    try std.testing.expectEqualStrings("visible", headers.operators[1].statement.value.mixfix_binding.name);
+    try std.testing.expectEqualStrings("visible", headers.operators[1].statement.value.mixfix_binding.target.name);
 }
 
 test "header scopes separate sibling branches and leave control headers in their parent" {
@@ -2019,7 +2027,7 @@ test "header scopes separate sibling branches and leave control headers in their
         \\fn render(argument:int,remaining...)
         \\    if condition then
         \\        import first.*
-        \\        mixfix decorate _ in unary
+        \\        mixfix(decorate) decorate _ in unary
         \\        branch_value:=1
         \\    elseif alternative then
         \\        import second.*
@@ -2030,7 +2038,7 @@ test "header scopes separate sibling branches and leave control headers in their
         \\        while ready do
         \\            block
         \\                import nested.*
-        \\                mixfix _ decorate _ in addition
+        \\                mixfix(decorate) _ decorate _ in addition
         \\            end
         \\        end
         \\    end
@@ -2118,7 +2126,7 @@ test "standalone prefix discovery respects block boundaries and callable data na
     const input =
         \\fn f()
         \\    if true then
-        \\        mixfix decorate _ in unary
+        \\        mixfix(decorate) decorate _ in unary
         \\        decorate:=1
         \\        first:=decorate (2)
         \\    else
@@ -2149,7 +2157,7 @@ test "mixfix callback null cannot be bypassed by header or drawing shortcuts" {
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
     var context: u8 = 0;
-    var parser = try Parser.init(arena.allocator(), "mixfix decorate _ in unary\nx:=decorate (1)\nblock draw (curve) end", .{ .mixfix = .{ .ptr = &context, .vtable = &.{ .lookup = Lookup.lookup } } }, &diagnostic);
+    var parser = try Parser.init(arena.allocator(), "mixfix(decorate) decorate _ in unary\nx:=decorate (1)\nblock draw (curve) end", .{ .mixfix = .{ .ptr = &context, .vtable = &.{ .lookup = Lookup.lookup } } }, &diagnostic);
     const script = try parser.parse();
     try std.testing.expect(script.statements[1].value.assignment.value.value == .call);
     try std.testing.expect(script.statements[2].value.expression.value.block[0].value.expression.value == .call);
@@ -2241,7 +2249,7 @@ test "all block heads accept inline and multiline bodies without line-boundary r
         .{ .inline_ = "fn empty() end", .multiline = "fn empty()\nend", .kind = .function },
         .{ .inline_ = "precedence custom above addition;associativity left end", .multiline = "precedence custom\nabove addition\nassociativity left\nend", .kind = .precedence_group },
         .{ .inline_ = "precedence empty end", .multiline = "precedence empty\nend", .kind = .precedence_group },
-        .{ .inline_ = "block mixfix draw _ in logical_or;draw curve end", .multiline = "block\nmixfix draw _ in logical_or\ndraw curve\nend", .kind = .expression },
+        .{ .inline_ = "block mixfix(draw) draw _ in logical_or;draw curve end", .multiline = "block\nmixfix(draw) draw _ in logical_or\ndraw curve\nend", .kind = .expression },
         .{ .inline_ = "if ready then end", .multiline = "if ready\nthen\nend", .kind = .conditional },
         .{ .inline_ = "for i in 1:3 do end", .multiline = "for i in 1:3\ndo\nend", .kind = .for_loop },
         .{ .inline_ = "while ready do end", .multiline = "while ready\ndo\nend", .kind = .while_loop },
@@ -2489,7 +2497,7 @@ test "mixfix forms delimit multiple arguments and preserve ordinary calls and la
     var diagnostic: ?source.Diagnostic = null;
     var parser = try Parser.init(arena.allocator(),
         \\first:=construct with center (1,2) radius (3+4)
-        \\mixfix construct with center _ radius _ in unary
+        \\mixfix(construct) construct with center _ radius _ in unary
         \\ordinary:=construct((1,2),7)
         \\with:=1;center:=2;radius:=3
         \\last:=construct with center center radius radius
@@ -2516,11 +2524,11 @@ test "mixfix labels stop only their current argument and parentheses isolate nes
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
     var parser = try Parser.init(arena.allocator(),
-        \\mixfix combine from _ onto _ in unary
+        \\mixfix(combine) combine from _ onto _ in unary
         \\first:=combine from f(onto)+p.onto onto [1,2][0]
         \\second:=combine from (combine from p onto q) onto q
         \\if true then
-        \\    mixfix combine with left _ right _ in unary
+        \\    mixfix(combine) combine with left _ right _ in unary
         \\    inside:=combine with left 3 right 4
         \\end
         \\outside:=combine from 5 onto 6
@@ -2541,7 +2549,7 @@ test "mixfix incomplete words and arguments continue lines without swallowing co
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
     var parser = try Parser.init(arena.allocator(),
-        \\mixfix combine with first _
+        \\mixfix(combine) combine with first _
         \\    second _ in
         \\    unary
         \\result:=combine with
@@ -2561,16 +2569,16 @@ test "mixfix incomplete words and arguments continue lines without swallowing co
 
 test "mixfix declarations reject ambiguous templates and unparenthesized nested forms" {
     const invalid = [_]struct { input: []const u8, message: []const u8 }{
-        .{ .input = "mixfix f with _ _ in unary", .message = "preceded by a word" },
-        .{ .input = "mixfix f with _ ending in unary", .message = "must end" },
-        .{ .input = "mixfix f with center in unary", .message = "must end" },
-        .{ .input = "mixfix f in unary", .message = "must end" },
-        .{ .input = "mixfix f cm _ in unary", .message = "unit 'cm'" },
-        .{ .input = "mixfix f then _ in unary", .message = "expected a mixfix word" },
-        .{ .input = "mixfix f from _ until _ in unary; x:=f from 1 true 2", .message = "expected mixfix word 'until'" },
-        .{ .input = "mixfix f from _ until _ in unary; x:=f from f from 1 until 2 until 3", .message = "require parentheses" },
-        .{ .input = "mixfix _ crop from _ to _ in addition; x:=1 crop 2", .message = "expected mixfix word 'from'" },
-        .{ .input = "mixfix _ crop from _ to _ in addition; x:=1 crop(2)", .message = "expected mixfix word 'from'" },
+        .{ .input = "mixfix(f) f with _ _ in unary", .message = "preceded by a word" },
+        .{ .input = "mixfix(f) f with _ ending in unary", .message = "must end" },
+        .{ .input = "mixfix(f) f with center in unary", .message = "must end" },
+        .{ .input = "mixfix(f) f in unary", .message = "must end" },
+        .{ .input = "mixfix(f) f cm _ in unary", .message = "unit 'cm'" },
+        .{ .input = "mixfix(f) f then _ in unary", .message = "expected a mixfix word" },
+        .{ .input = "mixfix(f) f from _ until _ in unary; x:=f from 1 true 2", .message = "expected mixfix word 'until'" },
+        .{ .input = "mixfix(f) f from _ until _ in unary; x:=f from f from 1 until 2 until 3", .message = "require parentheses" },
+        .{ .input = "mixfix(crop) _ crop from _ to _ in addition; x:=1 crop 2", .message = "expected mixfix word 'from'" },
+        .{ .input = "mixfix(crop) _ crop from _ to _ in addition; x:=1 crop(2)", .message = "expected mixfix word 'from'" },
     };
     for (invalid) |case| {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -2594,7 +2602,7 @@ test "mixfix providers support qualified names and reject malformed external tem
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
-    var form: ast.MixfixForm = .{ .parts = &.{ "with", "center", null, "radius", null }, .group = .{ .name = "unary", .span = .{ .start = 0, .end = 0 } } };
+    var form: ast.MixfixForm = .{ .head = "make", .parts = &.{ "with", "center", null, "radius", null }, .group = .{ .name = "unary", .span = .{ .start = 0, .end = 0 } } };
     const options: Options = .{ .mixfix = .{ .ptr = &form, .vtable = &.{ .lookup = Lookup.lookup } } };
     var parser = try Parser.init(arena.allocator(), "x:=shapes.make with center (0,0) radius 1", options, &diagnostic);
     const script = try parser.parse();
@@ -2861,7 +2869,7 @@ test "call heads probe one mixfix table and preserve ordinary member calls" {
         fn mixfix(context: *anyopaque, name: ast.OperatorName, leading: bool) ?MixfixLookup.Binding {
             const self: *@This() = @ptrCast(@alignCast(context));
             self.record(leading, name);
-            return .{ .form = .{ .parts = if (self.invalid) &.{} else if (std.mem.eql(u8, name.name, "combine")) &.{ "with", null } else &.{null}, .group = .{ .name = "unary", .span = name.span }, .leading = leading } };
+            return .{ .form = .{ .head = name.name, .parts = if (self.invalid) &.{} else if (std.mem.eql(u8, name.name, "combine")) &.{ "with", null } else &.{null}, .group = .{ .name = "unary", .span = name.span }, .leading = leading } };
         }
     };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

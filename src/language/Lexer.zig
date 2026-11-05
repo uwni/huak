@@ -58,7 +58,6 @@ pub const Kind = enum {
     kw_export,
     kw_default,
     kw_import,
-    kw_as,
     kw_precedence,
     kw_mixfix,
     kw_and,
@@ -193,13 +192,13 @@ pub fn next(self: *Lexer) error{LanguageError}!Token {
                 while (self.pos < self.source.len and (std.ascii.isAlphanumeric(self.source[self.pos]) or self.source[self.pos] == '_')) self.pos += 1;
                 const word = self.source[start..self.pos];
                 const keywords = std.StaticStringMap(Kind).initComptime(.{
-                    .{ "fn", .kw_fn },                     .{ "block", .kw_block },             .{ "end", .kw_end },               .{ "param", .kw_param },   .{ "if", .kw_if },
-                    .{ "expand_block", .kw_expand_block }, .{ "elseif", .kw_elseif },           .{ "else", .kw_else },             .{ "while", .kw_while },   .{ "for", .kw_for },
-                    .{ "then", .kw_then },                 .{ "do", .kw_do },                   .{ "in", .kw_in },                 .{ "break", .kw_break },   .{ "continue", .kw_continue },
-                    .{ "return", .kw_return },             .{ "and", .kw_and },                 .{ "or", .kw_or },                 .{ "not", .kw_not },       .{ "true", .kw_true },
-                    .{ "false", .kw_false },               .{ "setup_typst", .kw_setup_typst }, .{ "typ", .kw_typ },               .{ "export", .kw_export }, .{ "default", .kw_default },
-                    .{ "import", .kw_import },             .{ "as", .kw_as },                   .{ "precedence", .kw_precedence }, .{ "cycle", .kw_cycle },   .{ "mixfix", .kw_mixfix },
-                    .{ "typst_expose", .kw_typst_expose }, .{ "struct", .kw_struct },
+                    .{ "fn", .kw_fn },                     .{ "block", .kw_block },             .{ "end", .kw_end },     .{ "param", .kw_param },   .{ "if", .kw_if },
+                    .{ "expand_block", .kw_expand_block }, .{ "elseif", .kw_elseif },           .{ "else", .kw_else },   .{ "while", .kw_while },   .{ "for", .kw_for },
+                    .{ "then", .kw_then },                 .{ "do", .kw_do },                   .{ "in", .kw_in },       .{ "break", .kw_break },   .{ "continue", .kw_continue },
+                    .{ "return", .kw_return },             .{ "and", .kw_and },                 .{ "or", .kw_or },       .{ "not", .kw_not },       .{ "true", .kw_true },
+                    .{ "false", .kw_false },               .{ "setup_typst", .kw_setup_typst }, .{ "typ", .kw_typ },     .{ "export", .kw_export }, .{ "default", .kw_default },
+                    .{ "import", .kw_import },             .{ "precedence", .kw_precedence },   .{ "cycle", .kw_cycle }, .{ "mixfix", .kw_mixfix }, .{ "typst_expose", .kw_typst_expose },
+                    .{ "struct", .kw_struct },
                 });
                 return self.token(keywords.get(word) orelse .identifier, start);
             },
@@ -263,7 +262,7 @@ test "import selector braces suppress only their internal newlines" {
     var lexer: Lexer = .{ .source = "import paint.{\nfoo as first,\nbar,\n}\nnext:=1", .diagnostic = &diagnostic };
     const expected = [_]Kind{
         .kw_import,  .identifier, .dot,        .lbrace,
-        .identifier, .kw_as,      .identifier, .comma,
+        .identifier, .identifier, .identifier, .comma,
         .identifier, .comma,      .rbrace,     .newline,
         .identifier, .declare,    .integer,    .eof,
     };

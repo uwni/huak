@@ -1,4 +1,6 @@
-import paint.{trimmed, bounds, assert}
+import paint.bounds
+import geometry.trimmed
+import assertions.assert
 import "../../nodegraph.huak".*
 import assertions.assert
 plain := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": []})

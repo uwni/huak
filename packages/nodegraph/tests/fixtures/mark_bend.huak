@@ -1,4 +1,6 @@
 import paint.*
+import geometry.{point_at, region_intersection, region_difference, region_xor, offset}
+import object.region
 import transform.bent
 import math.norm
 import assertions.assert

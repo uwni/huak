@@ -1,4 +1,9 @@
-import paint.{rgb, rotate, apply, rectangle, circle, path, compound, transformed, bent, point_at, arclength, bounds, region, region_difference, fill, label, width, height, picture, object, append, assert, filled, at, shifted}
+import paint.{rgb, rotate, rectangle, circle, path, transformed, bounds, fill, label, picture, object, append, filled, at, shifted}
+import geometry.{compound, point_at, arclength, region_difference}
+import transform.{apply, bent}
+import object.region
+import text.{width, height}
+import assertions.assert
 import math.{abs, lerp, norm, sin, PI}
 import "../../nodegraph.huak".*
 import "../../nodegraph/options.huak" as options

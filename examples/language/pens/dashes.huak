@@ -1,5 +1,6 @@
 import drawing.drawing
-import paint.{rgb, pen, pencircle, translate, scale, rotate, rectangle, path, transformed, draw, fill, label, picture}
+import paint.{rgb, pen, translate, scale, rotate, rectangle, path, transformed, draw, fill, label, picture}
+import pen.pencircle
 # Dash lengths and phase remain physical distances, including an elliptic nib.
 export plate := picture(180mm, 200mm)
 default plate

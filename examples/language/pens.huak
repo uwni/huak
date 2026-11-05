@@ -1,5 +1,6 @@
 import drawing.drawing
-import paint.{rgb, pen, pencircle, pensquare, makepen, stroke_outline, translate, scale, rotate, path, transformed, draw, fill, label, picture}
+import paint.{rgb, pen, translate, scale, rotate, path, transformed, draw, fill, label, picture}
+import pen.{pencircle, pensquare, makepen, stroke_outline}
 param nib_width:length = 3mm
 param nib_angle:angle = 30deg
 

@@ -6,7 +6,7 @@ pub const process_count = 22;
 
 pub fn run(ctx: *h.Harness) !void {
     const script = try ctx.script("composition/main",
-        \\import paint.*
+        \\import paint.*;import geometry.compound
         \\import assertions.assert
         \\param APPLY:bool=true
         \\source:=picture(120pt,80pt)
@@ -79,14 +79,14 @@ pub fn run(ctx: *h.Harness) !void {
     try h.contains((try ctx.command("run", tolerance, &.{}, false)).stderr, "cut tolerance must be positive");
     const angle = try ctx.script("composition/angle", "import paint.*\np:=cut(picture(),circle((0,0),1),1deg)\n");
     try h.contains((try ctx.command("check", angle, &.{}, false)).stderr, "length");
-    const elements = try ctx.script("composition/elements", "import paint.{circle, compound};p:=compound([circle((0,0),1),42])\n");
+    const elements = try ctx.script("composition/elements", "import paint.circle;import geometry.compound;p:=compound([circle((0,0),1),42])\n");
     try h.contains((try ctx.command("run", elements, &.{}, false)).stderr, "path");
     const missing = try ctx.script("composition/missing", "import paint.*\np:=cut(picture())\n");
     try h.contains((try ctx.command("check", missing, &.{}, false)).stderr, "argument");
     const readonly = try ctx.script("composition/readonly", "import paint.picture;p:=picture(640, 480)\np.width=20pt\n");
     try h.contains((try ctx.command("check", readonly, &.{}, false)).stderr, "no writable field");
     const animated = try ctx.script("composition/animated",
-        \\import paint.*
+        \\import paint.*;import animation.{timeline, animate}
         \\source:=picture(100,80)
         \\source.timeline(1)
         \\target:=object.append(source, object.fill(circle((25,25),5)))
@@ -105,7 +105,7 @@ pub fn run(ctx: *h.Harness) !void {
 
 fn batch(ctx: *h.Harness) !void {
     const script = try ctx.script("composition/batch",
-        \\import paint.*
+        \\import paint.*;import geometry.compound
         \\setup_typst { set text(size:4pt) }
         \\caption:=typ[Tile]
         \\source:=picture(400pt,180pt)
@@ -155,7 +155,7 @@ fn clipReferences(svg: h.Svg) usize {
 
 fn objectCutters(ctx: *h.Harness) !void {
     const script = try ctx.script("composition/object-cutters",
-        \\import math.abs;import paint.*
+        \\import math.abs;import paint.*;import geometry.{compound, region_intersection};import pen.pensquare;import object.{outlines, region}
         \\import assertions.assert
         \\fn covered(region:path,at:pair)->bool
         \\    return len(region_intersection(region,rectangle(at,0.2pt,0.2pt),0.01pt))>0
@@ -248,16 +248,16 @@ fn objectCutters(ctx: *h.Harness) !void {
     for ([_][]const u8{ "object-cutters", "object-cutter" }) |prefix| {
         try t.expectEqualStrings(try ctx.read(try ctx.fmt("{s}-1.pdf", .{prefix})), try ctx.read(try ctx.fmt("{s}-4.pdf", .{prefix})));
     }
-    const tolerance = try ctx.script("composition/outline-tolerance", "import paint.{circle, region};p:=region(circle((0,0),1),0pt)\n");
+    const tolerance = try ctx.script("composition/outline-tolerance", "import paint.circle;import object.region;p:=region(circle((0,0),1),0pt)\n");
     try h.contains((try ctx.command("run", tolerance, &.{}, false)).stderr, "region tolerance must be positive");
-    const angle = try ctx.script("composition/outline-angle", "import paint.{circle, region};p:=region(circle((0,0),1),1deg)\n");
+    const angle = try ctx.script("composition/outline-angle", "import paint.circle;import object.region;p:=region(circle((0,0),1),1deg)\n");
     try h.contains((try ctx.command("check", angle, &.{}, false)).stderr, "length");
-    const removed = try ctx.script("composition/no-outline-tolerance", "import paint.{circle, outlines};p:=outlines(circle((0,0),1),0.01pt)\n");
+    const removed = try ctx.script("composition/no-outline-tolerance", "import paint.circle;import object.outlines;p:=outlines(circle((0,0),1),0.01pt)\n");
     try h.contains((try ctx.command("check", removed, &.{}, false)).stderr, "argument");
-    const object_type = try ctx.script("composition/outline-type", "import paint.outlines;p:=outlines(42)\n");
+    const object_type = try ctx.script("composition/outline-type", "import object.outlines;p:=outlines(42)\n");
     try h.contains((try ctx.command("run", object_type, &.{}, false)).stderr, "outlines requires a path, text, or object");
     const animated = try ctx.script("composition/animated-cutter",
-        \\import paint.*
+        \\import paint.*;import animation.{timeline, animate}
         \\cutter:=picture(100,80)
         \\cutter.timeline(1)
         \\target:=object.append(cutter, object.fill(circle((25,25),5)))

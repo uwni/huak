@@ -2,8 +2,21 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Huak",
   "scopeName": "source.huak",
-  "patterns": [{ "include": "#comments" }, { "include": "#dictionary-keys" }, { "include": "#strings" }, { "include": "#typst" }, { "include": "#structures" }, { "include": "#annotations" }, { "include": "#call-forms" }, { "include": "#members" }, { "include": "#keywords" }, { "include": "#numbers" }, { "include": "#functions" }, { "include": "#operators" }],
+  "patterns": [{ "include": "#comments" }, { "include": "#dictionary-keys" }, { "include": "#strings" }, { "include": "#typst" }, { "include": "#imports" }, { "include": "#structures" }, { "include": "#annotations" }, { "include": "#call-forms" }, { "include": "#members" }, { "include": "#keywords" }, { "include": "#numbers" }, { "include": "#functions" }, { "include": "#operators" }],
   "repository": {
+    "imports": {
+      "begin": "\\b(import)\\b(?:[ \\t]+[A-Za-z_][A-Za-z_0-9]*)?", "beginCaptures": { "1": { "name": "keyword.control.huak" } },
+      "end": "(?=;|$|\\b(?:end|else|elseif)\\b)",
+      "patterns": [
+        { "include": "#strings" }, { "include": "#comments" }, { "include": "#members" },
+        { "begin": "\\{", "end": "\\}", "patterns": [
+          { "include": "#comments" },
+          { "begin": "[A-Za-z_][A-Za-z_0-9]*", "end": "(?=[,}])", "patterns": [{ "include": "#comments" }, { "include": "#import-alias" }] }
+        ] },
+        { "include": "#import-alias" }, { "include": "#operators" }
+      ]
+    },
+    "import-alias": { "begin": "\\bas\\b", "beginCaptures": { "0": { "name": "keyword.control.huak" } }, "end": "[A-Za-z_][A-Za-z_0-9]*|(?=[,};])", "patterns": [{ "include": "#comments" }] },
     "comments": { "patterns": [{ "name": "comment.line.double-slash.huak", "match": "//.*$" }, { "name": "comment.line.number-sign.huak", "match": "#.*$" }] },
     "strings": { "name": "string.quoted.double.huak", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.huak", "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})" }] },
     "dictionary-keys": { "match": "(\"(?:\\\\.|[^\"\\\\])*\")([ \\t]*:)", "captures": { "1": { "name": "string.quoted.double.huak meta.mapping.key.huak" }, "2": { "name": "punctuation.separator.huak" } } },
@@ -29,7 +42,7 @@
     },
     "call-forms": { "patterns": [
       { "match": "\\b(fn|expand_block)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)", "captures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.function.huak" } } },
-      { "match": "\\b(mixfix)\\s+(?:_\\s+)?([A-Za-z_][A-Za-z_0-9]*)", "captures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.function.huak" } } }
+      { "match": "\\b(mixfix)\\s*\\(\\s*((?:[A-Za-z_][A-Za-z_0-9]*\\s*\\.\\s*)*)([A-Za-z_][A-Za-z_0-9]*)\\s*\\)", "captures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.namespace.huak" }, "3": { "name": "entity.name.function.huak" } } }
     ] },
     "annotations": { "patterns": [
       {
@@ -67,7 +80,7 @@
       { "begin": "\\{", "end": "\\}", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] }
     ] },
     "keywords": { "patterns": [
-      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|as|precedence|mixfix|and|or|not|typ|setup_typst|typst_expose|cycle)\\b" },
+      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|precedence|mixfix|and|or|not|typ|setup_typst|typst_expose|cycle)\\b" },
       { "name": "constant.language.boolean.huak", "match": "\\b(?:true|false)\\b" }
     ] },
     "numbers": { "patterns": [

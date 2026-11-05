@@ -3,7 +3,7 @@ below addition
 above path
 associativity left
 end
-mixfix _ combine _ in transform
+mixfix(combine) _ combine _ in transform
 fn mark(n:int)->int
 print(n)
 return n

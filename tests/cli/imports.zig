@@ -29,8 +29,8 @@ pub fn run(ctx: *h.Harness) !void {
         \\fn add(a:int,b:int)->int return a+b end
         \\fn twice(a:int)->int return 2*a end
         \\fn hidden()->int return 0 end
-        \\mixfix _ add _ in addition
-        \\mixfix twice _ in unary
+        \\mixfix(add) _ add _ in addition
+        \\mixfix(twice) twice _ in unary
         \\export add, twice
     );
     const selected = try ctx.script("imports/selected",
@@ -39,7 +39,7 @@ pub fn run(ctx: *h.Harness) !void {
         \\import "library.huak".{make as create, add as plus}
         \\import "library.huak".twice
         \\assert(twice 3==6)
-        \\assert(2 plus 3==5)
+        \\assert(2 add 3==5)
         \\default create(50mm)
         \\export mirror:=shapes.make(50mm)
     );
@@ -66,10 +66,10 @@ pub fn run(ctx: *h.Harness) !void {
     const named = try ctx.script("imports/named", "import paint\nexport p:=picture(640, 480);default p\nobject.append(p, copy(paint.sphere(5mm)))");
     _ = try ctx.command("run", named, &.{ "--output", "namespace-paint.svg" }, true);
     _ = try ctx.svg("namespace-paint.svg");
-    const renamed = try ctx.script("imports/renamed", "import paint.sphere as ball\nexport p:=picture(640, 480);default p\nobject.append(p, copy(ball 5mm))");
+    const renamed = try ctx.script("imports/renamed", "import paint.sphere as ball\nexport p:=picture(640, 480);default p\nobject.append(p, copy(sphere 5mm))");
     _ = try ctx.command("run", renamed, &.{ "--output", "prefix-paint.svg" }, true);
     _ = try ctx.svg("prefix-paint.svg");
-    const group = try ctx.script("imports/group", "import paint.{rgb, circle};import paint.{filled as colored, shifted}\nexport p:=picture(640, 480);default p\nobject.append(p, copy(circle((0mm,0mm),5mm) colored rgb(1,0,0) shifted (10mm,0mm)))");
+    const group = try ctx.script("imports/group", "import paint.{rgb, circle};import paint.{filled as colored, shifted}\nexport p:=picture(640, 480);default p\nobject.append(p, copy(circle((0mm,0mm),5mm) filled rgb(1,0,0) shifted (10mm,0mm)))");
     _ = try ctx.command("run", group, &.{ "--output", "infix-paint.svg" }, true);
     _ = try ctx.svg("infix-paint.svg");
 

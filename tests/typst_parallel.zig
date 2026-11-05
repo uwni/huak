@@ -66,7 +66,7 @@ test "batched layout registration outlines and rendering release every allocatio
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.{compound, fill, label, outlines, picture};a := typ[A]
+        \\import paint.{fill, label, picture};import geometry.compound;import object.outlines;a := typ[A]
         \\b := typ[WWWW]
         \\curve := compound(outlines(b).paths)
         \\pic := picture(120,80)
@@ -230,7 +230,7 @@ test "native errors retain the first source position successful prefix and stop 
 
 test "batched nonzero text frames use their own outlines and metrics are execution barriers" {
     const input =
-        \\import paint.{compound, bounds, draw, label, outlines, picture};import assertions.assert
+        \\import paint.{bounds, draw, label, picture};import geometry.compound;import object.outlines;import assertions.assert
         \\narrow := typ[i]
         \\wide := typ[WWWW]
         \\narrow_path := compound(outlines(narrow).paths)

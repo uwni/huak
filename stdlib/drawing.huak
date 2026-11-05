@@ -18,16 +18,12 @@ precedence insertion
 end
 
 export expand_block drawing(target:picture)
-    draw := objects.draw
-    fill := objects.fill
-    filldraw := objects.filldraw
-    label := objects.label
     add := insert.with(target: target)
     erase := erase.with(target: target)
-    mixfix add as + _ in insertion
-    mixfix draw _ with _ in logical_or
-    mixfix fill _ in logical_or
-    mixfix erase _ from _ with _ in logical_or
+    mixfix(add) + _ in insertion
+    mixfix(objects.draw) draw _ with _ in logical_or
+    mixfix(objects.fill) fill _ in logical_or
+    mixfix(erase) erase _ from _ with _ in logical_or
     ...
     return target
 end

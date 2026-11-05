@@ -1,4 +1,5 @@
-import paint.{rgb, width, height}
+import paint.rgb
+import text.{width, height}
 import "../../nodegraph.huak".*
 
 frame := hide(node("frame", absolute((50pt, 30pt)), typ[], {"width": 100pt, "height": 60pt}))

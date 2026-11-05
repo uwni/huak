@@ -157,7 +157,7 @@ pub const Function = struct {
 };
 pub const Parameter = struct { name: []const u8, kind: Type, default: ?Value, global: u32, span: Span, module: u32 = 0 };
 /// Persistent call syntax. Its strings and resolved group belong to Program.
-pub const MixfixForm = struct { parts: []const ?[]const u8, group: u32, symbol: ?[]const u8 = null };
+pub const MixfixForm = struct { head: []const u8, parts: []const ?[]const u8, group: u32 };
 /// Public binding metadata. Globals are read after execution; functions, types
 /// and namespaces resolve during compilation. Export never performs rendering.
 pub const Export = struct {

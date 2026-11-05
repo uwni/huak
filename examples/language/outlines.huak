@@ -1,6 +1,9 @@
 // Actual filled regions, including pen strokes, glyphs and a shape's hole.
 // Export clipped alone to inspect transparent cuts against any background.
 import paint.*
+import geometry.compound
+import pen.pensquare
+import object.outlines
 
 setup_typst { set text(size: 11pt) }
 cutter := picture with width 54mm height 55mm

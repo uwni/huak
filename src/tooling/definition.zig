@@ -151,11 +151,20 @@ const Query = struct {
     }
 
     fn operator(self: Query, name: ast.OperatorName, role: Role) ?Target {
+        if (name.namespace) |namespace| if (self.contains(name.span) and self.token.span.end < name.span.end) {
+            if (self.defaultNamespace(namespace, name.span.start)) |native|
+                return .{ .unit = self.unit, .span = self.token.span, .native = .{ .namespace = native } };
+            return self.namespaceToken(namespace, name.span.start);
+        };
+        return self.operatorTarget(name, role);
+    }
+
+    fn operatorTarget(self: Query, name: ast.OperatorName, role: Role) ?Target {
         if (name.namespace) |namespace| {
-            const id = self.graph.resolveNamespaceAt(self.unit, self.unit.scopeAt(name.span.start), namespace, name.span.start) orelse return null;
-            if (self.token.span.end < name.span.end)
-                return self.namespaceToken(namespace, name.span.start);
-            return self.public(id, name.name);
+            if (self.graph.resolveNamespaceAt(self.unit, self.unit.scopeAt(name.span.start), namespace, name.span.start)) |id| return self.public(id, name.name);
+            const native = self.defaultNamespace(namespace, name.span.start) orelse return null;
+            const signature = builtins.namespaceLookup(native, name.name) orelse return null;
+            return .{ .unit = self.unit, .span = self.token.span, .native = .{ .function = signature.id } };
         }
         return self.named(name.name, name.span.start, role);
     }
@@ -194,7 +203,7 @@ const Query = struct {
             current = self.graph.exportedNamespace(current, part) orelse return null;
             if (token.span.start == self.token.span.start) return moduleStart(self.graph.units.items[current]);
         }
-        return moduleStart(self.graph.units.items[imported.target]);
+        return null;
     }
 
     fn statements(self: Query, body: []const *ast.Stmt) ?Target {
@@ -281,19 +290,21 @@ const Query = struct {
             .typst_expose => |names| {
                 for (names) |name| if (self.contains(name.span)) return self.named(name.name, offset, .value);
             },
-            .imported => |declaration_| {
+            .imported => {
                 for (self.unit.imports.items) |imported| if (imported.span.start == statement_.span.start) {
                     if (imported.form == .selected) for (imported.form.selected) |binding| {
-                        if (self.contains(binding.span)) return self.public(imported.target, binding.name);
+                        if (self.contains(binding.span)) {
+                            if (self.token.span.start == binding.span.start or self.token.span.end == binding.span.end)
+                                return self.public(imported.target, binding.name);
+                            return null;
+                        }
                     };
                     // Only the path and namespace name denote a module. Syntax
                     // keywords and punctuation have no definition.
                     if (self.token.kind == .string) return moduleStart(self.graph.units.items[imported.initializer]);
-                    if (self.token.kind == .identifier) {
-                        if (declaration_.namespace_path.len != 0)
-                            return self.importNamespaceToken(statement_, imported);
+                    if (self.token.kind == .identifier and imported.form == .namespace and self.token.span.end == statement_.span.end)
                         return moduleStart(self.graph.units.items[imported.target]);
-                    }
+                    if (self.token.kind == .identifier) return self.importNamespaceToken(statement_, imported);
                 };
             },
             .precedence_group => |group| {
@@ -302,7 +313,7 @@ const Query = struct {
             },
             .mixfix_binding => |binding| {
                 if (self.contains(binding.form.group.span)) return self.operator(binding.form.group, .precedence);
-                if (self.token.kind == .identifier or Lexer.isOperator(self.token.kind)) return self.named(binding.name, offset, .callable);
+                if (self.token.kind == .identifier or Lexer.isOperator(self.token.kind)) return self.operator(binding.target, .callable);
             },
             else => {},
         }
@@ -386,6 +397,10 @@ const Query = struct {
             },
             .mixfix_call => |call| {
                 for (call.args) |argument| if (self.contains(argument.span)) return self.expression(argument);
+                if (call.qualified) |binding| {
+                    const owner = self.graph.units.items[binding.target.module.?];
+                    return self.inUnit(owner).operatorTarget(binding.target, .callable);
+                }
                 if (self.token.kind == .identifier or Lexer.isOperator(self.token.kind)) return self.operator(call.operator, .callable);
             },
             else => {},
@@ -1002,6 +1017,8 @@ test "definitions follow selected aliases namespace calls values and reexports" 
     try fixture.expect("increment(library", "file:///tmp/library.huak", library, "increment");
     try fixture.expect("amount)", "file:///tmp/library.huak", library, "amount");
     try fixture.expect("amount}", "file:///tmp/library.huak", library, "amount");
+    try fixture.expectNone("as shifted");
+    try fixture.expectNone("as library");
 }
 
 test "Typst exposure names navigate through ordinary local and imported value bindings" {
@@ -1041,21 +1058,22 @@ test "definitions classify operators and mixfix labels without treating argument
     const source =
         \\precedence transform above addition;associativity left end
         \\fn shifted(left:int,right:int)->int return left+right end
-        \\mixfix _ shifted _ in transform
+        \\mixfix(shifted) _ shifted _ in transform
         \\fn twice(value:int)->int return 2*value end
-        \\mixfix twice _ in unary
-        \\fn joined(left:int,right:int)->int return left+right end
-        \\mixfix joined from _ to _ in unary
+        \\mixfix(twice) twice _ in unary
+        \\fn combine(left:int,right:int)->int return left+right end
+        \\mixfix(combine) sum from _ to _ in unary
         \\amount:=3
         \\a:=amount shifted 4
         \\b:=twice amount
-        \\c:=joined from amount to 5
+        \\c:=sum from amount to 5
     ;
     const fixture: Fixture = .{ .source = source };
     try fixture.expect("shifted 4", "file:///tmp/definition.huak", source, "shifted");
     try fixture.expect("twice amount", "file:///tmp/definition.huak", source, "twice");
-    try fixture.expect("from amount", "file:///tmp/definition.huak", source, "joined");
-    try fixture.expect("to 5", "file:///tmp/definition.huak", source, "joined");
+    try fixture.expect("sum from amount", "file:///tmp/definition.huak", source, "combine");
+    try fixture.expect("from amount", "file:///tmp/definition.huak", source, "combine");
+    try fixture.expect("to 5", "file:///tmp/definition.huak", source, "combine");
     try fixture.expect("amount to", "file:///tmp/definition.huak", source, "amount");
     try fixture.expect("transform\n", "file:///tmp/definition.huak", source, "transform");
 }
@@ -1122,11 +1140,13 @@ test "definition and hover token selection accepts identifier endpoints before p
 }
 
 test "qualified operators share exported identities while namespace tokens navigate to module" {
-    const library = "export fn shifted(left:int,right:int)->int return left+right end\nmixfix _ shifted _ in addition\nexport fn twice(value:int)->int return value*2 end\nmixfix twice _ in unary\n";
-    const source = "import \"/tmp/library.huak\" as lib\nx:=1 lib.shifted 2\ny:=lib.twice 3\n";
+    const library = "export fn shifted(left:int,right:int)->int return left+right end\nmixfix(shifted) _ shifted _ in addition\nexport fn twice(value:int)->int return value*2 end\nmixfix(twice) twice _ in unary\n";
+    const source = "import \"/tmp/library.huak\" as lib\nx:=1 lib.shifted 2\ny:=lib.twice 3\nmixfix(lib.twice) double _ in unary\nz:=double 3\n";
     const fixture: Fixture = .{ .source = source, .files = &.{.{ .name = "/tmp/library.huak", .source = library }} };
     try fixture.expect("shifted 2", "file:///tmp/library.huak", library, "shifted");
     try fixture.expect("twice 3", "file:///tmp/library.huak", library, "twice");
+    try fixture.expect("twice) double", "file:///tmp/library.huak", library, "twice");
+    try fixture.expect("double 3", "file:///tmp/library.huak", library, "twice");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const result = (try fixture.lookup(arena.allocator(), "lib.twice")).?;
@@ -1359,15 +1379,16 @@ test "standard root completes modules and nested native members without fake def
     defer frontend.deinit();
     const root = "import std\nvalue:=std.";
     const modules_ = try complete(&frontend, a, root, "/tmp/standard-root.huak", root.len);
-    try std.testing.expectEqual(@as(usize, 16), modules_.len);
     var has_weave = false;
+    var has_regions = false;
     for (modules_) |module| {
         has_weave = has_weave or std.mem.eql(u8, module.label, "weave");
+        has_regions = has_regions or std.mem.eql(u8, module.label, "regions");
         try std.testing.expectEqual(@as(u8, 9), module.kind);
         try std.testing.expect(!std.mem.eql(u8, module.label, "assert") and !std.mem.eql(u8, module.label, "circle"));
         try std.testing.expect(std.mem.startsWith(u8, module.detail, "module "));
     }
-    try std.testing.expect(has_weave);
+    try std.testing.expect(has_weave and has_regions);
     const input = "import std\nimport std.math.{cos as cosine,PI as pi}\nvalue:=std.math.sin(cosine(pi))\n";
     const fixture: Fixture = .{ .source = input };
     try fixture.expectNone("sin(cosine");
@@ -1430,7 +1451,7 @@ test "nested drawing modules preserve imported mixfix and infix navigation" {
         \\import std
         \\import std.paint.circle as disk
         \\curve:=std.paint.circle with center (0,0) radius 2
-        \\other:=disk with center (2,3) radius 4
+        \\other:=circle with center (2,3) radius 4
         \\placed:=content std.paint.at (5,6)
     ;
     const fixture: Fixture = .{ .source = input };
@@ -1443,12 +1464,12 @@ test "nested drawing modules preserve imported mixfix and infix navigation" {
     defer frontend.deinit();
     const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "center (0,0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, detail, "fn geometry.circle("));
-    const template = "export expand_block drawing(target:int)\nplace:=len.with(\"abc\")\nmixfix place _ in unary\n...\nreturn target\nend\n";
+    const template = "export expand_block drawing(target:int)\nplace:=len.with(\"abc\")\nmixfix(place) place _ in unary\n...\nreturn target\nend\n";
     const caller = "import \"/tmp/commands.huak\".drawing as paint\nanswer:=paint 3 do\nplace()\nend\n";
     const expanded: Fixture = .{ .source = caller, .files = &.{.{ .name = "/tmp/commands.huak", .source = template }} };
     try expanded.expect("paint 3", "file:///tmp/commands.huak", template, "drawing");
     try expanded.expect("place()", "file:///tmp/commands.huak", template, "place:=");
-    const symbolic: Fixture = .{ .source = "fn subtract(a:int,b:int)->int return a-b end\nmixfix _ subtract as + _ in addition\nx:=8+3\n" };
+    const symbolic: Fixture = .{ .source = "fn subtract(a:int,b:int)->int return a-b end\nmixfix(subtract) _ + _ in addition\nx:=8+3\n" };
     try symbolic.expect("+ _", "file:///tmp/definition.huak", symbolic.source, "subtract(a");
     try symbolic.expect("+3", "file:///tmp/definition.huak", symbolic.source, "subtract(a");
     const bound: Fixture = .{ .source = "fn command(value:int)->int return value end\nanswer:=block\ncommand:=command.with(value:1)\nreturn command()\nend\n" };

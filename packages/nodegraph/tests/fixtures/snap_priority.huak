@@ -1,4 +1,7 @@
-import paint.{point_at, width, height, assert, at}
+import paint.at
+import geometry.point_at
+import text.{width, height}
+import assertions.assert
 import math.{abs}
 import "../../nodegraph.huak".*
 import assertions.assert

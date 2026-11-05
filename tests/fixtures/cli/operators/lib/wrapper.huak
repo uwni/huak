@@ -1,5 +1,5 @@
 import "common.huak" as common
 import "scaling.huak" as underlying
 fn multiplied(a:int,b:int)->int;return underlying.scaled(a,b);end
-mixfix _ multiplied _ in common.transform
+mixfix(multiplied) _ multiplied _ in common.transform
 export multiplied

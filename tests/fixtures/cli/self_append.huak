@@ -1,4 +1,5 @@
 import paint.*
+import assertions.assert
 p:=picture(640, 480)
 leaf:=object.append(p, fill(circle((10,10),2)))
 inserted:=append(p, copy(p))

@@ -1,6 +1,7 @@
 // A wire crossing cuts a transparent clearance in the lower picture.
 // The independent before/after exports contain only the two colored curves.
 import paint.*
+import pen.{makepen, stroke_outline}
 
 lower := (10mm, 10mm) ~~ (30mm, 25mm) ~~ (55mm, 40mm)
 upper := (10mm, 40mm) ~~ (30mm, 25mm) ~~ (55mm, 10mm)

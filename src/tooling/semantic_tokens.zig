@@ -66,7 +66,7 @@ const Collector = struct {
                 else => {},
             },
             .statement => |stmt| switch (stmt.value) {
-                .mixfix_binding => |binding| try self.words(.{ .start = stmt.span.start, .end = binding.form.group.span.start }, null),
+                .mixfix_binding => |binding| try self.words(.{ .start = stmt.span.start, .end = binding.form.group.span.start }, binding.target.span),
                 else => {},
             },
         }
@@ -75,10 +75,9 @@ const Collector = struct {
 
     /// Arguments are visited as AST children. Only the intervening template
     /// words are lexed here, so strings/comments/Typst cannot become labels.
-    fn words(self: *Collector, span: ast.Span, head: ?ast.Span) !void {
+    fn words(self: *Collector, span: ast.Span, head: ast.Span) !void {
         var diagnostic: ?@import("../language/source.zig").Diagnostic = null;
         var lexer: Lexer = .{ .source = self.unit.source_text[span.start..span.end], .diagnostic = &diagnostic };
-        var declaration_head = head == null;
         while (true) {
             const token = try lexer.next();
             if (token.kind == .eof) break;
@@ -89,15 +88,10 @@ const Collector = struct {
             if (token.kind != .identifier) continue;
             const word = lexer.source[token.span.start..token.span.end];
             const absolute: ast.Span = .{ .start = span.start + token.span.start, .end = span.start + token.span.end };
-            const kind: Kind = if (std.mem.eql(u8, word, "_")) .operator else if (head) |function|
-                (if (absolute.start >= function.start and absolute.end <= function.end)
-                    (if (absolute.end == function.end) Kind.function else Kind.namespace)
-                else
-                    .keyword)
-            else if (declaration_head) first: {
-                declaration_head = false;
-                break :first .function;
-            } else .keyword;
+            const kind: Kind = if (std.mem.eql(u8, word, "_")) .operator else if (absolute.start >= head.start and absolute.end <= head.end)
+                (if (absolute.end == head.end) Kind.function else Kind.namespace)
+            else
+                .keyword;
             try self.tokens.append(self.allocator, .{ .span = absolute, .kind = kind });
         }
     }

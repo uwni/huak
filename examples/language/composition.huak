@@ -1,6 +1,7 @@
 // Cut once with a compound hole, then append any foreground objects.
 // Each isolated export has a transparent background. PDF keeps native text.
 import paint.*
+import geometry.compound
 
 setup_typst { set text(size: 10pt) }
 caption := typ[$V = I R$]

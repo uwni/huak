@@ -26,9 +26,9 @@ assert(len(a.layers)==2 and len(b.layers)==1)
 assert(+2+3==5)
 block
     import "../plot.huak".{plotting as chart,lines as curve,figure as canvas,axis as coordinate}
-    other := canvas with width 200pt height 160pt
-    target := coordinate of other at (0,0)
-    chart target do +curve x [0,1] y [2,3] named typ[Alias] end
+    other := canvas(200pt,160pt)
+    target := axis of other at (0,0)
+    chart target do +lines x [0,1] y [2,3] named typ[Alias] end
     assert(len(target.layers)==1 and dict_contains(target.layers[0].options,"label"))
 end
 for name in ["circle","square","diamond","triangle_up","triangle_down","triangle_left","triangle_right","plus","cross","star"] do

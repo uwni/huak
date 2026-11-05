@@ -6,7 +6,7 @@ pub const process_count = 8;
 
 pub fn run(ctx: *h.Harness) !void {
     const script = try ctx.script("envelopes/main",
-        \\import paint.*
+        \\import paint.*;import pen.pensquare
         \\caption:=typ[Directional envelope Ω]
         \\nib:=pensquare(4pt)
         \\curve:=rectangle((20,20),60,40)
@@ -42,7 +42,7 @@ pub fn run(ctx: *h.Harness) !void {
     try t.expectEqualStrings(try ctx.read("directional-inner-1.svg"), try ctx.read("directional-inner-4.svg"));
     try t.expectEqualStrings(try ctx.read("directional-1.pdf"), try ctx.read("directional-4.pdf"));
     const broken = try ctx.script("envelopes/ellipse",
-        \\import paint.{pencircle, envelope, fill, picture};fn broken()->picture
+        \\import paint.{envelope, fill, picture};import pen.pencircle;fn broken()->picture
         \\    p:=picture(640, 480)
         \\    edge:=envelope((0,0)--(30,0),pencircle(4pt))
         \\    object.append(p, object.fill(edge))
@@ -58,8 +58,8 @@ pub fn run(ctx: *h.Harness) !void {
     try t.expectEqualStrings(serial.stderr, parallel.stderr);
     try ctx.absent("ellipse-1.svg");
     try ctx.absent("ellipse-4.svg");
-    const angle = try ctx.script("envelopes/angle", "import paint.{pensquare, envelope};curve:=(0,0)--(20,0)\nedge:=envelope(curve,pensquare(4pt),1deg)\n");
+    const angle = try ctx.script("envelopes/angle", "import paint.envelope;import pen.pensquare;curve:=(0,0)--(20,0)\nedge:=envelope(curve,pensquare(4pt),1deg)\n");
     try h.contains((try ctx.command("check", angle, &.{}, false)).stderr, "length");
-    const tolerance = try ctx.script("envelopes/tolerance", "import paint.{pensquare, envelope};curve:=(0,0)--(20,0)\nedge:=envelope(curve,pensquare(4pt),0pt)\n");
+    const tolerance = try ctx.script("envelopes/tolerance", "import paint.envelope;import pen.pensquare;curve:=(0,0)--(20,0)\nedge:=envelope(curve,pensquare(4pt),0pt)\n");
     try h.contains((try ctx.command("run", tolerance, &.{}, false)).stderr, "InvalidTolerance");
 }

@@ -35,7 +35,7 @@ end
 
 export expand_block drawing(ctx:Context)
     draw := draw.with(ctx: ctx)
-    mixfix draw _ with _ crossings _ in unary
+    mixfix(draw) draw _ with _ crossings _ in unary
     ...
     finish(ctx)
     return ctx.target

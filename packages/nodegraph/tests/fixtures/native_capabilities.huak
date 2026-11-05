@@ -1,4 +1,6 @@
 import paint.*
+import geometry.{intersection_times, sample_at_length}
+import object.region
 import math.abs
 import assertions.assert
 curve:=bezier((0pt,0pt),(0pt,0pt),(0pt,0pt),(10pt,0pt))

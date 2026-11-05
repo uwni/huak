@@ -477,7 +477,7 @@ test "object handles allow independent construction before continuous animation"
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library, drawing ++
-        \\import paint.{rgb, pen, circle, draw, fill, timeline, animate};export first := figure(1)
+        \\import paint.{rgb, pen, circle, draw, fill};import animation.{timeline, animate};export first := figure(1)
         \\export second := figure(2)
         \\id := object.append(first, object.fill(circle((20,20),6), rgb(0.8,0.1,0.2)))
         \\first.timeline(2,false)
@@ -907,7 +907,11 @@ test "imported builders share module text while initialization and local setting
         .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } },
     }, &diagnostic);
     defer program.deinit();
-    try t.expectEqual(@as(usize, 16), program.modules.len);
+    var figures_modules: usize = 0;
+    for (program.modules) |imported| {
+        if (std.mem.eql(u8, imported.name, "/workers/figures.huak")) figures_modules += 1;
+    }
+    try t.expectEqual(@as(usize, 1), figures_modules);
     const names: []const []const u8 = &.{ "first", "second", "third", "fourth" };
     var reference: [names.len]?[]u8 = @splat(null);
     defer for (reference) |bytes| if (bytes) |value| t.allocator.free(value);
@@ -1102,11 +1106,11 @@ test "directional envelope keeps captured paths pens and builder results safe fo
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.{rgb, pensquare, translate, bezier, fill, picture};import paint.envelope as side
+        \\import paint.{rgb, translate, bezier, fill, picture};import pen.pensquare;import paint.envelope as side
         \\shared_curve:=bezier((5,10),(20,70),(70,0),(90,60))
         \\shared_nib:=pensquare(4pt)
         \\fn figure(offset:pair)->picture
-        \\    edge:=side of shared_curve with shared_nib
+        \\    edge:=envelope of shared_curve with shared_nib
         \\    p:=picture(130,110)
         \\    object.append(p, object.fill(edge, rgb(0.2,0.4,0.7), translate(offset)))
         \\    return p

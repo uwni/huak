@@ -31,7 +31,7 @@ pub fn run(ctx: *h.Harness) !void {
         .{ .name = "tolerance_dimension", .mode = "check", .expression = "region_union(a,b,1deg)" },
         .{ .name = "rectangle_dimension", .expression = "clip_region(a,(1deg,1deg),(2deg,2deg))" },
     }) |case| {
-        const source = try ctx.fmt("import paint.{{rectangle, path, region_union, region_xor, offset, stroke_path, clip_region, clip_lines}};a:=rectangle((0,0),10mm,10mm); b:=rectangle((5mm,0),10mm,10mm)\nresult:={s}\n", .{case.expression});
+        const source = try ctx.fmt("import paint.{{rectangle, path}};import geometry.{{region_union, region_xor, offset, clip_region, clip_lines}};import pen.stroke_path;a:=rectangle((0,0),10mm,10mm); b:=rectangle((5mm,0),10mm,10mm)\nresult:={s}\n", .{case.expression});
         const file = try ctx.script(try ctx.fmt("polygon/invalid_{s}", .{case.name}), source);
         const failure = try ctx.command(case.mode, file, &.{}, false);
         try h.contains(failure.stderr, try ctx.fmt("{s}:2:", .{file}));

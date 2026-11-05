@@ -1,4 +1,6 @@
-import paint.{bezier, point_at, offset, assert, shifted}
+import paint.{bezier, shifted}
+import geometry.{point_at, offset}
+import assertions.assert
 import math.{abs, norm}
 import "../../nodegraph.huak".*
 import "../../nodegraph/curves.huak" as curves

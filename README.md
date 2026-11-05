@@ -54,6 +54,7 @@ zig build playground
 
 - [绘图脚本](examples/language/)涵盖平滑曲线、笔触和路径交织。
 - [三叶结](examples/language/trefoil.huak)用 `ab & bc & ca` 把三段首尾相接的 Bézier 曲线拼成一条路径。
+- [Huak 标志](examples/huak-logo.huak)用 `import regions.{union, minus}` 引入区域运算，再用 `a union b` 合并字形轮廓。需要交集或对称差时，可从同一模块导入 `inter` 或 `xor`。
 - [选择性擦除](examples/language/erase.huak)对照展示点划线、异形笔尖和变宽曲线。用 `erase sweep from [curve, band] with brush` 沿路径擦除，已有闭合笔迹时可写 `erase footprint from [curve, band]`。
 - [Plot 图集](packages/plot/docs/gallery.md)展示折线图、误差棒和热图，并附有源码。
 - [Nodegraph](packages/nodegraph/README.md) 用节点和箭头绘制关系图。

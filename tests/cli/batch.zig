@@ -26,7 +26,7 @@ pub fn run(ctx: *h.Harness) !void {
         \\default pic
     );
     const script = try ctx.script("batch/main",
-        \\import paint.{label, picture, timeline, animate};import "first.huak" as first
+        \\import paint.{label, picture};import animation.{timeline, animate};import "first.huak" as first
         \\import "second.huak" as second
         \\import "shared.huak" as shared
         \\export a := first.pic

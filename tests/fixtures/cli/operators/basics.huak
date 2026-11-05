@@ -12,7 +12,7 @@ assert(not 1 combine 2==13)
 assert((1 combine 2) combine 3==combine(combine(1,2),3))
 assert(1.combine(2)==combine(1,2))
 assert([4][0] combine 2==42)
-mixfix _ combine _ in transform
+mixfix(combine) _ combine _ in transform
 fn combine(x:int,y:int)->int
 return x*10+y
 end
@@ -22,7 +22,7 @@ return associativity
 end
 assert(contextual(2,3)==5)
 fn choose(a:any,b:any)->any;return a;end
-mixfix _ choose _ in transform
+mixfix(choose) _ choose _ in transform
 assert("kept" choose (1,2)=="kept")
 assert((
 1 combine

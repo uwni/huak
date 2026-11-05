@@ -9,6 +9,6 @@ blue := rgb(0.1, 0.4, 0.8)
 export plate := picture(80mm, 50mm)
 default plate
 drawing plate do
-    +(disk with center (40mm, 24mm) radius 15mm) filled blue
+    +circle with center (40mm, 24mm) radius 15mm filled blue
     +typ[Standard library namespaces] at (7mm, 44mm)
 end

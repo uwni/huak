@@ -1,4 +1,4 @@
-import paint.{rgb, circle, path, fill, label, picture, timeline, animate, motion};pic:=picture(240,100)
+import paint.{rgb, circle, path, fill, label, picture};import animation.{timeline, animate, motion};pic:=picture(240,100)
 export pic
 default pic
 pic.timeline(2,false)

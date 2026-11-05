@@ -23,8 +23,12 @@ pub const Symbol = struct {
     callable_since: usize = 0,
     type_since: usize = 0,
     precedence_since: usize = 0,
+
+    pub fn hasName(self: Symbol) bool {
+        return self.local != null or self.value != null or self.callable != null or self.type_symbol != null or self.precedence != null;
+    }
 };
-pub const Operator = struct { name: []const u8, form: *const ast.MixfixForm, since: usize = 0 };
+pub const Operator = struct { name: []const u8, form: *const ast.MixfixForm, since: usize = 0, qualified: ?*const ast.MixfixBinding = null };
 /// Entries live in the syntax arena, so map growth never moves a symbol.
 pub const Symbols = std.StringHashMapUnmanaged(*Symbol);
 pub const Readable = union(enum) { ordinary: struct { scope: Parser.ScopeId, span: ast.Span, module: ?u32 = null }, imported: Value };
@@ -56,7 +60,7 @@ pub const Resolver = struct {
         for (&symbol.operators) |*binding| if (binding.*) |value| {
             if (self.position < value.since) binding.* = null;
         };
-        if (symbol.local == null and symbol.value == null and symbol.callable == null and symbol.type_symbol == null and symbol.precedence == null and
+        if (!symbol.hasName() and
             symbol.mixfix[0] == null and symbol.mixfix[1] == null and symbol.operators[0] == null and symbol.operators[1] == null) return null;
         return symbol;
     }
@@ -175,15 +179,15 @@ test "callable lookup retains namespace provenance and constructor roles only at
     const headers: Parser.Headers = .{ .scopes = &scopes, .imports = &.{}, .operators = &.{} };
     var symbols = [_]Symbols{ .{}, .{} };
     defer for (&symbols) |*table| table.deinit(t.allocator);
-    const constructor: Member = .{ .module = 7, .name = "pen", .identity = .{ .module = 7, .name = "pen", .kind = .builtin }, .mixfix = .{ &.{ .parts = &.{null}, .group = .{ .name = "unary", .span = .{ .start = 1, .end = 2 } } }, null }, .initializer = 5 };
+    const constructor: Member = .{ .module = 7, .name = "pen", .identity = .{ .module = 7, .name = "pen", .kind = .builtin }, .mixfix = .{ &.{ .head = "pen", .parts = &.{null}, .group = .{ .name = "unary", .span = .{ .start = 1, .end = 2 } } }, null }, .initializer = 5 };
     var outer_symbol: Symbol = .{
         .value = .{ .namespace = 7 },
         .namespace_initializer = 5,
         .callable = constructor,
         .callable_since = 50,
         .mixfix = .{
-            &.{ .parts = &.{ "with", null }, .group = .{ .name = "unary", .span = .{ .start = 5, .end = 6 } } },
-            &.{ .parts = &.{null}, .group = .{ .name = "addition", .span = .{ .start = 3, .end = 4 } }, .leading = true },
+            &.{ .head = "pen", .parts = &.{ "with", null }, .group = .{ .name = "unary", .span = .{ .start = 5, .end = 6 } } },
+            &.{ .head = "pen", .parts = &.{null}, .group = .{ .name = "addition", .span = .{ .start = 3, .end = 4 } }, .leading = true },
         },
     };
     var inner_symbol: Symbol = .{ .value = .{ .namespace = 9 }, .namespace_initializer = 8, .value_since = 200 };

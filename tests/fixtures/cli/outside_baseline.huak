@@ -1,4 +1,4 @@
-import paint.{rgb, translate, compound, fill, label, outlines, picture};import assertions.assert
+import paint.{rgb, translate, fill, label, picture};import geometry.compound;import object.outlines;import assertions.assert
 export pic:=picture(100,100)
 default pic
 t:=typ[

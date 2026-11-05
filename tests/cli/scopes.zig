@@ -7,7 +7,7 @@ const invalid = [_][]const u8{
     "if true then import \"first.huak\".value; import \"second.huak\".value end",
     "if false then import \"first.huak\".hidden end",
     "if true then export hidden:=1 end",
-    "fn identity(x:int)->int return x end; if true then mixfix identity _ in unary end; print(identity 1)",
+    "fn identity(x:int)->int return x end; if true then mixfix(identity) identity _ in unary end; print(identity 1)",
     "outer:=1; if true then import \"second.huak\".value as outer; outer=2 end",
     "missing=1",
     "value:=1; value:=2",
@@ -24,14 +24,14 @@ pub fn run(ctx: *h.Harness) !void {
         \\print("first initialized")
         \\export value:=11
         \\export fn mark(x:int)->int return x+1 end
-        \\mixfix mark _ in unary
+        \\mixfix(mark) mark _ in unary
         \\fn hidden()->int return 0 end
     );
     _ = try ctx.script("scopes/second",
         \\import paint.{label, picture};print("second initialized")
         \\export value:=22
         \\export fn mark(x:int)->int return x+10 end
-        \\mixfix mark _ in unary
+        \\mixfix(mark) mark _ in unary
         \\export fn make()->picture
         \\    p:=picture(20mm,10mm)
         \\    object.append(p, object.label(typ[Scoped label], (1mm,6mm)))
@@ -77,7 +77,7 @@ pub fn run(ctx: *h.Harness) !void {
         \\while n<2 do import "second.huak".value; assert(value==22); n=n+1 end
         \\assert(value==11)
         \\fn identity(x:int)->int return x end
-        \\result:=0; if true then mixfix identity _ in unary; result=identity 7 end
+        \\result:=0; if true then mixfix(identity) identity _ in unary; result=identity 7 end
         \\assert(result==7)
         \\export plate :=picture(40mm,20mm)
         \\default plate

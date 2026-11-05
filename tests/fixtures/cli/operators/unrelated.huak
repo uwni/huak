@@ -8,7 +8,7 @@ below addition
 above path
 associativity left
 end
-mixfix _ firstop _ in first
-mixfix _ secondop _ in second
+mixfix(firstop) _ firstop _ in first
+mixfix(secondop) _ secondop _ in second
 fn firstop(a:int,b:int)->int;return a*10+b;end
 fn secondop(a:int,b:int)->int;return a*100+b;end

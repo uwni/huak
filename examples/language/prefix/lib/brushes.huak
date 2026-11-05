@@ -8,11 +8,11 @@ export brush_command
 fn painted(curve: path) -> object
     return fill(curve, rgb(0.15, 0.4, 0.8))
 end
-mixfix painted _ in brush_command
+mixfix(painted) painted _ in brush_command
 export painted
 
 fn reversed(curve: path) -> path
     return reverse(curve)
 end
-mixfix reversed _ in unary
+mixfix(reversed) reversed _ in unary
 export reversed

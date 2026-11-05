@@ -2,12 +2,12 @@ import paint.{rgb, reverse, draw, fill};import "common.huak" as common
 fn paint(p:path)->object
 return fill(p, rgb(0.2,0.4,0.8))
 end
-mixfix paint _ in common.command
+mixfix(paint) paint _ in common.command
 export paint
 fn privatepaint(p:path)->object;return draw(p);end
-mixfix privatepaint _ in common.command
+mixfix(privatepaint) privatepaint _ in common.command
 fn normal(p:path)->path;return p;end
 export normal
 fn mirrored(p:path)->path;return reverse(p);end
-mixfix mirrored _ in unary
+mixfix(mirrored) mirrored _ in unary
 export mirrored

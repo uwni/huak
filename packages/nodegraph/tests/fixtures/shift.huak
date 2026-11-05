@@ -1,4 +1,4 @@
-import paint.{assert}
+import assertions.assert
 import "../../nodegraph.huak".*
 import assertions.assert
 n := node("a", absolute((0pt, 0pt)), typ[A])

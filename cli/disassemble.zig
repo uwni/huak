@@ -27,8 +27,7 @@ pub fn write(program: *const bc.Program, writer: *std.Io.Writer) !void {
             .namespace => |index| try writer.print("export {s} (namespace {s})\n", .{ exported.name, program.modules[index].name }),
         }
         for (exported.mixfix, 0..) |optional, index| if (optional) |form| {
-            try writer.print("  mixfix {s}{s}", .{ if (index != 0) "_ " else "", exported.name });
-            if (form.symbol) |symbol| try writer.print(" as {s}", .{symbol});
+            try writer.print("  mixfix({s}) {s}{s}", .{ exported.name, if (index != 0) "_ " else "", form.head });
             for (form.parts) |part| try writer.print(" {s}", .{part orelse "_"});
             try writer.print(" in precedence {d}\n", .{form.group});
         };

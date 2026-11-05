@@ -6,10 +6,10 @@ end
 fn scaled(p:path,k:float)->path
 return transformed(p,scale(k))
 end
-mixfix _ scaled _ in transform
+mixfix(scaled) _ scaled _ in transform
 export scaled
 fn shifted(p:path,offset:pair)->path
 return transformed(p,translate(offset))
 end
-mixfix _ shifted _ in transform
+mixfix(shifted) _ shifted _ in transform
 export shifted

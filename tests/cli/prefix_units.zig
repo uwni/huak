@@ -14,15 +14,15 @@ pub fn run(ctx: *h.Harness) !void {
     try (try ctx.svg("prefix-second.svg")).viewBox("0 0 90 60");
     try h.contains(try ctx.pdfText("prefix.pdf", false), "Prefix drawing Ω");
     for ([_]struct { name: []const u8, source: []const u8 }{
-        .{ .name = "missing_function", .source = "mixfix missing _ in unary\n" },
-        .{ .name = "missing_group", .source = "fn f(x:int)->int;return x;end\nmixfix f _ in missing\n" },
-        .{ .name = "duplicate", .source = "fn f(x:int)->int;return x;end\nmixfix f _ in unary\nmixfix f _ in unary\n" },
-        .{ .name = "no_arguments", .source = "fn f();end\nmixfix f _ in unary\n" },
-        .{ .name = "two_scalars", .source = "fn f(x:int,y:int)->int;return x+y;end\nmixfix f _ in unary\n" },
-        .{ .name = "three_arguments", .source = "fn f(p:picture,x:path,c:color);end\nmixfix f _ in unary\n" },
-        .{ .name = "escaped_declaration", .source = "fn f(x:int)->int;return x;end\nif false then\nmixfix f _ in unary\nend\nvalue:=f 1\n" },
-        .{ .name = "wrong_type", .source = "fn f(x:int)->int;return x;end\nmixfix f _ in unary\nvalue:=f \"wrong\"\n" },
-        .{ .name = "dead_wrong_type", .source = "fn f(x:int)->int;return x;end\nmixfix f _ in unary\nif false then\nvalue:=f \"wrong\"\nend\n" },
+        .{ .name = "missing_function", .source = "mixfix(missing) missing _ in unary\n" },
+        .{ .name = "missing_group", .source = "fn f(x:int)->int;return x;end\nmixfix(f) f _ in missing\n" },
+        .{ .name = "duplicate", .source = "fn f(x:int)->int;return x;end\nmixfix(f) f _ in unary\nmixfix(f) f _ in unary\n" },
+        .{ .name = "no_arguments", .source = "fn f();end\nmixfix(f) f _ in unary\n" },
+        .{ .name = "two_scalars", .source = "fn f(x:int,y:int)->int;return x+y;end\nmixfix(f) f _ in unary\n" },
+        .{ .name = "three_arguments", .source = "fn f(p:picture,x:path,c:color);end\nmixfix(f) f _ in unary\n" },
+        .{ .name = "escaped_declaration", .source = "fn f(x:int)->int;return x;end\nif false then\nmixfix(f) f _ in unary\nend\nvalue:=f 1\n" },
+        .{ .name = "wrong_type", .source = "fn f(x:int)->int;return x;end\nmixfix(f) f _ in unary\nvalue:=f \"wrong\"\n" },
+        .{ .name = "dead_wrong_type", .source = "fn f(x:int)->int;return x;end\nmixfix(f) f _ in unary\nif false then\nvalue:=f \"wrong\"\nend\n" },
         .{ .name = "private_import", .source = "import drawing.drawing;import paint.{circle, picture};import \"lib/brushes.huak\" as brushes\np:=circle((5,5),2)\npic:=picture(640, 480)\ndrawing pic do;brushes.privatepaint p;end\n" },
         .{ .name = "normal_has_no_role", .source = "import paint.circle;import \"lib/brushes.huak\" as brushes\np:=circle((5,5),2)\nvalue:=brushes.normal p\n" },
         .{ .name = "static_target", .source = "import drawing.drawing;drawing 1 do\nend\n" },
@@ -86,9 +86,9 @@ pub fn run(ctx: *h.Harness) !void {
         .{ .name = "dash_negative", .source = "import paint.{rgb, pen};p:=pen(rgb(0,0,0),1mm,\"round\",\"round\",4,[-1mm,2mm])" },
         .{ .name = "miter_limit", .source = "import paint.{rgb, pen};p:=pen(rgb(0,0,0),1mm,\"round\",\"miter\",0.5)" },
         .{ .name = "cap", .source = "import paint.{rgb, pen};p:=pen(rgb(0,0,0),1mm,\"unknown\")" },
-        .{ .name = "open_nib", .source = "import paint.{makepen, path};p:=makepen(path((0,0),(1mm,1mm)))" },
-        .{ .name = "negative_nib", .source = "import paint.pencircle;p:=pencircle(-1mm)" },
-        .{ .name = "tolerance", .source = "import paint.{pensquare, stroke_outline, path};p:=stroke_outline(path((0,0),(1mm,1mm)),pensquare(),0mm)" },
+        .{ .name = "open_nib", .source = "import paint.path;import pen.makepen;p:=makepen(path((0,0),(1mm,1mm)))" },
+        .{ .name = "negative_nib", .source = "import pen.pencircle;p:=pencircle(-1mm)" },
+        .{ .name = "tolerance", .source = "import paint.path;import pen.{pensquare, stroke_outline};p:=stroke_outline(path((0,0),(1mm,1mm)),pensquare(),0mm)" },
     }) |case| {
         const path = try ctx.script(try ctx.fmt("pens/invalid_{s}", .{case.name}), case.source);
         try h.contains((try ctx.command("run", path, &.{}, false)).stderr, path);

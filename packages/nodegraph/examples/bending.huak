@@ -1,5 +1,6 @@
 // The same local arrowheads, placed rigidly or bent along the guide.
 import paint.*
+import geometry.point_at
 import "../nodegraph.huak".{absolute, edge, mark, node, diagram}
 import "../nodegraph/curves.huak" as curves
 

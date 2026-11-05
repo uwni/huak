@@ -6,6 +6,7 @@ pub const modules = [_]Module{
     .{ .name = "std/assertions.huak", .source = @embedFile("assertions.huak"), .aliases = &.{"assertions"} },
     .{ .name = "std/collections.huak", .source = @embedFile("collections.huak"), .aliases = &.{"collections"} },
     .{ .name = "std/paint.huak", .source = @embedFile("paint.huak"), .aliases = &.{"paint"} },
+    .{ .name = "std/regions.huak", .source = @embedFile("regions.huak"), .aliases = &.{"regions"} },
     .{ .name = "std/drawing.huak", .source = @embedFile("drawing.huak"), .aliases = &.{"drawing"} },
     .{ .name = "std/brush.huak", .source = @embedFile("brush.huak"), .aliases = &.{"brush"} },
     .{ .name = "std/engraving.huak", .source = @embedFile("engraving.huak"), .aliases = &.{"engraving"} },

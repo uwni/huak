@@ -1,4 +1,4 @@
-import math.{abs, norm};import paint.{rgb, pen, translate, rectangle, path, bezier, bounds, clipped, region_union, region_intersection, region_difference, region_xor, offset, stroke_path, clip_region, clip_lines, draw, fill, label, picture};import assertions.assert
+import math.{abs, norm};import paint.{rgb, pen, translate, rectangle, path, bezier, bounds, draw, fill, label, picture};import geometry.{clipped, region_union, region_intersection, region_difference, region_xor, offset, clip_region, clip_lines};import pen.stroke_path;import assertions.assert
 import "lib/regions.huak" as regions
 combined:=regions.base.region_union(regions.overlap,0.001mm,"nonzero")
 intersection:=region_intersection(regions.base,regions.overlap)

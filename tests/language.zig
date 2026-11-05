@@ -67,7 +67,7 @@ test "mapped callbacks are reentrant snapshot source pictures and preserve diagn
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.*
+        \\import paint.*;import geometry.point_at;import assertions.assert
         \\import transform.mapped
         \\source:=picture()
         \\object.append(source, draw(path((0pt,0pt),(2pt,0pt)), pen(rgb(0,0,1),1pt)))
@@ -117,7 +117,7 @@ test "affine mapping and transformation preserve nested clips native text and so
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.*
+        \\import paint.*;import assertions.assert
         \\import transform.{mapped,matrix}
         \\outer:=picture(transform:translate((20pt,30pt)),clip:rectangle((0pt,0pt),80pt,60pt))
         \\inner:=picture(transform:rotate(15deg))
@@ -204,7 +204,7 @@ test "subpaths preserve contour chains through namespaces UFCS lists and native 
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.*
+        \\import paint.*;import geometry.{compound, subpaths, region_difference};import object.region;import assertions.assert
         \\import geometry as geo
         \\import geometry.subpaths as split
         \\open:=bezier((0pt,0pt),(0pt,8pt),(12pt,8pt),(12pt,0pt))
@@ -277,7 +277,7 @@ test "formatting preserves prefix binding and native SVG PDF output" {
         \\import paint.*
         \\setup_typst {set text(size: 11pt)}
         \\fn twice(value:int)->int return 2*value end
-        \\mixfix twice _ in addition
+        \\mixfix(twice) twice _ in addition
         \\prefixed:=twice (2)+3
         \\ordinary:=twice(2)+3
         \\literal:="x=1,y=2"
@@ -516,7 +516,7 @@ test "list append assignment preserves aliases snapshots and runtime path constr
     for ([_]bool{ false, true }) |optimize| {
         var program = try compileModulesOptimized(&library,
             \\import drawing.drawing
-            \\import math.abs;import paint.{path, point_at, sample_path, bounds, draw, picture};import assertions.assert
+            \\import math.abs;import paint.{path, bounds, draw, picture};import geometry.{point_at, sample_path};import assertions.assert
             \\param count:int=3
             \\points:=[]
             \\for i in 0:count do
@@ -675,7 +675,7 @@ test "arc and profile builtins preserve physical units and runtime validation" {
     defer library.deinit();
     for ([_]bool{ false, true }) |optimize| {
         var program = try compileModulesOptimized(&library,
-            \\import math.{abs, norm};import paint.{path, bezier, arclength, sample_path, profile_outline, bounds};import assertions.assert
+            \\import math.{abs, norm};import paint.{path, bezier, bounds};import geometry.{arclength, sample_path};import pen.profile_outline;import assertions.assert
             \\curve:=bezier((0mm,0mm),(0mm,0mm),(0mm,0mm),(100mm,0mm))
             \\assert(abs(arclength(curve)-100mm)<0.001mm)
             \\samples:=sample_path(curve,3)
@@ -701,7 +701,7 @@ test "arc and profile builtins preserve physical units and runtime validation" {
             "profile_outline(p,[0,1],[1mm,-1mm])",
             "profile_outline(p,[0,1],[1deg,1deg])",
         }) |expression| {
-            const source = try std.fmt.allocPrint(t.allocator, "import math.{{abs, norm}};import paint.{{path, bezier, arclength, sample_path, profile_outline, bounds}};p:=path((0,0),(10,0)); result:={s}", .{expression});
+            const source = try std.fmt.allocPrint(t.allocator, "import math.{{abs, norm}};import paint.{{path, bezier, bounds}};import geometry.{{arclength, sample_path}};import pen.profile_outline;p:=path((0,0),(10,0)); result:={s}", .{expression});
             defer t.allocator.free(source);
             var invalid_program = try compileModulesOptimized(&library, source, &.{}, optimize);
             defer invalid_program.deinit();
@@ -771,7 +771,7 @@ test "polygon argument and topology errors stay checked with bytecode optimizati
             .{ .expression = "region_xor(a,a,0.001mm,\"unknown\")", .message = "InvalidFillRule" },
             .{ .expression = "clip_region(a,(1deg,1deg),(2deg,2deg))", .message = "DimensionMismatch" },
         }) |case| {
-            const source = try std.fmt.allocPrint(t.allocator, "import paint.{{rectangle, path, region_union, region_xor, offset, stroke_path, clip_region}};a:=rectangle((0,0),10mm,10mm)\nresult:={s}\n", .{case.expression});
+            const source = try std.fmt.allocPrint(t.allocator, "import paint.{{rectangle, path}};import geometry.{{region_union, region_xor, offset, clip_region}};import pen.stroke_path;a:=rectangle((0,0),10mm,10mm)\nresult:={s}\n", .{case.expression});
             defer t.allocator.free(source);
             var program = try compileModulesOptimized(&library, source, &.{}, optimize);
             defer program.deinit();
@@ -790,7 +790,7 @@ test "bytecode calls existing Hobby and linear solver and exports a true native 
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import math.abs;import solver.{unknown, equation, solve, value};import paint.{rgb, pen, translate, smooth, reverse, transformed, trimmed, bounds, draw, picture};import assertions.assert
+        \\import math.abs;import solver.{unknown, equation, solve, value};import paint.{rgb, pen, translate, smooth, reverse, transformed, bounds, draw, picture};import geometry.trimmed;import assertions.assert
         \\pic:=picture(200,100)
         \\s:=solver(); x:=unknown(s); y:=unknown(s)
         \\equation(s,2*x+y,8); equation(s,x-y,1)
@@ -829,7 +829,7 @@ test "shared native Typst settings keep frame snapshots and body-local changes i
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.{rgb, translate, compound, fill, label, width, outlines, picture};import assertions.assert
+        \\import paint.{rgb, translate, fill, label, picture};import geometry.compound;import object.outlines;import text.width;import assertions.assert
         \\setup_typst {
         \\ set text(size:10pt)
         \\ let word(s) = strong(s)
@@ -888,7 +888,7 @@ test "native Typst blocks control wrapping and embed code and math without DSL w
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const scripts = [_][]const u8{
-        \\import paint.{label, width, height, picture};import assertions.assert
+        \\import paint.{label, picture};import text.{width, height};import assertions.assert
         \\x:=typ[
         \\#block(width:35pt)[#text(size:12pt)[word word word word]]
         \\]
@@ -919,7 +919,7 @@ test "native Typst blocks control wrapping and embed code and math without DSL w
         \\]
         \\pic:=picture(640, 480); object.append(pic, object.label(x, (10,20)))
         ,
-        \\import paint.{label, width, height, picture};import assertions.assert
+        \\import paint.{label, picture};import text.{width, height};import assertions.assert
         \\setup_typst { let wrap(body)=strong(body); set text(size:11pt) }
         \\x:=typ[#wrap[Inline] #("]") `]` /* ] */ #[#{ let v="}"; [#v] }]]
         \\end_text:=typ[
@@ -1003,7 +1003,7 @@ test "drawing returns typed instances and appended groups remain animation targe
     for ([_]bool{ false, true }) |optimize| {
         var diagnostic: ?l.compiler.Diagnostic = null;
         var program = try l.compiler.compile(t.allocator,
-            \\import paint.*
+            \\import paint.*;import animation.{timeline, animate};import assertions.assert
             \\fn mark(dst:object, x:number) -> object
             \\    result := fill(circle((x,20),3))
             \\    drawing dst do
@@ -1065,7 +1065,7 @@ test "script animation uses one retained frame and continuous native object trac
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.{rgb, circle, fill, label, picture, timeline, animate};pic:=picture(200,100); pic.timeline(2.5,false)
+        \\import paint.{rgb, circle, fill, label, picture};import animation.{timeline, animate};pic:=picture(200,100); pic.timeline(2.5,false)
         \\t:=typ[
         \\Move Ω
         \\]
@@ -1101,7 +1101,7 @@ test "path queries clipping picture copies and animation motion reuse core opera
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import math.norm;import paint.{rgb, translate, circle, path, joined, point_at, tangent_at, intersections, clipped, draw, fill, picture, append, timeline, motion};import assertions.assert
+        \\import math.norm;import paint.{rgb, translate, circle, path, joined, draw, fill, picture, append};import geometry.{point_at, tangent_at, intersections, clipped};import animation.{timeline, motion};import assertions.assert
         \\pic:=picture(100,100)
         \\p:=path((0,0),(10,0)); q:=path((10,0),(20,0))
         \\joined_path:=joined(p,q)
@@ -1176,7 +1176,7 @@ test "shared Typst preamble preserves raw markup with embedded math code and tra
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import math.abs;import paint.{width, picture, label};import assertions.assert
+        \\import math.abs;import paint.{picture, label};import text.width;import assertions.assert
         \\plain:=typ[
         \\\[
         \\]
@@ -1228,7 +1228,7 @@ test "explicit pictures preserve independent bounds aliases and copied compositi
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.{rgb, translate, rectangle, bounds, canvas, fill, picture, append};import assertions.assert
+        \\import paint.{rgb, translate, rectangle, bounds, fill, picture, append};import picture.canvas;import assertions.assert
         \\fn stamp(dst: object, at: pair) -> void
         \\ object.append(dst, object.fill(rectangle(at,4,5), rgb(1,0,0)))
         \\end
@@ -1311,7 +1311,7 @@ test "animation and group state belong to each explicit picture" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.{rgb, pen, translate, rectangle, circle, fill, filldraw, picture, append, timeline, animate};animated:=picture(80,40); static:=picture(100,50)
+        \\import paint.{rgb, pen, translate, rectangle, circle, fill, filldraw, picture, append};import animation.{timeline, animate};animated:=picture(80,40); static:=picture(100,50)
         \\id:=object.append(animated, object.fill(circle((10,10),2), rgb(1,0,0)))
         \\animated.timeline(1.25)
         \\group:=object.append(static, picture(transform: translate((10,5)), clip: rectangle((0,0),20,20)))
@@ -1340,7 +1340,7 @@ test "default output retains its picture while named outputs read the final bind
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.{canvas, label, picture};export first:=picture(80,40)
+        \\import paint.{label, picture};import picture.canvas;export first:=picture(80,40)
         \\default first
         \\alias:=first
         \\export alias
@@ -1381,6 +1381,16 @@ test "default output retains its picture while named outputs read the final bind
 }
 
 const ModuleSource = struct { name: []const u8, source: []const u8 };
+fn linkedModule(program: *const l.bytecode.Program, name: []const u8) !l.bytecode.Module {
+    var found: ?l.bytecode.Module = null;
+    for (program.modules) |module| {
+        if (!std.mem.eql(u8, module.name, name)) continue;
+        try t.expect(found == null);
+        found = module;
+    }
+    return found orelse error.MissingModule;
+}
+
 const ModuleResolver = struct {
     sources: []const ModuleSource,
 
@@ -1511,7 +1521,7 @@ test "lexical callable roles restore precedence and nonprefix shadowing" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const sources = [_]ModuleSource{.{ .name = "/native/operators.huak", .source =
-        \\mixfix compute _ in unary
+        \\mixfix(compute) compute _ in unary
         \\export fn compute(input:int)->int return 2*input end
         \\export fn ordinary(a:int,b:int)->int return 10*a+b end
         \\export value:=10
@@ -1521,13 +1531,13 @@ test "lexical callable roles restore precedence and nonprefix shadowing" {
         \\import paint.{rgb, rectangle, fill, picture};import assertions.assert
         \\import "operators.huak".compute as act
         \\fn join_values(a:int,b:int)->int return 10*a+b end
-        \\mixfix _ join_values _ in addition
+        \\mixfix(join_values) _ join_values _ in addition
         \\fn only_here(value:int)->int return 10+value end
         \\fn local_prefix(value:int)->int
-        \\    mixfix only_here _ in unary
+        \\    mixfix(only_here) only_here _ in unary
         \\    return only_here value
         \\end
-        \\assert(act 3+1==7)
+        \\assert(compute 3+1==7)
         \\assert(1+2 join_values 3==33)
         \\if true then
         \\    import "operators.huak".value as act
@@ -1536,22 +1546,22 @@ test "lexical callable roles restore precedence and nonprefix shadowing" {
         \\end
         \\if true then
         \\    import "operators.huak".ordinary as act
-        \\    mixfix _ act _ in addition
-        \\    mixfix _ join_values _ in multiplication
+        \\    mixfix(act) _ act _ in addition
+        \\    mixfix(join_values) _ join_values _ in multiplication
         \\    assert(act (2,3)==23)
         \\    assert(2 act 3==23)
         \\    assert(1+2 join_values 3==24)
         \\end
-        \\assert(act 3+1==7 and 1+2 join_values 3==33)
+        \\assert(compute 3+1==7 and 1+2 join_values 3==33)
         \\assert(local_prefix(2)==12 and only_here(2)==12)
         \\total:=0
         \\for i in 1:2 do
-        \\    mixfix only_here _ in unary
+        \\    mixfix(only_here) only_here _ in unary
         \\    total=total+only_here i
         \\end
         \\counter:=0
         \\while counter<2 do
-        \\    mixfix only_here _ in unary
+        \\    mixfix(only_here) only_here _ in unary
         \\    total=total+only_here counter
         \\    counter=counter+1
         \\end
@@ -1559,7 +1569,7 @@ test "lexical callable roles restore precedence and nonprefix shadowing" {
         \\fn paint_mark(curve:path)->object return fill(curve, rgb(1,0,0)) end
         \\pic:=picture(40,30)
         \\drawing pic do
-        \\    mixfix paint_mark _ in logical_or
+        \\    mixfix(paint_mark) paint_mark _ in logical_or
         \\    +paint_mark rectangle((1,1),5,5)
         \\end
         \\object.append(pic,paint_mark(rectangle((10,1),5,5)))
@@ -1636,9 +1646,9 @@ test "scoped bindings cannot escape siblings or bypass privacy conflicts and exp
         .{ .source = "if false then import \"outer.huak\".secret end", .message = "secret" },
         .{ .source = "if true then import \"outer.huak\" as same;import \"inner.huak\" as same end", .message = "same" },
         .{ .source = "if true then import \"outer.huak\".compute as same;import \"inner.huak\".compute as same end", .message = "same" },
-        .{ .source = "fn f(value:int)->int return value end\nif true then mixfix f _ in unary;mixfix f _ in unary end", .message = "f" },
-        .{ .source = "fn f(value:int)->int return value end\nif true then mixfix f _ in unary;inside:=f 2 end\nbad:=f 3" },
-        .{ .source = "fn f(a:int,b:int)->int return a+b end\nfor i in 1:1 do mixfix _ f _ in addition;inside:=1 f 2 end\nbad:=1 f 2" },
+        .{ .source = "fn f(value:int)->int return value end\nif true then mixfix(f) f _ in unary;mixfix(f) f _ in unary end", .message = "f" },
+        .{ .source = "fn f(value:int)->int return value end\nif true then mixfix(f) f _ in unary;inside:=f 2 end\nbad:=f 3" },
+        .{ .source = "fn f(a:int,b:int)->int return a+b end\nfor i in 1:1 do mixfix(f) _ f _ in addition;inside:=1 f 2 end\nbad:=1 f 2" },
         .{ .source = "if true then export hidden:=1 end", .message = "export" },
         .{ .source = "fn run()->int export hidden:=1;return hidden end", .message = "export" },
         .{ .source = "if true then export fn hidden()->int return 1 end end" },
@@ -1734,13 +1744,13 @@ test "selected and reexported function aliases retain native operators and prece
         \\export fn enlarged(curve:path,factor:float)->path
         \\    return transformed(curve,scale(factor))
         \\end
-        \\mixfix _ enlarged _ in placement
+        \\mixfix(enlarged) _ enlarged _ in placement
         \\export fn relocated(curve:path,offset:pair)->path
         \\    return transformed(curve,translate(offset))
         \\end
-        \\mixfix _ relocated _ in placement
+        \\mixfix(relocated) _ relocated _ in placement
         \\export fn doubled(value:float)->float return 2*value end
-        \\mixfix doubled _ in unary
+        \\mixfix(doubled) doubled _ in unary
         },
         .{ .name = "/native/bridge.huak", .source =
         \\import "operators.huak".{placement as order, enlarged as resized, relocated as moved, doubled as twice, amount, adjusted}
@@ -1753,14 +1763,14 @@ test "selected and reexported function aliases retain native operators and prece
         \\import "bridge.huak".{order as affine, resized as grow, moved as move_curve, twice as double_value, amount as base, adjusted as add_base}
         \\precedence finishing below affine; above path; associativity left end
         \\fn nudged(curve:path,offset:pair)->path return transformed(curve,translate(offset)) end
-        \\mixfix _ nudged _ in finishing
+        \\mixfix(nudged) _ nudged _ in finishing
         \\base_curve:=circle((0,0),5)
-        \\curve:=base_curve grow 1+1 move_curve (20,30) nudged (3,4)
+        \\curve:=base_curve enlarged 1+1 relocated (20,30) nudged (3,4)
         \\ordinary:=nudged(move_curve(grow(base_curve,2),(20,30)),(3,4))
         \\assert(curve.bounds()==ordinary.bounds())
         \\assert(abs(curve.bounds()[0].x-13pt)<0.000001pt)
         \\assert(abs(curve.bounds()[1].y-44pt)<0.000001pt)
-        \\assert(double_value 3^2+1==19)
+        \\assert(doubled 3^2+1==19)
         \\assert(double_value(3^2)+1==19)
         \\assert(base==7 and add_base(5)==12)
         \\export grow, double_value, affine
@@ -1770,7 +1780,7 @@ test "selected and reexported function aliases retain native operators and prece
     for ([_]bool{ false, true }) |optimize| {
         var program = try compileModulesOptimized(&library, source, &modules, optimize);
         defer program.deinit();
-        try t.expectEqual(@as(usize, 17), program.modules.len);
+        for (modules) |module| _ = try linkedModule(&program, module.name);
         var checked_fold = false;
         for (program.functions) |function| if (std.mem.eql(u8, function.name, "adjusted")) {
             var multiplications: usize = 0;
@@ -1848,10 +1858,10 @@ test "namespace wildcard and selected bindings share module initialization and l
     for ([_]bool{ false, true }) |optimize| {
         var program = try compileModulesOptimized(&library, source, &sources, optimize);
         defer program.deinit();
-        try t.expectEqual(@as(usize, 16), program.modules.len);
+        const shared = try linkedModule(&program, "/native/shared.huak");
         for ([_][2][]const u8{ .{ "items", "readings" }, .{ "canvas", "sheet" } }) |names| {
             var original_global: ?u32 = null;
-            for (program.modules[2].exports) |exposed| if (std.mem.eql(u8, exposed.name, names[0])) {
+            for (shared.exports) |exposed| if (std.mem.eql(u8, exposed.name, names[0])) {
                 original_global = exposed.target.global;
             };
             try t.expect(original_global != null);
@@ -1887,10 +1897,10 @@ test "selection privacy conflicts and invalid exported bodies survive optimizati
     const sources = [_]ModuleSource{
         .{ .name = "/native/private.huak", .source =
         \\precedence private_order below addition; above path end
-        \\mixfix secret _ in unary
+        \\mixfix(secret) secret _ in unary
         \\fn secret(value:int)->int return value end
         \\fn step(left:int,right:int)->int return left+right end
-        \\mixfix _ step _ in private_order
+        \\mixfix(step) _ step _ in private_order
         \\value:=7
         \\export value,step
         },
@@ -1972,7 +1982,7 @@ test "module namespaces share native frames while isolating Typst setup by funct
         \\object.append(page, object.label(before, (5,110))); object.append(page, object.label(child, (5,160)))
     , &.{.{ .name = "/native/typography.huak", .source = imported_source }});
     defer program.deinit();
-    try t.expectEqual(@as(usize, 16), program.modules.len);
+    _ = try linkedModule(&program, "/native/typography.huak");
     var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
     defer runtime.deinit();
     var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
@@ -2017,7 +2027,7 @@ test "linked module initialization is shared within a run and reset for a reused
         \\export scene:=right.image
     , &sources);
     defer program.deinit();
-    try t.expectEqual(@as(usize, 18), program.modules.len);
+    for (sources) |module| _ = try linkedModule(&program, module.name);
     for (0..3) |_| {
         var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
         defer runtime.deinit();
@@ -2045,12 +2055,12 @@ test "exported infix geometry uses the normal function bytecode and native frame
         \\fn scaled(p:path,k:float)->path
         \\ return transformed(p,scale(k))
         \\end
-        \\mixfix _ scaled _ in transform
+        \\mixfix(scaled) _ scaled _ in transform
         \\export scaled
         \\fn shifted(p:path,offset:pair)->path
         \\ return transformed(p,translate(offset))
         \\end
-        \\mixfix _ shifted _ in transform
+        \\mixfix(shifted) _ shifted _ in transform
         \\export shifted
     ;
     const source =
@@ -2102,16 +2112,16 @@ test "head and leading mixfix expressions retain ordinary call bytecode and sing
     defer library.deinit();
     const declarations =
         \\fn negated(x:float)->float;return -x;end
-        \\mixfix negated _ in unary
+        \\mixfix(negated) negated _ in unary
         \\fn padded(x:int)->int;return x+100;end
-        \\mixfix padded _ in path
+        \\mixfix(padded) padded _ in path
         \\fn one(x:int)->int return x+1 end
-        \\mixfix one _ in unary
+        \\mixfix(one) one _ in unary
         \\fn combine(left:int,right:int)->int return 10*left+right end
-        \\mixfix combine left _ plus _ in unary
-        \\mixfix _ combine _ in addition
+        \\mixfix(combine) combine left _ plus _ in unary
+        \\mixfix(combine) _ combine _ in addition
         \\fn clip(first:int,middle:int,last:int)->int return 100*first+10*middle+last end
-        \\mixfix _ clip from _ to _ in addition
+        \\mixfix(clip) _ clip from _ to _ in addition
         \\events:=[]
         \\fn record(x:int)->int events+=x; return x end
     ;
@@ -2128,7 +2138,7 @@ test "head and leading mixfix expressions retain ordinary call bytecode and sing
         \\tracked:=record(4) clip from record(5) to record(6)
         \\assert(tracked==456 and events==[4,5,6])
         \\if true then
-        \\    mixfix combine from _ and_value _ in unary
+        \\    mixfix(combine) combine from _ and_value _ in unary
         \\    assert(combine from 7 and_value 8==78)
         \\    assert(7 combine 8==78)
         \\end
@@ -2147,7 +2157,7 @@ test "head and leading mixfix expressions retain ordinary call bytecode and sing
         \\tracked:=clip(record(4),record(5),record(6))
         \\assert(tracked==456 and events==[4,5,6])
         \\if true then
-        \\    mixfix combine from _ and_value _ in unary
+        \\    mixfix(combine) combine from _ and_value _ in unary
         \\    assert(combine(7,8)==78)
         \\    assert(combine(7,8)==78)
         \\end
@@ -2187,7 +2197,7 @@ test "drawing snapshots its target and reuses imported prefix functions and nati
         \\ print("paint")
         \\ return fill(curve, rgb(0.2,0.4,0.8))
         \\end
-        \\mixfix paint _ in logical_or
+        \\mixfix(paint) paint _ in logical_or
         \\export paint
     ;
     const source =
@@ -2258,11 +2268,11 @@ test "drawing scopes restore targets across nested loops and function returns" {
     const source =
         \\import drawing.drawing
         \\import math.sqrt;import paint.{circle, reverse, draw, fill, picture};import assertions.assert
-        \\mixfix reverse _ in unary
-        \\mixfix sqrt _ in unary
+        \\mixfix(reverse) reverse _ in unary
+        \\mixfix(sqrt) sqrt _ in unary
         \\assert(sqrt 16==4)
         \\fn same(dst:picture)->picture;return dst;end
-        \\mixfix same _ in unary
+        \\mixfix(same) same _ in unary
         \\curve:=circle((10,10),4)
         \\first:=picture(640, 480); second:=picture(640, 480)
         \\fn build(dst:picture,other:picture,p:path)
@@ -2464,7 +2474,7 @@ test "directional envelope preserves orientation subpaths and strict zero-line s
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.{rgb, pen, pensquare, stroke_outline, envelope, rectangle, circle, path, reverse, clipped, region_union};shape:=pensquare(4pt)
+        \\import paint.{rgb, pen, envelope, rectangle, circle, path, reverse};import geometry.{clipped, region_union};import pen.{pensquare, stroke_outline};shape:=pensquare(4pt)
         \\ink:=rgb(0.2,0.4,0.7)
         \\curve:=circle((40,40),15)
         \\outside:=envelope(curve,shape)
@@ -2526,7 +2536,7 @@ test "directional envelope rejects elliptical pens with source-located actionabl
         .{ .expression = "envelope(curve,pencircle(4pt))", .message = "EllipticalPen" },
         .{ .expression = "envelope(curve,pensquare(4pt),0pt)", .message = "InvalidTolerance" },
     }) |case| {
-        const source = try std.fmt.allocPrint(t.allocator, "import paint.{{pencircle, pensquare, envelope, path}};curve:=path((0,0),(20,0))\nresult:={s}\nafter:=1\n", .{case.expression});
+        const source = try std.fmt.allocPrint(t.allocator, "import paint.{{envelope, path}};import pen.{{pencircle, pensquare}};curve:=path((0,0),(20,0))\nresult:={s}\nafter:=1\n", .{case.expression});
         defer t.allocator.free(source);
         var program = try compileModulesOptimized(&library, source, &.{}, optimize);
         defer program.deinit();
@@ -2547,7 +2557,7 @@ test "drawing inserts only explicit plus expressions and retains object handles"
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
-        \\import paint.*
+        \\import paint.*;import assertions.assert
         \\import object.{remove}
         \\fn identity(value:any)->any return value end
         \\expand_block panel(target:picture)
@@ -2717,7 +2727,7 @@ test "anonymous drawing expressions return targets and unwind unfinished operand
         \\struct Card
         \\    image:picture=drawing picture(10,10) do
         \\        import object.fill as shade
-        \\        mixfix shade _ in unary
+        \\        mixfix(shade) shade _ in unary
         \\        shape := shade ((0,0)--(5,0)--(5,5)--cycle); +shape
         \\    end
         \\end
@@ -2766,7 +2776,7 @@ test "exported block templates preserve definition and caller scopes through ali
         \\export expand_block collect(target:dict)
         \\    import math.abs
         \\    place:=put.with(target:target)
-        \\    mixfix place _ in unary
+        \\    mixfix(place) place _ in unary
         \\    ...
         \\    return target["sum"]+extra+offset
         \\end

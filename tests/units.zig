@@ -16,7 +16,7 @@ test "unit syntax and dimensions reach native geometry and typography with ident
     defer library.deinit();
     const source =
         \\import drawing.drawing
-        \\import math.{sin, sqrt, abs, norm};import paint.{rotate, apply, circle, bounds, draw, label, width, picture};import math.PI as pi;import assertions.assert
+        \\import math.{sin, sqrt, abs, norm};import paint.{rotate, circle, bounds, draw, label, picture};import transform.apply;import text.width;import math.PI as pi;import assertions.assert
         \\param radius:length=1 cm
         \\param turn:angle=2 pi rad
         \\assert(1cm==10mm); assert(turn==360deg)

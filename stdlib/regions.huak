@@ -1,0 +1,18 @@
+import geometry.{region_union as union, region_intersection as inter, region_difference as minus, region_xor as xor}
+
+precedence region_sum
+    below path
+    above comparison
+    associativity left
+end
+precedence region_overlap
+    below path
+    above region_sum
+    associativity left
+end
+
+mixfix(union) _ union _ in region_sum
+mixfix(inter) _ inter _ in region_overlap
+mixfix(minus) _ minus _ in region_sum
+mixfix(xor) _ xor _ in region_sum
+export union, inter, minus, xor

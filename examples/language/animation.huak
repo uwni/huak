@@ -1,5 +1,6 @@
 import drawing.drawing
-import paint.{rgb, circle, fill, label, picture, timeline, animate}
+import paint.{rgb, circle, fill, label, picture}
+import animation.{timeline, animate}
 param seconds: float = 2.4
 export pic := picture(320, 160)
 default pic

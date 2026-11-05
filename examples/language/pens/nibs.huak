@@ -1,5 +1,6 @@
 import drawing.drawing
-import paint.{rgb, pen, pencircle, pensquare, makepen, makepath, translate, scale, rotate, rectangle, transformed, draw, fill, label, picture}
+import paint.{rgb, pen, translate, scale, rotate, rectangle, transformed, draw, fill, label, picture}
+import pen.{pencircle, pensquare, makepen, makepath}
 # Five physical nibs, one unchanged Hobby centerline.
 setup_typst {
     set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#273449"))

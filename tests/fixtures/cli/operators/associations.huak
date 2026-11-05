@@ -9,8 +9,8 @@ below addition
 above path
 associativity none
 end
-mixfix _ rightsub _ in subtract_right
-mixfix _ onesub _ in subtract_none
+mixfix(rightsub) _ rightsub _ in subtract_right
+mixfix(onesub) _ onesub _ in subtract_none
 fn rightsub(a:int,b:int)->int
 return a-b
 end

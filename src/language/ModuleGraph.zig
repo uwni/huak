@@ -27,10 +27,10 @@ test "module graph exposes only exported prefix declarations while parsing calle
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
             if (!std.mem.eql(u8, path, "library")) return error.UnknownModule;
             return .{ .name = "library.huak", .source =
-            \\mixfix wrap _ in addition
+            \\mixfix(wrap) wrap _ in addition
             \\export wrap
             \\fn wrap(x:int)->int;return x;end
-            \\mixfix hidden _ in addition
+            \\mixfix(hidden) hidden _ in addition
             \\fn hidden(x:int)->int;return x;end
             };
         }
@@ -81,6 +81,20 @@ pub const Unit = struct {
     }
     pub fn scopeAt(self: *const Unit, offset: usize) Parser.ScopeId {
         return self.headers.scopeAt(offset);
+    }
+
+    fn publicTemplate(self: *const Unit, head: []const u8, role: usize) ?Parser.MixfixLookup.Binding {
+        const scoped = self.scopes[0].get(head) orelse return null;
+        const binding = scoped.operators[role] orelse return null;
+        if (self.public_names.get(binding.name)) |entry| {
+            if (entry.mixfix[role] == binding.form) return .{ .form = binding.form.*, .target = binding.name };
+        }
+        // A module can re-export the same callable under a different name.
+        var exports = self.public_names.iterator();
+        while (exports.next()) |entry| {
+            if (entry.value_ptr.mixfix[role] == binding.form) return .{ .form = binding.form.*, .target = entry.key_ptr.* };
+        }
+        return null;
     }
 };
 const ModuleGraph = @This();
@@ -238,11 +252,17 @@ fn parseScript(self: *ModuleGraph, unit: *Unit, depth: usize) anyerror!void {
     }
     for (headers.operators) |header| {
         const binding = &header.statement.value.mixfix_binding;
-        const entry = try self.symbol(unit, header.scope, binding.name);
-        const role = &entry.mixfix[@intFromBool(binding.form.leading)];
-        if (role.* != null) return self.fail(unit, header.statement.span, "duplicate mixfix binding '{s}'", .{binding.name});
-        role.* = &binding.form;
-        try self.bindOperator(unit, header.scope, binding.name, &binding.form, 0, header.statement.span);
+        const qualified = binding.target.namespace != null;
+        if (qualified) {
+            binding.target.module = index;
+            binding.form.group.module = index;
+        } else {
+            const entry = try self.symbol(unit, header.scope, binding.target.name);
+            const role = &entry.mixfix[@intFromBool(binding.form.leading)];
+            if (role.* != null) return self.fail(unit, header.statement.span, "duplicate mixfix binding '{s}'", .{binding.target.name});
+            role.* = &binding.form;
+        }
+        try self.bindOperator(unit, header.scope, .{ .name = binding.target.name, .form = &binding.form, .qualified = if (qualified) binding else null }, header.statement.span);
     }
     var mixfix_context: MixfixContext = .{ .graph = self, .unit = unit };
     var options = self.options;
@@ -369,18 +389,23 @@ fn bindMember(self: *ModuleGraph, unit: *Unit, id: Parser.ScopeId, alias: []cons
             }
         },
     }
-    for (exposed.mixfix) |form| if (form) |value| try self.bindOperator(unit, id, alias, value, span.end, span);
+    for (exposed.mixfix) |form| if (form) |value| try self.bindOperator(unit, id, .{ .name = alias, .form = value, .since = span.end }, span);
 }
 
-fn bindOperator(self: *ModuleGraph, unit: *Unit, scope: Parser.ScopeId, name: []const u8, form: *const ast.MixfixForm, since: usize, span: source.Span) !void {
-    const spelling = form.symbol orelse return;
+fn bindOperator(self: *ModuleGraph, unit: *Unit, scope: Parser.ScopeId, binding: lexical.Operator, span: source.Span) !void {
+    const spelling = binding.form.head;
     const entry = try self.symbol(unit, scope, spelling);
-    const role = &entry.operators[@intFromBool(form.leading)];
+    const role = &entry.operators[@intFromBool(binding.form.leading)];
     if (role.*) |earlier| {
-        if (!std.mem.eql(u8, earlier.name, name) or earlier.form != form)
+        if (earlier.form == binding.form) {
+            if (binding.since < earlier.since) role.* = binding;
+            return;
+        }
+        if (earlier.qualified != null or binding.qualified != null or !std.mem.eql(u8, earlier.name, binding.name))
             return self.fail(unit, span, "conflicting mixfix operator '{s}'", .{spelling});
-        role.*.?.since = @min(earlier.since, since);
-    } else role.* = .{ .name = name, .form = form, .since = since };
+        if (binding.since >= earlier.since) return;
+    }
+    role.* = binding;
 }
 fn collectPublicExports(self: *ModuleGraph, unit: *Unit) !void {
     var functions: std.StringHashMapUnmanaged(void) = .{};
@@ -501,10 +526,6 @@ const MixfixContext = struct {
                     form.* = copy;
                 };
                 for (&symbol_.operators) |*binding| if (binding.*) |*value| {
-                    const copy = try context.graph.syntax.create(ast.MixfixForm);
-                    copy.* = value.form.*;
-                    if (copy.group.module == null) copy.group.module = owner.index;
-                    value.form = copy;
                     value.since = 0;
                 };
                 symbol_.value_since = 0;
@@ -519,17 +540,22 @@ const MixfixContext = struct {
         var bindings = injected.iterator();
         while (bindings.next()) |entry| {
             const span = context.unit.headers.scopes[scope].body;
-            try context.graph.checkOrdinary(context.unit, scope, entry.key_ptr.*, span);
             const destination = try context.graph.symbol(context.unit, scope, entry.key_ptr.*);
-            if (destination.value != null or destination.callable != null or destination.local != null)
-                return context.graph.fail(context.unit, span, "duplicate block binding '{s}'", .{entry.key_ptr.*});
             var incoming = entry.value_ptr.*.*;
+            if (incoming.hasName()) {
+                try context.graph.checkOrdinary(context.unit, scope, entry.key_ptr.*, span);
+                if (destination.hasName())
+                    return context.graph.fail(context.unit, span, "duplicate block binding '{s}'", .{entry.key_ptr.*});
+            }
             inline for (.{ "mixfix", "operators" }) |field| for (&@field(incoming, field), @field(destination.*, field)) |*binding, local| {
                 if (local != null and binding.* != null)
                     return context.graph.fail(context.unit, span, "duplicate mixfix binding '{s}'", .{entry.key_ptr.*});
                 if (binding.* == null) binding.* = local;
             };
-            destination.* = incoming;
+            if (incoming.hasName()) destination.* = incoming else {
+                destination.mixfix = incoming.mixfix;
+                destination.operators = incoming.operators;
+            }
         }
     }
 
@@ -540,17 +566,16 @@ const MixfixContext = struct {
         const index = @intFromBool(leading);
         if (name.namespace) |alias| {
             if (context.graph.resolveNamespaceAt(context.unit, id, alias, name.span.start)) |module| {
-                const exposed = context.graph.units.items[module].public_names.get(name.name) orelse return null;
-                return if (exposed.mixfix[index]) |form| .{ .form = form.* } else null;
+                return context.graph.units.items[module].publicTemplate(name.name, index);
             }
             if (resolver_.readable(id, alias) != null) return null;
         } else {
-            if (resolver_.operator(id, name.name, leading)) |binding| return .{ .form = binding.form.*, .target = binding.name };
-            const call = resolver_.callable(id, name.name);
-            if (call.mixfix[index]) |form| return .{ .form = form.* };
-            if (call.shadowed) return null;
-            if (call.member) |member|
-                return if (member.mixfix[index]) |form| .{ .form = form.* } else null;
+            if (resolver_.operator(id, name.name, leading)) |binding| {
+                if (binding.qualified) |qualified| return .{ .form = binding.form.*, .target = binding.name, .qualified = qualified };
+                const call = resolver_.callable(id, binding.name);
+                const form = call.mixfix[index] orelse (if (call.member) |member| member.mixfix[index] else null) orelse return null;
+                if (std.mem.eql(u8, form.head, name.name)) return .{ .form = form.*, .target = binding.name };
+            }
         }
         const options = context.graph.options;
         if (options.mixfix) |fallback| return fallback.lookup(name, leading);
@@ -570,9 +595,7 @@ fn sameMixfixParts(left: [2]?*const ast.MixfixForm, right: [2]?*const ast.Mixfix
             continue;
         }
         if (one.?.parts.len != two.?.parts.len) return false;
-        if (one.?.symbol == null or two.?.symbol == null) {
-            if (one.?.symbol != null or two.?.symbol != null) return false;
-        } else if (!std.mem.eql(u8, one.?.symbol.?, two.?.symbol.?)) return false;
+        if (!std.mem.eql(u8, one.?.head, two.?.head)) return false;
         for (one.?.parts, two.?.parts) |a, b| {
             if (a == null or b == null) {
                 if (a != null or b != null) return false;
@@ -586,7 +609,7 @@ test "a global export does not disclose a same-named private prefix function" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: []const u8) !ResolvedSource {
             return .{ .name = "library.huak", .source =
-            \\mixfix same _ in unary
+            \\mixfix(same) same _ in unary
             \\fn same(x:int)->int;return x;end
             \\same:=0; if true then;same=3;end
             \\export same
@@ -608,7 +631,7 @@ test "a global export does not disclose a same-named private prefix function" {
 test "lexical function imports replace prefix roles and imported data shadows calls" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
-            if (std.mem.eql(u8, path, "prefix")) return .{ .name = "prefix.huak", .source = "mixfix wrap _ in unary;export fn wrap(x:int)->int return x end" };
+            if (std.mem.eql(u8, path, "prefix")) return .{ .name = "prefix.huak", .source = "mixfix(wrap) wrap _ in unary;export fn wrap(x:int)->int return x end" };
             if (std.mem.eql(u8, path, "ordinary")) return .{ .name = "ordinary.huak", .source = "export fn wrap(a:int,b:int)->int return a+b end" };
             return .{ .name = "data.huak", .source = "export wrap:=7" };
         }
@@ -628,7 +651,7 @@ test "lexical function imports replace prefix roles and imported data shadows ca
         \\    import "data".wrap as act
         \\    mixed:=act
         \\end
-        \\outside:=act 5
+        \\outside:=wrap 5
     );
     const script = graph.units.items[0].script;
     const ordinary = script.statements[1].value.conditional.branches[0].body[1].value.assignment.value;
@@ -644,7 +667,7 @@ test "lexical function imports replace prefix roles and imported data shadows ca
 test "whole function data bindings shadow outer namespaces during prefix parsing" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: []const u8) !ResolvedSource {
-            return .{ .name = "library.huak", .source = "mixfix wrap _ in unary;export fn wrap(x:int)->int return x end" };
+            return .{ .name = "library.huak", .source = "mixfix(wrap) wrap _ in unary;export fn wrap(x:int)->int return x end" };
         }
     };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -674,7 +697,7 @@ test "same function imported with different prefix roles is rejected in either o
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
             if (std.mem.eql(u8, path, "base")) return .{ .name = "base.huak", .source = "export fn f(x:int)->int return x end" };
-            return .{ .name = "bridge.huak", .source = "import \"base\".f;mixfix f _ in unary;export f" };
+            return .{ .name = "bridge.huak", .source = "import \"base\".f;mixfix(f) f _ in unary;export f" };
         }
     };
     for ([_][]const u8{ "import \"base\".f;import \"bridge\".f", "import \"bridge\".f;import \"base\".f" }) |input| {
@@ -722,7 +745,7 @@ test "local structs occupy callable and type channels without leaking fields int
 test "record aliases and reexports retain the original nominal declaration identity" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
-            if (std.mem.eql(u8, path, "base")) return .{ .name = "base.huak", .source = "export struct Style;width:float=1;end\nmixfix Style width _ in unary\nstruct Hidden;value:int;end" };
+            if (std.mem.eql(u8, path, "base")) return .{ .name = "base.huak", .source = "export struct Style;width:float=1;end\nmixfix(Style) Style width _ in unary\nstruct Hidden;value:int;end" };
             return .{ .name = "bridge.huak", .source = "import \"base\".Style as Pen;export Pen" };
         }
     };
@@ -738,7 +761,7 @@ test "record aliases and reexports retain the original nominal declaration ident
         \\import "base" as styles
         \\fn paint(style:styles.Style)->Paint return style end
         \\export Paint
-        \\created:=Paint width 2
+        \\created:=Style width 2
     );
     const root_source = graph.units.items[0];
     const bridge = graph.units.items[1];
@@ -989,7 +1012,7 @@ test "exported namespaces retain canonical identities through nested imports" {
             if (std.mem.eql(u8, path, "tools")) return .{ .name = "tools.huak", .source =
             \\import math as numeric
             \\export numeric
-            \\mixfix wrap _ with _ in unary
+            \\mixfix(wrap) wrap _ with _ in unary
             \\export fn wrap(x:int,extra:int=0)->int;return x+extra;end
             };
             if (std.mem.eql(u8, path, "private")) return .{ .name = "private.huak", .source = "export secret:=1" };
@@ -1051,7 +1074,7 @@ test "exported namespaces retain canonical identities through nested imports" {
 test "imports become visible after declarations and preserve earlier outer bindings" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
-            if (std.mem.eql(u8, path, "outer")) return .{ .name = "outer.huak", .source = "mixfix wrap _ in unary;export fn wrap(x:int)->int;return x;end" };
+            if (std.mem.eql(u8, path, "outer")) return .{ .name = "outer.huak", .source = "mixfix(wrap) wrap _ in unary;export fn wrap(x:int)->int;return x;end" };
             if (std.mem.eql(u8, path, "inner")) return .{ .name = "inner.huak", .source = "export fn wrap(x:int,y:int)->int;return x+y;end" };
             return .{ .name = "data.huak", .source = "export wrap:=7" };
         }
@@ -1064,12 +1087,12 @@ test "imports become visible after declarations and preserve earlier outer bindi
     try graph.root("root.huak",
         \\import "outer".wrap as act
         \\if true then
-        \\    before:=act 1
+        \\    before:=wrap 1
         \\    import "inner".wrap as act
         \\    after:=act(2,3)
         \\end
         \\if true then
-        \\    before:=act 4
+        \\    before:=wrap 4
         \\    import "data".wrap as act
         \\    after:=act
         \\end

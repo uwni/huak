@@ -1,5 +1,5 @@
 import drawing.drawing
-import math.{sin, abs};import paint.{circle, label, width, picture};import math.PI as pi;import paint.{draw};import assertions.assert
+import math.{sin, abs};import paint.{circle, label, picture};import text.width;import math.PI as pi;import paint.{draw};import assertions.assert
 param radius:length=1cm
 param angle:angle=90deg
 assert(1cm==10mm)

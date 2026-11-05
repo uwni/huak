@@ -268,11 +268,11 @@ export expand_block drawing(target:Scene)
     wire := wire.with(target: target)
     group := group.with(target: target)
     matrix := matrix.with(target: target)
-    mixfix place _ at _ in unary
-    mixfix link _ to _ in unary
-    mixfix wire _ to _ in unary
-    mixfix group _ containing _ with _ in unary
-    mixfix matrix _ in unary
+    mixfix(place) place _ at _ in unary
+    mixfix(link) link _ to _ in unary
+    mixfix(wire) wire _ to _ in unary
+    mixfix(group) group _ containing _ with _ in unary
+    mixfix(matrix) matrix _ in unary
     ...
     return finish(target)
 end
@@ -290,11 +290,11 @@ export fn matrix_nodes(rows:list, options:dict = {}) -> list
     return result
 end
 
-mixfix node named _ at _ containing _ in unary
-mixfix connect from _ to _ in unary
-mixfix edge from _ to _ with _ in unary
-mixfix enclose named _ around _ containing _ in unary
-mixfix diagram of _ in unary
+mixfix(node) node named _ at _ containing _ in unary
+mixfix(connect) connect from _ to _ in unary
+mixfix(edge) edge from _ to _ with _ in unary
+mixfix(enclose) enclose named _ around _ containing _ in unary
+mixfix(diagram) diagram of _ in unary
 export GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, BetweenCoordinate, AutomaticCoordinate
 export NodeDescription, EnclosureDescription, EdgeDescription, MarkDescription
 export grid, absolute, named, relative, polar, between, automatic, shift
