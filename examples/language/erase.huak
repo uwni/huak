@@ -1,4 +1,5 @@
 import paint.*
+import pen_motion.*
 import pen.{pencircle, makepen}
 
 setup_typst {
@@ -53,21 +54,27 @@ italic := pencircle(12pt,ink).transformed(scale(1,0.25)).transformed(rotate(35de
 broken_italic := pen(ink,cap:"butt",dash:[17pt,8pt],dash_phase:3pt,nib:italic)
 
 // Each stop pairs a fraction of the contour's arc length with a full width.
-pressure := pen(ink,cap:"round",join:"round",profile:[[0,1pt],[0.22,15pt],[0.51,3pt],[0.76,12pt],[1,1pt]])
+pressure := pen(ink,tolerance:0.01pt,profile:[[0,1pt],[0.22,15pt],[0.51,3pt],[0.76,12pt],[1,1pt]])
 
-page := picture(556pt,359pt)
+twist := moving() do
+    return (scaling x (1 + t * t) y (1 - t / 2)) followed by (rotation by (135deg * t))
+end
+turning := pen(ink, nib:chisel, motion:twist, tolerance:0.01pt)
+
+page := picture(556pt,412pt)
 drawing page do
-    +rectangle((0pt,0pt),556pt,359pt) filled paper
-    +typ[#text(size: 24pt)[Selective erasure]] at (18pt,327pt)
-    +typ[#text(size: 9pt)[Only the dark band and copper curve are erased.]] at (18pt,309pt)
-    +typ[#smallcaps[Painted stroke]] at (136pt,283pt)
-    +typ[#smallcaps[Erased stroke]] at (348pt,283pt)
-    +draw ((18pt,277pt) -- (538pt,277pt)) with pen(grid_color,0.65pt)
+    +rectangle((0pt,0pt),556pt,412pt) filled paper
+    +typ[#text(size: 24pt)[Selective erasure]] at (18pt,380pt)
+    +typ[#text(size: 9pt)[Only the dark band and copper curve are erased.]] at (18pt,362pt)
+    +typ[#smallcaps[Painted stroke]] at (136pt,336pt)
+    +typ[#smallcaps[Erased stroke]] at (348pt,336pt)
+    +draw ((18pt,330pt) -- (538pt,330pt)) with pen(grid_color,0.65pt)
 
-    +specimen(typ[*Dash–dot*],typ[#text(size: 9pt)[Round caps, 4 pt phase]],straight,dash_dot) shifted (18pt,225pt)
-    +specimen(typ[*Faceted nib*],typ[#text(size: 9pt)[Four-sided chisel]],corners,chisel) shifted (18pt,172pt)
-    +specimen(typ[*Hobby spline*],typ[#text(size: 9pt)[Round nib, 6 pt]],wave,pen(ink,6pt,cap:"round")) shifted (18pt,119pt)
-    +specimen(typ[*Italic dashes*],typ[#text(size: 9pt)[Slanted elliptical nib]],wave,broken_italic) shifted (18pt,66pt)
-    +specimen(typ[*Pressure sweep*],typ[#text(size: 9pt)[1 → 15 → 3 → 12 → 1 pt]],wave,pressure) shifted (18pt,13pt)
+    +specimen(typ[*Dash–dot*],typ[#text(size: 9pt)[Round caps, 4 pt phase]],straight,dash_dot) shifted (18pt,278pt)
+    +specimen(typ[*Faceted nib*],typ[#text(size: 9pt)[Four-sided chisel]],corners,chisel) shifted (18pt,225pt)
+    +specimen(typ[*Hobby spline*],typ[#text(size: 9pt)[Round nib, 6 pt]],wave,pen(ink,6pt,cap:"round")) shifted (18pt,172pt)
+    +specimen(typ[*Italic dashes*],typ[#text(size: 9pt)[Slanted elliptical nib]],wave,broken_italic) shifted (18pt,119pt)
+    +specimen(typ[*Pressure sweep*],typ[#text(size: 9pt)[1 → 15 → 3 → 12 → 1 pt]],wave,pressure) shifted (18pt,66pt)
+    +specimen(typ[*Scale + turn*],typ[#text(size: 9pt)[Chisel rotating 135°]],wave,turning) shifted (18pt,13pt)
 end
 default page

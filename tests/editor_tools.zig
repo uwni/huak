@@ -533,13 +533,18 @@ test "standalone language server resolves standard module tree and nested native
             1 => {},
             2 => {
                 const items = response.get("result").?.object.get("items").?.array.items;
-                try t.expectEqual(@as(usize, 17), items.len);
-                var has_weave = false;
+                var frontend: Frontend = .{ .allocator = a, .io = t.io, .library_path = options.library_path };
+                defer frontend.deinit();
+                var diagnostic: ?tooling.compiler.Diagnostic = null;
+                const graph = try frontend.graph(a, source, "/tmp/huak-standard-tree.huak", &diagnostic);
+                const std_module = graph.resolveNamespace(graph.units.items[0], 0, "std") orelse return error.TestUnexpectedResult;
+                const expected = &graph.units.items[std_module].public_names;
+                try t.expect(expected.contains("weave"));
                 for (items) |item| {
                     try t.expectEqual(@as(i64, 9), item.object.get("kind").?.integer);
-                    has_weave = has_weave or std.mem.eql(u8, item.object.get("label").?.string, "weave");
+                    try t.expect(expected.remove(item.object.get("label").?.string));
                 }
-                try t.expect(has_weave);
+                try t.expectEqual(@as(usize, 0), expected.count());
             },
             3, 5 => {
                 const detail = response.get("result").?.object.get("contents").?.object.get("value").?.string;

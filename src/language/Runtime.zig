@@ -881,31 +881,28 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 // this constructor independently specifies all paint state.
                 value.nib = try effectiveNib(try self.penValue(args[7]));
             }
-            if (hasArgument(args, 8)) {
-                if (hasArgument(args, 1) or value.nib != null or value.dash.len != 0) {
-                    self.native_message = "profile supplies the full width of a solid circular pen; omit width, nib, and dash";
+            const legacy = hasArgument(args, 8);
+            if (legacy or hasArgument(args, 9)) {
+                if (legacy and (hasArgument(args, 1) or value.nib != null or hasArgument(args, 9)) or value.dash.len != 0) {
+                    self.native_message = "profile supplies the full width of a solid circular pen; motion uses a solid base nib";
                     return error.InvalidPen;
                 }
-                const stops = try sequence(args[8]);
-                const positions = try own.alloc(f64, stops.len);
-                const widths = try own.alloc(f64, stops.len);
-                for (stops, positions, widths) |stop, *position, *width| {
-                    const pair = try sequence(stop);
-                    if (pair.len != 2) {
-                        self.native_message = "each pen profile stop needs [fraction, full_width]";
-                        return error.InvalidProfile;
-                    }
-                    position.* = try numeric(pair[0]);
-                    width.* = try lengthPoints(pair[1]);
+                if ((hasArgument(args, 2) and (!legacy or value.cap != .round)) or
+                    (hasArgument(args, 3) and (!legacy or value.join != .round)) or hasArgument(args, 4))
+                {
+                    self.native_message = "the moving nib defines its own ends and corners";
+                    return error.InvalidPen;
                 }
-                const profile = try own.create(pen_geometry.WidthProfile);
-                profile.* = .{ .positions = positions, .widths = widths };
-                value.profile = profile;
-            }
-            DisplayList.validateStyle(&.{ .pen = value }) catch |err| {
-                if (err == error.InvalidProfile) self.native_message = "pen profile fractions must increase from 0 to 1 and widths must be finite and nonnegative";
-                return err;
-            };
+                value.cap = .round;
+                value.join = .round;
+                const tolerance = if (hasArgument(args, 10)) try lengthPoints(args[10]) else 0.001;
+                value.motion = readMotion(own, if (legacy) args[8] else args[9], legacy, tolerance) catch |err| {
+                    self.native_message = "motion requires a bounded polynomial or ordered [fraction,value] keys, nonnegative scale controls, and a positive physical tolerance";
+                    if (legacy and err == error.InvalidMotion) return error.InvalidProfile;
+                    return err;
+                };
+            } else if (hasArgument(args, 10)) return error.InvalidMotion;
+            try DisplayList.validateStyle(&.{ .pen = value });
             return self.store(DisplayList.Pen, &self.pens, value, .pen);
         },
         .pencircle, .pensquare => {
@@ -935,7 +932,10 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             var options: pen_geometry.StrokeOptions = .{};
             if (hasArgument(args, 2)) options.tolerance = try lengthPoints(args[2]);
             const brush = try self.penValue(args[1]);
-            if (brush.profile != null) return self.pathResult(try pen_geometry.profiledOutline(own, try self.path(args[0]), &brush, options));
+            if (brush.motion) |motion| {
+                if (!hasArgument(args, 2)) options.tolerance = motion.tolerance;
+                return self.pathResult(try renderer.motionFootprint(own, try self.path(args[0]), &brush, options));
+            }
             options.cap = brush.cap;
             options.join = brush.join;
             options.miter_limit = brush.miter_limit;
@@ -1414,8 +1414,45 @@ fn validateCanvas(w: f64, h: f64) !void {
     if (w <= 0 or h <= 0 or !std.math.isFinite(w) or !std.math.isFinite(h)) return error.InvalidCanvas;
 }
 
+fn readMotion(a: std.mem.Allocator, input: Value, legacy: bool, tolerance: f64) !*const pen_geometry.Motion {
+    const Motion = pen_geometry.Motion;
+    const values = try sequence(input);
+    const tracks = try a.alloc(Motion.Track, if (legacy) 1 else values.len);
+    var keys: std.ArrayList(Motion.Key) = .empty;
+    var visits: usize = 0;
+    for (tracks, 0..) |*track, i| {
+        var stops = values;
+        var kind: Motion.Kind = .scale;
+        if (!legacy) {
+            const op = try sequence(values[i]);
+            if (op.len != 2) return error.InvalidMotion;
+            kind = std.meta.stringToEnum(Motion.Kind, try string(op[0])) orelse return error.InvalidMotion;
+            const operand = op[1];
+            const list = types.sequence(operand);
+            if (list == null or (list.?.len > 0 and list.?[0] == .string)) {
+                const polynomial = try @import("runtime/pen_polynomial.zig").read(operand, 0, &visits);
+                track.* = try polynomial.append(kind, a, &keys);
+                continue;
+            }
+            stops = list.?;
+        }
+        track.* = .{ .kind = kind, .first = keys.items.len, .len = stops.len };
+        try keys.ensureUnusedCapacity(a, stops.len);
+        for (stops) |stop| {
+            const pair = try sequence(stop);
+            if (pair.len != 2) return error.InvalidMotion;
+            const v = if (legacy) try lengthPoints(pair[1]) else if (kind == .rotate) try angular(pair[1]) else try numeric(pair[1]);
+            keys.appendAssumeCapacity(.{ .t = try numeric(pair[0]), .value = v });
+        }
+    }
+    const motion = try a.create(Motion);
+    motion.* = .{ .tracks = tracks, .keys = keys.items, .tolerance = tolerance };
+    try motion.validate();
+    return motion;
+}
+
 fn effectiveNib(value: DisplayList.Pen) !pen_geometry.Nib {
-    if (value.profile != null) return error.ProfileHasNoFixedNib;
+    if (value.motion != null) return error.MotionHasNoFixedNib;
     if (value.nib) |nib| return nib;
     if (!std.math.isFinite(value.width) or value.width < 0) return error.InvalidPen;
     return .{ .ellipse = .scaling(value.width, value.width) };
@@ -2030,7 +2067,7 @@ test "aggregate runtime sparse optional builtin slots retain host defaults" {
     const last_stop = types.listView(&.{ .{ .int = 1 }, .{ .int = 12 } });
     var profile_args = [_]Value{ red, .omitted, .omitted, .omitted, .omitted, .omitted, .omitted, .omitted, types.listView(&.{ first_stop, last_stop }) };
     const pressure = try runtime.penValue(try runtime.invoke(a, .pen, &profile_args));
-    try std.testing.expectEqualSlices(f64, &.{ 2, 12 }, pressure.profile.?.widths);
+    try std.testing.expectEqual(@as(f64, 12), pressure.motion.?.keys[1].value);
     profile_args[8] = types.listView(&.{ first_stop, first_stop, last_stop });
     try std.testing.expectError(error.InvalidProfile, runtime.invoke(a, .pen, &profile_args));
     profile_args[8] = types.listView(&.{ first_stop, last_stop });

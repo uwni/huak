@@ -8,7 +8,6 @@ pub const EPSILON = std.math.floatEps(f64);
 pub const EPSILON_HALF = EPSILON / 2;
 pub const EPSILON_DOUBLE = EPSILON * 2;
 pub const EPSILON_INVERSE = 1 / EPSILON;
-pub const ORDERABLE_EPSILON = EPSILON * 16;
 pub const PRECISE_EPSILON = EPSILON * 4;
 pub const ROUGH_EPSILON = EPSILON * 64;
 pub const MORE_ROUGH_EPSILON = EPSILON * 256;
@@ -66,9 +65,6 @@ pub fn almostDequalUlps(a: f64, b: f64) bool {
 pub fn almostEqualUlps(a: f64, b: f64) bool {
     return equal(a, b, 16, 16);
 }
-pub fn almostEqualUlpsNoNormalCheck(a: f64, b: f64) bool {
-    return equalNoNormal(a, b, 16);
-}
 pub fn almostEqualUlpsPin(a: f64, b: f64) bool {
     return std.math.isFinite(a) and std.math.isFinite(b) and almostEqualUlps(a, b);
 }
@@ -105,9 +101,6 @@ pub fn preciselyZero(x: f64) bool {
 pub fn approximatelyZeroHalf(x: f64) bool {
     return @abs(x) < EPSILON_HALF;
 }
-pub fn approximatelyZeroOrderable(x: f64) bool {
-    return @abs(x) < ORDERABLE_EPSILON;
-}
 pub fn approximatelyZeroInverse(x: f64) bool {
     return @abs(x) > EPSILON_INVERSE;
 }
@@ -115,9 +108,6 @@ pub fn approximatelyZeroWhenComparedTo(x: f64, y: f64) bool {
     return x == 0 or @abs(x) < @abs(y * EPSILON);
 }
 pub const preciselyZeroWhenComparedTo = approximatelyZeroWhenComparedTo;
-pub fn roughlyZeroWhenComparedTo(x: f64, y: f64) bool {
-    return x == 0 or @abs(x) < @abs(y * ROUGH_EPSILON);
-}
 pub fn approximatelyEqual(x: f64, y: f64) bool {
     return approximatelyZero(x - y);
 }
@@ -126,9 +116,6 @@ pub fn preciselyEqual(x: f64, y: f64) bool {
 }
 pub fn approximatelyEqualHalf(x: f64, y: f64) bool {
     return approximatelyZeroHalf(x - y);
-}
-pub fn approximatelyEqualOrderable(x: f64, y: f64) bool {
-    return approximatelyZeroOrderable(x - y);
 }
 pub fn approximatelyGreaterThanOne(x: f64) bool {
     return x > 1 - EPSILON;
@@ -141,10 +128,6 @@ pub fn approximatelyLessThanZero(x: f64) bool {
 }
 pub fn preciselyLessThanZero(x: f64) bool {
     return x < PRECISE_EPSILON;
-}
-pub const approximatelyNegative = approximatelyLessThanZero;
-pub fn approximatelyNegativeOrderable(x: f64) bool {
-    return x < ORDERABLE_EPSILON;
 }
 pub const preciselyNegative = preciselyLessThanZero;
 pub fn approximatelyOneOrLess(x: f64) bool {
@@ -159,12 +142,6 @@ pub fn approximatelyPositive(x: f64) bool {
 pub const approximatelyZeroOrMore = approximatelyPositive;
 pub fn approximatelyZeroOrMoreDouble(x: f64) bool {
     return x > -EPSILON_DOUBLE;
-}
-pub fn approximatelyBetween(a: f64, b: f64, c: f64) bool {
-    return if (a <= c) approximatelyNegative(a - b) and approximatelyNegative(b - c) else approximatelyNegative(b - a) and approximatelyNegative(c - b);
-}
-pub fn approximatelyBetweenOrderable(a: f64, b: f64, c: f64) bool {
-    return if (a <= c) approximatelyNegativeOrderable(a - b) and approximatelyNegativeOrderable(b - c) else approximatelyNegativeOrderable(b - a) and approximatelyNegativeOrderable(c - b);
 }
 pub fn preciselyBetween(a: f64, b: f64, c: f64) bool {
     return if (a <= c) preciselyNegative(a - b) and preciselyNegative(b - c) else preciselyNegative(b - a) and preciselyNegative(c - b);
@@ -261,8 +238,8 @@ test "binary64 ULP budgets preserve the original strict endpoints" {
     try t.expectEqual(@as(i32, 0), ulpsDistance(-0.0, 0.0));
     const tiny: f64 = @bitCast(@as(u64, 1));
     try t.expectEqual(std.math.maxInt(i32), ulpsDistance(-tiny, 0));
-    try t.expect(almostEqualUlpsNoNormalCheck(-tiny, 0));
-    try t.expect(almostEqualUlpsNoNormalCheck(-0.0, 0.0));
+    try t.expect(almostDequalUlps(-tiny, 0));
+    try t.expect(almostDequalUlps(-0.0, 0.0));
     try t.expect(almostLessUlps(1, after(1, 16)));
     try t.expect(!almostLessUlps(1, after(1, 15)));
     try t.expect(almostLessOrEqualUlps(1, 1));

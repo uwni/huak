@@ -18,12 +18,42 @@ pub const Stroke = struct {
     }
 };
 
+/// Draw and erase share one stored footprint, including a precision budget
+/// for either native export format. Keep encoding constraints out of the
+/// standalone geometry kernel. Units are physical points in the path frame.
+pub fn motionFootprint(allocator: std.mem.Allocator, center: Path, pen: *const DisplayList.Pen, options: pens.StrokeOptions) !Path {
+    var geometry = options;
+    geometry.tolerance *= 0.75;
+    var path = try pens.motionOutline(allocator, center, pen, geometry);
+    errdefer path.deinit();
+    var magnitude: f64 = 0;
+    for (path.segments.items) |segment| switch (segment) {
+        .move, .line => |p| magnitude = @max(magnitude, @abs(p.x), @abs(p.y)),
+        .cubic => |c| {
+            for ([_]g.Point{ c.c1, c.c2, c.end }) |p| magnitude = @max(magnitude, @abs(p.x), @abs(p.y));
+        },
+        .close => {},
+    };
+    // The pinned Typst PDF backend stores controls as binary32. Casting and
+    // shortest-decimal formatting each consume at most half a binary32 ulp.
+    // SVG writes relative coordinates to nine decimal places. Errors of
+    // successive endpoints can accumulate. The convex hull property extends
+    // the control-point bound to every point of the resulting Bézier curve.
+    const count: f64 = @floatFromInt(path.segments.items.len);
+    const pdf = 2 * (magnitude * std.math.floatEps(f32) + std.math.floatMin(f32));
+    const svg = count * (1e-9 + 8 * std.math.floatEps(f64) * magnitude);
+    if (magnitude > std.math.floatMax(f32) or @max(pdf, svg) > options.tolerance * 0.25) return error.OutputPrecisionRange;
+    return path;
+}
+
 pub fn resolve(allocator: std.mem.Allocator, segments: []const Path.Segment, pen: *const DisplayList.Pen, options: pens.StrokeOptions) !?Stroke {
     var center = Path.init(allocator);
     center.segments.items = @constCast(segments);
     center.segments.capacity = segments.len;
-    if (pen.profile != null) {
-        var outline = try pens.profiledOutline(allocator, center, pen, options);
+    if (pen.motion) |motion| {
+        var settings = options;
+        settings.tolerance = motion.tolerance;
+        var outline = try motionFootprint(allocator, center, pen, settings);
         if (outline.segments.items.len != 0) return .{ .path = outline, .style = .{ .fill = pen.color } };
         outline.deinit();
         return null;
@@ -115,4 +145,18 @@ test "resolved strokes own their geometry and clean up every failed allocation" 
     try exerciseNibGeometry(std.testing.allocator);
     var stable = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
     try std.testing.checkAllAllocationFailures(stable.allocator(), exerciseNibGeometry, .{});
+}
+
+test "export rejects a moving outline below the physical coordinate precision budget" {
+    const a = std.testing.allocator;
+    var path = Path.init(a);
+    defer path.deinit();
+    try path.moveTo(.{ .x = 100, .y = 0 });
+    try path.lineTo(.{ .x = 110, .y = 0 });
+    const motion: pens.Motion = .{ .tracks = &.{.{ .kind = .scale, .first = 0, .len = 2 }}, .keys = &.{ .{ .t = 0, .value = 1 }, .{ .t = 1, .value = 2 } } };
+    const paint: DisplayList.Pen = .{ .nib = pens.Nib.square(), .motion = &motion };
+    try std.testing.expectError(error.OutputPrecisionRange, motionFootprint(a, path, &paint, .{ .tolerance = 1e-7 }));
+    var output = try motionFootprint(a, path, &paint, .{ .tolerance = 0.001 });
+    defer output.deinit();
+    try std.testing.expect(output.segments.items.len > 0);
 }

@@ -12,6 +12,7 @@ import solver
 import assertions
 import collections
 import brush
+import pen_motion
 import engraving
 import paint
 import regions
@@ -19,4 +20,4 @@ import weave
 
 export math, geometry, color, pen, transform, picture, object, text, animation, solver
 export assertions, collections, brush, engraving, paint
-export weave, regions
+export weave, regions, pen_motion

@@ -13,40 +13,29 @@ const Curve = @import("curve.zig").Curve;
 const line_curve = @import("intersections/line_curve.zig");
 
 /// Sorted intersections and their paired parameters. Coincidence and near-end
-/// metadata retain upstream meanings; storage is fixed at the upstream limit.
+/// metadata retain upstream meanings; each paired event has one coincidence bit.
 const Intersections = @This();
 
 points: [13]Point = @splat(.{ .x = 0, .y = 0 }),
-points2: [2]Point = @splat(.{ .x = 0, .y = 0 }),
 parameters: [2][13]f64 = @splat(@splat(0)),
-coincident: [2]u16 = @splat(0),
+coincident: u16 = 0,
 nearly_same: [2]bool = @splat(false),
 used: usize = 0,
 max: usize = 0,
 allow_near: bool = true,
-swapped: bool = false,
 /// The upstream release implementation clears results on capacity failure.
 /// Keep that state but expose it so the caller can propagate the failure.
 overflow: bool = false,
 
 pub fn reset(self: *Intersections) void {
-    self.allow_near = true;
+    self.nearly_same = @splat(false);
     self.used = 0;
-    self.coincident = @splat(0);
+    self.coincident = 0;
     self.overflow = false;
 }
 pub fn setMax(self: *Intersections, count: usize) void {
     std.debug.assert(count <= self.points.len);
     self.max = count;
-}
-pub fn allowNear(self: *Intersections, allowed: bool) void {
-    self.allow_near = allowed;
-}
-pub fn swap(self: *Intersections) void {
-    self.swapped = !self.swapped;
-}
-pub fn flip(self: *Intersections) void {
-    for (self.parameters[1][0..self.used]) |*t| t.* = 1 - t.*;
 }
 pub fn hasT(self: *const Intersections, t: f64) bool {
     std.debug.assert(t == 0 or t == 1);
@@ -56,20 +45,17 @@ pub fn hasOppT(self: *const Intersections, t: f64) bool {
     return self.used > 0 and (self.parameters[1][0] == t or self.parameters[1][self.used - 1] == t);
 }
 pub fn isCoincident(self: *const Intersections, index: usize) bool {
-    return self.coincident[0] & bit(index) != 0;
+    return self.coincident & bit(index) != 0;
 }
 pub fn setCoincident(self: *Intersections, index: usize) void {
-    for (&self.coincident) |*mask| mask.* |= bit(index);
+    self.coincident |= bit(index);
 }
 pub fn clearCoincidence(self: *Intersections, index: usize) void {
-    for (&self.coincident) |*mask| mask.* &= ~bit(index);
-}
-pub fn insertSwap(self: *Intersections, one: f64, two: f64, point: Point) ?usize {
-    return if (self.swapped) self.insert(two, one, point) else self.insert(one, two, point);
+    self.coincident &= ~bit(index);
 }
 pub fn insert(self: *Intersections, one: f64, two: f64, point: Point) ?usize {
     var was_coincident = false;
-    if (self.coincident[0] == 3 and n.between(self.parameters[0][0], one, self.parameters[0][1])) return null;
+    if (self.coincident == 3 and n.between(self.parameters[0][0], one, self.parameters[0][1])) return null;
     for (0..self.used) |index| {
         const old_one = self.parameters[0][index];
         const old_two = self.parameters[1][index];
@@ -88,7 +74,7 @@ pub fn insert(self: *Intersections, one: f64, two: f64, point: Point) ?usize {
     while (index < self.used and self.parameters[0][index] <= one) : (index += 1) {}
     if (self.used >= self.max) {
         self.used = 0;
-        self.coincident = @splat(0);
+        self.coincident = 0;
         self.overflow = true;
         return null;
     }
@@ -102,7 +88,7 @@ pub fn insert(self: *Intersections, one: f64, two: f64, point: Point) ?usize {
     }
     if (index < self.used) {
         const clear_mask = ~((bit(index)) - 1);
-        for (&self.coincident) |*mask| mask.* += mask.* & clear_mask;
+        self.coincident += self.coincident & clear_mask;
     }
     self.points[index] = point;
     self.parameters[0][index] = one;
@@ -116,10 +102,9 @@ pub fn insertNear(self: *Intersections, one: f64, two: f64, first: Point, second
     const index: usize = if (one != 0) 1 else 0;
     self.nearly_same[index] = true;
     _ = self.insert(one, two, first);
-    self.points2[index] = second;
 }
 pub fn insertCoincident(self: *Intersections, one: f64, two: f64, point: Point) ?usize {
-    const index = self.insertSwap(one, two, point) orelse return null;
+    const index = self.insert(one, two, point) orelse return null;
     self.setCoincident(index);
     return index;
 }
@@ -130,7 +115,7 @@ pub fn removeOne(self: *Intersections, index: usize) void {
     @memmove(self.points[index..][0..remaining], self.points[index + 1 ..][0..remaining]);
     for (&self.parameters) |*column| @memmove(column[index..][0..remaining], column[index + 1 ..][0..remaining]);
     const lower_mask = bit(index) - 1;
-    for (&self.coincident) |*mask| mask.* = (mask.* & lower_mask) | ((mask.* >> 1) & ~lower_mask);
+    self.coincident = (self.coincident & lower_mask) | ((self.coincident >> 1) & ~lower_mask);
 }
 pub fn closestTo(self: *const Intersections, start: f64, end: f64, point: Point, distance: *f64) ?usize {
     distance.* = std.math.floatMax(f64);
@@ -150,20 +135,7 @@ pub fn merge(self: *Intersections, first: *const Intersections, first_index: usi
     self.parameters[0][0] = first.parameters[0][first_index];
     self.parameters[1][0] = second.parameters[0][second_index];
     self.points[0] = first.points[first_index];
-    self.points2[0] = second.points[second_index];
     self.used = 1;
-}
-pub fn mostOutside(self: *const Intersections, start: f64, end: f64, origin: Point) ?usize {
-    var result: ?usize = null;
-    for (0..self.used) |index| {
-        if (!n.between(start, self.parameters[0][index], end)) continue;
-        if (result) |best_index| {
-            const best = self.points[best_index].sub(origin);
-            const candidate = self.points[index].sub(origin);
-            if (candidate.crossCheck(best) < 0) result = index;
-        } else result = index;
-    }
-    return result;
 }
 pub fn intersectRay(self: *Intersections, curve: Curve, line: Line) usize {
     return self.intersectRayFrom(curve, line.points[0], line.points[1].sub(line.points[0]));
@@ -171,7 +143,7 @@ pub fn intersectRay(self: *Intersections, curve: Curve, line: Line) usize {
 pub fn intersectRayFrom(self: *Intersections, curve: Curve, origin: Point, direction: Point) usize {
     return switch (curve) {
         .line => |value| self.lineRayFrom(value, origin, direction),
-        inline .quad, .cubic => |value| line_curve.ray(@TypeOf(value), self, value, origin, direction),
+        inline .quad, .cubic => |value| line_curve.ray(self, value, origin, direction),
     };
 }
 fn lineRayFrom(self: *Intersections, a: Line, origin: Point, b_length: Point) usize {
@@ -207,7 +179,7 @@ fn cleanUpParallelLines(self: *Intersections, parallel: bool) void {
             if (start_match and end_match and (self.parameters[0][0] != 0 or !n.zeroOrOne(self.parameters[1][0])) and self.parameters[0][1] == 1 and n.zeroOrOne(self.parameters[1][1])) self.removeOne(0) else self.removeOne(@intFromBool(end_match));
         }
     }
-    if (self.used == 2) self.coincident = @splat(3);
+    if (self.used == 2) self.coincident = 3;
 }
 fn computePoints(self: *Intersections, line: Line, count: usize) void {
     self.points[0] = line.ptAtT(self.parameters[0][0]);
@@ -290,18 +262,6 @@ pub fn cubicLine(self: *Intersections, cubic: Cubic, line: Line) usize {
 pub fn quadLine(self: *Intersections, quad: Quad, line: Line) usize {
     return line_curve.intersect(Quad, self, quad, line);
 }
-pub fn cubicHorizontal(self: *Intersections, cubic: Cubic, left: f64, right: f64, y: f64, flipped: bool) usize {
-    return line_curve.axis(Cubic, self, cubic, left, right, y, false, flipped);
-}
-pub fn cubicVertical(self: *Intersections, cubic: Cubic, top: f64, bottom: f64, x: f64, flipped: bool) usize {
-    return line_curve.axis(Cubic, self, cubic, top, bottom, x, true, flipped);
-}
-pub fn quadHorizontal(self: *Intersections, quad: Quad, left: f64, right: f64, y: f64, flipped: bool) usize {
-    return line_curve.axis(Quad, self, quad, left, right, y, false, flipped);
-}
-pub fn quadVertical(self: *Intersections, quad: Quad, top: f64, bottom: f64, x: f64, flipped: bool) usize {
-    return line_curve.axis(Quad, self, quad, top, bottom, x, true, flipped);
-}
 pub fn curveCurve(self: *Intersections, allocator: std.mem.Allocator, first: Curve, second: Curve) !usize {
     if (second == .line) return switch (first) {
         .line => |a| self.lineLine(a, second.line),
@@ -328,79 +288,18 @@ pub fn curveCurve(self: *Intersections, allocator: std.mem.Allocator, first: Cur
     }
     return @import("intersections/sect.zig").intersect(allocator, first, second, self);
 }
-pub const intersect = curveCurve;
 
-pub fn lineHorizontal(self: *Intersections, line: Line, left: f64, right: f64, y: f64, flipped: bool) usize {
-    return self.lineAxis(line, left, right, y, false, flipped);
-}
-pub fn lineVertical(self: *Intersections, line: Line, top: f64, bottom: f64, x: f64, flipped: bool) usize {
-    return self.lineAxis(line, top, bottom, x, true, flipped);
-}
-fn lineAxis(self: *Intersections, line: Line, low: f64, high: f64, constant: f64, vertical: bool, flipped: bool) usize {
-    self.max = 3;
-    const first: Point = if (vertical) .{ .x = constant, .y = low } else .{ .x = low, .y = constant };
-    const second: Point = if (vertical) .{ .x = constant, .y = high } else .{ .x = high, .y = constant };
-    var t = line.exactPoint(first);
-    if (t >= 0) _ = self.insert(t, boolT(flipped), first);
-    if (low != high) {
-        t = line.exactPoint(second);
-        if (t >= 0) _ = self.insert(t, boolT(!flipped), second);
-        for (line.points, 0..) |point, index| {
-            t = if (vertical) Line.exactPointV(point, low, high, constant) else Line.exactPointH(point, low, high, constant);
-            if (t >= 0) _ = self.insert(@floatFromInt(index), if (flipped) 1 - t else t, point);
-        }
-    }
-    const v0 = if (vertical) line.points[0].x else line.points[0].y;
-    const v1 = if (vertical) line.points[1].x else line.points[1].y;
-    const minimum = @min(v0, v1);
-    const maximum = @max(v0, v1);
-    const extent = @abs(line.points[1].x - line.points[0].x);
-    const result: usize = if (if (vertical) !n.preciselyBetween(minimum, constant, maximum) else minimum > constant or maximum < constant)
-        0
-    else if (n.almostEqualUlps(minimum, maximum) and (vertical or maximum - minimum < extent))
-        2
-    else
-        1;
-    if (result == 1 and self.used == 0) {
-        const one = n.pinT((constant - v0) / (v1 - v0));
-        const position = if (vertical) line.points[0].y + one * (line.points[1].y - line.points[0].y) else line.points[0].x + one * (line.points[1].x - line.points[0].x);
-        self.parameters[0][0] = one;
-        if (n.between(low, position, high)) {
-            const two = (position - low) / (high - low);
-            self.parameters[1][0] = if (flipped) 1 - two else two;
-            self.points[0] = if (vertical) .{ .x = constant, .y = position } else .{ .x = position, .y = constant };
-            self.used = 1;
-        }
-    }
-    if (self.allow_near or result == 2) {
-        t = line.nearPoint(first, null);
-        if (t >= 0) _ = self.insert(t, boolT(flipped), first);
-        if (low != high) {
-            t = line.nearPoint(second, null);
-            if (t >= 0) _ = self.insert(t, boolT(!flipped), second);
-            for (line.points, 0..) |point, index| {
-                t = if (vertical) Line.nearPointV(point, low, high, constant) else Line.nearPointH(point, low, high, constant);
-                if (t >= 0) _ = self.insert(@floatFromInt(index), if (flipped) 1 - t else t, point);
-            }
-        }
-    }
-    self.cleanUpParallelLines(result == 2);
-    return self.used;
-}
 fn bit(index: usize) u16 {
     return @as(u16, 1) << @intCast(index);
-}
-fn boolT(value: bool) f64 {
-    return if (value) 1 else 0;
 }
 
 fn expectCoincidenceIdentity(result: *const Intersections, original_flags: u16) !void {
     for (result.points[0..result.used], 0..) |point, index| {
         const identity: usize = @as(usize, @intFromFloat(point.y)) - 1;
         const expected = original_flags & bit(identity) != 0;
-        for (result.coincident) |mask| try std.testing.expectEqual(expected, mask & bit(index) != 0);
+        try std.testing.expectEqual(expected, result.isCoincident(index));
     }
-    for (result.coincident) |mask| try std.testing.expect(mask < bit(result.used));
+    try std.testing.expect(result.coincident < bit(result.used));
 }
 
 test "intersection storage preserves root identity across every endpoint replacement position and label pattern" {
@@ -453,7 +352,7 @@ test "intersection storage deletion removes only that root label including final
         try t.expect(result.insert(1, 1, .{ .x = 1, .y = 5 }) != null);
         try expectCoincidenceIdentity(&result, @intCast(pattern));
         while (result.used != 0) result.removeOne(result.used - 1);
-        try t.expectEqualSlices(u16, &.{ 0, 0 }, &result.coincident);
+        try t.expectEqual(@as(u16, 0), result.coincident);
         _ = result.insert(0, 0, .{ .x = 0, .y = 5 });
         try expectCoincidenceIdentity(&result, 0);
     };
@@ -464,18 +363,18 @@ test "intersection storage capacity failure clears root tags and keeps overflow 
     var result: Intersections = .{ .max = 2 };
     try t.expect(result.insertCoincident(0.2, 0.2, .{ .x = 0.2, .y = 1 }) != null);
     try t.expect(result.insertCoincident(0.4, 0.4, .{ .x = 0.4, .y = 2 }) != null);
-    try t.expectEqualSlices(u16, &.{ 3, 3 }, &result.coincident);
+    try t.expectEqual(@as(u16, 3), result.coincident);
     try t.expect(result.insert(0.8, 0.8, .{ .x = 0.8, .y = 3 }) == null);
     try t.expectEqual(@as(usize, 0), result.used);
     try t.expect(result.overflow);
-    try t.expectEqualSlices(u16, &.{ 0, 0 }, &result.coincident);
+    try t.expectEqual(@as(u16, 0), result.coincident);
 
     result.reset();
     try t.expect(!result.overflow);
     try t.expectEqual(@as(usize, 2), result.max);
     try t.expectEqual(@as(?usize, 0), result.insert(0.5, 0.5, .{ .x = 0.5, .y = 1 }));
     try t.expectEqual(@as(usize, 1), result.used);
-    try t.expectEqualSlices(u16, &.{ 0, 0 }, &result.coincident);
+    try t.expectEqual(@as(u16, 0), result.coincident);
 }
 
 test "intersection storage preserves ordered pairs endpoint replacement and coincidence bits" {
@@ -490,8 +389,7 @@ test "intersection storage preserves ordered pairs endpoint replacement and coin
     result.setCoincident(2);
     result.removeOne(1);
     try t.expectEqual(@as(usize, 2), result.used);
-    try t.expectEqual(@as(u16, 3), result.coincident[0]);
-    try t.expectEqual(@as(u16, 3), result.coincident[1]);
+    try t.expectEqual(@as(u16, 3), result.coincident);
     result.reset();
     _ = result.insert(1e-14, 1e-14, .{ .x = 1e-14, .y = 1e-14 });
     _ = result.insert(0, 0, .{ .x = 0, .y = 0 });
@@ -509,13 +407,13 @@ test "intersection storage endpoint replacement retains the same root coincidenc
     result.setCoincident(0);
     result.setCoincident(2);
     try t.expectEqual(@as(usize, 3), result.used);
-    try t.expectEqualSlices(u16, &.{ 5, 5 }, &result.coincident);
+    try t.expectEqual(@as(u16, 5), result.coincident);
 
     // The original C++ mask 5 -> 6 changed which root was coincident.
     // Endpoint replacement refines root 0, so roots 0 and 2 retain the tag.
     try t.expectEqual(@as(?usize, 0), result.insert(0, 0, .zero));
     try t.expectEqual(@as(usize, 3), result.used);
-    try t.expectEqualSlices(u16, &.{ 5, 5 }, &result.coincident);
+    try t.expectEqual(@as(u16, 5), result.coincident);
     try t.expectEqualSlices(f64, &.{ 0, 0.5, 1 }, result.parameters[0][0..result.used]);
     try t.expectEqualSlices(f64, &.{ 0, 0.5, 1 }, result.parameters[1][0..result.used]);
     try t.expect(result.points[0].eql(.zero));
@@ -530,13 +428,13 @@ test "intersection storage replacing the last coincident endpoint does not shift
     const second = [_]f64{ 0, 0.7343750000000164, 0.7500000596337759, 0.9999999999999936 };
     for (first, second) |one, two| _ = result.insert(one, two, .{ .x = one, .y = two });
     for (0..result.used) |index| result.setCoincident(index);
-    try t.expectEqualSlices(u16, &.{ 15, 15 }, &result.coincident);
+    try t.expectEqual(@as(u16, 15), result.coincident);
 
     // Captured from section INTERSECT canonical circle coverage. The original
     // C++ erase/reinsert at the final slot leaves both masks equal to 15.
     try t.expectEqual(@as(?usize, 3), result.insert(1, 1, .{ .x = 1, .y = 1 }));
     try t.expectEqual(@as(usize, 4), result.used);
-    try t.expectEqualSlices(u16, &.{ 15, 15 }, &result.coincident);
+    try t.expectEqual(@as(u16, 15), result.coincident);
     try t.expectEqualSlices(f64, &first, result.parameters[0][0..result.used]);
     try t.expectEqualSlices(f64, &.{ 0, second[1], second[2], 1 }, result.parameters[1][0..result.used]);
 }
@@ -579,13 +477,13 @@ test "DD line intersection preserves original captured near parallel parameters"
 test "axis intersections preserve overlap and reversed second parameters" {
     const diagonal: Line = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 4, .y = 4 } } };
     var result: Intersections = .{};
-    try std.testing.expectEqual(@as(usize, 1), result.lineHorizontal(diagonal, 0, 8, 2, true));
+    try std.testing.expectEqual(@as(usize, 1), result.lineLine(diagonal, .{ .points = .{ .{ .x = 8, .y = 2 }, .{ .x = 0, .y = 2 } } }));
     try std.testing.expectEqual(@as(f64, 0.5), result.parameters[0][0]);
     try std.testing.expectEqual(@as(f64, 0.75), result.parameters[1][0]);
     result.reset();
     const collinear: Line = .{ .points = .{ .{ .x = 1, .y = 2 }, .{ .x = 3, .y = 2 } } };
-    try std.testing.expectEqual(@as(usize, 2), result.lineHorizontal(collinear, 0, 4, 2, false));
-    try std.testing.expectEqual(@as(u16, 3), result.coincident[0]);
+    try std.testing.expectEqual(@as(usize, 2), result.lineLine(collinear, .{ .points = .{ .{ .x = 0, .y = 2 }, .{ .x = 4, .y = 2 } } }));
+    try std.testing.expectEqual(@as(u16, 3), result.coincident);
 }
 
 test "quad and cubic line roots preserve tangent events and axis parameters" {
@@ -597,14 +495,14 @@ test "quad and cubic line roots preserve tangent events and axis parameters" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.5), result.parameters[0][0], 1e-14);
     try std.testing.expectApproxEqAbs(@as(f64, 0.5), result.parameters[1][0], 1e-14);
     result.reset();
-    try std.testing.expectEqual(@as(usize, 1), result.cubicVertical(cubic, -2, 2, 1.5, false));
+    try std.testing.expectEqual(@as(usize, 1), result.cubicLine(cubic, .{ .points = .{ .{ .x = 1.5, .y = -2 }, .{ .x = 1.5, .y = 2 } } }));
     try std.testing.expectEqual(@as(f64, 0.5), result.parameters[1][0]);
     result.reset();
     try std.testing.expectEqual(@as(usize, 1), result.quadLine(quad, line));
     try std.testing.expectApproxEqAbs(@as(f64, 0.5), result.parameters[0][0], 1e-14);
     try std.testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0), result.parameters[1][0], 1e-14);
     result.reset();
-    try std.testing.expectEqual(@as(usize, 1), result.quadHorizontal(quad, 0, 2, 0, true));
+    try std.testing.expectEqual(@as(usize, 1), result.quadLine(quad, .{ .points = .{ .{ .x = 2, .y = 0 }, Point.zero } }));
     try std.testing.expectEqual(@as(f64, 0.5), result.parameters[1][0]);
 }
 
@@ -613,7 +511,7 @@ test "line curve coincidence keeps clipped interval endpoints" {
     const line: Line = .{ .points = .{ .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 0 } } };
     var result: Intersections = .{};
     try std.testing.expectEqual(@as(usize, 2), result.cubicLine(curve, line));
-    try std.testing.expectEqual(@as(u16, 3), result.coincident[0]);
+    try std.testing.expectEqual(@as(u16, 3), result.coincident);
     try std.testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0), result.parameters[0][0], 1e-14);
     try std.testing.expectApproxEqAbs(@as(f64, 2.0 / 3.0), result.parameters[0][1], 1e-14);
 }
@@ -632,7 +530,6 @@ test "ray intersections retain curve roots beyond the finite ray segment" {
     try std.testing.expectEqual(@as(f64, 1.5), result.points[0].x);
     var distance: f64 = undefined;
     try std.testing.expectEqual(@as(?usize, 0), result.closestTo(0, 1, .{ .x = 0, .y = 0 }, &distance));
-    try std.testing.expectEqual(@as(?usize, 0), result.mostOutside(0, 1, .{ .x = 0, .y = 0 }));
 }
 
 test "TSect cubic intersections retain two curved source events" {
@@ -676,18 +573,22 @@ test "TSect rejects curved hull overlaps without a true event" {
 }
 
 test "curve dispatch returns exact coincident cubic endpoints under either near policy" {
-    const a: Curve = .{ .cubic = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 2 }, .{ .x = 2, .y = 2 }, .{ .x = 3, .y = 0 } } } };
-    for ([_]bool{ false, true }) |allow_near| for ([_]bool{ false, true }) |reversed| {
+    const curves = [_]Curve{
+        .{ .cubic = .{ .points = .{ Point.zero, .{ .x = 1, .y = 2 }, .{ .x = 2, .y = 2 }, .{ .x = 3, .y = 0 } } } },
+        // TSect alone can return both endpoints without marking this overlap.
+        .{ .cubic = .{ .points = .{ Point.zero, .{ .x = 0.0625, .y = -0.75 }, .{ .x = 0.1875, .y = 0.25 }, .{ .x = 0.5, .y = 0 } } } },
+    };
+    for (curves) |a| for ([_]bool{ false, true }) |allow_near| for ([_]bool{ false, true }) |reversed| {
         var result: Intersections = .{ .allow_near = allow_near };
         const b = if (reversed) a.reverse() else a;
         try std.testing.expectEqual(@as(usize, 2), try result.curveCurve(std.testing.allocator, a, b));
         try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[0][0..result.used]);
         try std.testing.expectEqualSlices(f64, if (reversed) &.{ 1, 0 } else &.{ 0, 1 }, result.parameters[1][0..result.used]);
-        try std.testing.expectEqual([2]u16{ 3, 3 }, result.coincident);
+        try std.testing.expectEqual(@as(u16, 3), result.coincident);
     };
 }
 
-test "caller near policy retains native graph endpoint observations" {
+test "successive curve queries preserve the near policy and clear prior endpoint observations" {
     const a: Curve = .{ .quad = .{ .points = .{ Point.zero, .{ .x = 1, .y = 0.5 }, .{ .x = 2, .y = 1 } } } };
     var b = a;
     b.quad.points[2].y = std.math.nextAfter(f64, 1, 2);
@@ -696,10 +597,13 @@ test "caller near policy retains native graph endpoint observations" {
     try std.testing.expectEqual(@as(f64, 0), exact.parameters[0][0]);
     try std.testing.expectEqual(@as(f64, 0), exact.parameters[1][0]);
     try std.testing.expectEqual(Point.zero, exact.points[0]);
-    // The graph's near endpoint is an equivalence observation, not a second
-    // mathematical root of the nonzero quadratic coordinate difference.
-    var graph_query: Intersections = .{};
-    _ = try graph_query.curveCurve(std.testing.allocator, a, b);
-    try std.testing.expect(graph_query.nearly_same[1]);
-    try std.testing.expect(graph_query.hasT(1));
+    try std.testing.expectEqual(@as(usize, 1), try exact.curveCurve(std.testing.allocator, a, b));
+
+    // The endpoint at t=1 is only present under the near policy.
+    var near: Intersections = .{};
+    _ = try near.curveCurve(std.testing.allocator, a, b);
+    try std.testing.expect(near.nearly_same[1]);
+    try std.testing.expect(near.hasT(1));
+    _ = try near.curveCurve(std.testing.allocator, a, a);
+    try std.testing.expectEqual([2]bool{ false, false }, near.nearly_same);
 }

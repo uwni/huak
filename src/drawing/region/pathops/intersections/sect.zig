@@ -1236,7 +1236,7 @@ fn binarySearch(first: *Sect, second: *Sect, result: *Intersections) !void {
     // A fixed nonzero Jacobian rules out a shared interval. Keep all finite-
     // precision observations and the original endpoint priority; proximity
     // between them cannot establish continuous coincidence.
-    if (result.used > 1 and result.coincident[0] == 0 and @import("separation.zig").atMostOne(first.curve, second.curve)) return;
+    if (result.used > 1 and result.coincident == 0 and @import("separation.zig").atMostOne(first.curve, second.curve)) return;
     var index: usize = 0;
     while (index + 1 < result.used) {
         if (result.isCoincident(index) and result.isCoincident(index + 1)) {
@@ -1302,7 +1302,7 @@ test "TSect exact f64 coincidence retains two endpoints after Cardano cancellati
         try std.testing.expectEqual(@as(usize, 2), try intersect(std.testing.allocator, curve, other, &result));
         try std.testing.expectEqualSlices(f64, &.{ 0, 1 }, result.parameters[0][0..result.used]);
         try std.testing.expectEqualSlices(f64, if (reversed) &.{ 1, 0 } else &.{ 0, 1 }, result.parameters[1][0..result.used]);
-        try std.testing.expectEqual([2]u16{ 3, 3 }, result.coincident);
+        try std.testing.expectEqual(@as(u16, 3), result.coincident);
         try std.testing.expect(!result.overflow);
         for (result.points[0..result.used], result.parameters[0][0..result.used]) |point, time| {
             try std.testing.expect(point.eql(curve.ptAtT(time)));

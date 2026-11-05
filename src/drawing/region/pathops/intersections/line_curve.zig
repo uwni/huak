@@ -8,17 +8,22 @@ const curve_types = @import("../curve.zig");
 const Line = curve_types.Line;
 const Intersections = @import("../Intersections.zig");
 
-pub fn ray(comptime Curve: type, result: *Intersections, curve: Curve, origin: Point, direction: Point) usize {
+fn lineRoots(curve: anytype, origin: Point, direction: Point, roots: *[curve.points.len - 1]f64) usize {
     var rotated = curve;
     for (&rotated.points, curve.points) |*out, point| {
         const relative = point.sub(origin);
         out.* = .{
             .x = @mulAdd(f64, relative.y, direction.x, -(relative.x * direction.y)),
-            .y = if (Curve == curve_types.Cubic) @mulAdd(f64, relative.y, direction.y, relative.x * direction.x) else relative.y * direction.y + relative.x * direction.x,
+            // Cubic root recovery uses both coordinates to find inflections.
+            .y = if (@TypeOf(curve) == curve_types.Cubic) @mulAdd(f64, relative.y, direction.y, relative.x * direction.x) else 0,
         };
     }
+    return rotated.verticalIntersect(0, roots);
+}
+
+pub fn ray(result: *Intersections, curve: anytype, origin: Point, direction: Point) usize {
     var roots: [curve.points.len - 1]f64 = undefined;
-    const count = rotated.verticalIntersect(0, &roots);
+    const count = lineRoots(curve, origin, direction, &roots);
     result.max = curve.points.len - 1;
     result.used = count;
     for (roots[0..count], 0..) |t, index| {
@@ -31,45 +36,17 @@ pub fn ray(comptime Curve: type, result: *Intersections, curve: Curve, origin: P
 pub fn intersect(comptime Curve: type, result: *Intersections, curve: Curve, line: Line) usize {
     var query: Query(Curve) = .{ .curve = curve, .line = line, .result = result };
     result.max = if (Curve == curve_types.Cubic) 4 else 5;
-    query.addEndpoints(null);
-    var rotated = curve;
+    query.addEndpoints();
     const direction = line.points[1].sub(line.points[0]);
-    for (&rotated.points, curve.points) |*out, point| {
-        const relative = point.sub(line.points[0]);
-        out.* = .{
-            .x = @mulAdd(f64, relative.y, direction.x, -(relative.x * direction.y)),
-            .y = if (Curve == curve_types.Cubic) @mulAdd(f64, relative.y, direction.y, relative.x * direction.x) else relative.y * direction.y + relative.x * direction.x,
-        };
-    }
     var roots: [curve.points.len - 1]f64 = undefined;
-    const count = rotated.verticalIntersect(0, &roots);
+    const count = lineRoots(curve, line.points[0], direction, &roots);
     for (roots[0..count]) |t| {
         var curve_t = t;
-        var line_t = query.findLineT(t);
+        const relative = curve.ptAtT(t).sub(line.points[0]);
+        var line_t = if (@abs(direction.x) > @abs(direction.y)) relative.x / direction.x else relative.y / direction.y;
         var point: Point = undefined;
-        if (query.pinTs(&curve_t, &line_t, &point, false) and query.uniqueAnswer(curve_t, point)) _ = result.insert(curve_t, line_t, point);
+        if (query.pinTs(&curve_t, &line_t, &point) and query.uniqueAnswer(curve_t, point)) _ = result.insert(curve_t, line_t, point);
     }
-    query.checkCoincident();
-    return result.used;
-}
-
-pub fn axis(comptime Curve: type, result: *Intersections, curve: Curve, low: f64, high: f64, constant: f64, vertical: bool, flipped: bool) usize {
-    const line: Line = .{ .points = if (vertical) .{ .{ .x = constant, .y = low }, .{ .x = constant, .y = high } } else .{ .{ .x = low, .y = constant }, .{ .x = high, .y = constant } } };
-    var query: Query(Curve) = .{ .curve = curve, .line = line, .result = result };
-    result.max = if (Curve == curve_types.Cubic) 4 else 5;
-    query.addEndpoints(vertical);
-    var roots: [curve.points.len - 1]f64 = undefined;
-    const count = if (vertical) curve.verticalIntersect(constant, &roots) else curve.horizontalIntersect(constant, &roots);
-    for (roots[0..count]) |t| {
-        var curve_t = t;
-        var point = curve.ptAtT(t);
-        if (Curve == curve_types.Cubic or !vertical) {
-            if (vertical) point.x = constant else point.y = constant;
-        }
-        var line_t = ((if (vertical) point.y else point.x) - low) / (high - low);
-        if (query.pinTs(&curve_t, &line_t, &point, true) and query.uniqueAnswer(curve_t, point)) _ = result.insert(curve_t, line_t, point);
-    }
-    if (flipped) result.flip();
     query.checkCoincident();
     return result.used;
 }
@@ -83,20 +60,18 @@ fn Query(comptime Curve: type) type {
         const cubic = Curve == curve_types.Cubic;
         const last = if (cubic) 3 else 2;
 
-        fn addEndpoints(self: *Self, direction: ?bool) void {
+        fn addEndpoints(self: *Self) void {
             for ([_]usize{ 0, last }, 0..) |index, endpoint| {
                 const point = self.curve.points[index];
-                const t = self.endpointT(point, direction, false);
+                const t = self.line.exactPoint(point);
                 if (t >= 0) _ = self.result.insert(@floatFromInt(endpoint), t, point);
             }
-            // The upstream specialized horizontal/vertical wrappers permit
-            // near endpoints by default; the general line respects allowNear.
-            if (!self.result.allow_near and direction == null) return;
+            if (!self.result.allow_near) return;
             for ([_]usize{ 0, last }, 0..) |index, endpoint| {
                 const curve_t: f64 = @floatFromInt(endpoint);
                 if (self.result.hasT(curve_t)) continue;
                 const point = self.curve.points[index];
-                const line_t = self.endpointT(point, direction, true);
+                const line_t = self.line.nearPoint(point, null);
                 if (line_t >= 0) _ = self.result.insert(curve_t, line_t, point);
             }
             for (self.line.points, 0..) |point, endpoint| {
@@ -106,17 +81,7 @@ fn Query(comptime Curve: type) type {
                 if (curve_t >= 0) _ = self.result.insert(curve_t, line_t, point);
             }
         }
-        fn endpointT(self: *Self, point: Point, direction: ?bool, near: bool) f64 {
-            const vertical = direction orelse return if (near) self.line.nearPoint(point, null) else self.line.exactPoint(point);
-            if (vertical) return if (near) Line.nearPointV(point, self.line.points[0].y, self.line.points[1].y, self.line.points[0].x) else Line.exactPointV(point, self.line.points[0].y, self.line.points[1].y, self.line.points[0].x);
-            return if (near) Line.nearPointH(point, self.line.points[0].x, self.line.points[1].x, self.line.points[0].y) else Line.exactPointH(point, self.line.points[0].x, self.line.points[1].x, self.line.points[0].y);
-        }
-        fn findLineT(self: *Self, t: f64) f64 {
-            const point = self.curve.ptAtT(t);
-            const direction = self.line.points[1].sub(self.line.points[0]);
-            return if (@abs(direction.x) > @abs(direction.y)) (point.x - self.line.points[0].x) / direction.x else (point.y - self.line.points[0].y) / direction.y;
-        }
-        fn pinTs(self: *Self, curve_t: *f64, line_t: *f64, point: *Point, initialized: bool) bool {
+        fn pinTs(self: *Self, curve_t: *f64, line_t: *f64, point: *Point) bool {
             if (cubic) {
                 if (!n.approximatelyOneOrLess(line_t.*) or !n.approximatelyZeroOrMore(line_t.*)) return false;
             } else {
@@ -127,7 +92,7 @@ fn Query(comptime Curve: type) type {
             const line_point = self.line.ptAtT(line_t.*);
             const curve_point = self.curve.ptAtT(curve_t.*);
             if (cubic and !line_point.roughlyEqual(curve_point)) return false;
-            if (n.zeroOrOne(line_t.*) or (!initialized and !n.zeroOrOne(curve_t.*))) point.* = line_point else if (!initialized) point.* = curve_point;
+            point.* = if (n.zeroOrOne(line_t.*) or !n.zeroOrOne(curve_t.*)) line_point else curve_point;
             const grid_point = point.*;
             if (cubic) {
                 if (grid_point.eql(self.line.points[0])) line_t.* = 0 else if (grid_point.eql(self.line.points[1])) line_t.* = 1;

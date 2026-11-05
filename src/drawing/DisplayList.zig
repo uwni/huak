@@ -218,7 +218,14 @@ pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
                 if (!transform.isFinite()) return error.NonFinite;
                 box = try segmentBounds(try self.range(p.path), transform);
                 if (p.style.pen) |pen| if (box) |b| {
-                    if (pen.nib) |nib| {
+                    if (pen.motion) |motion| {
+                        const nib = pen.nib orelse @import("pen/nib.zig").Nib{ .ellipse = .scaling(pen.width, pen.width) };
+                        const extent = try @import("pen/sweep.zig").radius(nib);
+                        const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
+                        const padding = extent * motion.bounds().scale * norm;
+                        if (!std.math.isFinite(padding)) return error.NonFinite;
+                        box = b.expanded(padding);
+                    } else if (pen.nib) |nib| {
                         const nib_box = nib.bounds() catch return error.InvalidPen;
                         var linear = transform;
                         linear.e = 0;
@@ -240,7 +247,7 @@ pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
                         box = .{ .min = b.min.add(offset.min), .max = b.max.add(offset.max) };
                     } else {
                         const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
-                        const radius = pen.maxWidth() * norm * (if (pen.join == .miter) pen.miter_limit else if (pen.cap == .square) @as(f64, 1) else @as(f64, 0.5));
+                        const radius = pen.width * norm * (if (pen.join == .miter) pen.miter_limit else if (pen.cap == .square) @as(f64, 1) else @as(f64, 0.5));
                         if (!std.math.isFinite(radius)) return error.NonFinite;
                         box = b.expanded(radius);
                     }

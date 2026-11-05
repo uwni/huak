@@ -10,6 +10,8 @@ pub const Options = struct {
     /// inversion needs this even for a straight, nonuniformly parameterized
     /// cubic; ordinary polygon flattening does not.
     parameter_tolerance: ?f64 = null,
+    /// Arc-length motion must retain travel even on tiny loops that fit within a pixel.
+    preserve_travel: bool = false,
     max_segments: usize,
     max_depth: usize,
 };
@@ -57,7 +59,7 @@ const Builder = struct {
             @max(curve.p1.distance(curve.p0.lerp(curve.p3, 1.0 / 3.0)), curve.p2.distance(curve.p0.lerp(curve.p3, 2.0 / 3.0))) <= limit
         else
             true;
-        if (deviation <= self.options.tolerance and upper - chord <= length_budget and parameter_ok) return self.line(curve.p3, .{ .original = last, .incoming = if (last) incoming else null, .time = end });
+        if (deviation <= self.options.tolerance and upper - chord <= length_budget and parameter_ok and (!self.options.preserve_travel or chord > 0 or upper == 0)) return self.line(curve.p3, .{ .original = last, .incoming = if (last) incoming else null, .time = end });
         if (depth >= self.options.max_depth) return error.StrokeWorkLimit;
         const halves = curve.split(0.5);
         const middle = begin * 0.5 + end * 0.5;
@@ -95,6 +97,36 @@ fn endpointDirection(curve: g.Cubic, last: bool) g.Point {
         }
     }
     return .zero;
+}
+
+/// Shortest nonstationary contour of a flattened path.
+pub fn minimumContourLength(path: Path) !f64 {
+    var current: ?g.Point = null;
+    var start: g.Point = .zero;
+    var length: f64 = 0;
+    var minimum = std.math.inf(f64);
+    for (path.segments.items) |segment| switch (segment) {
+        .move => |point| {
+            if (length > 0) minimum = @min(minimum, length);
+            current = point;
+            start = point;
+            length = 0;
+        },
+        .line, .close => {
+            const point = if (segment == .line) segment.line else start;
+            length += (current orelse return error.InvalidPath).distance(point);
+            if (!std.math.isFinite(length)) return error.NonFinite;
+            current = point;
+            if (segment == .close) {
+                if (length > 0) minimum = @min(minimum, length);
+                length = 0;
+                current = null;
+            }
+        },
+        .cubic => return error.InvalidPath,
+    };
+    if (length > 0) minimum = @min(minimum, length);
+    return minimum;
 }
 
 pub fn flatten(allocator: std.mem.Allocator, path: Path, options: Options) Error!Path {

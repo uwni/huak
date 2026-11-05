@@ -141,8 +141,8 @@ const Builder = struct {
 
     fn stroke(self: *Builder, path: Path, paint: DisplayList.Pen, transform: g.Transform) !Path {
         const tolerance = try localTolerance(self.options.tolerance, transform);
-        if (paint.profile != null) {
-            var expanded = try pen.profiledOutline(self.allocator, path, &paint, try self.strokeOptions(paint, tolerance));
+        if (paint.motion) |motion| {
+            var expanded = try pen.motionOutline(self.allocator, path, &paint, try self.strokeOptions(paint, @min(tolerance, motion.tolerance)));
             defer expanded.deinit();
             try self.consume(expanded);
             return self.region(expanded, transform, .nonzero);

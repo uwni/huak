@@ -73,7 +73,7 @@ test "standard root exports module namespaces and preserves nested native and so
             root = module;
         };
         try t.expect(root != null);
-        const names = [_][]const u8{ "math", "geometry", "color", "pen", "transform", "picture", "object", "text", "animation", "solver", "assertions", "collections", "brush", "engraving", "paint", "weave", "regions" };
+        const names = [_][]const u8{ "math", "geometry", "color", "pen", "transform", "picture", "object", "text", "animation", "solver", "assertions", "collections", "brush", "engraving", "paint", "weave", "regions", "pen_motion" };
         try t.expectEqual(names.len, root.?.exports.len);
         for (root.?.exports) |exposed| {
             try t.expect(exposed.target == .namespace);
@@ -1116,5 +1116,43 @@ test "standalone path and text objects need no drawing container" {
         const text = try @import("support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(text);
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, text, "Standalone objects"));
+    }
+}
+
+test "motion expressions retain units and composition order through painted and erased strokes" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compile(&library,
+            \\import paint.*; import std.pen_motion.*; import pen.pensquare; import assertions.assert
+            \\t := 7
+            \\turn := moving() do
+            \\    return (scaling x (1 + t * t) y (1 - t / 2)) followed by (rotation by (90deg * t))
+            \\end
+            \\assert(t + 3 == 10)
+            \\nib := pen(rgb(0.2,0.4,0.7), nib:pensquare(4pt), motion:turn, tolerance:0.01pt)
+            \\p := (4pt,8pt) -- (24pt,8pt)
+            \\export page := drawing picture(30pt,16pt) do
+            \\    mask := rectangle((0pt,0pt),30pt,16pt) filled rgb(1,0,0)
+            \\    +draw p with nib; +mask
+            \\    erase p from [mask] with nib
+            \\end
+            \\export painted := page.children[0]
+        , optimize);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+        const obj = machine.getGlobal("painted").?.object;
+        const owner: *const l.Runtime.SceneOwner = @ptrCast(@alignCast(obj.owner));
+        const motion = (try owner.scene.getNode(obj.index)).path.style.pen.?.motion.?;
+        const halfway = motion.at(0.5);
+        const expected = huak.core.geometry.Transform.scaling(1.25, 0.75).then(huak.core.geometry.Transform.rotation(std.math.pi / 4.0));
+        inline for (.{ "a", "b", "c", "d" }) |field| try t.expectApproxEqAbs(@field(expected, field), @field(halfway, field), 1e-14);
+        var svg = try runtime.render(machine.getGlobal("page").?, .svg);
+        defer svg.deinit();
+        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);
     }
 }

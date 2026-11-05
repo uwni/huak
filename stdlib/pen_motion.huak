@@ -1,0 +1,50 @@
+// Motion values are ordinary, ordered lists of immutable track specifications.
+// Each scalar ramp is linear in the fraction of arc length of one contour.
+fn ramp(a:any,b:any) -> list
+    return [[0,a],[1,b]]
+end
+mixfix(ramp) varying from _ to _ in unary
+export ramp
+
+fn scaling(x:any,y:any) -> list
+    return [["scale_x",x],["scale_y",y]]
+end
+mixfix(scaling) scaling x _ y _ in unary
+export scaling
+
+fn rotation(angle:any) -> list
+    return [["rotate",angle]]
+end
+mixfix(rotation) rotation by _ in unary
+export rotation
+
+fn then_motion(first:list,second:list) -> list
+    result := copy(first)
+    result += second
+    return result
+end
+mixfix(then_motion) _ followed by _ in path
+export then_motion
+
+// Arithmetic in this lexical block constructs scalar expressions for the
+// motion. The ordinary arithmetic outside the block keeps its usual meaning.
+fn add_expr(a:any,b:any) -> list return ["+",a,b] end
+fn sub_expr(a:any,b:any) -> list return ["-",a,b] end
+fn mul_expr(a:any,b:any) -> list return ["*",a,b] end
+fn div_expr(a:any,b:any) -> list return ["/",a,b] end
+fn negate_expr(a:any) -> list return ["*",-1,a] end
+
+export expand_block moving()
+    t := ["progress"]
+    add_op := add_expr
+    mixfix(add_op) _ + _ in addition
+    sub_op := sub_expr
+    mixfix(sub_op) _ - _ in addition
+    mul_op := mul_expr
+    mixfix(mul_op) _ * _ in multiplication
+    div_op := div_expr
+    mixfix(div_op) _ / _ in multiplication
+    negate_op := negate_expr
+    mixfix(negate_op) - _ in unary
+    ...
+end

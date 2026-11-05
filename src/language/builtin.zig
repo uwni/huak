@@ -89,7 +89,7 @@ const registry = .{
     .unit = .{ .namespace = .math, .args = .{ .value = p }, .minimum = 1, .result = p },
     .lerp = .{ .namespace = .math, .args = .{ .a = p, .b = p, .t = n }, .minimum = 3, .result = p },
     .rgb = .{ .namespace = .color, .args = .{ .red = n, .green = n, .blue = n, .alpha = n }, .minimum = 3, .result = .color },
-    .pen = .{ .namespace = .pen, .implicit = true, .args = .{ .color = .color, .width = length, .cap = .string, .join = .string, .miter_limit = n, .dash = .list, .dash_phase = length, .nib = .pen, .profile = .list }, .minimum = 1, .result = .pen },
+    .pen = .{ .namespace = .pen, .implicit = true, .args = .{ .color = .color, .width = length, .cap = .string, .join = .string, .miter_limit = n, .dash = .list, .dash_phase = length, .nib = .pen, .profile = .list, .motion = .list, .tolerance = length }, .minimum = 1, .result = .pen },
     .pencircle = .{ .namespace = .pen, .args = .{ .diameter = length, .color = .color }, .minimum = 0, .result = .pen },
     .pensquare = .{ .namespace = .pen, .args = .{ .width = length, .color = .color }, .minimum = 0, .result = .pen },
     .makepen = .{ .namespace = .pen, .args = .{ .outline = .path, .color = .color }, .minimum = 1, .result = .pen },

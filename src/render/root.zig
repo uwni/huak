@@ -27,6 +27,8 @@ pub fn viewport(picture: *const DisplayList, size: ?g.Point, frames: []const typ
     return (try bounds(picture, frames)) orelse .{ .min = .zero, .max = .zero };
 }
 
+pub const motionFootprint = @import("typst/pen.zig").motionFootprint;
+
 pub const Format = enum { svg, pdf };
 
 /// Matching allocation owners stay with the bytes and never cross the ABI.

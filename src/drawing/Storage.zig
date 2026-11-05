@@ -39,7 +39,7 @@ pub const Scope = struct { transform: g.Transform, clip: ?PathRef };
 pub const Error = std.mem.Allocator.Error || error{
     InvalidColor,
     InvalidPen,
-    InvalidProfile,
+    InvalidMotion,
     InvalidStyle,
     InvalidMetrics,
     InvalidPath,
@@ -131,9 +131,9 @@ pub fn validateStyle(style_value: *const Style) Error!void {
         if (!pen.color.valid()) return error.InvalidColor;
         if (!std.math.isFinite(pen.width) or pen.width < 0 or !std.math.isFinite(pen.miter_limit) or pen.miter_limit < 1 or !std.math.isFinite(pen.dash_phase)) return error.InvalidPen;
         if (pen.nib) |nib| nib.validate() catch return error.InvalidPen;
-        if (pen.profile) |profile| {
-            _ = try profile.maxSlope();
-            if (pen.nib != null or pen.dash.len != 0) return error.InvalidPen;
+        if (pen.motion) |motion| {
+            try motion.validate();
+            if (pen.dash.len != 0) return error.InvalidPen;
         }
         var total: f64 = 0;
         for (pen.dash) |length| {

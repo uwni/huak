@@ -83,32 +83,6 @@ pub const Line = struct {
         const largest = @max(@max(b.max.x, b.max.y), -@min(b.min.x, b.min.y));
         return n.roughlyEqualUlps(largest, largest + dist);
     }
-    pub fn exactPointH(p: Point, left: f64, right: f64, y: f64) f64 {
-        return if (p.y == y and p.x == left) 0 else if (p.y == y and p.x == right) 1 else -1;
-    }
-    pub fn exactPointV(p: Point, top: f64, bottom: f64, x: f64) f64 {
-        return if (p.x == x and p.y == top) 0 else if (p.x == x and p.y == bottom) 1 else -1;
-    }
-    pub fn nearPointH(p: Point, left: f64, right: f64, y: f64) f64 {
-        if (!n.almostBequalUlps(p.y, y) or !n.almostBetweenUlps(left, p.x, right)) return -1;
-        const t = n.pinT((p.x - left) / (right - left));
-        const real_x = (1 - t) * left + t * right;
-        const dx = p.y - y;
-        const dy = p.x - real_x;
-        const dist = @sqrt(dx * dx + dy * dy);
-        const largest = interpolatedLargest(.{ .x = left, .y = y }, .{ .x = right, .y = y }, t);
-        return if (n.almostEqualUlpsPin(largest, largest + dist)) t else -1;
-    }
-    pub fn nearPointV(p: Point, top: f64, bottom: f64, x: f64) f64 {
-        if (!n.almostBequalUlps(p.x, x) or !n.almostBetweenUlps(top, p.y, bottom)) return -1;
-        const t = n.pinT((p.y - top) / (bottom - top));
-        const real_y = (1 - t) * top + t * bottom;
-        const dx = p.x - x;
-        const dy = p.y - real_y;
-        const dist = @sqrt(dx * dx + dy * dy);
-        const largest = interpolatedLargest(.{ .x = x, .y = top }, .{ .x = x, .y = bottom }, t);
-        return if (n.almostEqualUlpsPin(largest, largest + dist)) t else -1;
-    }
     pub fn horizontalIntersect(self: Line, y: f64, out: *[1]f64) usize {
         if (self.points[0].y == self.points[1].y) return 0;
         out[0] = n.pinT((y - self.points[0].y) / (self.points[1].y - self.points[0].y));
@@ -1289,7 +1263,6 @@ test "merged cubic endpoints shift adjacent controls while retaining source alig
 test "axis line proximity uses its constant-coordinate ULP budget" {
     const line: Line = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 1e5, .y = 0 } } };
     try std.testing.expectEqual(@as(f64, -1), line.nearPoint(.{ .x = 5e4, .y = 1e-12 }, null));
-    try std.testing.expectEqual(@as(f64, -1), Line.nearPointH(.{ .x = 5e4, .y = 1e-12 }, 0, 1e5, 0));
     var unequal = true;
     try std.testing.expectEqual(@as(f64, 0.5), line.nearPoint(.{ .x = 5e4, .y = 0 }, &unequal));
     try std.testing.expect(!unequal);

@@ -127,7 +127,7 @@ test "shared monotone coordinate solves captured false coincidence and overflow 
         try std.testing.expectApproxEqAbs(times[1 - swapped], result.parameters[1][0], 1e-13);
         try std.testing.expect(result.points[0].eql(first.ptAtT(result.parameters[0][0])));
         try std.testing.expect(first.ptAtT(result.parameters[0][0]).approximatelyEqual(second.ptAtT(result.parameters[1][0])));
-        try std.testing.expectEqualSlices(u16, &.{ 0, 0 }, &result.coincident);
+        try std.testing.expectEqual(@as(u16, 0), result.coincident);
         try std.testing.expect(!result.overflow);
         var dispatched: Intersections = .{ .allow_near = false };
         try std.testing.expectEqual(@as(usize, 1), try dispatched.curveCurve(std.testing.allocator, first, second));

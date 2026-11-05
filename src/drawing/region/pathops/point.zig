@@ -24,16 +24,6 @@ pub const Point = struct {
     pub fn cross(a: Point, b: Point) f64 {
         return a.x * b.y - a.y * b.x;
     }
-    pub fn crossCheck(a: Point, b: Point) f64 {
-        const xy = a.x * b.y;
-        const yx = a.y * b.x;
-        return if (n.almostEqualUlps(xy, yx)) 0 else xy - yx;
-    }
-    pub fn crossNoNormalCheck(a: Point, b: Point) f64 {
-        const xy = a.x * b.y;
-        const yx = a.y * b.x;
-        return if (n.almostEqualUlpsNoNormalCheck(xy, yx)) 0 else xy - yx;
-    }
     pub fn lengthSquared(a: Point) f64 {
         return a.x * a.x + a.y * a.y;
     }
@@ -49,8 +39,6 @@ pub const Point = struct {
     pub fn eql(a: Point, b: Point) bool {
         return a.x == b.x and a.y == b.y;
     }
-    pub const equal = eql;
-    pub const almostEqual = approximatelyEqual;
     pub fn isFinite(a: Point) bool {
         return std.math.isFinite(a.x) and std.math.isFinite(a.y);
     }
@@ -84,19 +72,7 @@ pub const Point = struct {
         const scale_value = largest(a, b);
         return n.roughlyEqualUlps(scale_value, scale_value + a.distance(b));
     }
-    /// SkDPoint::RoughlyEqual(SkPoint,SkPoint), distinct from the instance
-    /// roughlyEqual test's initial absolute-coordinate shortcut.
-    pub fn roughlyEqualCoordinates(a: Point, b: Point) bool {
-        if (!n.roughlyEqualUlps(a.x, b.x) and !n.roughlyEqualUlps(a.y, b.y)) return false;
-        const scale_value = largest(a, b);
-        return n.roughlyEqualUlps(scale_value, scale_value + a.distance(b));
-    }
-    pub fn wayRoughlyEqual(a: Point, b: Point) bool {
-        const diff = a.sub(b);
-        return n.roughlyZeroWhenComparedTo(@max(@abs(diff.x), @abs(diff.y)), @max(@max(@abs(a.x), @abs(a.y)), @max(@abs(b.x), @abs(b.y))));
-    }
 };
-pub const Vector = Point;
 pub const Bounds = struct {
     min: Point,
     max: Point,
