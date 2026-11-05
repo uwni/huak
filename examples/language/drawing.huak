@@ -16,7 +16,7 @@ fn wave(x: float) -> float
   return 95 + 35 * sin(x / 32)
 end
 
-fn marker(at: pair, color: color) -> object
+fn marker(at: vec2, color: color) -> object
   return fill(circle(at, 3), color)
 end
 

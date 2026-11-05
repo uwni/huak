@@ -53,7 +53,7 @@ end
 mixfix(filled) _ filled _ in path
 export filled
 
-fn at(content:text, position:pair) -> object
+fn at(content:text, position:vec2) -> object
     result := object(content)
     transform_object(result, translate(position))
     return result
@@ -61,7 +61,7 @@ end
 mixfix(at) _ at _ in path
 export at
 
-fn shifted(source:object, offset:pair) -> object
+fn shifted(source:object, offset:vec2) -> object
     return transformed(source, translate(offset))
 end
 mixfix(shifted) _ shifted _ in path

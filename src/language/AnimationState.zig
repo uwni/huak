@@ -110,10 +110,10 @@ fn parseKeys(self: *AnimationState, comptime T: type, input: []const Value, reso
         const time = try numeric(values[0]);
         const raw = values[1];
         const value: T = if (T == f64) try dimensioned(raw, dimension) else if (T == geometry.Point) blk: {
-            if (raw != .pair) return error.AnimationKeyRequiresPair;
-            if (dimension.eql(.distance)) break :blk try raw.pair.nativePoint();
-            if (!raw.pair.dimension.eql(.scalar)) return error.DimensionMismatch;
-            break :blk .{ .x = raw.pair.x, .y = raw.pair.y };
+            if (raw != .vec2) return error.AnimationKeyRequiresPair;
+            if (dimension.eql(.distance)) break :blk try raw.vec2.nativePoint();
+            if (!raw.vec2.dimension.eql(.scalar)) return error.DimensionMismatch;
+            break :blk .{ .x = raw.vec2.x, .y = raw.vec2.y };
         } else if (T == DisplayList.Color) blk: {
             if (comptime @TypeOf(resolver) == @TypeOf(null)) return error.ColorResolverRequired;
             break :blk try resolver.animationColor(raw);
@@ -148,9 +148,9 @@ test "animation adapter retains object indices and continuous keys" {
     var state = AnimationState.init(std.testing.allocator);
     defer state.deinit();
     const keys = [_]Value{
-        types.listView(&.{ .{ .int = 0 }, .{ .pair = .zero } }),
-        types.listView(&.{ .{ .number = 0.37 }, .{ .pair = .{ .x = 10, .y = 20 } } }),
-        types.listView(&.{ .{ .int = 1 }, .{ .pair = .{ .x = 30, .y = 40 } } }),
+        types.listView(&.{ .{ .int = 0 }, .{ .vec2 = .zero } }),
+        types.listView(&.{ .{ .number = 0.37 }, .{ .vec2 = .{ .x = 10, .y = 20 } } }),
+        types.listView(&.{ .{ .int = 1 }, .{ .vec2 = .{ .x = 30, .y = 40 } } }),
     };
     try state.animate(0, "translate", &keys, "linear", null);
     const tracks = try testTracks(&state, 1);
@@ -182,9 +182,9 @@ test "animation keys convert geometry units and reject dimensions on scale and t
     var state = AnimationState.init(std.testing.allocator);
     defer state.deinit();
     const id: u32 = 0;
-    const translated: Value = .{ .pair = .{ .x = 10, .y = 0, .dimension = .distance } };
+    const translated: Value = .{ .vec2 = .{ .x = 10, .y = 0, .dimension = .distance } };
     const points = [_]Value{
-        types.listView(&.{ .{ .int = 0 }, .{ .pair = .zero } }),
+        types.listView(&.{ .{ .int = 0 }, .{ .vec2 = .zero } }),
         types.listView(&.{ .{ .int = 1 }, translated }),
     };
     try state.animate(id, "translate", &points, "linear", null);

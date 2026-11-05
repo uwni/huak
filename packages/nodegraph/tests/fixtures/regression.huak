@@ -14,7 +14,7 @@ import "../../nodegraph/marks.huak" as marks
 import "../../nodegraph/model.huak" as model
 import "../../nodegraph/render.huak" as render
 
-fn near(a:pair, b:pair)
+fn near(a:vec2, b:vec2)
     assert(norm(a-b) < 0.002pt, "coordinate mismatch")
 end
 

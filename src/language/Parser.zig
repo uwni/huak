@@ -621,8 +621,9 @@ fn prefix(self: *Parser) anyerror!*ast.Expr {
             const x = try self.expression(0);
             if (try self.accept(.comma)) {
                 const y = try self.expression(0);
-                const finish = try self.expect(.rparen, "expected ')' after pair");
-                return self.createExpr(.join(token.span, finish.span), .{ .pair = .{ .x = x, .y = y } });
+                const z = if (try self.accept(.comma)) try self.expression(0) else null;
+                const finish = try self.expect(.rparen, "expected ')' after vector");
+                return self.createExpr(.join(token.span, finish.span), .{ .vector = .{ .x = x, .y = y, .z = z } });
             }
             const finish = try self.expect(.rparen, "expected ')' after expression");
             return self.createExpr(.join(token.span, finish.span), .{ .grouped = x });
@@ -1371,7 +1372,7 @@ test "native path joins preserve kinds units cycle and operator-line continuatio
     try std.testing.expectEqualStrings("corner", middle.right.value.name);
     const first = middle.left.value.path_join;
     try std.testing.expectEqual(ast.PathJoin.smooth, first.kind);
-    try std.testing.expectEqual(units.Unit.mm, first.left.value.pair.x.value.quantity.unit);
+    try std.testing.expectEqual(units.Unit.mm, first.left.value.vector.x.value.quantity.unit);
     const postfix = script.statements[1].value.assignment.value.value.call;
     try std.testing.expect(postfix.dot);
     try std.testing.expectEqualStrings("bounds", postfix.name);
@@ -1746,7 +1747,7 @@ test "export function modifiers and name lists preserve existing declaration sha
 test "function rest parameters preserve element annotations and complete source spans" {
     const input =
         \\fn collect(args...) return args end
-        \\export fn points(label:string, points:pair...)->list return points end
+        \\export fn points(label:string, points:vec2...)->list return points end
         \\fn ordinary(value:int)->int return value end
     ;
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -1767,8 +1768,8 @@ test "function rest parameters preserve element annotations and complete source 
     try std.testing.expect(!typed.params[0].variadic);
     try std.testing.expectEqualStrings("string", typed.params[0].annotation.name);
     try std.testing.expect(typed.params[1].variadic);
-    try std.testing.expectEqualStrings("pair", typed.params[1].annotation.name);
-    try std.testing.expectEqualStrings("points:pair...", input[typed.params[1].span.start..typed.params[1].span.end]);
+    try std.testing.expectEqualStrings("vec2", typed.params[1].annotation.name);
+    try std.testing.expectEqualStrings("points:vec2...", input[typed.params[1].span.start..typed.params[1].span.end]);
     try std.testing.expectEqualStrings("list", typed.result.?.name);
     try std.testing.expect(!script.statements[2].value.function.params[0].variadic);
 }
@@ -2507,7 +2508,7 @@ test "mixfix forms delimit multiple arguments and preserve ordinary calls and la
     const mixed = script.statements[0].value.assignment.value.value.mixfix_call;
     try std.testing.expectEqualStrings("construct", mixed.operator.name);
     try std.testing.expectEqual(@as(usize, 2), mixed.args.len);
-    try std.testing.expect(mixed.args[0].value == .pair);
+    try std.testing.expect(mixed.args[0].value == .vector);
     try std.testing.expect(mixed.args[1].value == .grouped);
     const form = script.statements[1].value.mixfix_binding.form;
     try std.testing.expectEqual(@as(usize, 2), form.arity());

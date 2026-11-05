@@ -509,7 +509,7 @@ fn runUntil(self: *Machine, task_end: ?usize, depth: usize) Error!Value {
             .positive => {
                 const value = try self.pop();
                 switch (value) {
-                    .int, .number, .quantity, .pair => {},
+                    .int, .number, .quantity, .vec2, .vec3 => {},
                     .handle => |handle| if (handle.kind != .variable and handle.kind != .linear) {
                         return self.fail("cannot apply unary + to {s}", .{self.typeName(handle.kind)});
                     },
@@ -524,7 +524,8 @@ fn runUntil(self: *Machine, task_end: ?usize, depth: usize) Error!Value {
                     .int => |integer| .{ .int = integerNegate(integer) catch return self.fail("integer overflow", .{}) },
                     .number => |numeric_value| .{ .number = -numeric_value },
                     .quantity => |quantity| .{ .quantity = quantity.negate() },
-                    .pair => |pair| .{ .pair = pair.scale(-1) },
+                    .vec2 => |pair| .{ .vec2 = pair.scale(-1) },
+                    .vec3 => |pair| .{ .vec3 = pair.scale(-1) },
                     .handle => try self.nativeBinary(.subtract, .{ .int = 0 }, value),
                     else => return self.fail("cannot negate {s}", .{self.typeName(value.valueType())}),
                 };
@@ -626,10 +627,16 @@ fn runUntil(self: *Machine, task_end: ?usize, depth: usize) Error!Value {
                     try self.push(result);
                 }
             },
-            .make_pair => {
+            .make_vec3 => {
+                const z = try self.pop();
                 const y = try self.pop();
                 const x = try self.pop();
-                try self.push(numeric.makePair(x, y) catch |err| return self.numericFailure(err));
+                try self.push(numeric.makeVector(3, .{ x, y, z }) catch |err| return self.numericFailure(err));
+            },
+            .make_vec2 => {
+                const y = try self.pop();
+                const x = try self.pop();
+                try self.push(numeric.makeVec2(x, y) catch |err| return self.numericFailure(err));
             },
             .make_list => {
                 const args = try self.arguments(instruction.a);
@@ -675,10 +682,8 @@ fn runUntil(self: *Machine, task_end: ?usize, depth: usize) Error!Value {
             .field => {
                 const name = try self.stringConstant(instruction.a);
                 const object = try self.pop();
-                if (object == .pair and std.mem.eql(u8, name, "x")) {
-                    try self.push(object.pair.component(object.pair.x));
-                } else if (object == .pair and std.mem.eql(u8, name, "y")) {
-                    try self.push(object.pair.component(object.pair.y));
+                if (object.vectorField(name)) |component| {
+                    try self.push(component);
                 } else if (object == .record) {
                     const index = try self.recordField(object.record, name, instruction.b);
                     try self.push(try self.materialize(object.record.fields[index]));
@@ -1486,11 +1491,11 @@ fn checkFiniteLeaf(self: *Machine, value: Value) Error!void {
         .quantity => |quantity| if (!std.math.isFinite(quantity.value)) {
             return self.fail("arithmetic produced a non-finite quantity", .{});
         },
-        .pair => |pair| if (!pair.isFinite()) {
-            return self.fail("arithmetic produced a non-finite pair", .{});
+        inline .vec2, .vec3 => |pair| if (!pair.isFinite()) {
+            return self.fail("arithmetic produced a non-finite vector", .{});
         },
         .handle => |handle| switch (handle.kind) {
-            .path, .color, .pen, .transform, .solver, .variable, .linear, .solution, .text, .measure => {},
+            .path, .shape, .color, .pen, .transform, .solver, .variable, .linear, .solution, .text, .measure => {},
             else => return self.fail("host returned an invalid native handle type", .{}),
         },
         else => {},
@@ -1529,7 +1534,7 @@ fn numericFailure(self: *Machine, err: anyerror) Error {
         error.DimensionMismatch => self.fail("incompatible quantity dimensions", .{}),
         error.DimensionOverflow => self.fail("quantity dimension exponent overflow", .{}),
         error.InvalidPower => self.fail("quantity power requires compatible integer dimensions", .{}),
-        error.TypeMismatch => self.fail("operator requires compatible numeric or pair operands", .{}),
+        error.TypeMismatch => self.fail("operator requires compatible numeric or vector operands", .{}),
         else => self.fail("arithmetic produced a non-finite value", .{}),
     };
 }
@@ -1680,9 +1685,7 @@ fn valuesEqual(self: *Machine, left: Value, right: Value) Error!bool {
             .string => |string| if (!std.mem.eql(u8, string, b.string)) {
                 return false;
             },
-            .pair => |pair| if (!pair.dimension.eql(b.pair.dimension) or pair.x != b.pair.x or pair.y != b.pair.y) {
-                return false;
-            },
+            inline .vec2, .vec3 => |v, tag| if (!std.meta.eql(v, @field(b, @tagName(tag)))) return false,
             .handle => |handle| if (handle.kind != b.handle.kind or handle.index != b.handle.index) {
                 return false;
             },
@@ -2340,7 +2343,7 @@ test "dimensional bytecode parameters vectors and ratios retain native values" {
     };
     const instructions = [_]I{
         ins(.constant, 0),     ins(.constant, 1), ins(.add, 0),       ins(.store_global, 0),
-        ins(.constant, 2),     ins(.constant, 0), ins(.make_pair, 0), ins(.field, 3),
+        ins(.constant, 2),     ins(.constant, 0), ins(.make_vec2, 0), ins(.field, 3),
         ins(.store_global, 1), ins(.constant, 0), ins(.constant, 1),  ins(.divide, 0),
         ins(.store_global, 2), ins(.halt, 0),
     };
@@ -2512,15 +2515,15 @@ test "parameters reject unknown duplicate missing and invalid values before exec
 
 test "arithmetic lists pairs and finite errors execute without a native library" {
     var program = try testProgram(&.{.{ .name = "script", .code = &.{
-        ins(.constant, 0), ins(.constant, 1), ins(.make_pair, 0), ins(.constant, 1), ins(.multiply, 0), ins(.store_global, 0),
+        ins(.constant, 0), ins(.constant, 1), ins(.make_vec2, 0), ins(.constant, 1), ins(.multiply, 0), ins(.store_global, 0),
         ins(.constant, 2), ins(.constant, 1), ins(.make_list, 2), ins(.constant, 3), ins(.index, 0),    ins(.store_global, 1),
         ins(.halt, 0),
-    }, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{ .{ .int = 3 }, .{ .int = 2 }, .{ .string = "first" }, .{ .int = 0 } }, &.{ "point", "first" }, &.{ .pair, .string });
+    }, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{ .{ .int = 3 }, .{ .int = 2 }, .{ .string = "first" }, .{ .int = 0 } }, &.{ "point", "first" }, &.{ .vec2, .string });
     defer program.deinit();
     var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer machine.deinit();
     _ = try machine.execute(&.{});
-    const point = machine.getGlobal("point").?.pair;
+    const point = machine.getGlobal("point").?.vec2;
     try std.testing.expectEqual(@as(f64, 6), point.x);
     try std.testing.expectEqual(@as(f64, 4), point.y);
     try std.testing.expectEqualStrings("first", machine.getGlobal("first").?.string);
@@ -3741,7 +3744,7 @@ test "every allocation failure frees VM globals lists operands locals frames and
 
 test "unary positive preserves numbers pairs and linear handles but checks dynamic types" {
     const accepted = [_]Value{
-        .{ .int = 7 },                                     .{ .number = 2.5 },                              .{ .pair = .{ .x = 1, .y = 2 } },
+        .{ .int = 7 },                                     .{ .number = 2.5 },                              .{ .vec2 = .{ .x = 1, .y = 2 } },
         .{ .handle = .{ .kind = .variable, .index = 0 } }, .{ .handle = .{ .kind = .linear, .index = 1 } },
     };
     for (accepted) |value| {
@@ -3844,8 +3847,8 @@ test "dot calls execute forward recursive chained indexed and expression receive
         \\  return x*(x-1).fact()
         \\end
         \\fn combine(x:int,y:int)->int; return x*10+y; end
-        \\fn move(p:pair,delta:pair)->pair; return p+delta; end
-        \\fn x(p:pair)->float; return p.y; end
+        \\fn move(p:vec2,delta:vec2)->vec2; return p+delta; end
+        \\fn x(p:vec2)->float; return p.y; end
     , "dot-execution.huak", .{}, &diagnostic);
     defer program.deinit();
     var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
@@ -3854,8 +3857,8 @@ test "dot calls execute forward recursive chained indexed and expression receive
     try std.testing.expectEqual(@as(i64, 720), machine.getGlobal("answer").?.int);
     try std.testing.expectEqual(@as(i64, 345), machine.getGlobal("chained").?.int);
     try std.testing.expectEqual(@as(i64, 89), machine.getGlobal("indexed").?.int);
-    try std.testing.expectEqual(@as(f64, 6), machine.getGlobal("point").?.pair.x);
-    try std.testing.expectEqual(@as(f64, 8), machine.getGlobal("point").?.pair.y);
+    try std.testing.expectEqual(@as(f64, 6), machine.getGlobal("point").?.vec2.x);
+    try std.testing.expectEqual(@as(f64, 8), machine.getGlobal("point").?.vec2.y);
     try std.testing.expectEqual(@as(f64, 6), machine.getGlobal("property").?.number);
     try std.testing.expectEqual(@as(f64, 8), machine.getGlobal("called").?.number);
 }

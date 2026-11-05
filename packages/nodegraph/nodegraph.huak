@@ -51,8 +51,8 @@ fn debug_grid(dst:object, resolved:layout.Geometry)
     x1:length := xs[len(xs)-1].center+xs[len(xs)-1].width/2
     y0:length := ys[0].center-ys[0].width/2
     y1:length := ys[len(ys)-1].center+ys[len(ys)-1].width/2
-    x_axis:pair := resolved.axes[0]
-    y_axis:pair := resolved.axes[1]
+    x_axis:vec2 := resolved.axes[0]
+    y_axis:vec2 := resolved.axes[1]
     basis := transform.matrix(x_axis.x, x_axis.y, y_axis.x, y_axis.y, 0pt, 0pt)
     ink := pen(rgb(0.55, 0.62, 0.75), 0.25pt)
     for i in 0:len(xs)-1 do
@@ -128,7 +128,7 @@ export fn geometry(items:list, options:dict = {}) -> layout.Geometry
     return result
 end
 
-export fn anchor(objects:any, name:string, side:string = "center") -> pair
+export fn anchor(objects:any, name:string, side:string = "center") -> vec2
     if objects.kind == "scene" then
         finish(objects)
         return layout.anchor(objects.geometry, name, side)
@@ -163,7 +163,7 @@ fn render_geometry(objects:layout.Geometry, options:dict) -> picture
         if opt.get(options, "debug", false) or level >= 2 then
             for item in objects.objects do
                 if item.kind != "edge" then
-                    center:pair := item.center
+                    center:vec2 := item.center
                     object.append(debug, draw(circle(center, 2pt), pen(rgb(0.85, 0.2, 0.2), 0.5pt)))
                 end
             end
@@ -222,7 +222,7 @@ export fn matrix(target:Scene, rows:list, options:dict = {}) -> list
     return result
 end
 
-export fn anchor_node(target:Scene, node:NodeHandle, side:string = "center") -> pair
+export fn anchor_node(target:Scene, node:NodeHandle, side:string = "center") -> vec2
     finish(target)
     return layout.anchor(target.geometry, node.name, side)
 end

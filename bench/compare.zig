@@ -27,11 +27,11 @@ const Difference = struct {
         var sum: f64 = 0;
         for (samples, 0..) |pair, i| {
             before[i] = switch (field) {
-                .ms => pair[0].ms,
+                .ms => vec2[0].ms,
                 .rss => @floatFromInt(pair[0].rss),
             };
             after[i] = switch (field) {
-                .ms => pair[1].ms,
+                .ms => vec2[1].ms,
                 .rss => @floatFromInt(pair[1].rss),
             };
             delta[i] = after[i] - before[i];

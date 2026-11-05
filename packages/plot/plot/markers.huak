@@ -60,7 +60,7 @@ export fn prepare(symbol:Marker, ink:color, size:any = false) -> path
     return transformed(result,rotate(get(symbol.options,"rotation",0deg)))
 end
 
-export fn paint(dst:picture, symbol:Marker, shape:path, position:pair, ink:color)
+export fn paint(dst:picture, symbol:Marker, shape:path, position:vec2, ink:color)
     shifted := transformed(shape,translate(position))
     interior:any := get(symbol.options,"fill",ink)
     stroke:any := get(symbol.options,"pen",pen(ink,0.7pt))

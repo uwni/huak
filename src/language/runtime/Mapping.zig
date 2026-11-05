@@ -11,8 +11,8 @@ function: types.Value,
 context: ?types.Value,
 
 pub fn point(self: Mapping, input: geometry.Point) !geometry.Point {
-    const args = [_]types.Value{ .{ .pair = types.Pair.fromPoint(input) }, self.context orelse .unit };
+    const args = [_]types.Value{ .{ .vec2 = types.Vec2.fromPoint(input) }, self.context orelse .unit };
     const result = try self.machine.invokeFunction(self.function, args[0..if (self.context != null) @as(usize, 2) else 1]);
-    if (result != .pair) return error.PointMappingMustReturnPair;
-    return result.pair.nativePoint();
+    if (result != .vec2) return error.PointMappingMustReturnVec2;
+    return result.vec2.nativePoint();
 }

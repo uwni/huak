@@ -55,7 +55,7 @@ fn dots(region:path, spacing:length, radius:length, ink:color) -> object
 end
 export dots
 
-fn sphere(center:pair, radius:length, ink:color, lines:int) -> object
+fn sphere(center:vec2, radius:length, ink:color, lines:int) -> object
     assert(radius > 0pt, "sphere radius must be positive")
     assert(lines >= 4, "sphere needs at least four shading intervals")
     spacing := 2 * radius / lines

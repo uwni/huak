@@ -9,7 +9,7 @@ for i in 0:len(shapes)-1 do
     kind:string := shapes[i]
     node_kind := node("shape", absolute((0pt, 0pt)), typ[X], {"shape": kind, "width": 40pt, "height": 24pt})
     g := geometry([node_kind])
-    center:pair := anchor(g, "shape", "center")
+    center:vec2 := anchor(g, "shape", "center")
     assert(abs(center.x) < 0.001pt and abs(center.y) < 0.001pt, "shape must resolve at its center")
 end
 

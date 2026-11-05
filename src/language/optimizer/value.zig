@@ -7,9 +7,10 @@ const units = types.units;
 const Value = bc.Value;
 
 pub const Key = struct {
-    tag: enum { unit, int, number, quantity, boolean, string, pair },
+    tag: enum { unit, int, number, quantity, boolean, string, vec2, vec3 },
     a: u64 = 0,
     b: u64 = 0,
+    c: u64 = 0,
     dimension: units.Dimension = .scalar,
     bytes: []const u8 = &.{},
 };
@@ -18,12 +19,13 @@ pub const KeyContext = struct {
         var result = std.hash.Wyhash.init(@backingInt(key.tag));
         result.update(std.mem.asBytes(&key.a));
         result.update(std.mem.asBytes(&key.b));
+        if (key.tag == .vec3) result.update(std.mem.asBytes(&key.c));
         result.update(std.mem.asBytes(&key.dimension));
         result.update(key.bytes);
         return result.final();
     }
     pub fn eql(_: @This(), a: Key, b: Key) bool {
-        return a.tag == b.tag and a.a == b.a and a.b == b.b and a.dimension.eql(b.dimension) and std.mem.eql(u8, a.bytes, b.bytes);
+        return a.tag == b.tag and a.a == b.a and a.b == b.b and a.c == b.c and a.dimension.eql(b.dimension) and std.mem.eql(u8, a.bytes, b.bytes);
     }
 };
 pub fn keyOf(value: Value) ?Key {
@@ -34,7 +36,8 @@ pub fn keyOf(value: Value) ?Key {
         .quantity => |v| .{ .tag = .quantity, .a = @bitCast(v.value), .dimension = v.dimension },
         .boolean => |v| .{ .tag = .boolean, .a = @intFromBool(v) },
         .string => |v| .{ .tag = .string, .bytes = v },
-        .pair => |v| .{ .tag = .pair, .a = @bitCast(v.x), .b = @bitCast(v.y), .dimension = v.dimension },
+        .vec2 => |v| .{ .tag = .vec2, .a = @bitCast(v.x), .b = @bitCast(v.y), .dimension = v.dimension },
+        .vec3 => |v| .{ .tag = .vec3, .a = @bitCast(v.x), .b = @bitCast(v.y), .c = @bitCast(v.z), .dimension = v.dimension },
         .omitted, .list, .dict, .record, .handle, .function, .object => null,
     };
 }
@@ -44,7 +47,7 @@ pub fn scalarValid(value: Value) bool {
         .unit, .int, .boolean, .string => true,
         .number => |v| std.math.isFinite(v),
         .quantity => |v| std.math.isFinite(v.value),
-        .pair => |v| v.isFinite(),
+        inline .vec2, .vec3 => |v| v.isFinite(),
         .omitted, .list, .dict, .record, .handle, .function, .object => false,
     };
 }
@@ -54,14 +57,15 @@ pub fn unary(op: bc.Op, operand: Value) ?Value {
     return switch (op) {
         .logical_not => if (operand == .boolean) .{ .boolean = !operand.boolean } else null,
         .positive => switch (operand) {
-            .int, .number, .quantity, .pair => operand,
+            .int, .number, .quantity, .vec2, .vec3 => operand,
             else => null,
         },
         .negate => switch (operand) {
             .int => |v| .{ .int = numeric.integerNegate(v) catch return null },
             .number => |v| .{ .number = -v },
             .quantity => |v| .{ .quantity = v.negate() },
-            .pair => |v| .{ .pair = v.scale(-1) },
+            .vec2 => |v| .{ .vec2 = v.scale(-1) },
+            .vec3 => |v| .{ .vec3 = v.scale(-1) },
             else => null,
         },
         else => null,
@@ -99,7 +103,7 @@ pub fn binary(op: bc.Op, left: Value, right: Value) ?Value {
                 .unit => true,
                 .boolean => |a| a == right.boolean,
                 .string => |a| std.mem.eql(u8, a, right.string),
-                .pair => |a| a.dimension.eql(right.pair.dimension) and a.x == right.pair.x and a.y == right.pair.y,
+                inline .vec2, .vec3 => |v, tag| std.meta.eql(v, @field(right, @tagName(tag))),
                 else => return null,
             };
             return .{ .boolean = if (op == .equal) equal else !equal };
@@ -114,7 +118,7 @@ pub fn binary(op: bc.Op, left: Value, right: Value) ?Value {
                 else => unreachable,
             } };
         },
-        .make_pair => return numeric.makePair(left, right) catch return null,
+        .make_vec2 => return numeric.makeVec2(left, right) catch return null,
         .add, .subtract, .multiply, .divide, .remainder, .power => {
             return numeric.valueArithmetic(op, left, right) catch return null;
         },

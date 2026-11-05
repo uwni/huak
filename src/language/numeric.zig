@@ -8,39 +8,49 @@ const units = types.units;
 pub const NumericError = error{ Overflow, DivisionByZero, NonFinite };
 pub const ValueError = NumericError || units.Error || error{TypeMismatch};
 
-pub fn makePair(x: Value, y: Value) ValueError!Value {
-    var a = try types.asQuantity(x);
-    var b = try types.asQuantity(y);
-    _ = try a.checked();
-    _ = try b.checked();
-    // An unqualified zero can be an axis origin in any dimensional vector.
-    if (!a.dimension.eql(b.dimension)) {
-        if (a.dimension.eql(.scalar) and a.value == 0) a.dimension = b.dimension else if (b.dimension.eql(.scalar) and b.value == 0) b.dimension = a.dimension else return error.DimensionMismatch;
+pub fn makeVector(comptime size: usize, coordinates: [size]Value) ValueError!Value {
+    var dimension: ?units.Dimension = null;
+    var components: [size]f64 = undefined;
+    for (coordinates, &components) |value, *component| {
+        const q = try (try types.asQuantity(value)).checked();
+        component.* = q.value;
+        if (q.value == 0 and q.dimension.eql(.scalar)) continue;
+        if (dimension) |d| if (!d.eql(q.dimension)) return error.DimensionMismatch;
+        dimension = q.dimension;
     }
-    return .{ .pair = .{ .x = a.value, .y = b.value, .dimension = a.dimension } };
+    const d = dimension orelse units.Dimension.scalar;
+    return if (size == 2) .{ .vec2 = .{ .x = components[0], .y = components[1], .dimension = d } } else .{ .vec3 = .{ .x = components[0], .y = components[1], .z = components[2], .dimension = d } };
+}
+
+pub fn makeVec2(x: Value, y: Value) ValueError!Value {
+    return makeVector(2, .{ x, y });
 }
 
 pub fn valueArithmetic(op: Op, left: Value, right: Value) ValueError!Value {
-    if (left == .pair or right == .pair) {
-        if (left == .pair and right == .pair) {
-            if (op != .add and op != .subtract) return error.TypeMismatch;
-            const a = left.pair;
-            const b = right.pair;
-            if (!a.dimension.eql(b.dimension)) return error.DimensionMismatch;
-            const result: types.Pair = .{
-                .x = try floatArithmetic(op, a.x, b.x),
-                .y = try floatArithmetic(op, a.y, b.y),
-                .dimension = a.dimension,
-            };
-            return .{ .pair = result };
+    inline for (.{ "vec2", "vec3" }) |name| {
+        const tag = @field(std.meta.Tag(Value), name);
+        if (left == tag or right == tag) {
+            const both = left == tag and right == tag;
+            var result = @field(if (left == tag) left else right, name);
+            if (both) {
+                if (op != .add and op != .subtract) return error.TypeMismatch;
+                const other = @field(right, name);
+                if (!result.dimension.eql(other.dimension)) return error.DimensionMismatch;
+                inline for (.{ "x", "y", "z" }) |axis| if (@hasField(@TypeOf(result), axis)) {
+                    @field(result, axis) = try floatArithmetic(op, @field(result, axis), @field(other, axis));
+                };
+            } else {
+                if (op != .multiply and !(left == tag and op == .divide)) return error.TypeMismatch;
+                const scalar = try types.asQuantity(if (left == tag) right else left);
+                const dimension = result.dimension;
+                inline for (.{ "x", "y", "z" }) |axis| if (@hasField(@TypeOf(result), axis)) {
+                    const q = try units.arithmetic(if (op == .divide) .divide else .multiply, .{ .value = @field(result, axis), .dimension = dimension }, scalar);
+                    @field(result, axis) = q.value;
+                    result.dimension = q.dimension;
+                };
+            }
+            return @unionInit(Value, name, result);
         }
-        if (op != .multiply and !(left == .pair and op == .divide)) return error.TypeMismatch;
-        const p = if (left == .pair) left.pair else right.pair;
-        const scalar = try types.asQuantity(if (left == .pair) right else left);
-        const operation: units.Arithmetic = if (op == .divide) .divide else .multiply;
-        const x = try units.arithmetic(operation, .{ .value = p.x, .dimension = p.dimension }, scalar);
-        const y = try units.arithmetic(operation, .{ .value = p.y, .dimension = p.dimension }, scalar);
-        return .{ .pair = .{ .x = x.value, .y = y.value, .dimension = x.dimension } };
     }
     if (left == .int and right == .int and op != .divide and op != .power) {
         return .{ .int = try switch (op) {
@@ -145,15 +155,15 @@ test "shared dimensional arithmetic retains vectors quantities and unit ratios" 
     const centimetre: Value = .{ .quantity = try units.applyUnit(1, .cm) };
     const millimetre: Value = .{ .quantity = try units.applyUnit(1, .mm) };
     try std.testing.expectEqual(@as(f64, 10), (try valueArithmetic(.divide, centimetre, millimetre)).number);
-    const vector = (try makePair(.{ .int = 0 }, centimetre)).pair;
+    const vector = (try makeVec2(.{ .int = 0 }, centimetre)).vec2;
     try std.testing.expect(vector.dimension.eql(.distance));
-    const scaled = (try valueArithmetic(.multiply, .{ .pair = vector }, centimetre)).pair;
+    const scaled = (try valueArithmetic(.multiply, .{ .vec2 = vector }, centimetre)).vec2;
     try std.testing.expectEqual(units.Dimension{ .length = 2 }, scaled.dimension);
     try std.testing.expectEqual(@as(f64, 100), scaled.y);
-    const normalized = (try valueArithmetic(.divide, .{ .pair = vector }, centimetre)).pair;
+    const normalized = (try valueArithmetic(.divide, .{ .vec2 = vector }, centimetre)).vec2;
     try std.testing.expect(normalized.dimension.eql(.scalar));
     try std.testing.expectEqual(@as(f64, 1), normalized.y);
-    try std.testing.expectError(error.DimensionMismatch, makePair(.{ .int = 1 }, centimetre));
+    try std.testing.expectError(error.DimensionMismatch, makeVec2(.{ .int = 1 }, centimetre));
     try std.testing.expectError(error.DimensionMismatch, valueArithmetic(.add, centimetre, .{ .int = 1 }));
     try std.testing.expectError(error.DivisionByZero, valueArithmetic(.divide, centimetre, .{ .int = 0 }));
 }

@@ -6,12 +6,12 @@ import "options.huak" as opt
 // Coordinates have distinct, fixed fields. The existing kind dispatch remains
 // ordinary library code; Huak does not need a tagged-union language feature.
 export struct GridCoordinate
-    value:pair
+    value:vec2
     kind:string = "grid"
 end
 
 export struct AbsoluteCoordinate
-    position:pair
+    position:vec2
     kind:string = "absolute"
 end
 
@@ -23,7 +23,7 @@ end
 
 export struct RelativeCoordinate
     origin:any
-    delta:pair
+    delta:vec2
     kind:string = "relative"
 end
 
@@ -73,7 +73,7 @@ export fn grid(x:float, y:float) -> GridCoordinate
     return GridCoordinate(value: (x, y))
 end
 
-export fn absolute(position:pair) -> AbsoluteCoordinate
+export fn absolute(position:vec2) -> AbsoluteCoordinate
     return AbsoluteCoordinate(position: position)
 end
 
@@ -82,7 +82,7 @@ export fn named(name:string, anchor:string = "center") -> NamedCoordinate
     return NamedCoordinate(name: name, anchor: anchor)
 end
 
-export fn relative(origin:any, delta:pair) -> RelativeCoordinate
+export fn relative(origin:any, delta:vec2) -> RelativeCoordinate
     return RelativeCoordinate(origin: origin, delta: delta)
 end
 
@@ -108,7 +108,7 @@ export fn shift(origin:any, direction:string, distance:length = 6pt) -> Relative
         "dl": (-1, -1), "ld": (-1, -1), "sw": (-1, -1), "ws": (-1, -1), "southwest": (-1, -1), "south-west": (-1, -1),
     }
     assert(dict_contains(directions, direction), "unknown direction shorthand: " + direction)
-    delta:pair := directions[direction]
+    delta:vec2 := directions[direction]
     return relative(origin, (delta.x*distance, delta.y*distance))
 end
 

@@ -136,10 +136,10 @@ test "mapping workers share immutable measures and reject callbacks mutating sha
             \\import object.draw
             \\guide:=measure(path((0pt,0pt),(2pt,0pt)))
             \\shared:=picture(10pt,10pt)
-            \\fn position(p:pair,m:measure)->pair
+            \\fn position(p:vec2,m:measure)->vec2
             \\    {s}
             \\    sample:=sample_at_fraction(m,0.5)
-            \\    origin:pair:=sample[1]
+            \\    origin:vec2:=sample[1]
             \\    return p+origin
             \\end
             \\fn figure()->picture
@@ -1109,7 +1109,7 @@ test "directional envelope keeps captured paths pens and builder results safe fo
         \\import paint.{rgb, translate, bezier, fill, picture};import pen.pensquare;import paint.envelope as side
         \\shared_curve:=bezier((5,10),(20,70),(70,0),(90,60))
         \\shared_nib:=pensquare(4pt)
-        \\fn figure(offset:pair)->picture
+        \\fn figure(offset:vec2)->picture
         \\    edge:=envelope of shared_curve with shared_nib
         \\    p:=picture(130,110)
         \\    object.append(p, object.fill(edge, rgb(0.2,0.4,0.7), translate(offset)))

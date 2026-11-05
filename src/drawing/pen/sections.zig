@@ -14,7 +14,6 @@ const Allocator = std.mem.Allocator;
 /// interval is expressed as two ranges at the contour seam. Nonstationary
 /// contours require begin < end; zero-time contour stamps may use equality.
 pub const Range = struct { contour: usize, begin: f64, end: f64 };
-const Contour = struct { begin: f64, end: f64 };
 const Piece = struct { geometry: prep.Piece, source: dash.SourceSpan };
 const Pieces = std.MultiArrayList(Piece);
 const Run = struct { first: usize, end: usize, closed: bool };
@@ -30,44 +29,11 @@ pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, 
     if (paint.motion != null) return error.UnsupportedMotionSections;
     if (ranges.len > options.max_segments or source.segments.items.len > options.max_segments *| 2 +| 1) return error.StrokeWorkLimit;
     {
-        var contours: std.ArrayList(Contour) = .empty;
-        defer contours.deinit(allocator);
-        var time: f64 = 0;
-        var current: ?g.Point = null;
-        var start: ?g.Point = null;
-        for (source.segments.items) |segment| {
-            switch (segment) {
-                .move => |point| {
-                    if (!point.isFinite()) return error.NonFinite;
-                    try contours.append(allocator, .{ .begin = time, .end = time });
-                    current = point;
-                    start = point;
-                },
-                .line, .cubic => {
-                    if (current == null) return error.InvalidPath;
-                    if (segment == .line) {
-                        if (!segment.line.isFinite()) return error.NonFinite;
-                        current = segment.line;
-                    } else {
-                        const controls = segment.cubic;
-                        if (!controls.c1.isFinite() or !controls.c2.isFinite() or !controls.end.isFinite()) return error.NonFinite;
-                        current = controls.end;
-                    }
-                    time += 1;
-                    contours.items[contours.items.len - 1].end = time;
-                },
-                .close => {
-                    if (current == null or start == null) return error.InvalidPath;
-                    if (!same(current.?, start.?)) time += 1;
-                    contours.items[contours.items.len - 1].end = time;
-                    current = null;
-                    start = null;
-                },
-            }
-        }
+        const contours = try source.contourRanges(allocator);
+        defer allocator.free(contours);
         for (ranges) |range| {
-            if (range.contour >= contours.items.len or !std.math.isFinite(range.begin) or !std.math.isFinite(range.end)) return error.InvalidSection;
-            const contour = contours.items[range.contour];
+            if (range.contour >= contours.len or !std.math.isFinite(range.begin) or !std.math.isFinite(range.end)) return error.InvalidSection;
+            const contour = contours[range.contour];
             if (range.begin < contour.begin or range.end > contour.end or range.begin > range.end or (range.begin == range.end and contour.begin != contour.end)) return error.InvalidSection;
         }
     }
@@ -111,7 +77,7 @@ pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, 
                     .close => start.?,
                     else => unreachable,
                 };
-                if (segment != .close or !same(current.?, point)) {
+                if (segment != .close or !current.?.eql(point)) {
                     const curve = if (segment == .cubic) g.Cubic{ .p0 = current.?, .p1 = segment.cubic.c1, .p2 = segment.cubic.c2, .p3 = point } else g.Cubic{ .p0 = current.?, .p1 = current.?, .p2 = point, .p3 = point };
                     if (pieces.len - run_first >= settings.max_segments) return error.StrokeWorkLimit;
                     try pieces.append(allocator, .{ .geometry = .{ .curve = curve, .cubic = segment == .cubic }, .source = span });
@@ -254,10 +220,6 @@ fn neighbor(pieces: []const prep.Piece, index: usize, forward: bool, closed: boo
         if (!prep.stationary(pieces[current].curve)) return pieces[current];
     }
     return null;
-}
-
-fn same(a: g.Point, b: g.Point) bool {
-    return a.x == b.x and a.y == b.y;
 }
 
 test "source stroke sections retain real caps and do not cap artificial boundaries" {

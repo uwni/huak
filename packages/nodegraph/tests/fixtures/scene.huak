@@ -5,7 +5,7 @@ import "../../nodegraph.huak" as nodegraph
 import "../../nodegraph.huak".{scene, geometry, anchor, place, link, group, matrix, anchor_node, route_edge, finish, grid, edge}
 import assertions.assert
 
-fn near(a:pair, b:pair)
+fn near(a:vec2, b:vec2)
     assert(norm(a-b) < 0.002pt, "scene anchor mismatch")
 end
 

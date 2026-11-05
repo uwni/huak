@@ -24,14 +24,14 @@ export struct Panel
     rulers_by_side:dict = {}
     x_piece:any = false
     y_piece:any = false
-    origin:pair = (0pt,0pt)
-    size:pair = (1pt,1pt)
+    origin:vec2 = (0pt,0pt)
+    size:vec2 = (1pt,1pt)
     left:length = 0pt
     right:length = 0pt
     top:length = 0pt
     bottom:length = 0pt
     legends:list = []
-    legend_size:pair = (0pt,0pt)
+    legend_size:vec2 = (0pt,0pt)
     color_layer:any = false
     color_ticks:list = []
     color_labels:list = []
@@ -100,7 +100,7 @@ fn layers_for(layers:list, ax:Axis, dimension:string, side:string) -> list
     return selected
 end
 
-// Statistics that combine layers (grouping and stacking) are local to a pair
+// Statistics that combine layers (grouping and stacking) are local to a vec2
 // of axes. Put their primitives back in insertion order before painting.
 fn prepare_layers(ax:Axis, sides:dict) -> list
     groups := {}
@@ -235,7 +235,7 @@ fn shared_scale(fig:Figure, panels:list, panel:Panel, dimension:string, groups:l
     return scales.resolve(values,kind,limits,reference.scale.reversed)
 end
 
-export fn point(panel:Panel, x:any, y:any) -> pair
+export fn point(panel:Panel, x:any, y:any) -> vec2
     result := affine_point(panel,x,y)
     for dim in ["x","y"] do
         partition := panel.rulers_by_side[primary(panel.source,dim)].partition
@@ -256,7 +256,7 @@ end
 
 // Project the whole geometry onto the affine extension of this tile. Native
 // clipping then finds the actual crossings, including lines with both ends outside.
-fn affine_point(panel:Panel, x:any, y:any) -> pair
+fn affine_point(panel:Panel, x:any, y:any) -> vec2
     return panel.origin+(panel.size.x*scales.coordinate(panel.x,x),panel.size.y*scales.coordinate(panel.y,y))
 end
 
@@ -272,11 +272,11 @@ fn raw_value(scale:scales.Scale, item:Layer, value:float, dimension:string, row:
     return value
 end
 
-fn raw_point(panel:Panel, item:Layer, x:float, y:float, row:int) -> pair
+fn raw_point(panel:Panel, item:Layer, x:float, y:float, row:int) -> vec2
     return panel.origin+(panel.size.x*scales.numeric_coordinate(panel.x,raw_value(panel.x,item,x,"x",row)),panel.size.y*scales.numeric_coordinate(panel.y,raw_value(panel.y,item,y,"y",row)))
 end
 
-fn measure(panel:Panel, fig:Figure, available:pair)
+fn measure(panel:Panel, fig:Figure, available:vec2)
     opts := panel.source.options
     size:length := get(opts,"font_size",get(fig.options,"font_size",9pt))
     panel.left = 10pt; panel.right = 10pt; panel.bottom = 10pt; panel.top = 10pt
@@ -427,7 +427,7 @@ export fn layout(fig:Figure, panels:list)
     end
 end
 
-fn segment(dst:picture, a:pair, b:pair, ink:pen)
+fn segment(dst:picture, a:vec2, b:vec2, ink:pen)
     append(dst,draw(path(a,b),ink))
 end
 
@@ -507,7 +507,7 @@ end
 
 // A point centered in an omitted interval must not leave the edge of a
 // marker or a text label in a neighboring retained interval.
-fn retained(panel:Panel, p:pair) -> bool
+fn retained(panel:Panel, p:vec2) -> bool
     if panel.x_piece!=false then
         if panel.x_piece.cut_before and p.x<panel.origin.x-1e-8pt then return false end
         if panel.x_piece.cut_after and p.x>panel.origin.x+panel.size.x+1e-8pt then return false end

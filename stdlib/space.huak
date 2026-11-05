@@ -1,0 +1,130 @@
+// Script-built boundary geometry. Projection preserves the source list index.
+import projection.{project_scene, model_shape as Shape}
+import geometry.{compound, rectangle}
+import object.region
+import assertions.assert
+
+export Shape
+
+export fn torus(major:length, minor:length) -> shape
+    return Shape("torus", [major, minor])
+end
+
+export fn sphere(radius:length) -> shape
+    return Shape("sphere", [radius])
+end
+
+export fn cylinder(radius:length, height:length) -> shape
+    return Shape("cylinder", [radius, height])
+end
+
+export fn cone(base:length, height:length, top:length=0pt) -> shape
+    return Shape("cone", [base, top, height])
+end
+
+export fn on_surface(surface:shape, uv:path, face:int=0) -> shape
+    return Shape("surface_curve", [surface, uv, face])
+end
+
+export struct Plane
+    origin:vec3 = (0,0,0)
+    u:vec3 = (1,0,0)
+    v:vec3 = (0,1,0)
+end
+
+export fn profile(curve:path, plane:Plane=Plane()) -> shape
+    return Shape("profile", [curve, plane.origin, plane.u, plane.v])
+end
+
+export fn face(profile:any, plane:Plane=Plane()) -> shape
+    return Shape("face", [profile, plane.origin, plane.u, plane.v])
+end
+
+export fn extrude(profile:any, displacement:vec3, plane:Plane=Plane()) -> shape
+    return Shape("extrude", [profile, plane.origin, plane.u, plane.v, displacement])
+end
+
+// The default meridian uses radius and height as its two coordinates.
+export fn revolve(profile:any, angle:angle=360deg, axis:vec3=(0,0,1), center:vec3=(0,0,0), plane:Plane=Plane(v:(0,0,1))) -> shape
+    return Shape("revolve", [profile, plane.origin, plane.u, plane.v, center, axis, angle])
+end
+
+export fn box(width:length, depth:length, height:length) -> shape
+    assert(width > 0pt and depth > 0pt and height > 0pt, "box dimensions must be positive")
+    return extrude(rectangle((0pt,0pt),width,depth),(0pt,0pt,height))
+end
+
+export fn sweep(profile:any, guide:any) -> shape
+    return Shape("sweep",[profile,guide])
+end
+
+export fn loft(sections:list, solid:bool=false) -> shape
+    if solid then return Shape("solid_loft",sections) end
+    return Shape("loft",sections)
+end
+
+export struct Camera
+    azimuth:angle
+    elevation:angle
+    focus:length
+end
+
+export fn orthographic(azimuth:angle=35deg, elevation:angle=30deg) -> Camera
+    return Camera(azimuth, elevation, 0pt)
+end
+
+export fn perspective(azimuth:angle, elevation:angle, focus:length) -> Camera
+    assert(focus > 0pt, "perspective focus must be positive")
+    return Camera(azimuth, elevation, focus)
+end
+
+export struct Line
+    curve:path
+    source:int
+    kind:string
+    visible:bool
+    other_source:int = -1
+end
+
+export struct VisibleFace
+    region:path
+    source:int
+    face:int
+end
+
+export struct Layer
+    faces:list = []
+    lines:list = []
+end
+
+export struct Projection
+    lines:list
+    visible_faces:list
+    layers:list
+end
+
+export fn silhouette(projection:Projection) -> path
+    // Visible faces tile the image. Normalize their shared borders in one pass.
+    paths := []
+    for face in projection.visible_faces do paths += [face.region] end
+    return region(compound(paths))
+end
+
+export fn project(shapes:list, view:Camera, tolerance:length=0.01pt, faces:bool=true) -> Projection
+    lines := []
+    result := project_scene(shapes, view.azimuth, view.elevation, view.focus, tolerance, faces)
+    layers := []
+    count:int := result[2]
+    for i in 0:count-1 do layers += [Layer()] end
+    for row in result[0] do
+        line := Line(row[0], row[1], row[2], row[3] == 0, row[4])
+        lines += [line]
+        if faces then layers[count-1-row[3]].lines += [line] end
+    end
+    for row in result[1] do
+        layers[count-1-row[3]].faces += [VisibleFace(row[0], row[1], row[2])]
+    end
+    front := []
+    if count > 0 then front = layers[count-1].faces end
+    return Projection(lines, front, layers)
+end

@@ -24,7 +24,7 @@ export struct PaintedObject
 end
 
 struct LabelPlacement
-    point:pair
+    point:vec2
     angle:angle
     mask:path
 end
@@ -39,7 +39,7 @@ end
 export fn node_object(item:layout.ResolvedNode) -> PaintedObject
     options:dict := item.options
     result := picture()
-    center:pair := item.center
+    center:vec2 := item.center
     outline:path := item.outline
     ink:color := opt.get(options, "stroke", rgb(0, 0, 0))
     width:length := opt.get(options, "thickness", 0pt)
@@ -52,7 +52,7 @@ export fn node_object(item:layout.ResolvedNode) -> PaintedObject
             extent:length := item.size.x
             if side == "left" or side == "right" then extent = item.size.y end
             glyph := shapes.stretched_glyph(kind, extent, side)
-            glyph_center:pair := center
+            glyph_center:vec2 := center
             if side == "bottom" then glyph_center = (center.x, center.y-item.size.y/2-glyph.height/2) end
             if side == "top" then glyph_center = (center.x, center.y+item.size.y/2+glyph.height/2) end
             if side == "left" then glyph_center = (center.x-item.size.x/2-glyph.width/2, center.y) end
@@ -68,7 +68,7 @@ export fn node_object(item:layout.ResolvedNode) -> PaintedObject
                     if len(stroke_path) > 0 then object.append(result, draw(stroke_path, pen(ink, width))) end
                 end
                 if kind == "cylinder" then
-                    size:pair := item.size
+                    size:vec2 := item.size
                     shape_options:dict := opt.get(options, "shape_options", {})
                     tilt:angle := opt.get(shape_options, "tilt", 0deg)
                     rim := min(size.y/8, size.x/8)
@@ -100,7 +100,7 @@ fn label_position(curve:path, body:text, options:dict) -> LabelPlacement
     position := curves.position(curve, opt.get(options, "label_pos", 0.5))
     if opt.has(options, "label_distance") then
         sample := sample_at_length(curve, opt.get(options, "label_distance", 0pt))
-        sample_tangent:pair := sample[2]
+        sample_tangent:vec2 := sample[2]
         assert(norm(sample_tangent) > 0, "route position has zero tangent")
         position = curves.RoutePosition(point: sample[1], tangent: sample_tangent)
     end
@@ -109,8 +109,8 @@ fn label_position(curve:path, body:text, options:dict) -> LabelPlacement
         assert(time >= 0 and time <= len(curve), "label segment position lies outside edge")
         position = curves.RoutePosition(point: point_at(curve, time), tangent: unit(tangent_at(curve, time)))
     end
-    point:pair := position.point
-    tangent:pair := position.tangent
+    point:vec2 := position.point
+    tangent:vec2 := position.tangent
     normal := (-tangent.y, tangent.x)
     angle:angle := opt.get(options, "label_angle", 0deg)
     if opt.get(options, "label_tangent", false) then angle = angle+atan2(tangent.y, tangent.x) end
@@ -147,7 +147,7 @@ end
 
 // Connect at the base of a terminal mask, before entering the head. Like
 // Asymptote's drawarrow, the shaft does not continue through the head to its tip.
-fn attachment_times(curve:path, tail:path, head:path) -> pair
+fn attachment_times(curve:path, tail:path, head:path) -> vec2
     if len(tail) == 0 and len(head) == 0 then return (0, len(curve)) end
     first := 0.0
     last := float(len(curve))

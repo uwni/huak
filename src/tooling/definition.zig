@@ -340,8 +340,9 @@ const Query = struct {
             .dict => |entries| for (entries) |entry| {
                 if (self.contains(entry.value.span)) return self.expression(entry.value);
             },
-            .pair => |pair| {
+            .vector => |pair| {
                 if (self.contains(pair.x.span)) return self.expression(pair.x);
+                if (pair.z) |z| if (self.contains(z.span)) return self.expression(z);
                 return self.expression(pair.y);
             },
             .unary => |unary| return self.expression(unary.operand),
@@ -895,7 +896,7 @@ fn contextExpression(expr_: *const ast.Expr, offset: usize) ?*const ast.Expr {
         .dict => |entries| for (entries) |entry| {
             if (contextExpression(entry.value, offset)) |context| return context;
         },
-        .pair => |pair| return contextExpression(pair.x, offset) orelse contextExpression(pair.y, offset),
+        .vector => |pair| return contextExpression(pair.x, offset) orelse contextExpression(pair.y, offset) orelse (if (pair.z) |z| contextExpression(z, offset) else null),
         .unary => |unary| return contextExpression(unary.operand, offset),
         .quantity => |quantity| return contextExpression(quantity.operand, offset),
         .binary => |binary| return contextExpression(binary.left, offset) orelse contextExpression(binary.right, offset),

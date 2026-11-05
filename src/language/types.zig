@@ -14,7 +14,7 @@ pub const Type = enum(u32) {
     scalar,
     boolean,
     string,
-    pair,
+    vec2,
     list,
     path,
     color,
@@ -30,6 +30,11 @@ pub const Type = enum(u32) {
     function,
     measure,
     object,
+    vec3,
+    /// Builtin argument constraint accepting either vector dimension.
+    vector,
+    shape,
+    path_or_shape,
     _,
 
     pub const record_base: u32 = 0x10000;
@@ -47,6 +52,7 @@ pub const Type = enum(u32) {
     }
 
     pub fn name(self: Type) []const u8 {
+        if (self == .path_or_shape) return "path | shape";
         const info = @typeInfo(Type).@"enum";
         inline for (info.field_names, info.field_values) |field_name, value| {
             if (@backingInt(self) == value) return field_name;
@@ -55,6 +61,7 @@ pub const Type = enum(u32) {
     }
 
     pub fn parse(text: []const u8) ?Type {
+        if (std.mem.eql(u8, text, "vector") or std.mem.eql(u8, text, "path_or_shape")) return null;
         if (std.mem.eql(u8, text, "float") or std.mem.eql(u8, text, "numeric")) return .number;
         if (std.mem.eql(u8, text, "bool")) return .boolean;
         if (std.mem.eql(u8, text, "void")) return .unit;
@@ -65,8 +72,13 @@ pub const Type = enum(u32) {
     pub fn fieldType(self: Type, field: []const u8) ?Type {
         const Field = struct { owner: Type, name: []const u8, kind: Type };
         const fields = [_]Field{
-            .{ .owner = .pair, .name = "x", .kind = .scalar },
-            .{ .owner = .pair, .name = "y", .kind = .scalar },
+            .{ .owner = .shape, .name = "kind", .kind = .string },
+            .{ .owner = .shape, .name = "arguments", .kind = .list },
+            .{ .owner = .vec2, .name = "x", .kind = .scalar },
+            .{ .owner = .vec2, .name = "y", .kind = .scalar },
+            .{ .owner = .vec3, .name = "x", .kind = .scalar },
+            .{ .owner = .vec3, .name = "y", .kind = .scalar },
+            .{ .owner = .vec3, .name = "z", .kind = .scalar },
             .{ .owner = .text, .name = "width", .kind = .length },
             .{ .owner = .text, .name = "height", .kind = .length },
             .{ .owner = .text, .name = "baseline", .kind = .length },
@@ -93,12 +105,18 @@ pub const Type = enum(u32) {
 
     pub fn accepts(expected: Type, actual: Type) bool {
         return expected == .any or actual == .any or expected == actual or
+            (expected == .vector and actual.isVector()) or
+            (expected == .path_or_shape and (actual == .path or actual == .shape)) or
+            (actual == .path_or_shape and (expected == .path or expected == .shape)) or
             (expected == .object and actual == .picture) or
             (expected == .number and actual == .int) or
             (expected == .scalar and actual.isScalar()) or
             (actual == .scalar and expected.isScalar()) or
             (expected == .quantity and (actual == .length or actual == .angle)) or
             ((expected == .length or expected == .angle) and (actual == .number or actual == .int));
+    }
+    pub fn isVector(self: Type) bool {
+        return self == .vec2 or self == .vec3;
     }
     pub fn isScalar(self: Type) bool {
         return switch (self) {
@@ -112,27 +130,59 @@ pub const Type = enum(u32) {
     }
 };
 
-pub const Pair = struct {
+pub const Vec2 = struct {
     x: f64,
     y: f64,
     dimension: units.Dimension = .scalar,
-    pub const zero: Pair = .{ .x = 0, .y = 0 };
-    pub fn isFinite(self: Pair) bool {
+    pub const zero: Vec2 = .{ .x = 0, .y = 0 };
+    pub fn isFinite(self: Vec2) bool {
         return std.math.isFinite(self.x) and std.math.isFinite(self.y);
     }
-    pub fn scale(self: Pair, value: f64) Pair {
+    pub fn scale(self: Vec2, value: f64) Vec2 {
         return .{ .x = self.x * value, .y = self.y * value, .dimension = self.dimension };
     }
-    pub fn component(self: Pair, value: f64) Value {
+    pub fn component(self: Vec2, value: f64) Value {
         return fromQuantity(.{ .value = value, .dimension = self.dimension });
     }
-    pub fn nativePoint(self: Pair) units.Error!g.Point {
+    pub fn nativePoint(self: Vec2) units.Error!g.Point {
         if (!self.isFinite()) return error.NonFinite;
         if (self.dimension.eql(.scalar)) return .{ .x = self.x, .y = self.y };
         return .{ .x = try units.toPoints(.{ .value = self.x, .dimension = self.dimension }), .y = try units.toPoints(.{ .value = self.y, .dimension = self.dimension }) };
     }
-    pub fn fromPoint(point: g.Point) Pair {
+    pub fn fromPoint(point: g.Point) Vec2 {
         return .{ .x = units.fromPoints(point.x).value, .y = units.fromPoints(point.y).value, .dimension = .distance };
+    }
+};
+
+pub const Vec3 = struct {
+    x: f64,
+    y: f64,
+    z: f64,
+    dimension: units.Dimension = .scalar,
+
+    pub fn isFinite(self: Vec3) bool {
+        return std.math.isFinite(self.x) and std.math.isFinite(self.y) and std.math.isFinite(self.z);
+    }
+    pub fn scale(self: Vec3, factor: f64) Vec3 {
+        return .{ .x = self.x * factor, .y = self.y * factor, .z = self.z * factor, .dimension = self.dimension };
+    }
+    pub fn component(self: Vec3, value: f64) Value {
+        return fromQuantity(.{ .value = value, .dimension = self.dimension });
+    }
+    pub fn points(self: Vec3) units.Error![3]f64 {
+        if (!self.isFinite()) return error.NonFinite;
+        if (self.dimension.eql(.scalar)) return .{ self.x, self.y, self.z };
+        var result: [3]f64 = undefined;
+        for (&result, [3]f64{ self.x, self.y, self.z }) |*v, c| v.* = try units.toPoints(.{ .value = c, .dimension = self.dimension });
+        return result;
+    }
+    pub fn fromPoints(values: [3]f64, dim: units.Dimension) !Vec3 {
+        var v = values;
+        for (&v) |*c| {
+            if (!std.math.isFinite(c.*)) return error.NonFinite;
+            if (dim.eql(.distance)) c.* = units.fromPoints(c.*).value;
+        }
+        return .{ .x = v[0], .y = v[1], .z = v[2], .dimension = dim };
     }
 };
 
@@ -202,13 +252,27 @@ pub const Value = union(enum) {
     quantity: units.Quantity,
     boolean: bool,
     string: []const u8,
-    pair: Pair,
+    vec2: Vec2,
+    vec3: Vec3,
     list: List,
     dict: *Dict,
     record: *Record,
     handle: Handle,
     function: Function,
     object: Object,
+
+    pub fn vectorField(self: Value, name: []const u8) ?Value {
+        switch (self) {
+            inline .vec2, .vec3 => |v| {
+                inline for (.{ "x", "y", "z" }) |axis| {
+                    if (@hasField(@TypeOf(v), axis) and std.mem.eql(u8, name, axis))
+                        return v.component(@field(v, axis));
+                }
+            },
+            else => {},
+        }
+        return null;
+    }
 
     pub fn valueType(self: Value) Type {
         return switch (self) {
@@ -219,7 +283,8 @@ pub const Value = union(enum) {
             .quantity => |q| if (q.dimension.eql(.distance)) .length else if (q.dimension.eql(.rotation)) .angle else .quantity,
             .boolean => .boolean,
             .string => .string,
-            .pair => .pair,
+            .vec2 => .vec2,
+            .vec3 => .vec3,
             .list => .list,
             .dict => .dict,
             .record => |record_value| record_value.kind,
@@ -245,10 +310,10 @@ pub fn listView(items: []const Value) Value {
 }
 
 test "list storage fits the existing geometry value payload" {
-    try std.testing.expect(@sizeOf(Object) <= @sizeOf(Pair));
-    try std.testing.expect(@sizeOf(List) <= @sizeOf(Pair));
-    try std.testing.expect(@sizeOf(*Dict) <= @sizeOf(Pair));
-    try std.testing.expect(@sizeOf(*Record) <= @sizeOf(Pair));
+    try std.testing.expect(@sizeOf(Object) <= @sizeOf(Vec2));
+    try std.testing.expect(@sizeOf(List) <= @sizeOf(Vec2));
+    try std.testing.expect(@sizeOf(*Dict) <= @sizeOf(Vec2));
+    try std.testing.expect(@sizeOf(*Record) <= @sizeOf(Vec2));
 }
 
 test "nominal struct types preserve builtin IDs and safe names" {

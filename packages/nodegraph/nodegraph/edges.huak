@@ -78,13 +78,13 @@ fn snapped(curve:path, coordinate:any, objects:layout.Geometry, from_start:bool)
     return selected
 end
 
-fn defocused(point:pair, coordinate:any, objects:layout.Geometry, angle:angle) -> pair
+fn defocused(point:vec2, coordinate:any, objects:layout.Geometry, angle:angle) -> vec2
     if coordinate.kind != "named" then return point end
     node := layout.find(objects, coordinate.name)
     if node.kind == "edge" or coordinate.anchor != "center" or not opt.get(node.options, "snap", true) then return point end
     defocus:float := opt.get(node.options, "defocus", 0)
     if defocus == 0 then return point end
-    size:pair := node.size
+    size:vec2 := node.size
     aspect:float := size.x/size.y
     mu := pow(aspect, defocus)
     dx := max(0pt, size.x/2*(1-1/mu))*cos(angle)

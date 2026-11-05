@@ -1,7 +1,8 @@
 const std = @import("std");
+const space_contracts = [_][]const u8{ "visibility", "modeling" };
 const Translator = @import("translate_c").Translator;
 const Import = std.Build.Module.Import;
-const Configuration = struct { target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, library: std.Build.LazyPath, use_llvm: ?bool };
+const Configuration = struct { target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, library: std.Build.LazyPath, use_llvm: ?bool, occt: ?[]const u8 };
 const Libraries = struct { binding: Import, native: Import, huak: Import, tooling: Import, options: Import, xml: *std.Build.Module };
 const EditorTools = struct { formatter: *std.Build.Step.Compile, language_server: *std.Build.Step.Compile };
 const Scenes = struct { sample: Import, drawing: Import, animation: Import, drawing_workflow: Import, typst_workflow: Import };
@@ -17,8 +18,11 @@ pub fn build(b: *std.Build) void {
     };
     // Zig 0.17's x86_64 ELF backend emits unresolved debug references for C
     // function types; LLVM correctly keeps dynamically bound symbols unlinked.
-    const config: Configuration = .{ .target = target, .optimize = optimize, .library = library, .use_llvm = if (target.result.os.tag == .linux and target.result.cpu.arch == .x86_64) true else null };
+    const config: Configuration = .{ .target = target, .optimize = optimize, .library = library, .use_llvm = if (target.result.os.tag == .linux and target.result.cpu.arch == .x86_64) true else null, .occt = b.option([]const u8, "occt", "OCCT installation prefix for native 3D projection") };
+
     const libraries = addLibraries(b, config);
+    if (config.occt != null)
+        b.installDirectory(.{ .source_dir = b.path("src/drawing/space/licenses"), .install_dir = .prefix, .install_subdir = "share/licenses/huak/occt" });
     const cli = addCli(b, config, libraries);
     const editors = addEditorTools(b, config, libraries);
     const scenes = sceneModules(b, config, libraries);
@@ -60,7 +64,7 @@ const EngineModules = struct {
     xml: *std.Build.Module,
 };
 
-fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, comptime public: bool) EngineModules {
+fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, comptime public: bool, occt: ?[]const u8) EngineModules {
     const c_api: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("libtypst/include/libtypst.h"), .target = target, .optimize = optimize });
     const binding = engineModule(b, public, "typst_binding", .{ .root_source_file = b.path("src/typst/binding.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{.{ .name = "typst_c", .module = c_api.mod }} });
     const native = engineModule(b, public, "libtypst", .{ .root_source_file = b.path("src/typst/library.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{binding} });
@@ -68,6 +72,7 @@ fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const csv: Import = .{ .name = "csvzero", .module = b.dependency("csvzero", .{ .target = target, .optimize = optimize }).module("csvzero") };
     const standard_library: Import = .{ .name = "huak_std", .module = b.createModule(.{ .root_source_file = b.path("stdlib/catalog.zig"), .target = target, .optimize = optimize }) };
     const engine = engineModule(b, public, "huak", .{ .root_source_file = b.path("src/huak.zig"), .target = target, .optimize = optimize, .imports = &.{ native, .{ .name = "xml_parser", .module = xml }, standard_library, csv } });
+    configureSpace(b, engine.module, target, optimize, occt);
     return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml };
 }
 
@@ -75,8 +80,24 @@ fn engineModule(b: *std.Build, comptime public: bool, name: []const u8, options:
     return .{ .name = name, .module = if (public) b.addModule(name, options) else b.createModule(options) };
 }
 
+fn configureSpace(b: *std.Build, kernel: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, prefix_option: ?[]const u8) void {
+    if (prefix_option) |prefix| {
+        const header: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("src/drawing/space/projection.h"), .target = target, .optimize = optimize });
+        kernel.addImport("space_c", header.mod);
+        if (target.result.os.tag == .wasi)
+            return @import("apps/playground/space_build.zig").link(b, kernel, b.graph.cwdRelativePath(prefix));
+        kernel.addSystemIncludePath(b.graph.cwdRelativePath(b.pathJoin(&.{ prefix, "include", "opencascade" })));
+        kernel.addLibraryPath(b.graph.cwdRelativePath(b.pathJoin(&.{ prefix, "lib" })));
+        kernel.addCSourceFiles(.{ .root = b.path("src/drawing/space"), .files = &.{ "model.cpp", "projection.cpp", "visibility.cpp", "curves.cpp" }, .flags = &.{"-std=c++17"} });
+        kernel.link_libcpp = true;
+        for ([_][]const u8{ "TKOffset", "TKBO", "TKShHealing", "TKHLR", "TKPrim", "TKTopAlgo", "TKBRep", "TKGeomAlgo", "TKGeomBase", "TKG3d", "TKG2d", "TKMath", "TKernel" }) |lib| kernel.linkSystemLibrary(lib, .{});
+    } else {
+        kernel.addAnonymousImport("space_c", .{ .root_source_file = b.path("src/drawing/space/disabled.zig") });
+    }
+}
+
 fn addLibraries(b: *std.Build, config: Configuration) Libraries {
-    const engine = engineModules(b, config.target, config.optimize, true);
+    const engine = engineModules(b, config.target, config.optimize, true, config.occt);
     const tooling = b.addModule("huak_tooling", .{ .root_source_file = b.path("src/tooling.zig"), .target = config.target, .optimize = config.optimize, .link_libc = true, .imports = &.{ engine.native, engine.standard_library, engine.csv } });
     const defaults = b.addOptions();
     if (b.option([]const u8, "runtime-libtypst", "Default library name or path for the installed desktop tools")) |path|
@@ -88,8 +109,9 @@ fn addLibraries(b: *std.Build, config: Configuration) Libraries {
 
 fn addPlayground(b: *std.Build) void {
     const step = b.step("playground", "Build the standalone browser Playground");
-    const target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi });
-    const modules = engineModules(b, target, .ReleaseSmall, false);
+    const occt = b.option([]const u8, "wasm-occt", "Directory containing the optional OCCT WASI kernel and its matching toolchain");
+    const target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .wasi, .cpu_features_add = if (occt != null) std.Target.wasm.featureSet(&.{.exception_handling}) else .empty });
+    const modules = engineModules(b, target, .ReleaseSmall, false, occt);
     const app = b.addExecutable(.{ .name = "huak", .root_module = module(b, target, .ReleaseSmall, "apps/playground/main.zig", &.{ modules.huak, modules.native }), .use_llvm = true });
     const wasi = b.dependency("browser_wasi", .{});
     step.dependOn(&b.addInstallDirectory(.{ .source_dir = wasi.path("dist"), .include_extensions = &.{".js"}, .install_dir = .prefix, .install_subdir = "playground/wasi" }).step);
@@ -103,6 +125,7 @@ fn addPlayground(b: *std.Build) void {
     tests.step.dependOn(&cargo.step);
     tests.stack_size = 8 * 1024 * 1024;
     const check = b.addSystemCommand(&.{"wasmtime"});
+    if (occt != null) check.addArg("-Wexceptions=y");
     check.addArtifactArg(tests);
     b.step("test-playground", "Test SVG and diagnostics through the Wasm entry points").dependOn(&check.step);
     app.root_module.export_symbol_names = &.{ "huak_input", "huak_set_files", "huak_render", "huak_result", "huak_result_len" };
@@ -115,7 +138,10 @@ fn addPlayground(b: *std.Build) void {
     const sources = b.addWriteFiles().addCopyDirectory(b.path("examples"), "examples", .{ .include_extensions = &.{ ".huak", ".csv", ".json" } });
     catalog.addDirectoryArg2(sources, .{});
     const index = catalog.addOutputFileArg2("examples.json", .{});
+    if (occt != null) catalog.addArg("--space");
     tests.root_module.addAnonymousImport("example-catalog", .{ .root_source_file = index });
+    for (space_contracts) |name| tests.root_module.addAnonymousImport(name, .{ .root_source_file = b.path(b.fmt("tests/fixtures/space/{s}.huak", .{name})) });
+    if (occt != null) step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/drawing/space/licenses"), .install_dir = .prefix, .install_subdir = "playground/licenses/occt" }).step);
     step.dependOn(&b.addInstallFile(index, "playground/examples.json").step);
 }
 
@@ -285,6 +311,22 @@ fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, scenes: 
     all_tests.dependOn(&cli_tests.step);
     language_tests.dependOn(&cli_tests.step);
     b.step("test-cli", "Run real CLI processes and verify SVG/PDF output").dependOn(&cli_tests.step);
+    if (config.occt != null) {
+        const space = b.step("test-space", "Test modeling and projected visibility in SVG and PDF");
+        all_tests.dependOn(space);
+        for (space_contracts) |name| {
+            const projection = b.addRunArtifact(cli);
+            projection.addArg("run");
+            projection.addFileArg(b.path(b.fmt("tests/fixtures/space/{s}.huak", .{name})));
+            projection.addArg("--libtypst");
+            projection.addFileArg(config.library);
+            for ([_][]const u8{ "svg", "pdf" }) |extension| {
+                projection.addArg("--output");
+                _ = projection.addOutputFileArg2(b.fmt("{s}.{s}", .{ name, extension }), .{});
+            }
+            space.dependOn(&projection.step);
+        }
+    }
     const editor_options = b.addOptions();
     editor_options.addOptionPath("library_path", config.library);
     editor_options.addOptionPath("formatter_path", editors.formatter.getEmittedBin());

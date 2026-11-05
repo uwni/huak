@@ -1,7 +1,7 @@
 import paint.*
-import geometry.region_intersection
+import geometry.{compound, region_intersection}
 import object.region
-import weave
+import weave.weave
 import assertions.assert
 import geometry.path_crossings
 import math.sqrt
@@ -13,9 +13,11 @@ b := path((50pt, 10pt), (50pt, 90pt))
 
 export automatic := picture(100pt, 100pt)
 default automatic
-weave.drawing weave.context(automatic, gap:4pt) do
-    draw a with red
-    draw b with blue
+drawing automatic do
+    +weave(gap:4pt) do
+        +draw a with red
+        +draw b with blue
+    end
 end
 assert(len(region_intersection(region(automatic), rectangle((44pt, 49pt), 2pt, 2pt))) == 0, "weave clearance must be empty")
 assert(len(region_intersection(region(automatic), rectangle((49pt, 49pt), 2pt, 2pt))) > 0, "over passage must remain")
@@ -23,41 +25,53 @@ assert(len(region_intersection(region(automatic), rectangle((24pt, 49pt), 2pt, 2
 
 export explicit := picture(100pt, 100pt)
 visits := [-1]
-weave.drawing weave.context(explicit, gap:4pt) do
-    draw a with red crossings visits
-    visits[0] = 1
-    draw b with blue crossings [1]
+drawing explicit do
+    +weave(gap:4pt) do
+        +draw a with red crossings visits
+        visits[0] = 1
+        +draw b with blue crossings [1]
+    end
 end
 
 export reversed := picture(100pt, 100pt)
-weave.drawing weave.context(reversed, gap:4pt) do
-    draw a with red crossings [1]
-    draw b with blue crossings [-1]
+drawing reversed do
+    +weave(gap:4pt) do
+        +draw a with red crossings [1]
+        +draw b with blue crossings [-1]
+    end
 end
 assert(len(region_intersection(region(reversed), rectangle((49pt, 44pt), 2pt, 2pt))) == 0)
 assert(len(region_intersection(region(reversed), rectangle((49pt, 49pt), 2pt, 2pt))) > 0)
 
 export self_crossing := picture(100pt, 100pt)
-weave.drawing weave.context(self_crossing, gap:2pt) do
-    draw (10pt,10pt) -- (90pt, 90pt) -- (10pt, 90pt) -- (90pt, 10pt) with red crossings [1, -1]
+drawing self_crossing do
+    +weave(gap:2pt) do
+        +draw (10pt,10pt) -- (90pt, 90pt) -- (10pt, 90pt) -- (90pt, 10pt) with red crossings [1, -1]
+    end
 end
 
 export hopf := picture(100pt, 100pt)
-weave.drawing weave.context(hopf, gap:2pt) do
-    draw circle((40pt, 50pt), 25pt) with red crossings [1, -2]
-    draw circle((60pt, 50pt), 25pt) with blue crossings [-1, 2]
+drawing hopf do
+    +weave(gap:2pt) do
+        +draw circle((40pt, 50pt), 25pt) with red crossings [1, -2]
+        +draw circle((60pt, 50pt), 25pt) with blue crossings [-1, 2]
+    end
 end
 
 export partial_hopf := picture(100pt, 100pt)
-weave.drawing weave.context(partial_hopf, gap:2pt) do
-    draw circle((40pt, 50pt), 25pt) with red crossings [1, -2]
-    draw circle((60pt, 50pt), 25pt) with blue
+drawing partial_hopf do
+    +weave(gap:2pt) do
+        +draw circle((40pt, 50pt), 25pt) with red crossings [1, -2]
+        +draw circle((60pt, 50pt), 25pt) with blue
+    end
 end
 
 export partial_second_hopf := picture(100pt, 100pt)
-weave.drawing weave.context(partial_second_hopf, gap:2pt) do
-    draw circle((40pt, 50pt), 25pt) with red
-    draw circle((60pt, 50pt), 25pt) with blue crossings [-1, 2]
+drawing partial_second_hopf do
+    +weave(gap:2pt) do
+        +draw circle((40pt, 50pt), 25pt) with red
+        +draw circle((60pt, 50pt), 25pt) with blue crossings [-1, 2]
+    end
 end
 
 caption := typ[Hopf link]
@@ -77,12 +91,26 @@ trefoil_curve := closed(ta & tb & tc)
 assert(len(path_crossings([trefoil_curve])) == 3, "ordinary trefoil nodes must not be crossings")
 export trefoil := picture(100pt, 100pt)
 translucent := pen(rgb(0.8, 0.1, 0.1, 0.5), 6pt, "round", "round")
-weave.drawing weave.context(trefoil, gap:2pt) do
-    draw trefoil_curve with translucent crossings [1, -2, 3, -1, 2, -3]
+drawing trefoil do
+    +weave(gap:2pt) do
+        +draw trefoil_curve with translucent crossings [1, -2, 3, -1, 2, -3]
+    end
 end
 
-// Ordinary picture drawing keeps its original immediate behavior and target.
-ordinary := picture(100pt, 100pt)
-drawing ordinary do +draw a end
-assert(len(bounds(ordinary)) == 2)
+// A cut can consume an entire contour, or the entire strand.
+short := path((50pt,49pt), (50pt,51pt))
+covered := weave(gap:0pt) do
+    +draw short
+    +draw a with red
+end
+assert(len(covered.children) == 1)
+remote := path((20pt,10pt), (30pt,10pt))
+partial := weave(gap:0pt) do
+    +draw compound([remote, short]) with false
+    +draw a with red
+end
+assert(len(partial.children) == 2)
+remaining := region(partial.children[0])
+assert(len(region_intersection(remaining, rectangle((49pt,49pt), 2pt, 2pt))) == 0)
+assert(len(region_intersection(remaining, rectangle((24pt,9pt), 2pt, 2pt))) > 0)
 print("weave checks passed")

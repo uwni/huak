@@ -89,7 +89,7 @@ pub fn main(init: std.process.Init) !void {
         .{ "unknown-option", "node(\"a\",grid(0,0),typ[A],{\"raduis\": 10pt})", "unknown nodegraph option: raduis" },
         .{ "duplicate-option", "node(\"a\",grid(0,0),typ[A],{\"width\": 10pt, \"width\": 20pt})", "duplicate dictionary key" },
         .{ "legacy-list-options", "node(\"a\",grid(0,0),typ[A],[[\"width\",10pt]])", "expected dict" },
-        .{ "coordinate-field-type", "coordinate:=grid(0,0); coordinate.value=\"bad\"", "expected pair" },
+        .{ "coordinate-field-type", "coordinate:=grid(0,0); coordinate.value=\"bad\"", "expected vec2" },
         .{ "node-cycle", "geometry([node(\"a\",named(\"b\"),typ[A]),node(\"b\",named(\"a\"),typ[B])])", "cyclic or unknown node" },
         .{ "group-cycle", "geometry([enclose(\"a\",[\"b\"],typ[]),enclose(\"b\",[\"a\"],typ[])])", "cyclic or unknown node" },
         .{ "edge-cycle", "geometry([edge(named(\"b\"),absolute((0pt,0pt)),{\"name\": \"a\"}),edge(named(\"a\"),absolute((1pt,0pt)),{\"name\": \"b\"})])", "cyclic or unknown edge" },

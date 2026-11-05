@@ -158,7 +158,7 @@ const Analysis = struct {
             .less_equal,
             .greater,
             .greater_equal,
-            .make_pair,
+            .make_vec2,
             => {
                 const right = self.pop();
                 const left = self.pop();
@@ -170,6 +170,16 @@ const Analysis = struct {
                 const result = if (left.value != null and right.value != null) values.binary(instruction.op, left.value.?, right.value.?) else null;
                 try self.push(.{ .value = if (result != null and values.scalarValid(result.?)) result else null, .may_handle = native });
             },
+            .make_vec3 => {
+                const z = self.pop();
+                const y = self.pop();
+                const x = self.pop();
+                const value = if (x.value != null and y.value != null and z.value != null)
+                    @import("../numeric.zig").makeVector(3, .{ x.value.?, y.value.?, z.value.? }) catch null
+                else
+                    null;
+                try self.push(.{ .value = value });
+            },
             .jump_if_false => {
                 const condition = self.pop();
                 return if (condition.value != null and condition.value.? == .boolean) condition.value.?.boolean else null;
@@ -177,11 +187,8 @@ const Analysis = struct {
             .field => {
                 const object = self.pop();
                 const name = self.constants[instruction.a].string;
-                if (object.value != null and object.value.? == .pair and
-                    (std.mem.eql(u8, name, "x") or std.mem.eql(u8, name, "y")))
-                {
-                    const pair = object.value.?.pair;
-                    try self.push(Fact.literal(pair.component(if (std.mem.eql(u8, name, "x")) pair.x else pair.y)));
+                if (if (object.value) |v| v.vectorField(name) else null) |component| {
+                    try self.push(Fact.literal(component));
                 } else {
                     // Unknown fields can enter a host callback. Source
                     // constants already on the operand stack remain values.
@@ -301,7 +308,7 @@ fn join(current: *Fact, incoming: Fact) bool {
 
 fn mayHandle(kind: bc.Type) bool {
     return switch (kind) {
-        .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .pair, .list, .dict => false,
+        .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .dict => false,
         else => !kind.isRecord(),
     };
 }

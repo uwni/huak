@@ -121,6 +121,28 @@ pub fn clone(self: Path, allocator: std.mem.Allocator) !Path {
     result.open = self.open;
     return result;
 }
+
+/// An oriented circular arc, approximated by cubic spans of at most 90 degrees.
+pub fn arc(allocator: std.mem.Allocator, center: Point, radius: f64, start: f64, sweep: f64) !Path {
+    if (!std.math.isFinite(start) or !std.math.isFinite(sweep) or !std.math.isFinite(radius) or
+        radius <= 0 or sweep == 0 or @abs(sweep) > 2 * std.math.pi) return error.InvalidParameter;
+    var path = Path.init(allocator);
+    errdefer path.deinit();
+    const count: usize = @intFromFloat(@ceil(@abs(sweep) / (std.math.pi / 2.0)));
+    const step = sweep / @as(f64, @floatFromInt(count));
+    const k = radius * (4.0 / 3.0) * @tan(step / 4);
+    var angle = start;
+    var radial: Point = .{ .x = @cos(angle), .y = @sin(angle) };
+    try path.moveTo(center.add(radial.scale(radius)));
+    for (0..count) |_| {
+        const c1 = path.current.?.add(.{ .x = -radial.y * k, .y = radial.x * k });
+        angle += step;
+        radial = .{ .x = @cos(angle), .y = @sin(angle) };
+        const end = center.add(radial.scale(radius));
+        try path.cubicTo(c1, end.add(.{ .x = radial.y * k, .y = -radial.x * k }), end);
+    }
+    return path;
+}
 /// Split at every move, preserving contour order, exact geometry, winding
 /// and open/closed state, including move-only contours. This does not group
 /// holes with their enclosing contours or resolve intersections. The caller
@@ -330,7 +352,7 @@ pub fn reverse(self: Path, allocator: std.mem.Allocator) !Path {
         // Reverse the implicit closing edge first, retaining the original
         // final point as time zero. A final zero-length CLOSE below marks
         // topology without adding another drawable segment time.
-        if (closed and !exactPoint(last, first)) try result.lineTo(last);
+        if (closed and !last.eql(first)) try result.lineTo(last);
         var i = if (closed) subpath_end - 1 else subpath_end;
         while (i > subpath_begin + 1) {
             i -= 1;
@@ -350,6 +372,70 @@ pub fn reverse(self: Path, allocator: std.mem.Allocator) !Path {
     }
     return result;
 }
+pub const ContourRange = struct { begin: f64, end: f64, closed: bool = false };
+
+/// Global drawable-segment times for each contour, including move-only contours.
+/// Closure records the explicit CLOSE command. The caller owns the result.
+pub fn contourRanges(self: Path, allocator: std.mem.Allocator) ![]ContourRange {
+    var contours: std.ArrayList(ContourRange) = .empty;
+    errdefer contours.deinit(allocator);
+    var time: f64 = 0;
+    var current: ?Point = null;
+    var start: ?Point = null;
+    for (self.segments.items) |segment| {
+        switch (segment) {
+            .move => |point| {
+                if (!point.isFinite()) return error.NonFinite;
+                try contours.append(allocator, .{ .begin = time, .end = time });
+                current = point;
+                start = point;
+            },
+            .line, .cubic => {
+                if (current == null) return error.InvalidPath;
+                if (segment == .line) {
+                    if (!segment.line.isFinite()) return error.NonFinite;
+                    current = segment.line;
+                } else {
+                    const controls = segment.cubic;
+                    if (!controls.c1.isFinite() or !controls.c2.isFinite() or !controls.end.isFinite()) return error.NonFinite;
+                    current = controls.end;
+                }
+                time += 1;
+                contours.items[contours.items.len - 1].end = time;
+            },
+            .close => {
+                if (current == null or start == null) return error.InvalidPath;
+                if (!current.?.eql(start.?)) time += 1;
+                contours.items[contours.items.len - 1].end = time;
+                contours.items[contours.items.len - 1].closed = true;
+                current = null;
+                start = null;
+            },
+        }
+    }
+    return contours.toOwnedSlice(allocator);
+}
+
+test "contour ranges distinguish CLOSE from an open return to the start" {
+    var p = Path.init(std.testing.allocator);
+    defer p.deinit();
+    try p.moveTo(.zero);
+    try p.lineTo(.{ .x = 2, .y = 3 });
+    try p.lineTo(.zero);
+    try p.moveTo(.zero);
+    try p.lineTo(.{ .x = 4, .y = 1 });
+    try p.close();
+    try p.moveTo(.zero);
+    try p.close();
+    const ranges = try p.contourRanges(std.testing.allocator);
+    defer std.testing.allocator.free(ranges);
+    try std.testing.expectEqualSlices(ContourRange, &.{
+        .{ .begin = 0, .end = 2 },
+        .{ .begin = 2, .end = 4, .closed = true },
+        .{ .begin = 4, .end = 4, .closed = true },
+    }, ranges);
+}
+
 pub fn segmentCount(self: Path) usize {
     var count: usize = 0;
     var current: Point = .zero;
@@ -368,7 +454,7 @@ pub fn segmentCount(self: Path) usize {
             count += 1;
         },
         .close => {
-            if (!exactPoint(current, start)) count += 1;
+            if (!current.eql(start)) count += 1;
             current = start;
         },
     };
@@ -414,7 +500,7 @@ const CurveReader = struct {
             }
             if (!open) return error.InvalidPath;
             open = segment != .close;
-            if (!open and exactPoint(current, start)) continue;
+            if (!open and current.eql(start)) continue;
             const curve: Cubic = switch (segment) {
                 .line => |point| .line(current, point),
                 .cubic => |c| .{ .p0 = current, .p1 = c.c1, .p2 = c.c2, .p3 = c.end },
@@ -487,7 +573,7 @@ fn collectIntersections(self: Path, comptime Result: type, allocator: std.mem.Al
                 const value: Result = if (Result == Point) hit.point else .{ .point = hit.point, .a = @as(f64, @floatFromInt(i)) + hit.a, .b = @as(f64, @floatFromInt(j)) + hit.b };
                 var duplicate = false;
                 for (result.items) |old| {
-                    if (if (Result == Point) old.distance(value) <= tolerance else old.a == value.a and old.b == value.b and exactPoint(old.point, value.point)) {
+                    if (if (Result == Point) old.distance(value) <= tolerance else old.a == value.a and old.b == value.b and old.point.eql(value.point)) {
                         duplicate = true;
                         break;
                     }
@@ -537,7 +623,7 @@ pub fn trimmed(self: Path, allocator: std.mem.Allocator, begin: f64, end: f64) a
             subpath_time = time;
             continue;
         }
-        if (segment == .close and exactPoint(current, start)) {
+        if (segment == .close and current.eql(start)) {
             if (begin <= subpath_time and end >= time and result.open) try result.close();
             current = start;
             continue;
@@ -632,7 +718,7 @@ pub fn clippedToRect(self: Path, allocator: std.mem.Allocator, rect: g.BBox) !Pa
             // relative tolerance.
             fragment.p0 = curve.at(lo);
             fragment.p3 = curve.at(hi);
-            if (need_move or result.current == null or !exactPoint(result.current.?, fragment.p0)) try result.moveTo(fragment.p0);
+            if (need_move or result.current == null or !result.current.?.eql(fragment.p0)) try result.moveTo(fragment.p0);
             if (segment == .cubic) try result.cubicTo(fragment.p1, fragment.p2, fragment.p3) else try result.lineTo(fragment.p3);
             need_move = false;
         }
@@ -832,17 +918,14 @@ fn lineParameter(point: Point, start: Point, direction: Point) f64 {
 }
 
 fn sameCurve(a: Cubic, b: Cubic) bool {
-    return exactPoint(a.p0, b.p0) and exactPoint(a.p1, b.p1) and exactPoint(a.p2, b.p2) and exactPoint(a.p3, b.p3);
-}
-fn exactPoint(a: Point, b: Point) bool {
-    return a.x == b.x and a.y == b.y;
+    return a.p0.eql(b.p0) and a.p1.eql(b.p1) and a.p2.eql(b.p2) and a.p3.eql(b.p3);
 }
 fn pointCurve(curve: Cubic) bool {
-    return exactPoint(curve.p0, curve.p1) and exactPoint(curve.p0, curve.p2) and exactPoint(curve.p0, curve.p3);
+    return curve.p0.eql(curve.p1) and curve.p0.eql(curve.p2) and curve.p0.eql(curve.p3);
 }
 fn linearCurve(curve: Cubic) bool {
     const line = Cubic.line(curve.p0, curve.p3);
-    return exactPoint(curve.p1, line.p1) and exactPoint(curve.p2, line.p2);
+    return curve.p1.eql(line.p1) and curve.p2.eql(line.p2);
 }
 fn appendIntersection(result: *std.ArrayList(Intersection), allocator: std.mem.Allocator, hit: Intersection, tolerance: f64) !void {
     for (result.items) |*old| {

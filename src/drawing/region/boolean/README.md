@@ -36,6 +36,13 @@ one batch of reversed controls. Their angular sorting workspace is reused per
 vertex. Sorting each vertex fan directly links the incoming twins; faces traverse
 these links without a duplicate edge list. Construction samples, cuts, candidate
 lists and sorting buffers never become references in the completed arrangement.
+
+When the outgoing direction intervals overlap, the graph orders the edges by
+their first contact with a square centered at the vertex. Its half-width is
+half the smallest of the outgoing curves' maximum coordinate displacements,
+so each curve reaches its boundary. The earliest positive root across its
+four walls gives one angular sort key per edge. This also handles branches
+which initially share a tangent.
 Source, initial sample/cut, vertex and half-edge capacities are reserved before
 population; edge capacity is bounded by the completed cuts. Adjacent source
 curves share an exact endpoint sample through their closed-contour links. The

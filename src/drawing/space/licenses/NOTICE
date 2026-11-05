@@ -1,0 +1,13 @@
+Huak's optional 3D projection uses Open CASCADE Technology (OCCT).
+Copyright Open CASCADE SAS and the OCCT contributors.
+
+OCCT is distributed under the GNU Lesser General Public License, version 2.1,
+with the Open CASCADE exception, version 1.0. Both texts accompany this notice.
+OCCT source and release history: https://github.com/Open-Cascade-SAS/OCCT
+
+The desktop projection backend links to the OCCT shared libraries installed on
+the user's system. The user can replace them with interface-compatible builds.
+
+The optional local WASI build uses the OCCT 8.0.1 port and single-threaded
+header from OCCTSwift (also LGPL 2.1). The kernel build, sources and patches
+are identified at https://github.com/SecondMouseAU/OCCTSwift/tree/v4.0.0-kernel.8

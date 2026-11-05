@@ -39,6 +39,18 @@ zig-out/bin/huak run circle.huak --output circle.svg --output circle.pdf
 
 将 `run` 换成 `watch`，保存脚本时就会重新生成图形。[VS Code 扩展](editors/vscode/README.md) 可以直接预览 SVG。
 
+## 三维投影
+
+二维和三维路径共用 `--`、`&` 和 Bézier 构造器。用 `space` 拉伸、旋转、扫掠或放样轮廓，再将模型投影成二维路径。棱线、曲面轮廓和模型交线可分别设置线型。画半透明表面时按 `projection.layers` 从远到近填色、描边。[同一条圆弧生成曲面和实体](examples/space/profiles.huak) · [圆柱穿过透明球](examples/space/solids.huak) · [圆环与贴面螺旋](examples/space/torus.huak)
+
+三维构建使用 Open CASCADE Technology（OCCT），采用 LGPL 2.1 及 Open CASCADE 特别例外。macOS 可按下列方式启用。[许可证与声明](src/drawing/space/licenses/) · [接口、精度与可选 Wasm 构建](src/drawing/space/README.md)
+
+```sh
+brew install opencascade
+zig build -Docct="$(brew --prefix opencascade)"
+zig-out/bin/huak run examples/space/torus.huak --output torus.svg --output torus.pdf
+```
+
 ## 本地 Playground
 
 本地构建 Playground 需要 Rust 的 Wasm 目标。

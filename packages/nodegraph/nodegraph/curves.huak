@@ -5,11 +5,11 @@ import geometry.{arclength, bezier, compound, joined, sample_at_fraction, sample
 import assertions.assert
 
 export struct RoutePosition
-    point:pair
-    tangent:pair
+    point:vec2
+    tangent:vec2
 end
 
-export fn arc(center:pair, radius:length, start:angle, sweep:angle) -> path
+export fn arc(center:vec2, radius:length, start:angle, sweep:angle) -> path
     assert(radius > 0pt and abs(sweep) > 0deg and abs(sweep) <= 360deg, "arc needs positive radius and sweep in (-360, 360]")
     count := int(ceil(abs(sweep)/90deg))
     delta := sweep/count
@@ -26,7 +26,7 @@ export fn arc(center:pair, radius:length, start:angle, sweep:angle) -> path
     return result
 end
 
-export fn bent(first:pair, last:pair, bend:angle) -> path
+export fn bent(first:vec2, last:vec2, bend:angle) -> path
     delta := last-first
     assert(norm(delta) > 0pt, "bent route endpoints coincide; use a loop")
     if abs(bend) < 1e-9deg then return path(first, last) end
@@ -42,11 +42,11 @@ export fn rounded_route(points:list, radius:length = 0pt) -> path
     assert(len(points) >= 2, "route requires at least two vertices")
     if radius <= 0pt or len(points) == 2 then return path(points) end
     result := path(points[0], points[0])
-    previous:pair := points[0]
+    previous:vec2 := points[0]
     for i in 1:len(points)-2 do
-        a:pair := points[i-1]
-        b:pair := points[i]
-        c:pair := points[i+1]
+        a:vec2 := points[i-1]
+        b:vec2 := points[i]
+        c:vec2 := points[i+1]
         assert(norm(b-a) > 0pt and norm(c-b) > 0pt, "route has repeated adjacent vertices")
         before := b-unit(b-a)*min(radius, norm(b-a)/2)
         after := b+unit(c-b)*min(radius, norm(c-b)/2)
@@ -67,7 +67,7 @@ end
 export fn position(curve:path, fraction:float) -> RoutePosition
     assert(fraction >= 0 and fraction <= 1, "route position must be in [0, 1]")
     sample := sample_at_fraction(curve, fraction)
-    tangent:pair := sample[2]
+    tangent:vec2 := sample[2]
     assert(norm(tangent) > 0, "route position has zero tangent")
     return RoutePosition(point: sample[1], tangent: tangent)
 end
@@ -79,7 +79,7 @@ export fn parallel_route(curve:path, distance:length, samples:int = 65) -> path
     source := sample_path(curve, samples)
     for i in 0:len(source)-1 do
         assert(source[i][4] == 0, "parallel routes require a single contour")
-        tangent:pair := source[i][2]
+        tangent:vec2 := source[i][2]
         assert(norm(tangent) > 0, "parallel route has zero tangent")
         points += source[i][1]+(-tangent.y, tangent.x)*distance
     end
@@ -97,7 +97,7 @@ export fn decorated(curve:path, kind:string, amplitude:length, wavelength:length
     points := []
     for i in 0:len(samples)-1 do
         assert(samples[i][4] == 0, "decorations require a single contour")
-        tangent:pair := samples[i][2]
+        tangent:vec2 := samples[i][2]
         normal := (-tangent.y, tangent.x)
         phase := float(i)/16
         displacement := sin(2*PI*phase)*amplitude

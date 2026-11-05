@@ -4,19 +4,19 @@ const t = std.testing;
 const h = @import("harness.zig");
 
 const prefix =
-    "import paint.*\nimport weave\npic:=picture(100pt,100pt)\na:=path((10pt,50pt),(90pt,50pt))\nb:=path((50pt,10pt),(50pt,90pt))\nink:=pen(rgb(0,0,0),6pt)\n";
+    "import paint.*\nimport weave.weave\na:=path((10pt,50pt),(90pt,50pt))\nb:=path((50pt,10pt),(50pt,90pt))\nink:=pen(rgb(0,0,0),6pt)\n";
 const invalid = [_]struct { name: []const u8, body: []const u8, message: []const u8 }{
-    .{ .name = "count", .body = "draw a with ink crossings [1,2];draw b with ink crossings [-1]", .message = "one signed ID" },
-    .{ .name = "zero", .body = "draw a with ink crossings [0];draw b with ink crossings [1]", .message = "expected crossing 1" },
-    .{ .name = "id", .body = "draw a with ink crossings [2];draw b with ink crossings [1]", .message = "expected crossing 1" },
-    .{ .name = "both-over", .body = "draw a with ink crossings [1];draw b with ink crossings [1]", .message = "one over passage and one under passage" },
-    .{ .name = "both-under", .body = "draw a with ink crossings [-1];draw b with ink crossings [-1]", .message = "one over passage and one under passage" },
-    .{ .name = "float-id", .body = "draw a with ink crossings [1.0];draw b with ink crossings [-1]", .message = "int" },
-    .{ .name = "string-id", .body = "draw a with ink crossings [\"1\"];draw b with ink crossings [-1]", .message = "int" },
-    .{ .name = "extra-id", .body = "draw a with ink crossings [1]", .message = "one signed ID" },
-    .{ .name = "self-conflict", .body = "draw (10pt,10pt)--(90pt,90pt)--(10pt,90pt)--(90pt,10pt) with ink crossings [1,1]", .message = "one over passage and one under passage" },
+    .{ .name = "count", .body = "+draw a with ink crossings [1,2];+draw b with ink crossings [-1]", .message = "one signed ID" },
+    .{ .name = "zero", .body = "+draw a with ink crossings [0];+draw b with ink crossings [1]", .message = "expected crossing 1" },
+    .{ .name = "id", .body = "+draw a with ink crossings [2];+draw b with ink crossings [1]", .message = "expected crossing 1" },
+    .{ .name = "both-over", .body = "+draw a with ink crossings [1];+draw b with ink crossings [1]", .message = "one over passage and one under passage" },
+    .{ .name = "both-under", .body = "+draw a with ink crossings [-1];+draw b with ink crossings [-1]", .message = "one over passage and one under passage" },
+    .{ .name = "float-id", .body = "+draw a with ink crossings [1.0];+draw b with ink crossings [-1]", .message = "int" },
+    .{ .name = "string-id", .body = "+draw a with ink crossings [\"1\"];+draw b with ink crossings [-1]", .message = "int" },
+    .{ .name = "extra-id", .body = "+draw a with ink crossings [1]", .message = "one signed ID" },
+    .{ .name = "self-conflict", .body = "+draw (10pt,10pt)--(90pt,90pt)--(10pt,90pt)--(90pt,10pt) with ink crossings [1,1]", .message = "one over passage and one under passage" },
 };
-pub const process_count = 8 + invalid.len;
+pub const process_count = 9 + invalid.len;
 
 pub fn run(ctx: *h.Harness) !void {
     const script = try ctx.fixture("weave/basic");
@@ -61,36 +61,53 @@ pub fn run(ctx: *h.Harness) !void {
     try t.expectEqualStrings(try ctx.read("weave-1.svg"), try ctx.read("weave-4.svg"));
     try t.expectEqualStrings(try ctx.read("weave-hopf-1.svg"), try ctx.read("weave-hopf-4.svg"));
     try t.expectEqualStrings(try ctx.read("weave-trefoil-1.svg"), try ctx.read("weave-trefoil-4.svg"));
-    const early = try ctx.script("weave/early",
+    const diagonal = try ctx.fixture("weave/diagonal");
+    _ = try ctx.command("run", diagonal, &.{ "--output=diagonal.svg", "--output=diagonal.pdf" }, true);
+    try t.expect((try ctx.svg("diagonal.svg")).count("clipPath") >= 2);
+    try h.contains(try ctx.read("diagonal.pdf"), "%PDF-");
+    const blocks = try ctx.script("weave/blocks",
         \\import paint.*
-        \\import weave
+        \\import weave.weave
         \\import assertions.assert
-        \\fn make()->picture
-        \\    pic:=picture(640, 480)
-        \\    collector:=weave.context(pic)
-        \\    result:=weave.drawing collector do
-        \\        draw path((0pt,0pt),(10pt,0pt))
-        \\        return pic
+        \\a := path((0pt,0pt),(10pt,0pt))
+        \\b := path((0pt,20pt),(10pt,20pt))
+        \\plate := picture(100pt,100pt)
+        \\ink := pen(rgb(0,0,0), 2pt)
+        \\ordinary := picture()
+        \\outer := weave do
+        \\    item := draw b with ink
+        \\    assert(item.kind == "path")
+        \\    drawing ordinary do
+        \\        +item
+        \\        +draw b with ink
         \\    end
-        \\    assert(len(collector.strands)==1,"return must skip ordinary template tail")
-        \\    weave.finish(collector)
-        \\    return result
+        \\    draw b
+        \\    +draw a
+        \\    inner := weave(tolerance:0.002pt, gap:2pt) do +draw b end
+        \\    assert(len(inner.children)==1)
+        \\    assert(bounds(inner)[0].y > 10pt)
+        \\    +draw path((0pt,4pt),(10pt,4pt))
         \\end
-        \\assert(len(bounds(make()))==2,"explicit finish must render the collection")
-        \\reused:=picture(640, 480)
-        \\collector:=weave.context(reused)
-        \\weave.drawing collector do
-        \\    draw path((0pt,0pt),(10pt,0pt))
+        \\assert(len(outer.children)==2)
+        \\assert(bounds(outer)[1].y < 10pt)
+        \\assert(len(ordinary.children)==2)
+        \\assert(bounds(ordinary)[0] == bounds(draw(b, ink))[0])
+        \\assert(len(plate.children)==0)
+        \\drawing plate do
+        \\    +outer
+        \\    +weave do +draw b end
+        \\    +draw a
         \\end
-        \\assert(len(collector.strands)==0,"successful finish must clear the collection")
-        \\weave.drawing collector do
-        \\    draw path((0pt,10pt),(10pt,10pt))
+        \\assert(len(plate.children)==3)
+        \\early := weave do
+        \\    +draw a
+        \\    return picture()
         \\end
-        \\assert(len(collector.strands)==0)
+        \\assert(len(early.children)==0)
     );
-    _ = try ctx.command("run", early, &.{}, true);
+    _ = try ctx.command("run", blocks, &.{}, true);
     for (invalid) |case| {
-        const source = try ctx.fmt("{s}weave.drawing weave.context(pic) do;{s};end\ndefault pic\n", .{ prefix, case.body });
+        const source = try ctx.fmt("{s}default weave do;{s};end\n", .{ prefix, case.body });
         const file = try ctx.script(try ctx.fmt("weave/invalid-{s}", .{case.name}), source);
         const failure = try ctx.command("run", file, &.{"--output=weave-invalid.svg"}, false);
         try h.contains(failure.stderr, case.message);
@@ -100,9 +117,20 @@ pub fn run(ctx: *h.Harness) !void {
         .{ .name = "gap", .option = "gap:-1pt", .message = "gap must be nonnegative" },
         .{ .name = "tolerance", .option = "tolerance:0pt", .message = "tolerance must be positive" },
     }) |case| {
-        const file = try ctx.script(try ctx.fmt("weave/invalid-{s}", .{case.name}), try ctx.fmt("{s}weave.drawing weave.context(pic,{s}) do end\n", .{ prefix, case.option }));
+        const file = try ctx.script(try ctx.fmt("weave/invalid-{s}", .{case.name}), try ctx.fmt("{s}weave({s}) do end\n", .{ prefix, case.option }));
         try h.contains((try ctx.command("run", file, &.{}, false)).stderr, case.message);
     }
-    const empty = try ctx.script("weave/empty", "import weave\nimport assertions.assert\nimport object.bounds\npic:=picture(640, 480)\nweave.drawing weave.context(pic) do end\nassert(len(bounds(pic))==0)\n");
-    _ = try ctx.command("run", empty, &.{}, true);
+    const standalone = try ctx.script("weave/standalone",
+        \\import weave.weave
+        \\import assertions.assert
+        \\import color.rgb
+        \\empty:picture := weave do end
+        \\assert(len(empty.children) == 0)
+        \\unused := weave do
+        \\    item := draw ((0pt,0pt) -- (10pt,0pt)) with pen(rgb(0,0,0), 2pt)
+        \\    assert(item.kind == "path")
+        \\end
+        \\assert(len(unused.children) == 0)
+    );
+    _ = try ctx.command("run", standalone, &.{}, true);
 }

@@ -1,0 +1,44 @@
+import paint.*
+import weave.weave
+import assertions.assert
+import geometry.region_intersection
+import object.region
+
+left := circle with center (40mm, 58mm) radius 22mm
+bottom := circle with center (50mm, 40mm) radius 22mm
+warm := pen(rgb(0.78, 0.18, 0.12), 2.2mm, "round", "round")
+cool := pen(rgb(0.12, 0.35, 0.72), 2.2mm, "round", "round")
+woven := weave(gap:0.8mm) do
+    +draw left with warm crossings [1, -2, ]
+    +draw bottom with cool crossings [-1, 2, ]
+end
+
+fn ink_at(ink:path, point:vec2) -> bool
+    probe := rectangle(point-(0.02mm, 0.02mm), 0.04mm, 0.04mm)
+    return len(region_intersection(ink, probe)) > 0
+end
+
+fn check_crossings(pic:picture)
+    assert(len(pic.children) == 2)
+    first := region(pic.children[0])
+    second := region(pic.children[1])
+    upper_right := (62mm, 58.445mm)
+    lower_left := (28mm, 39.555mm)
+    assert(ink_at(first, upper_right) and not ink_at(second, upper_right))
+    assert(ink_at(second, lower_left) and not ink_at(first, lower_left))
+    // The upper-right crossing straddles the original seam of the red circle.
+    assert(ink_at(first, (62.7mm, 57.1mm)) and not ink_at(second, (62.7mm, 57.1mm)))
+    // Check the transparent clearance on both sides of each overpass.
+    for p in [(60.45mm, 59.45mm), (63.55mm, 57.45mm), (29.55mm, 38.55mm), (26.45mm, 40.55mm)] do
+        assert(not ink_at(first, p) and not ink_at(second, p))
+    end
+    assert(ink_at(first, (18mm, 58mm)) and ink_at(second, (50mm, 18mm)))
+end
+
+check_crossings(woven)
+backwards := weave(gap:0.8mm) do
+    +draw reverse(left) with warm crossings [-1, 2]
+    +draw bottom with cool
+end
+check_crossings(backwards)
+default woven

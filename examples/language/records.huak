@@ -7,7 +7,7 @@ struct Style
     radius: length = 6mm
 end
 
-fn marker(center: pair, style: Style) -> object
+fn marker(center: vec2, style: Style) -> object
     return draw(circle(center, style.radius), pen(style.ink, style.width))
 end
 

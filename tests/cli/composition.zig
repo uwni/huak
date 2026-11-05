@@ -157,7 +157,7 @@ fn objectCutters(ctx: *h.Harness) !void {
     const script = try ctx.script("composition/object-cutters",
         \\import math.abs;import paint.*;import geometry.{compound, region_intersection};import pen.pensquare;import object.{outlines, region}
         \\import assertions.assert
-        \\fn covered(region:path,at:pair)->bool
+        \\fn covered(region:path,at:vec2)->bool
         \\    return len(region_intersection(region,rectangle(at,0.2pt,0.2pt),0.01pt))>0
         \\end
         \\source:=picture(200pt,140pt)

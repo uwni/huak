@@ -12,7 +12,7 @@ pub const process_count = 3 + invalid.len;
 
 pub fn run(ctx: *h.Harness) !void {
     _ = try ctx.script("variadic/helpers",
-        \\import paint.path;export fn route(points:pair...)->path return path(points) end
+        \\import paint.path;export fn route(points:vec2...)->path return path(points) end
         \\export fn gather(args...)->list return args end
         \\export fn sum(values:float...)->float
         \\    total:=0.0

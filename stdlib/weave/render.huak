@@ -1,9 +1,8 @@
 // Local clearance policy. Native stroke sections retain the source pen's
 // dash, cap and join semantics; the original stroke is rendered only once.
-import geometry.{compound, offset, region_difference, region_union, sample_path}
+import geometry.{compound, contour_ranges, offset, region_difference, region_union}
 import pen.stroke_sections
-import object.{append, draw}
-import transform.translate
+import object.draw
 import math.floor
 import "std/weave/analysis.huak" as analysis
 
@@ -25,31 +24,57 @@ end
 
 fn sections(strand:analysis.Strand, visits:list, tolerance:length) -> Sections
     if len(visits) == 0 then return Sections(original:[], remaining:[]) end
-    endpoints := sample_path(strand.curve, 2, tolerance)
+    contours := contour_ranges(strand.curve)
     ranges := []
+    wraps := []
     cursor := 0
-    for contour in 0:int(len(endpoints)/2)-1 do
+    for contour in 0:len(contours)-1 do
+        start:float := contours[contour][0]
+        stop:float := contours[contour][1]
+        period := stop-start
         first := cursor
         while cursor < len(visits) and visits[cursor].contour == contour do cursor = cursor+1 end
         if first == cursor then
-            ranges += [[contour, endpoints[2*contour][3], endpoints[2*contour+1][3]]]
+            ranges += [[contour, start, stop]]
         else
+            // On a closed contour the last and first visits are neighbors.
+            // Choose their boundary on the unwrapped time axis.
+            seam := stop
+            if contours[contour][2] and cursor-first > 1 then
+                seam = partition(visits[cursor-1].time, visits[first].time+period)
+            end
+            begin := seam-period
             for i in first:cursor-1 do
                 passage:analysis.Passage := visits[i]
-                begin:float := endpoints[2*contour][3]
-                finish:float := endpoints[2*contour+1][3]
-                if i > first then begin = partition(visits[i-1].time, passage.time) end
+                finish := seam
                 if i+1 < cursor then finish = partition(passage.time, visits[i+1].time) end
                 passage.section = len(ranges)
+                if begin < start then
+                    wraps += [[passage.section, [contour, begin+period, stop]]]
+                    begin = start
+                elseif finish > stop then
+                    wraps += [[passage.section, [contour, start, finish-period]]]
+                    finish = stop
+                end
                 ranges += [[contour, begin, finish]]
+                begin = finish
             end
         end
     end
-    original := stroke_sections(strand.curve, strand.stroke, ranges, tolerance)
+    // stroke_sections preserves the original dash phase on both sides of a
+    // seam. Reunite the two ranges before using this passage as a mask or cut.
+    count := len(ranges)
+    for wrap in wraps do ranges += [wrap[1]] end
+    coverage := stroke_sections(strand.curve, strand.stroke, ranges, tolerance)
+    original := coverage[0:count-1]
+    for j in 0:len(wraps)-1 do
+        owner:int := wraps[j][0]
+        original[owner] = region_union(original[owner], coverage[count+j], tolerance)
+    end
     return Sections(original:original, remaining:copy(original))
 end
 
-export fn finish(target:object, plan:analysis.Plan, gap:length, tolerance:length) -> object
+export fn compose(plan:analysis.Plan, gap:length, tolerance:length) -> picture
     parts := []
     for i in 0:len(plan.strands)-1 do parts += [sections(plan.strands[i], plan.visits[i], tolerance)] end
     for i in 0:len(plan.crossings)-1 do
@@ -67,18 +92,14 @@ export fn finish(target:object, plan:analysis.Plan, gap:length, tolerance:length
     for i in 0:len(plan.strands)-1 do
         strand:analysis.Strand := plan.strands[i]
         pieces:Sections := parts[i]
+        target:object := result
         if pieces.changed then
             keep := compound([])
-            for j in 0:len(pieces.remaining)-1 do keep = region_union(keep, pieces.remaining[j], tolerance) end
-            if len(keep) != 0 then
-                clipped := object.append(result, picture(transform: translate((0pt, 0pt)), clip: keep))
-                object.append(clipped, draw(strand.curve, strand.stroke))
-            end
-        else
-            object.append(result, draw(strand.curve, strand.stroke))
+            for piece in pieces.remaining do keep = region_union(keep, piece, tolerance) end
+            if len(keep) == 0 then continue end
+            target = object.append(result, picture(clip:keep))
         end
+        object.append(target, draw(strand.curve, strand.stroke))
     end
-    // The caller's picture changes only after all crossing checks and Boolean
-    // work succeed. Every strand was drawn once, preserving its native alpha.
-    return append(target, result)
+    return result
 end

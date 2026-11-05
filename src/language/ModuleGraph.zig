@@ -952,7 +952,7 @@ test "core primitives and constructors can be reexported without imports" {
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
     var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, null, &diagnostic);
-    try graph.root("root.huak", "export print,panic,len,int,float,str,pair,dict_contains,dict_remove,keys,copy,path,pen,picture,object,solver");
+    try graph.root("root.huak", "export print,panic,len,int,float,str,vec2,vec3,dict_contains,dict_remove,keys,copy,path,pen,picture,object,solver");
     const root_source = graph.units.items[0];
     for (builtins.signatures) |signature| {
         if (signature.implicit) {

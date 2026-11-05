@@ -94,7 +94,7 @@ pub fn solveCubic(v: *const Cubic, comptime coord: usize, value: f64, roots: *[3
 pub fn getArea(v: *const Cubic) f64 {
     return 3 * ((v.p3.y - v.p0.y) * (v.p1.x + v.p2.x) - (v.p3.x - v.p0.x) * (v.p1.y + v.p2.y) + v.p1.y * (v.p0.x - v.p2.x) - v.p1.x * (v.p0.y - v.p2.y) + v.p3.y * (v.p2.x + v.p0.x / 3) - v.p3.x * (v.p2.y + v.p0.y / 3)) / 20;
 }
-fn getCoefficients(v: *const Cubic) [10]f64 {
+fn getCoefficients(v: *const Cubic) [6]f64 {
     var x1 = v.p1.x;
     var y1 = v.p1.y;
     var x2 = v.p2.x;
@@ -113,7 +113,7 @@ fn getCoefficients(v: *const Cubic) [10]f64 {
     const cy = 3 * (y1 - v.p0.y);
     const by = 3 * (y2 - y1) - cy;
     const ay = v.p3.y - v.p0.y - cy - by;
-    return .{ ax, bx, cx, ay, by, cy, x1, y1, x2, y2 };
+    return .{ ax, bx, cx, ay, by, cy };
 }
 fn getCoordinate(v0: f64, v3: f64, a: f64, b: f64, c: f64, t: f64) f64 {
     return if (t == 0) v0 else if (t == 1) v3 else ((a * t + b) * t + c) * t + v0;
@@ -122,33 +122,8 @@ pub fn getPoint(v: *const Cubic, t: f64) Point {
     const c = getCoefficients(v);
     return pointWithCoefficients(v, &c, t);
 }
-fn pointWithCoefficients(v: *const Cubic, c: *const [10]f64, t: f64) Point {
+fn pointWithCoefficients(v: *const Cubic, c: *const [6]f64, t: f64) Point {
     return .{ .x = getCoordinate(v.p0.x, v.p3.x, c[0], c[1], c[2], t), .y = getCoordinate(v.p0.y, v.p3.y, c[3], c[4], c[5], t) };
-}
-pub fn getTangent(v: *const Cubic, t: f64) Point {
-    const c = getCoefficients(v);
-    var x: f64 = undefined;
-    var y: f64 = undefined;
-    if (t < n.CURVETIME_EPSILON) {
-        x = c[2];
-        y = c[5];
-    } else if (t > 1 - n.CURVETIME_EPSILON) {
-        x = 3 * (v.p3.x - c[8]);
-        y = 3 * (v.p3.y - c[9]);
-    } else {
-        x = (3 * c[0] * t + 2 * c[1]) * t + c[2];
-        y = (3 * c[3] * t + 2 * c[4]) * t + c[5];
-    }
-    if (x == 0 and y == 0 and (t < n.CURVETIME_EPSILON or t > 1 - n.CURVETIME_EPSILON)) {
-        x = c[8] - c[6];
-        y = c[9] - c[7];
-    }
-    const len = @sqrt(x * x + y * y);
-    if (len != 0) {
-        x /= len;
-        y /= len;
-    }
-    return .{ .x = x, .y = y };
 }
 /// The loop branch of Paper's cubic classification gives two distinct interior parameters.
 pub fn selfIntersectionTimes(v: *const Cubic) ?[2]f64 {
@@ -315,7 +290,7 @@ pub fn getNearestTime(v: *const Cubic, point: Point) ?f64 {
     }
     const Refine = struct {
         values: *const Cubic,
-        coefficients: [10]f64,
+        coefficients: [6]f64,
         point: Point,
         min_dist: f64 = std.math.inf(f64),
         min_t: f64 = 0,

@@ -138,6 +138,21 @@ test "all published examples render through the worker interface" {
     try std.testing.expect(huak_set_files());
     const catalog = examples.?.value;
     try std.testing.expect(catalog.entries.len > 0);
+    if (catalog.files.map.get("space/torus.huak")) |torus| {
+        const start = std.Io.Clock.awake.now(std.testing.io);
+        @memcpy(huak_input(torus.len).?[0..torus.len], torus);
+        try std.testing.expect(huak_render(0));
+        const elapsed = start.durationTo(std.Io.Clock.awake.now(std.testing.io));
+        std.debug.print("first torus script to SVG: {d} ms\n", .{elapsed.toMilliseconds()});
+        inline for (.{ "visibility", "modeling" }) |name| {
+            const contract = @embedFile(name);
+            @memcpy(huak_input(contract.len).?[0..contract.len], contract);
+            if (!huak_render(0)) {
+                std.debug.print("{s}: {s}\n", .{ name, result() });
+                return error.ProjectionContractFailed;
+            }
+        }
+    }
     for (catalog.entries) |path| {
         const source = catalog.files.map.get(path).?;
         const buffer = huak_input(path.len + source.len).?[0 .. path.len + source.len];

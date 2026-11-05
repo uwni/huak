@@ -8,7 +8,7 @@ return transformed(p,scale(k))
 end
 mixfix(scaled) _ scaled _ in transform
 export scaled
-fn shifted(p:path,offset:pair)->path
+fn shifted(p:path,offset:vec2)->path
 return transformed(p,translate(offset))
 end
 mixfix(shifted) _ shifted _ in transform

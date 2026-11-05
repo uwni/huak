@@ -3,7 +3,7 @@ import paint.{rgb, pen, circle, draw}
 radius := 8
 ink := pen(rgb(0.12, 0.32, 0.65), 1.5)
 
-fn marker(center: pair) -> object
+fn marker(center: vec2) -> object
     return draw(circle(center, radius), ink)
 end
 export marker

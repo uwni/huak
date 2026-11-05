@@ -22,7 +22,6 @@ pub const Edge = struct {
     time1: f64,
     time2: f64,
     straight: bool,
-    length: ?f64 = null,
 };
 pub const HalfEdge = struct {
     edge: usize,
@@ -33,7 +32,7 @@ pub const HalfEdge = struct {
     face: usize = none,
 };
 const Directions = struct { start: f64, width: f64 };
-const SortEntry = struct { index: usize, directions: Directions = undefined, point: Point = undefined, angle: f64 = undefined };
+const SortEntry = struct { index: usize, directions: Directions = undefined, angle: f64 = undefined };
 const Interval = struct { first: Cut, last: Cut };
 const Candidate = struct {
     coordinate: f64,
@@ -204,11 +203,11 @@ const Builder = struct {
         }
         var sort: std.ArrayList(SortEntry) = .empty;
         defer sort.deinit(allocator);
-        for (self.graph.vertices.items, 0..) |vertex, i| {
+        for (0..self.graph.vertices.items.len) |i| {
             const outgoing = outgoing_edges[offsets[i]..offsets[i + 1]];
             if (outgoing.len > 2) {
                 try sort.resize(allocator, outgoing.len);
-                if (!self.sortByDirections(outgoing, sort.items)) self.sortByDistance(outgoing, vertex.point, sort.items);
+                if (!self.sortByDirections(outgoing, sort.items)) try self.sortByExit(outgoing, sort.items);
             }
             for (outgoing, 0..) |index, position| {
                 self.graph.half_edges.items[index ^ 1].next = outgoing[(if (position == 0) outgoing.len else position) - 1];
@@ -412,57 +411,44 @@ const Builder = struct {
         }
         return false;
     }
-    fn sortByDistance(self: *Builder, outgoing: []usize, origin: Point, sorted: []SortEntry) void {
-        var distance = std.math.inf(f64);
+    // Incident edges begin at the same vertex and do not cross again before
+    // their ends. Their first contacts with one surrounding square give the
+    // cyclic order, including edges leaving with the same tangent.
+    fn sortByExit(self: *Builder, outgoing: []usize, sorted: []SortEntry) !void {
+        var radius = std.math.inf(f64);
         for (outgoing) |index| {
-            const edge = &self.graph.edges.items[self.graph.half_edges.items[index].edge];
-            edge.length = edge.length orelse curves.getLength(&edge.cubic, 0, 1);
-            distance = @min(distance, edge.length.? / 2);
+            const v = self.graph.half_edges.items[index].cubic;
+            const box = v.bounds();
+            const lo = v.p0.sub(box.min);
+            const hi = box.max.sub(v.p0);
+            radius = @min(radius, @max(lo.x, lo.y, hi.x, hi.y) / 2);
         }
+        if (!(radius > 0)) return error.PrecisionRange;
         for (outgoing, sorted) |index, *entry| {
-            const half = &self.graph.half_edges.items[index];
-            const edge = &self.graph.edges.items[half.edge];
-            const time = if (edge.straight) distance / edge.length.? else curves.getTimeAt(half.cubic, distance, 0) orelse 0;
-            const p = curves.getPoint(half.cubic, time);
-            entry.* = .{ .index = index, .point = p, .angle = std.math.atan2(p.y - origin.y, p.x - origin.x) };
+            const v = self.graph.half_edges.items[index].cubic;
+            // Work relative to the vertex so small exit displacements retain
+            // their precision when the vertex is far from the coordinate origin.
+            const local: Cubic = .{ .p0 = .zero, .p1 = v.p1.sub(v.p0), .p2 = v.p2.sub(v.p0), .p3 = v.p3.sub(v.p0) };
+            var first = std.math.inf(f64);
+            inline for (0..2) |axis| {
+                for ([_]f64{ -radius, radius }) |wall| {
+                    var roots: [3]f64 = undefined;
+                    const count = curves.solveCubic(&local, axis, wall, &roots, 0, 1);
+                    if (count > 0) for (roots[0..@intCast(count)]) |t| {
+                        if (t > 0) first = @min(first, t);
+                    };
+                }
+            }
+            if (!std.math.isFinite(first)) return error.PrecisionRange;
+            const p = local.at(first);
+            entry.* = .{ .index = index, .angle = std.math.atan2(p.y, p.x) };
         }
         std.mem.sort(SortEntry, sorted, {}, struct {
             fn less(_: void, a: SortEntry, b: SortEntry) bool {
                 return a.angle < b.angle;
             }
         }.less);
-        var start: f64 = -std.math.pi;
-        var gap: f64 = 0;
-        for (sorted, 0..) |entry, i| {
-            const angle = entry.angle;
-            const previous = sorted[(if (i == 0) sorted.len else i) - 1].angle;
-            const delta = @mod(angle - previous + std.math.tau, std.math.tau);
-            const difference = if (delta == 0) std.math.tau else delta;
-            if (difference > gap) {
-                gap = difference;
-                start = angle;
-            }
-        }
-        for (sorted) |*entry| entry.angle = @mod(entry.angle - start + std.math.tau, std.math.tau);
-        std.mem.sort(SortEntry, sorted, self, struct {
-            fn less(ctx: *Builder, first: SortEntry, second: SortEntry) bool {
-                if (curves.withinDistance(first.point, second.point, ctx.epsilon)) {
-                    const orientation = ctx.side(&ctx.graph.half_edges.items[first.index], &ctx.graph.half_edges.items[second.index]);
-                    if (orientation != 0) return orientation < 0;
-                }
-                return first.angle < second.angle;
-            }
-        }.less);
         for (outgoing, sorted) |*index, entry| index.* = entry.index;
-    }
-    fn side(self: *Builder, first: *const HalfEdge, second: *const HalfEdge) i32 {
-        const edge1 = &self.graph.edges.items[first.edge];
-        const edge2 = &self.graph.edges.items[second.edge];
-        const length = @min(edge1.length.?, edge2.length.?) / 2;
-        const second_time = if (edge2.straight) length / edge2.length.? else curves.getTimeAt(second.cubic, length, 0) orelse 0;
-        const p = curves.getPoint(second.cubic, second_time);
-        const time = curves.getNearestTime(first.cubic, p) orelse return 0;
-        return if (time > 0 and time < 1) (if (curves.getTangent(first.cubic, time).cross(p.sub(curves.getPoint(first.cubic, time))) > 0) @as(i32, -1) else 1) else 0;
     }
 };
 

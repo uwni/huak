@@ -61,7 +61,7 @@ const Sources = struct {
                     continue;
                 }
                 const contour = active orelse return error.InvalidPath;
-                if (segment != .close or !samePoint(current, start)) {
+                if (segment != .close or !current.eql(start)) {
                     const curve: g.Cubic = switch (segment) {
                         .line => |point| .line(current, point),
                         .cubic => |curve| .{ .p0 = current, .p1 = curve.c1, .p2 = curve.c2, .p3 = curve.end },
@@ -223,9 +223,6 @@ fn rejectCoincidence(allocator: Allocator, first: Segment, second: Segment) !voi
     return error.ResolutionLimit;
 }
 
-fn samePoint(first: g.Point, second: g.Point) bool {
-    return first.x == second.x and first.y == second.y;
-}
 fn sameBranch(first: Branch, second: Branch) bool {
     return first.path == second.path and first.contour == second.contour and first.time == second.time;
 }

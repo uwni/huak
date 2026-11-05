@@ -1,0 +1,88 @@
+import space as s
+import paint.*
+import geometry.{arc, ellipse, subpaths, compound, point_at}
+import transform.{apply, compose}
+import regions.*
+import math.abs
+import assertions.assert
+
+top := s.orthographic(-90deg,90deg)
+view := s.orthographic(34deg,27deg)
+tol := 0.01pt
+fn check_front(item:shape, left:length, right:length)
+    faces := s.project([item],top,tolerance:tol).visible_faces
+    assert(len(faces) == 1, "expected a single front face")
+    box := bounds(faces[0].region)
+    assert(abs(box[0].x-left) < tol and abs(box[1].x-right) < tol,"projected x extent")
+end
+
+base := s.box(20pt,10pt,8pt)
+second := transformed(base, translate((12pt,0,0)))
+check_front(base union second,0pt,32pt)
+check_front(base inter second,12pt,20pt)
+check_front(base minus second,0pt,12pt)
+check_front(transformed(s.sphere(5pt),translate((6pt,0,4pt))),1pt,11pt)
+check_front(transformed(base, scale(2,1,3)),0pt,40pt)
+check_front(s.cylinder(7pt,9pt),-7pt,7pt)
+check_front(s.face(rectangle((3pt,2pt,1pt),10pt,7pt)),3pt,13pt)
+
+turn := compose(translate((0,0,5pt)),rotate(90deg,axis:(0,1,0)))
+p := apply(turn,(0pt,2pt,3pt))
+assert(abs(p.x-8pt) < tol and abs(p.y-2pt) < tol and abs(p.z) < tol)
+assert(apply(scale(2),(1,2,3)).z == 6)
+
+rim := arc((0,0,0),5pt,0deg,180deg)
+flat_arc := arc((0,0),5pt,0deg,180deg)
+assert(abs(point_at(flat_arc,2).x + 5pt) < tol)
+closed_rim := rim & ((-5pt,0,0) -- (5pt,0,0))
+check_front(s.extrude(s.face(closed_rim),(0,0,4pt)),-5pt,5pt)
+check_front(s.face(closed(reverse(rim))),-5pt,5pt)
+sheet := s.extrude(rim,(0,0,4pt))
+assert(len(s.project([sheet],view).visible_faces) > 0)
+section := ellipse((0,0,0),5pt,8pt)
+check_front(s.extrude(section,(0,0,4pt)),-5pt,5pt)
+check_front(s.sweep(section,(0,0,0) -- (0,0,12pt)),-5pt,5pt)
+tip := transformed(section,compose(scale(0.5,0.5,1),translate((0,0,10pt))))
+lofted := s.loft([section,tip],solid:true)
+assert(len(s.project([lofted],view).layers) == 2)
+for solid in [s.cone(6pt,10pt),s.cone(6pt,10pt,3pt)] do
+    assert(len(s.project([solid],view).layers) == 2)
+end
+ring := compound([rectangle((0,0),12pt,12pt),reverse(rectangle((3pt,3pt),6pt,6pt))])
+plate := s.face(s.profile(ring))
+faces := s.project([plate],top).visible_faces
+assert(len(faces) == 1 and len(subpaths(faces[0].region)) == 2,"inner contour survives placement")
+edge := bezier((0,0,0),(1,2,3),(3,2,1),(4,4,4))
+assert(len(s.project([edge],view,faces:false).lines) == 1)
+
+axis := compose(translate((0,0,-28mm)), rotate(58deg,axis:(0,1,0)))
+tube := transformed(s.cylinder(9mm,56mm),axis)
+ball := transformed(s.sphere(18mm),translate((3mm,4mm,0)))
+projection := s.project([tube,ball],s.orthographic(-65deg,26deg))
+stack := projection.layers
+assert(len(stack) == 4,"two intersecting solids contribute four sheets")
+for layer in stack do
+    tube_visible := false
+    ball_visible := false
+    for face in layer.faces do
+        if face.source == 0 then tube_visible = true else ball_visible = true end
+    end
+    assert(tube_visible and ball_visible,"both surfaces change depth order")
+end
+front_section := false
+rear_section := false
+silhouette := false
+ridge := false
+for line in projection.lines do
+    if line.kind == "intersection" then
+        assert(line.source == 0 and line.other_source == 1)
+        if line.visible then front_section = true else rear_section = true end
+    else if line.kind == "outline" then silhouette = true
+    else if line.kind == "edge" then ridge = true
+    end end end
+end
+assert(front_section and rear_section and silhouette and ridge)
+
+default drawing picture() do
+    for face in faces do +face.region filled rgb(0.2,0.5,0.6) end
+end

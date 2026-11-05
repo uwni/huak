@@ -473,7 +473,7 @@ test "quantity folding preserves dimensions errors and constant identities" {
         .{ .left = .{ .quantity = try units.applyUnit(2 * std.math.pi, .rad) }, .right = .{ .quantity = try units.applyUnit(360, .deg) }, .op = .equal, .folds = true },
         .{ .left = .{ .quantity = try units.applyUnit(2, .cm) }, .right = .{ .quantity = try units.applyUnit(2, .mm) }, .op = .divide, .folds = true },
         .{ .left = .{ .quantity = try units.applyUnit(2, .cm) }, .right = .{ .quantity = try units.applyUnit(2, .mm) }, .op = .multiply, .folds = true },
-        .{ .left = .{ .int = 0 }, .right = .{ .quantity = try units.applyUnit(2, .cm) }, .op = .make_pair, .folds = true },
+        .{ .left = .{ .int = 0 }, .right = .{ .quantity = try units.applyUnit(2, .cm) }, .op = .make_vec2, .folds = true },
         .{ .left = .{ .quantity = try units.applyUnit(1, .cm) }, .right = .{ .quantity = try units.applyUnit(1, .deg) }, .op = .add, .folds = false },
         .{ .left = .{ .quantity = try units.applyUnit(1, .cm) }, .right = .{ .int = 0 }, .op = .divide, .folds = false },
     };

@@ -71,8 +71,8 @@ test "mapped callbacks are reentrant snapshot source pictures and preserve diagn
         \\import transform.mapped
         \\source:=picture()
         \\object.append(source, draw(path((0pt,0pt),(2pt,0pt)), pen(rgb(0,0,1),1pt)))
-        \\fn offset_point(p:pair,offset:pair)->pair return p+offset end
-        \\fn mutate_and_map(p:pair,original:object)->pair
+        \\fn offset_point(p:vec2,offset:vec2)->vec2 return p+offset end
+        \\fn mutate_and_map(p:vec2,original:object)->vec2
         \\    if len(original.paths)==1 then object.append(original, fill(rectangle((20pt,20pt),2pt,2pt))) end
         \\    nested:=mapped(path(p),offset_point,(0pt,3pt))
         \\    return bounds(nested)[0]
@@ -91,9 +91,9 @@ test "mapped callbacks are reentrant snapshot source pictures and preserve diagn
         try execute(&machine);
     }
     const failures = [_]struct { source: []const u8, message: []const u8, steps: usize = 10000 }{
-        .{ .source = "fn broken(p:pair)->pair panic(\"mapping failed\"); return p end; result:=transform.mapped(path((0,0)),broken)", .message = "mapping failed" },
-        .{ .source = "fn broken(p:pair)->pair while true do end; return p end; result:=transform.mapped(path((0,0)),broken)", .message = "instruction limit", .steps = 100 },
-        .{ .source = "fn wrong(p:pair)->int return 1 end; result:=transform.mapped(path((0,0)),wrong)", .message = "PointMappingMustReturnPair" },
+        .{ .source = "fn broken(p:vec2)->vec2 panic(\"mapping failed\"); return p end; result:=transform.mapped(path((0,0)),broken)", .message = "mapping failed" },
+        .{ .source = "fn broken(p:vec2)->vec2 while true do end; return p end; result:=transform.mapped(path((0,0)),broken)", .message = "instruction limit", .steps = 100 },
+        .{ .source = "fn wrong(p:vec2)->int return 1 end; result:=transform.mapped(path((0,0)),wrong)", .message = "PointMappingMustReturnVec2" },
         .{ .source = "f:=math.sin; result:=f()", .message = "invalid argument count" },
         .{ .source = "import transform.bent; result:=bent(path((0,0)),path((0,0)))", .message = "InvalidBendGuide" },
         .{ .source = "import transform.bent; result:=bent(path((0,0)),geometry.compound([path((0,0),(1,1)),path((2,2),(3,3))]))", .message = "InvalidBendGuide" },
@@ -603,11 +603,11 @@ test "path literals lower once preserve point evaluation and reach native vector
             \\mixed:=a--b~~c~~d--cycle
             \\mixed_ordinary:=path([a,b,c,d],true,["straight","smooth","smooth","straight"])
             \\order:=[]
-            \\fn mark(x:length) -> pair
+            \\fn mark(x:length) -> vec2
             \\    order += x
             \\    return (x,x/2)
             \\end
-            \\fn make_path(a:pair,b:pair,c:pair) -> path
+            \\fn make_path(a:vec2,b:vec2,c:vec2) -> path
             \\    return a~~b~~c
             \\end
             \\evaluated:=mark(0mm)--mark(10mm)~~mark(20mm)
@@ -1167,7 +1167,7 @@ test "deep or exponentially shared lists have bounded formatting work" {
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         try t.expect(machine.failure != null);
     }
-    const text = try l.Runtime.formatValue(t.allocator, .{ .pair = .{ .x = 1e308, .y = 1e-308 } });
+    const text = try l.Runtime.formatValue(t.allocator, .{ .vec2 = .{ .x = 1e308, .y = 1e-308 } });
     defer t.allocator.free(text);
     try t.expect(text.len > 0);
 }
@@ -1229,7 +1229,7 @@ test "explicit pictures preserve independent bounds aliases and copied compositi
     defer library.deinit();
     var program = try compile(&library,
         \\import paint.{rgb, translate, rectangle, bounds, fill, picture, append};import picture.canvas;import assertions.assert
-        \\fn stamp(dst: object, at: pair) -> void
+        \\fn stamp(dst: object, at: vec2) -> void
         \\ object.append(dst, object.fill(rectangle(at,4,5), rgb(1,0,0)))
         \\end
         \\first:=picture(80,40); second:=picture(120,70); alias:=first
@@ -1745,7 +1745,7 @@ test "selected and reexported function aliases retain native operators and prece
         \\    return transformed(curve,scale(factor))
         \\end
         \\mixfix(enlarged) _ enlarged _ in placement
-        \\export fn relocated(curve:path,offset:pair)->path
+        \\export fn relocated(curve:path,offset:vec2)->path
         \\    return transformed(curve,translate(offset))
         \\end
         \\mixfix(relocated) _ relocated _ in placement
@@ -1762,7 +1762,7 @@ test "selected and reexported function aliases retain native operators and prece
         \\import math.abs;import paint.{translate, circle, transformed, bounds, draw, picture};import assertions.assert
         \\import "bridge.huak".{order as affine, resized as grow, moved as move_curve, twice as double_value, amount as base, adjusted as add_base}
         \\precedence finishing below affine; above path; associativity left end
-        \\fn nudged(curve:path,offset:pair)->path return transformed(curve,translate(offset)) end
+        \\fn nudged(curve:path,offset:vec2)->path return transformed(curve,translate(offset)) end
         \\mixfix(nudged) _ nudged _ in finishing
         \\base_curve:=circle((0,0),5)
         \\curve:=base_curve enlarged 1+1 relocated (20,30) nudged (3,4)
@@ -2057,7 +2057,7 @@ test "exported infix geometry uses the normal function bytecode and native frame
         \\end
         \\mixfix(scaled) _ scaled _ in transform
         \\export scaled
-        \\fn shifted(p:path,offset:pair)->path
+        \\fn shifted(p:path,offset:vec2)->path
         \\ return transformed(p,translate(offset))
         \\end
         \\mixfix(shifted) _ shifted _ in transform

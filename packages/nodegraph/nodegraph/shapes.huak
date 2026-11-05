@@ -7,7 +7,7 @@ import pen.stroke_path
 import assertions.assert
 import "options.huak" as opt
 
-export fn rounded_rect(center:pair, size:pair, radius:length) -> path
+export fn rounded_rect(center:vec2, size:vec2, radius:length) -> path
     r := min(radius, min(size.x, size.y)/2)
     if r <= 0pt then return rectangle(center-size/2, size.x, size.y) end
     x := size.x/2-r
@@ -20,7 +20,7 @@ export fn rounded_rect(center:pair, size:pair, radius:length) -> path
     return offset(rectangle(center-(x, y), 2*x, 2*y), r, "round")
 end
 
-export fn ellipse_shape(center:pair, size:pair, factor:float = 1) -> path
+export fn ellipse_shape(center:vec2, size:vec2, factor:float = 1) -> path
     assert(size.x > 0pt and size.y > 0pt and factor > 0, "shape dimensions must be positive")
     return transformed(circle((0pt, 0pt), 1pt), compose(scale(size.x*factor/2pt, size.y*factor/2pt), translate(center)))
 end
@@ -30,7 +30,7 @@ fn oriented(points:list, dir:string) -> list
     rotate := dir == "left" or dir == "bottom"
     result := []
     for i in 0:len(points)-1 do
-        p:pair := points[i]
+        p:vec2 := points[i]
         if flip then p = (p.y, p.x) end
         if rotate then p = (-p.x, -p.y) end
         result += [p]
@@ -38,7 +38,7 @@ fn oriented(points:list, dir:string) -> list
     return result
 end
 
-export fn shape_outline(kind:string, center:pair, size:pair, radius:length = 0pt, options:dict = {}) -> path
+export fn shape_outline(kind:string, center:vec2, size:vec2, radius:length = 0pt, options:dict = {}) -> path
     assert(size.x > 0pt and size.y > 0pt, "shape dimensions must be positive")
     w := size.x/2
     h := size.y/2
@@ -123,7 +123,7 @@ export fn shape_outline(kind:string, center:pair, size:pair, radius:length = 0pt
     return path(moved, true)
 end
 
-export fn text_center(dst:object, body:text, center:pair, angle:angle = 0deg)
+export fn text_center(dst:object, body:text, center:vec2, angle:angle = 0deg)
     local := picture()
     object.append(local, label(body, (-body.width/2, body.height/2-body.baseline)))
     append(dst, local, compose(rotate(angle), translate(center)))

@@ -66,9 +66,9 @@ pub fn fork(parent: *Runtime) !Runtime {
     // No child-owned resources exist while these metadata copies can fail.
     errdefer child.arena.deinit();
     inline for (.{
-        "module_setups", "path_values", "colors",       "pens",      "transforms",
-        "solvers",       "variables",   "expressions",  "solutions", "texts",
-        "layouts",       "frames",      "scene_values", "measures",
+        "module_setups", "path_values",  "colors",      "pens",      "transforms", "models",
+        "solvers",       "variables",    "expressions", "solutions", "texts",      "layouts",
+        "frames",        "scene_values", "measures",
     }) |name| {
         try @field(child, name).appendSlice(child.arena.allocator(), @field(parent, name).items);
     }
@@ -195,7 +195,7 @@ test "task snapshots isolate metadata and prohibit writes through borrowed owner
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(a, a, &unused_library, .{ .inputs = &.{.{ .key = "title", .value = "retained" }} });
     defer parent.deinit();
-    const curve = try invoke(&parent, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const picture = try invoke(&parent, .picture, &.{});
     _ = try invoke(&parent, .append, &.{ picture, try invoke(&parent, .draw, &.{curve}) });
     const solver = try invoke(&parent, .solver, &.{});
@@ -231,7 +231,7 @@ test "task picture adoption moves geometry and supports continued drawing" {
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
-    const curve = try invoke(&parent, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const earlier = try invoke(&parent, .picture, &.{});
     _ = try invoke(&parent, .append, &.{ earlier, try invoke(&parent, .draw, &.{curve}) });
     var child = try parent.forkTask();
@@ -269,7 +269,7 @@ test "task checkpoint rollback releases unpublished owners without changing seri
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
-    const curve = try invoke(&parent, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const marker = parent.checkpointTasks();
     var child = try parent.forkTask();
     defer child.deinit();
@@ -291,7 +291,7 @@ fn allocationFailureAdoption(allocator: std.mem.Allocator, object_result: bool) 
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(allocator, allocator, &unused_library, .{});
     defer parent.deinit();
-    const curve = try invoke(&parent, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     var child = try parent.forkTask();
     defer child.deinit();
     const result = try invoke(&child, .picture, &.{});
@@ -315,7 +315,7 @@ test "task adoption moves the connected storage graph and preserves foreign hand
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
-    const curve = try invoke(&parent, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     var child = try parent.forkTask();
     var child_alive = true;
     defer if (child_alive) child.deinit();
@@ -354,7 +354,7 @@ test "task adoption rejects animation tracks without moving owners" {
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
-    const curve = try invoke(&parent, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     var child = try parent.forkTask();
     defer child.deinit();
     const picture = try invoke(&child, .picture, &.{});

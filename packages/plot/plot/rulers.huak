@@ -145,11 +145,11 @@ export fn measure(r:Ruler, available:length, font:length, shared:any)
     elseif setting!=false then r.minors = setting end
 end
 
-fn segment(dst:picture, a:pair, b:pair, stroke:pen)
+fn segment(dst:picture, a:vec2, b:vec2, stroke:pen)
     append(dst,draw(path(a,b),stroke))
 end
 
-export fn spine(dst:picture, r:Ruler, start:pair, ink:pen)
+export fn spine(dst:picture, r:Ruler, start:vec2, ink:pen)
     tangent := (1,0); normal := (0,1)
     if not horizontal(r.side) then tangent = (0,1); normal = (1,0) end
     ends := get(r.options,"arrow","none")
@@ -179,7 +179,7 @@ fn break_endpoint(gaps:list, distance:length) -> bool
     return false
 end
 
-export fn paint(dst:picture, r:Ruler, origin:pair, size:pair, ink:pen, grid:pen, foreground:bool, show_spine:bool, cross_pieces:list)
+export fn paint(dst:picture, r:Ruler, origin:vec2, size:vec2, ink:pen, grid:pen, foreground:bool, show_spine:bool, cross_pieces:list)
     opts := r.options
     along_x := horizontal(r.side)
     start := origin

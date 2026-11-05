@@ -19,7 +19,6 @@ export struct Passage
 end
 
 export struct Crossing
-    point:pair
     first:Passage
     second:Passage
 end
@@ -60,7 +59,7 @@ export fn analyze(strands:list, tolerance:length) -> Plan
         id := i+1
         first := Passage(strand:row[1], contour:row[2], time:row[3], crossing:id, over:false)
         second := Passage(strand:row[4], contour:row[5], time:row[6], crossing:id, over:true)
-        crossings += [Crossing(point:row[0], first:first, second:second)]
+        crossings += [Crossing(first:first, second:second)]
         insert(visits[first.strand], first)
         insert(visits[second.strand], second)
     end

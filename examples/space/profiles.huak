@@ -1,0 +1,19 @@
+import space as s
+import paint.*
+import geometry.arc
+
+// The same semicircle bounds both the open sheet and the solid.
+rim := arc((0,0,0),14mm,0deg,180deg)
+height := (0,0,20mm)
+sheet := s.extrude(rim,height)
+diameter := (-14mm,0,0) -- (14mm,0,0)
+solid := s.extrude(s.face(rim & diameter),height)
+view := s.project([sheet, transformed(solid,translate((40mm,0,0)))], s.orthographic(-65deg,32deg))
+inks := [rgb(0.50,0.76,0.78),rgb(0.96,0.73,0.44)]
+
+default drawing picture() do
+    for face in view.visible_faces do +face.region filled inks[face.source] end
+    for line in view.lines do
+        if line.visible and line.kind != "seam" then +draw line.curve end
+    end
+end

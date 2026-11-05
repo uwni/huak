@@ -17,7 +17,7 @@ export struct Layer
 end
 
 export struct Axis
-    cell:pair
+    cell:vec2
     layers:list = []
     options:dict = {}
     sides:dict = {}
@@ -46,7 +46,7 @@ export fn figure(width:length = 400pt, height:length = 280pt, options:dict = {})
     return Figure(width:width, height:height, options:copy(options))
 end
 
-export fn axis(fig:Figure, cell:pair = (0,0), options:dict = {}) -> Axis
+export fn axis(fig:Figure, cell:vec2 = (0,0), options:dict = {}) -> Axis
     assert(cell.x >= 0 and cell.y >= 0 and cell.x == int(cell.x) and cell.y == int(cell.y), "axis cell requires nonnegative integer row and column")
     for existing in fig.axes do assert(existing.cell != cell, "axis cell is already occupied") end
     validate(options, AXIS_OPTIONS)
@@ -89,7 +89,7 @@ export fn on_axes(item:Layer, x:string, y:string) -> Layer
     return styled(item,{"xaxis":x,"yaxis":y})
 end
 
-export fn arrow(start:pair, finish:pair) -> Layer
+export fn arrow(start:vec2, finish:vec2) -> Layer
     return Layer(kind:"arrow",x:[start.x,finish.x],y:[start.y,finish.y])
 end
 

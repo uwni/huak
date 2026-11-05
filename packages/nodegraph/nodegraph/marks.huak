@@ -47,8 +47,8 @@ export fn render(description:model.MarkDescription, guide:path, ink:color, width
     origin:length := 0pt
     if description.position <= 0 then origin = opt.get(options, "tail_origin", 0pt) end
     if description.position >= 1 then origin = opt.get(options, "tip_origin", 0pt) end
-    location:pair := where.point+where.tangent*origin
-    direction:pair := where.tangent
+    location:vec2 := where.point+where.tangent*origin
+    direction:vec2 := where.tangent
     size:length := opt.get(options, "size", default_size)
     size = size*opt.get(options, "scale", 1)
     assert(size > 0pt and width > 0pt, "mark size and stroke thickness must be positive")

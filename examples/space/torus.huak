@@ -1,0 +1,28 @@
+import space as s
+import paint.*
+import math.PI
+
+ring := s.torus(30mm, 8mm)
+coil := s.on_surface(ring, (0, 0) -- (2*PI, 12*PI))
+axis := (-55mm, 0, -12mm) -- (55mm, 0, -12mm)
+view := s.orthographic(70deg, 38deg)
+projection := s.project([ring, coil, axis], view, faces:false)
+ink := pen(rgb(0.10, 0.18, 0.25), 0.7pt)
+copper := pen(rgb(0.69, 0.27, 0.10), 1.3pt)
+hidden := pen(rgb(0.53, 0.55, 0.59), 0.5pt, dash:[2pt, 2pt])
+default drawing picture() do
+    for line in projection.lines do
+        if not line.visible and line.kind != "seam" then
+            +draw line.curve with hidden
+        end
+    end
+    for line in projection.lines do
+        if line.visible and line.kind != "seam" then
+            if line.source == 1 then
+                +draw line.curve with copper
+            else
+                +draw line.curve with ink
+            end
+        end
+    end
+end

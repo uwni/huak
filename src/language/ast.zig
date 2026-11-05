@@ -47,7 +47,7 @@ pub const Expr = struct {
         name: []const u8,
         list: []const *Expr,
         dict: []const DictEntry,
-        pair: struct { x: *Expr, y: *Expr },
+        vector: struct { x: *Expr, y: *Expr, z: ?*Expr = null },
         unary: struct { op: Unary, operand: *Expr },
         binary: struct { op: Binary, left: *Expr, right: *Expr },
         // Raw joins participate in precedence binding. Bound literals are
@@ -188,9 +188,10 @@ pub fn walkChildren(visitor: anytype, node: Node) anyerror!void {
             .dict => |values| for (values) |value| {
                 try walk(visitor, .{ .expression = value.value });
             },
-            .pair => |value| {
+            .vector => |value| {
                 try walk(visitor, .{ .expression = value.x });
                 try walk(visitor, .{ .expression = value.y });
+                if (value.z) |z| try walk(visitor, .{ .expression = z });
             },
             inline .binary, .path_join, .path_literal => |value| {
                 try walk(visitor, .{ .expression = value.left });

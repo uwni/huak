@@ -87,7 +87,7 @@ end
 
 // Raw scene paths expose a full shaft hidden behind a mask, even if the
 // rendered image looks identical. Verify each retained path independently.
-fn has_segment(paths:list, a:pair, b:pair) -> bool
+fn has_segment(paths:list, a:vec2, b:vec2) -> bool
     for curve in paths do
         if len(curve)==1 then
             p := geometry.point_at(curve,0); q := geometry.point_at(curve,1)

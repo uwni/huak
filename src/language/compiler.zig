@@ -766,6 +766,29 @@ const Compiler = struct {
     }
 
     fn builtinResult(self: *Compiler, context: *Context, signature: builtin.Signature, args: []const *ast.Expr) Type {
+        if (signature.id == .unit or signature.id == .lerp or signature.id == .apply) {
+            // Both vector parameters of lerp must have the same dimension.
+            // Named calls can supply them in either order.
+            for (args) |arg| if (self.expressionType(context, arg)) |kind| {
+                if (kind.isVector()) return kind;
+            };
+        }
+        switch (signature.id) {
+            .rectangle, .circle, .ellipse, .arc, .bezier, .path => for (args) |arg| {
+                if (self.expressionType(context, arg)) |kind| {
+                    if (kind == .vec2) return .path;
+                    if (kind == .vec3) return .shape;
+                }
+            },
+            .reverse, .closed => if (args.len == 1) return self.expressionType(context, args[0]) orelse signature.result,
+            .joined, .region_union, .region_intersection, .region_difference => if (args.len >= 2) {
+                const left = self.expressionType(context, args[0]);
+                const right = self.expressionType(context, args[1]);
+                if (left == .shape or right == .shape) return .shape;
+                if (left == .path and right == .path) return .path;
+            },
+            else => {},
+        }
         return if (signature.id == .copy and args.len == 1) self.expressionType(context, args[0]) orelse signature.result else signature.result;
     }
 
@@ -774,6 +797,7 @@ const Compiler = struct {
         if (inner.value == .name) if (context.resolve(inner.value.name, inner.span)) |binding| return binding.symbol.kind;
         if (inner.value == .dict) return .dict;
         if (inner.value == .list) return .list;
+        if (inner.value == .vector) return if (inner.value.vector.z == null) .vec2 else .vec3;
         if (inner.value == .member) {
             const member = inner.value.member;
             if (ungroup(member.object).value == .name) {
@@ -1214,17 +1238,20 @@ const Compiler = struct {
                 _ = try context.emit(.make_dict, try self.narrow(entries.len, span), 0, span);
                 return .dict;
             },
-            .pair => |pair| {
-                const x = try self.compileExpression(context, pair.x);
-                const y = try self.compileExpression(context, pair.y);
-                try self.require(.scalar, x, pair.x.span);
-                try self.require(.scalar, y, pair.y.span);
-                if (scalarDimension(x)) |a| if (scalarDimension(y)) |b| {
-                    if (!a.eql(b) and !(a.eql(.scalar) and zeroLiteral(pair.x)) and !(b.eql(.scalar) and zeroLiteral(pair.y)))
-                        return self.fail(span, "pair coordinates have incompatible dimensions", .{});
+            .vector => |v| {
+                var dimension: ?units.Dimension = null;
+                for ([_]?*ast.Expr{ v.x, v.y, v.z }) |coordinate| if (coordinate) |expr| {
+                    const kind = try self.compileExpression(context, expr);
+                    try self.require(.scalar, kind, expr.span);
+                    if (scalarDimension(kind)) |d| {
+                        if (d.eql(.scalar) and zeroLiteral(expr)) continue;
+                        if (dimension) |prior| if (!prior.eql(d))
+                            return self.fail(span, "vector coordinates have incompatible dimensions", .{});
+                        dimension = d;
+                    }
                 };
-                _ = try context.emit(.make_pair, 0, 0, span);
-                return .pair;
+                _ = try context.emit(if (v.z == null) .make_vec2 else .make_vec3, 0, 0, span);
+                return if (v.z == null) .vec2 else .vec3;
             },
             .unary => |unary| {
                 const literal = ungroup(unary.operand);
@@ -1240,7 +1267,7 @@ const Compiler = struct {
                         return .boolean;
                     },
                     .positive, .negate => {
-                        if (kind != .pair and kind != .variable and kind != .linear) try self.require(.scalar, kind, span);
+                        if (!kind.isVector() and kind != .variable and kind != .linear) try self.require(.scalar, kind, span);
                         _ = try context.emit(if (unary.op == .negate) .negate else .positive, 0, 0, span);
                         return if (unary.op == .negate and kind == .variable) .linear else kind;
                     },
@@ -1567,14 +1594,23 @@ const Compiler = struct {
         var closed = false;
         try self.collectPathLiteral(expression_, &points, &joins, &closed, 0);
         if (points.items.len < 2) return self.fail(expression_.span, "a path literal needs at least two points", .{});
-        for (points.items) |point_| try self.require(.pair, try self.compileExpression(context, point_), point_.span);
+        var dimension: Type = .any;
+        for (points.items) |point_| {
+            const actual = try self.compileExpression(context, point_);
+            try self.require(if (dimension == .any) .vector else dimension, actual, point_.span);
+            if (actual.isVector()) dimension = actual;
+        }
         _ = try context.emit(.make_list, try self.narrow(points.items.len, expression_.span), 0, expression_.span);
         try context.constant(.{ .boolean = closed }, expression_.span);
         const values = try self.allocator.alloc(Value, joins.items.len);
         for (values, joins.items) |*value, join| value.* = .{ .string = @tagName(join) };
         try context.constant(bc.types.listView(values), expression_.span);
         _ = try context.emit(.call_builtin, @backingInt(builtin.Id.path), 3, expression_.span);
-        return .path;
+        return switch (dimension) {
+            .vec2 => .path,
+            .vec3 => .shape,
+            else => .any,
+        };
     }
 
     fn collectPathLiteral(self: *Compiler, expression_: *ast.Expr, points: *std.array_list.Managed(*ast.Expr), joins: *std.array_list.Managed(ast.PathJoin), closed: *bool, depth: usize) anyerror!void {
@@ -1633,8 +1669,9 @@ const Compiler = struct {
         const right_number = right == .int or right == .number;
         if (left_number and right_number) return if (operation == .divide or operation == .power or left == .number or right == .number) .number else .int;
         if (operation == .add and left == .string and right == .string) return .string;
-        if ((operation == .add or operation == .subtract) and left == .pair and right == .pair) return .pair;
-        if ((operation == .multiply and ((left == .pair and right.isScalar()) or (left.isScalar() and right == .pair))) or (operation == .divide and left == .pair and right.isScalar())) return .pair;
+        if ((operation == .add or operation == .subtract) and left.isVector() and left == right) return left;
+        if ((operation == .multiply or operation == .divide) and left.isVector() and right.isScalar()) return left;
+        if (operation == .multiply and left.isScalar() and right.isVector()) return right;
         const left_linear = left == .variable or left == .linear;
         const right_linear = right == .variable or right == .linear;
         if ((operation == .add or operation == .subtract) and (left_linear or left_number) and (right_linear or right_number)) return .linear;
@@ -1678,7 +1715,11 @@ const Compiler = struct {
                 }
                 break :blk .{ .dict = dictionary };
             },
-            .pair => |pair| numeric.makePair(try self.constantValue(pair.x, function_parameters), try self.constantValue(pair.y, function_parameters)) catch |err| self.fail(expression_.span, "invalid constant pair: {s}", .{@errorName(err)}),
+            .vector => |v| blk: {
+                const x = try self.constantValue(v.x, function_parameters);
+                const y = try self.constantValue(v.y, function_parameters);
+                break :blk (if (v.z) |z| numeric.makeVector(3, .{ x, y, try self.constantValue(z, function_parameters) }) else numeric.makeVec2(x, y)) catch |err| self.fail(expression_.span, "invalid constant vector: {s}", .{@errorName(err)});
+            },
             .string => |value| .{ .string = try self.allocator.dupe(u8, value) },
             .name => |name| blk: {
                 if (function_parameters) |parameters| {
@@ -2511,7 +2552,7 @@ fn pathLiteralAllocationExercise(allocator: std.mem.Allocator) !void {
     for ([_]bool{ false, true }) |optimize| {
         var diagnostic: ?Diagnostic = null;
         var program = try compile(allocator,
-            \\fn outline(a:pair,b:pair,c:pair) -> path
+            \\fn outline(a:vec2,b:vec2,c:vec2) -> path
             \\    return a~~b--c~~cycle
             \\end
             \\shape:=outline((0mm,0mm),(10mm,15mm),(20mm,0mm))
@@ -2894,8 +2935,8 @@ test "variadic aliases preserve ordinary dot prefix and infix call roles" {
 
 test "variadic calls check fixed prefixes and declared element types" {
     const invalid = [_][]const u8{
-        "fn f(head:int,tail:pair...);end;f()",
-        "fn f(head:int,tail:pair...);end;f(1,2)",
+        "fn f(head:int,tail:vec2...);end;f()",
+        "fn f(head:int,tail:vec2...);end;f(1,2)",
         "fn f(values:missing...);end",
         "fn f(a:int,b:int,c:int,rest...);end;mixfix(f) _ f _ in addition",
         "fn f(a:int,b:int,c:int,rest...);end;mixfix(f) f _ in unary",
@@ -3192,10 +3233,10 @@ test "properties stay distinct from dot calls with explicitly aliased functions"
         \\point:=(2,3)
         \\coordinate:=point.x
         \\custom:=point.x()
-        \\fn x(p:pair)->float; return p.y; end
+        \\fn x(p:vec2)->float; return p.y; end
     , "members.huak", .{}, &diagnostic);
     defer program.deinit();
-    const expected = [_]Type{ .int, .number, .solution, .string, .pair, .scalar, .number };
+    const expected = [_]Type{ .int, .number, .solution, .string, .vec2, .scalar, .number };
     for (expected, [_][]const u8{ "sin", "a", "s", "tag", "point", "coordinate", "custom" }) |kind, name| try std.testing.expectEqual(kind, testGlobalType(&program, name));
 }
 
@@ -3732,7 +3773,7 @@ test "function defaults retain ordinary dot and both mixfix call forms" {
         \\events:=[]
         \\fn record(x:int)->int events+=x;return x end
         \\explicit:=combine(record(1),record(2))
-        \\fn settings(value:float=1,position:pair=(0mm,1mm),label:string="默认")->list
+        \\fn settings(value:float=1,position:vec2=(0mm,1mm),label:string="默认")->list
         \\    return [value,position,label]
         \\end
         \\configured:=settings()
@@ -3884,7 +3925,7 @@ test "function defaults resolve ordinary imported bindings" {
     };
     const cases = [_][]const u8{
         "import \"values\".pi; fn f(x:float=pi) end",
-        "import \"values\".{tau,e}; fn f(x:pair=(tau,e)) end",
+        "import \"values\".{tau,e}; fn f(x:vec2=(tau,e)) end",
         "import \"values\".pi as cm; fn f(x:list=[[cm]]) end",
         "import \"values\".*; fn f(x:angle=pi rad) end",
     };
@@ -3906,7 +3947,7 @@ test "function defaults keep literal constants and explicit units without changi
     for ([_]bool{ false, true }) |optimize| {
         var diagnostic: ?Diagnostic = null;
         var program = try compile(std.testing.allocator,
-            \\fn constants(angle:angle=(2*3.141592653589793) rad,point:pair=(6.283185307179586,2.718281828459045),items:list=[[mm]])->list
+            \\fn constants(angle:angle=(2*3.141592653589793) rad,point:vec2=(6.283185307179586,2.718281828459045),items:list=[[mm]])->list
             \\    return [angle,point,items]
             \\end
             \\result:=constants()
@@ -3920,8 +3961,8 @@ test "function defaults keep literal constants and explicit units without changi
         _ = try machine.execute(&.{});
         const result = @import("types.zig").sequence(machine.getGlobal("result").?).?;
         try std.testing.expectEqual(@as(f64, 2 * std.math.pi), result[0].quantity.value);
-        try std.testing.expectEqual(@as(f64, 2 * std.math.pi), result[1].pair.x);
-        try std.testing.expectEqual(@as(f64, std.math.e), result[1].pair.y);
+        try std.testing.expectEqual(@as(f64, 2 * std.math.pi), result[1].vec2.x);
+        try std.testing.expectEqual(@as(f64, std.math.e), result[1].vec2.y);
         try std.testing.expectEqual(@as(f64, 10), machine.getGlobal("distance").?.quantity.value);
 
         var cli = try compile(std.testing.allocator, "pi:=1; param angle:float=3.141592653589793", "unchanged-cli-default.huak", .{ .optimize = optimize }, &diagnostic);

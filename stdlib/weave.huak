@@ -1,42 +1,22 @@
-// Explicit collection scope for self-crossing paths and multiple strands.
+// Each weave block collects its own strands and returns their woven picture.
 import color.rgb
+import object as objects
 import assertions.assert
 import "std/weave/analysis.huak" as analysis
 import "std/weave/render.huak" as render
 
-export struct Context
-    target:object
-    strands:list
-    gap:length
-    tolerance:length
+fn collect(strands:list, curve:path, stroke:any = false, visits:list = [])
+    if stroke == false then stroke = pen(rgb(0, 0, 0), 1pt) end
+    strands += [analysis.Strand(curve:curve, stroke:stroke, visits:copy(visits))]
 end
 
-export fn context(target:object, gap:length = 1pt, tolerance:length = 0.001pt) -> Context
+export expand_block weave(gap:length = 1pt, tolerance:length = 0.001pt) -> picture
     assert(gap >= 0pt, "weave gap must be nonnegative")
     assert(tolerance > 0pt, "weave tolerance must be positive")
-    return Context(target:target, strands:[], gap:gap, tolerance:tolerance)
-end
-
-fn stroke_or_default(value:any) -> pen
-    if value == false then return pen(rgb(0, 0, 0), 1pt) end
-    return value
-end
-
-export fn draw(ctx:Context, curve:path, stroke:any = false, visits:list = [])
-    ctx.strands += [analysis.Strand(curve:curve, stroke:stroke_or_default(stroke), visits:copy(visits))]
-end
-
-export fn finish(ctx:Context)
-    if len(ctx.strands) == 0 then return end
-    plan := analysis.analyze(ctx.strands, ctx.tolerance)
-    render.finish(ctx.target, plan, ctx.gap, ctx.tolerance)
-    ctx.strands = []
-end
-
-export expand_block drawing(ctx:Context)
-    draw := draw.with(ctx: ctx)
-    mixfix(draw) draw _ with _ crossings _ in unary
+    strands := []
+    add := collect.with(strands: strands)
+    mixfix(add) +draw _ with _ crossings _ in unary
+    mixfix(objects.draw) draw _ with _ in logical_or
     ...
-    finish(ctx)
-    return ctx.target
+    return render.compose(analysis.analyze(strands, tolerance), gap, tolerance)
 end

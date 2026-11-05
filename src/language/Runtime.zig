@@ -73,6 +73,23 @@ pub const Options = struct {
 };
 
 const Runtime = @This();
+const Model = @import("runtime/model.zig");
+const Affine3 = @import("../drawing/transform/Affine3.zig");
+const Transform = union(enum) {
+    plane: struct { xy: g.Transform, z_scale: f64 },
+    spatial: *const Affine3,
+
+    pub fn matrix3(t: Transform) Affine3 {
+        return switch (t) {
+            .plane => |p| blk: {
+                var matrix = Affine3.fromPlane(p.xy);
+                matrix.rows[2][2] = p.z_scale;
+                break :blk matrix;
+            },
+            .spatial => |p| p.*,
+        };
+    }
+};
 
 pub const TaskCheckpoint = task_owners.Checkpoint;
 gpa: std.mem.Allocator,
@@ -95,7 +112,8 @@ path_values: std.ArrayList(Path) = .empty,
 measures: std.ArrayList(Measure) = .empty,
 colors: std.ArrayList(DisplayList.Color) = .empty,
 pens: std.ArrayList(DisplayList.Pen) = .empty,
-transforms: std.ArrayList(g.Transform) = .empty,
+transforms: std.ArrayList(Transform) = .empty,
+models: std.ArrayList(Model.Node) = .empty,
 solvers: std.ArrayList(*constraints.Solver) = .empty,
 variables: std.ArrayList(Variable) = .empty,
 expressions: std.ArrayList(Expr) = .empty,
@@ -234,7 +252,7 @@ pub fn takeOutputs(self: *Runtime, values: []const Value) !OutputBatch {
     self.outputs_taken = true;
     return batch;
 }
-fn mem(self: *Runtime) std.mem.Allocator {
+pub fn mem(self: *Runtime) std.mem.Allocator {
     return self.arena.allocator();
 }
 fn from(ctx: ?*anyopaque) *Runtime {
@@ -369,7 +387,7 @@ fn store(self: *Runtime, comptime T: type, list: *std.ArrayList(T), value: T, ki
     try list.append(self.mem(), value);
     return handle(kind, index);
 }
-fn path(self: *Runtime, value: Value) !Path {
+pub fn path(self: *Runtime, value: Value) !Path {
     return self.path_values.items[try checkedIndex(value, .path, self.path_values.items.len)];
 }
 fn color(self: *Runtime, value: Value) !DisplayList.Color {
@@ -379,7 +397,27 @@ fn penValue(self: *Runtime, value: Value) !DisplayList.Pen {
     return self.pens.items[try checkedIndex(value, .pen, self.pens.items.len)];
 }
 fn transformValue(self: *Runtime, value: Value) !g.Transform {
+    return switch (try self.affineValue(value)) {
+        .plane => |t| t.xy,
+        .spatial => error.ExpectedPlanarTransform,
+    };
+}
+pub fn affineValue(self: *Runtime, value: Value) !Transform {
     return self.transforms.items[try checkedIndex(value, .transform, self.transforms.items.len)];
+}
+pub fn model(self: *Runtime, value: Value) !Model.Node {
+    return self.models.items[try checkedIndex(value, .shape, self.models.items.len)];
+}
+fn modelResult(self: *Runtime, kind: Model.Kind, args: []const Value) !Value {
+    for (args) |value| switch (value) {
+        .int, .number, .quantity, .vec2, .vec3 => {},
+        .handle => |ref| switch (ref.kind) {
+            .path, .shape, .transform => {},
+            else => return error.InvalidModelArgument,
+        },
+        else => return error.InvalidModelArgument,
+    };
+    return self.store(Model.Node, &self.models, .{ .kind = kind, .arguments = try self.mem().dupe(Value, args) }, .shape);
 }
 fn textValue(self: *Runtime, value: Value) !Text {
     return self.texts.items[try checkedIndex(value, .text, self.texts.items.len)];
@@ -450,7 +488,7 @@ fn objectSnapshot(self: *Runtime, value: Value, static: bool) !Scene.Snapshot {
     if (static) try self.requireStatic(object);
     return object.owner.scene.snapshotWithBounds(self.gpa, object.index, null, renderer.FrameBounds{ .frames = self.frames.items });
 }
-fn pathResult(self: *Runtime, value: Path) !Value {
+pub fn pathResult(self: *Runtime, value: Path) !Value {
     return self.store(Path, &self.path_values, value, .path);
 }
 fn outlinedLabel(self: *Runtime, reference: usize) !*const outline.Label {
@@ -525,14 +563,26 @@ fn rawPaths(self: *Runtime, allocator: std.mem.Allocator, object: Value) !Value 
     for (result, raw) |*value, path_| value.* = try self.pathResult(path_);
     return types.listView(result);
 }
-fn transformResult(self: *Runtime, value: g.Transform) !Value {
-    if (!value.isFinite()) return error.NonFinite;
-    return self.store(g.Transform, &self.transforms, value, .transform);
+fn transformResult(self: *Runtime, value: g.Transform, z_scale: f64) !Value {
+    if (!value.isFinite() or !std.math.isFinite(z_scale)) return error.NonFinite;
+    return self.store(Transform, &self.transforms, .{ .plane = .{ .xy = value, .z_scale = z_scale } }, .transform);
+}
+fn spatialTransform(self: *Runtime, value: Affine3) !Value {
+    for (value.rows) |row| for (row) |v| {
+        if (!std.math.isFinite(v)) return error.NonFinite;
+    };
+    const matrix = try self.mem().create(Affine3);
+    matrix.* = value;
+    return self.store(Transform, &self.transforms, .{ .spatial = matrix }, .transform);
 }
 fn field(ctx: ?*anyopaque, allocator: std.mem.Allocator, object: Value, name: []const u8) !Value {
     const self = from(ctx);
     if (self.outputs_taken) return error.InvalidState;
-    if (object.valueType() == .text) {
+    if (object.valueType() == .shape) {
+        const node = try self.model(object);
+        if (std.mem.eql(u8, name, "kind")) return .{ .string = @tagName(node.kind) };
+        if (std.mem.eql(u8, name, "arguments")) return types.listView(node.arguments);
+    } else if (object.valueType() == .text) {
         const metrics = (try self.textValue(object)).metrics;
         if (std.mem.eql(u8, name, "width")) return lengthResult(metrics.width);
         if (std.mem.eql(u8, name, "height")) return lengthResult(metrics.height);
@@ -570,7 +620,7 @@ fn field(ctx: ?*anyopaque, allocator: std.mem.Allocator, object: Value, name: []
             .path => |draw| draw.transform,
             .label => |label| label.transform,
             .picture => |group| group.transform,
-        });
+        }, 1);
         if (std.mem.eql(u8, name, "fill") or std.mem.eql(u8, name, "pen")) {
             if (command.* != .path) return error.ExpectedPathObject;
             if (std.mem.eql(u8, name, "fill")) return if (command.path.style.fill) |value| self.store(DisplayList.Color, &self.colors, value, .color) else .{ .boolean = false };
@@ -595,7 +645,7 @@ fn field(ctx: ?*anyopaque, allocator: std.mem.Allocator, object: Value, name: []
             const curves = try allocator.alloc(Value, measure.curves.len);
             for (curves, measure.curves) |*value, curve| {
                 const points = try allocator.alloc(Value, 4);
-                for (points, [_]g.Point{ curve.p0, curve.p1, curve.p2, curve.p3 }) |*point_, point_value| point_.* = .{ .pair = types.Pair.fromPoint(point_value) };
+                for (points, [_]g.Point{ curve.p0, curve.p1, curve.p2, curve.p3 }) |*point_, point_value| point_.* = .{ .vec2 = types.Vec2.fromPoint(point_value) };
                 value.* = types.listView(points);
             }
             return types.listView(curves);
@@ -695,7 +745,9 @@ pub fn animationColor(self: *Runtime, value: Value) !DisplayList.Color {
 fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Value) !Value {
     const own = self.mem();
     switch (id) {
-        .matrix => return self.transformResult(.{ .a = try numeric(args[0]), .b = try numeric(args[1]), .c = try numeric(args[2]), .d = try numeric(args[3]), .e = try lengthPoints(args[4]), .f = try lengthPoints(args[5]) }),
+        .project_scene => return @import("runtime/projection.zig").project(self, a, args),
+        .model_shape => return self.modelResult(std.meta.stringToEnum(Model.Kind, try string(args[0])) orelse return error.InvalidModelShape, try sequence(args[1])),
+        .matrix => return self.transformResult(.{ .a = try numeric(args[0]), .b = try numeric(args[1]), .c = try numeric(args[2]), .d = try numeric(args[3]), .e = try lengthPoints(args[4]), .f = try lengthPoints(args[5]) }, 1),
         .timeline => {
             const target = try self.objectValue(args[0], true);
             const settings = try target.owner.scene.settings(target.index);
@@ -840,20 +892,32 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (id == .atan2) return .{ .quantity = .{ .value = std.math.atan2(x.value, y.value), .dimension = .rotation } };
             return if ((id == .min and order != .gt) or (id == .max and order != .lt)) args[0] else args[1];
         },
-        .pair => return numeric_ops.makePair(args[0], args[1]),
-        .dot => {
-            const x = try vector(args[0]);
-            const y = try vector(args[1]);
-            return types.fromQuantity(try (units.Quantity{ .value = x.x * y.x + x.y * y.y, .dimension = try x.dimension.combine(y.dimension, false) }).checked());
-        },
-        .norm => {
-            const p = try vector(args[0]);
-            return types.fromQuantity(try (units.Quantity{ .value = std.math.hypot(p.x, p.y), .dimension = p.dimension }).checked());
-        },
-        .unit => {
-            const p = try vector(args[0]);
-            const n = try (g.Point{ .x = p.x, .y = p.y }).normalized();
-            return .{ .pair = .{ .x = n.x, .y = n.y } };
+        .vec2 => return numeric_ops.makeVec2(args[0], args[1]),
+        .vec3 => return numeric_ops.makeVector(3, args[0..3].*),
+        .dot, .norm, .unit => switch (args[0]) {
+            inline .vec2, .vec3 => |v, tag| {
+                if (!v.isFinite()) return error.NonFinite;
+                if (id == .dot) {
+                    if (args[1] != tag) return error.TypeMismatch;
+                    const w = @field(args[1], @tagName(tag));
+                    const dot = v.x * w.x + v.y * w.y + (if (tag == .vec3) v.z * w.z else 0);
+                    return types.fromQuantity(try (units.Quantity{ .value = dot, .dimension = try v.dimension.combine(w.dimension, false) }).checked());
+                }
+                if (id == .norm) {
+                    const xy = std.math.hypot(v.x, v.y);
+                    return types.fromQuantity(try (units.Quantity{ .value = if (tag == .vec3) std.math.hypot(xy, v.z) else xy, .dimension = v.dimension }).checked());
+                }
+                if (tag == .vec2) {
+                    const n = try (g.Point{ .x = v.x, .y = v.y }).normalized();
+                    return .{ .vec2 = .{ .x = n.x, .y = n.y } };
+                } else {
+                    const max = @max(@abs(v.x), @abs(v.y), @abs(v.z));
+                    if (max == 0) return error.ZeroVector;
+                    const n: types.Vec3 = .{ .x = v.x / max, .y = v.y / max, .z = v.z / max };
+                    return .{ .vec3 = n.scale(1 / std.math.hypot(std.math.hypot(n.x, n.y), n.z)) };
+                }
+            },
+            else => return error.TypeMismatch,
         },
         .lerp => {
             const difference = try numeric_ops.valueArithmetic(.subtract, args[1], args[0]);
@@ -917,7 +981,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return self.store(DisplayList.Pen, &self.pens, .{ .nib = retained.nib, .color = if (hasArgument(args, 1)) try self.color(args[1]) else .black, .cap = .round, .join = .round }, .pen);
         },
         .makepath => return self.pathResult(try (try effectiveNib(try self.penValue(args[0]))).makePath(own)),
-        .penoffset => return .{ .pair = types.Pair.fromPoint(try (try effectiveNib(try self.penValue(args[0]))).offset(try point(args[1]))) },
+        .penoffset => return .{ .vec2 = types.Vec2.fromPoint(try (try effectiveNib(try self.penValue(args[0]))).offset(try point(args[1]))) },
         .envelope => {
             const brush = try self.penValue(args[1]);
             var config: pen_geometry.EnvelopeOptions = .{ .cap = brush.cap, .join = brush.join, .miter_limit = brush.miter_limit };
@@ -949,21 +1013,47 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return self.pathResult(try pen_geometry.strokeOutline(own, try effectiveNib(brush), center, options));
         },
         .translate => {
+            if (args[0] == .vec3) {
+                const p = try args[0].vec3.points();
+                var t: Affine3 = .{};
+                for (&t.rows, p) |*row, v| row[3] = v;
+                return self.spatialTransform(t);
+            }
             const p = try point(args[0]);
-            return self.transformResult(.translation(p.x, p.y));
+            return self.transformResult(.translation(p.x, p.y), 1);
         },
         .scale => {
             const x = try numeric(args[0]);
-            return self.transformResult(.scaling(x, if (hasArgument(args, 1)) try numeric(args[1]) else x));
+            const t = g.Transform.scaling(x, if (hasArgument(args, 1)) try numeric(args[1]) else x);
+            if (!hasArgument(args, 2)) return self.transformResult(t, if (hasArgument(args, 1)) 1 else x);
+            var spatial = Affine3.fromPlane(t);
+            spatial.rows[2][2] = try numeric(args[2]);
+            return self.spatialTransform(spatial);
         },
-        .rotate => return self.transformResult(.rotation(try angular(args[0]))),
-        .compose => return self.transformResult((try self.transformValue(args[0])).then(try self.transformValue(args[1]))),
+        .rotate => {
+            const angle = try angular(args[0]);
+            if (!hasArgument(args, 1)) return self.transformResult(.rotation(angle), 1);
+            if (args[1] != .vec3 or !args[1].vec3.dimension.eql(.scalar)) return error.InvalidAxis;
+            return self.spatialTransform(try Affine3.rotation(angle, try args[1].vec3.points()));
+        },
+        .compose => {
+            const first = try self.affineValue(args[0]);
+            const second = try self.affineValue(args[1]);
+            if (first == .plane and second == .plane)
+                return self.transformResult(first.plane.xy.then(second.plane.xy), first.plane.z_scale * second.plane.z_scale);
+            return self.spatialTransform(first.matrix3().then(second.matrix3()));
+        },
         .apply => {
+            if (args[1] == .vec3) {
+                const p = args[1].vec3;
+                const v = (try self.affineValue(args[0])).matrix3().apply(try p.points());
+                return .{ .vec3 = try types.Vec3.fromPoints(v, p.dimension) };
+            }
             const result = (try self.transformValue(args[0])).apply(try point(args[1]));
             const original = try vector(args[1]);
-            return .{ .pair = if (original.dimension.eql(.scalar)) .{ .x = result.x, .y = result.y } else types.Pair.fromPoint(result) };
+            return .{ .vec2 = if (original.dimension.eql(.scalar)) .{ .x = result.x, .y = result.y } else types.Vec2.fromPoint(result) };
         },
-        .bezier, .rectangle, .circle, .path, .smooth => return self.constructPath(id, args),
+        .bezier, .rectangle, .circle, .ellipse, .arc, .path, .smooth => return self.constructPath(id, args),
         .compound => {
             var combined = Path.init(own);
             errdefer combined.deinit();
@@ -975,6 +1065,15 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 try combined.append(try self.path(item));
             }
             return self.pathResult(combined);
+        },
+        .contour_ranges => {
+            const ranges = try (try self.path(args[0])).contourRanges(self.gpa);
+            defer self.gpa.free(ranges);
+            const rows = try a.alloc(Value, ranges.len);
+            for (rows, ranges) |*row, range| row.* = types.listView(try a.dupe(Value, &.{
+                .{ .number = range.begin }, .{ .number = range.end }, .{ .boolean = range.closed },
+            }));
+            return types.listView(rows);
         },
         .subpaths => {
             const parts = try (try self.path(args[0])).subpaths(own);
@@ -989,8 +1088,10 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             }
             return types.listView(values);
         },
-        .reverse => return self.pathResult(try (try self.path(args[0])).reverse(own)),
-        .closed => {
+        .reverse, .closed => {
+            if (args[0].valueType() == .shape)
+                return self.modelResult(if (id == .reverse) .reverse else .closed, args);
+            if (id == .reverse) return self.pathResult(try (try self.path(args[0])).reverse(own));
             var result = try (try self.path(args[0])).clone(own);
             errdefer result.deinit();
             try result.close();
@@ -1011,6 +1112,8 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return self.store(Measure, &self.measures, measure, .measure);
         },
         .transformed => {
+            if (args[0].valueType() == .shape or (args[0].valueType() == .path and (try self.affineValue(args[1])) == .spatial))
+                return self.modelResult(.transformed, args);
             const transform = try self.transformValue(args[1]);
             if (args[0].valueType() == .pen) {
                 var value = try self.penValue(args[0]);
@@ -1022,6 +1125,8 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return self.pathResult(try (try self.path(args[0])).transformed(own, transform));
         },
         .joined => {
+            if (args[0].valueType() == .shape or args[1].valueType() == .shape)
+                return self.modelResult(.joined, args);
             var result = try (try self.path(args[0])).clone(own);
             try result.join(try self.path(args[1]));
             return self.pathResult(result);
@@ -1029,7 +1134,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         .trimmed => return self.pathResult(try (try self.path(args[0])).trimmed(own, try numeric(args[1]), try numeric(args[2]))),
         .point_at, .tangent_at => {
             const curve = try (try self.path(args[0])).curveAt(try numeric(args[1]));
-            return .{ .pair = types.Pair.fromPoint(if (id == .point_at) curve.curve.at(curve.t) else curve.curve.derivative(curve.t)) };
+            return .{ .vec2 = types.Vec2.fromPoint(if (id == .point_at) curve.curve.at(curve.t) else curve.curve.derivative(curve.t)) };
         },
         .arclength, .sample_path, .sample_at_length, .sample_at_fraction, .samples_at_length => {
             var options: Measure.Options = .{};
@@ -1089,7 +1194,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 },
                 else => return error.TypeMismatch,
             } orelse return types.listView(&.{});
-            return types.listView(try a.dupe(Value, &.{ .{ .pair = types.Pair.fromPoint(box.min) }, .{ .pair = types.Pair.fromPoint(box.max) } }));
+            return types.listView(try a.dupe(Value, &.{ .{ .vec2 = types.Vec2.fromPoint(box.min) }, .{ .vec2 = types.Vec2.fromPoint(box.max) } }));
         },
         .intersections, .intersection_times => {
             const first = try self.path(args[0]);
@@ -1108,7 +1213,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             defer self.gpa.free(crossings);
             const rows = try a.alloc(Value, crossings.len);
             for (rows, crossings) |*row, crossing| row.* = types.listView(try a.dupe(Value, &.{
-                .{ .pair = types.Pair.fromPoint(crossing.point) },
+                .{ .vec2 = types.Vec2.fromPoint(crossing.point) },
                 .{ .int = @intCast(crossing.first.path) },
                 .{ .int = @intCast(crossing.first.contour) },
                 .{ .number = crossing.first.time },
@@ -1155,6 +1260,15 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return self.pathResult(try converted.clone(own));
         },
         .region_union, .region_intersection, .region_difference, .region_xor => {
+            if (args[0].valueType() == .shape or args[1].valueType() == .shape) {
+                if (args.len != 2 or args[0].valueType() != .shape or args[1].valueType() != .shape) return error.ExpectedTwoModelShapes;
+                return self.modelResult(switch (id) {
+                    .region_union => .fuse,
+                    .region_intersection => .common,
+                    .region_difference => .cut,
+                    else => return error.UnsupportedModelOperation,
+                }, args);
+            }
             var options: regions.Options = .{};
             if (hasArgument(args, 2)) options.tolerance = try lengthPoints(args[2]);
             if (hasArgument(args, 3)) options.fill_rule = std.meta.stringToEnum(regions.FillRule, try string(args[3])) orelse return error.InvalidFillRule;
@@ -1307,13 +1421,22 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
 fn constructPath(self: *Runtime, id: builtin.Id, args: []const Value) !Value {
     const a = self.mem();
     var result = Path.init(a);
+    if (args[0] == .vec3) switch (id) {
+        .circle, .ellipse, .arc, .bezier => return self.modelResult(switch (id) {
+            .circle => .circle,
+            .ellipse => .ellipse,
+            .arc => .arc,
+            else => .cubic,
+        }, args),
+        else => {},
+    };
     switch (id) {
         .bezier => {
             try result.moveTo(try point(args[0]));
             try result.cubicTo(try point(args[1]), try point(args[2]), try point(args[3]));
         },
         .rectangle => {
-            const p = try point(args[0]);
+            const p = if (args[0] == .vec3) g.Point.zero else try point(args[0]);
             const w = try lengthPoints(args[1]);
             const h = try lengthPoints(args[2]);
             try result.moveTo(p);
@@ -1321,13 +1444,36 @@ fn constructPath(self: *Runtime, id: builtin.Id, args: []const Value) !Value {
             try result.lineTo(p.add(.{ .x = w, .y = h }));
             try result.lineTo(p.add(.{ .x = 0, .y = h }));
             try result.close();
+            if (args[0] == .vec3) return self.modelResult(.profile, &.{
+                try self.pathResult(result),              args[0],
+                .{ .vec3 = .{ .x = 1, .y = 0, .z = 0 } }, .{ .vec3 = .{ .x = 0, .y = 1, .z = 0 } },
+            });
         },
         .circle => result = try Path.circle(a, try point(args[0]), try lengthPoints(args[1])),
+        .ellipse => {
+            const center = try point(args[0]);
+            const rx = try lengthPoints(args[1]);
+            const ry = try lengthPoints(args[2]);
+            if (rx <= 0 or ry <= 0) return error.InvalidParameter;
+            result = try Path.circle(a, .zero, 1);
+            try result.transform(g.Transform.scaling(rx, ry).then(.translation(center.x, center.y)));
+        },
+        .arc => result = try Path.arc(a, try point(args[0]), try lengthPoints(args[1]), try angular(args[2]), try angular(args[3])),
         .path, .smooth => {
             const from_list = id == .smooth or types.sequence(args[0]) != null;
             if (id == .path and from_list and args.len > 3) return error.InvalidPath;
             const values = if (from_list) try sequence(args[0]) else args;
             const closed = if (from_list and hasArgument(args, 1)) try boolean(args[1]) else false;
+            if (id == .path and values.len != 0 and values[0] == .vec3) {
+                if (values.len < 2) return error.TooFewKnots;
+                for (values) |v| if (v != .vec3) return error.ExpectedVec3;
+                if (from_list and hasArgument(args, 2)) {
+                    const joins = try sequence(args[2]);
+                    if (joins.len != values.len - @intFromBool(!closed)) return error.InvalidJoinCount;
+                    for (joins) |join| if (!std.mem.eql(u8, try string(join), "straight")) return error.HobbyRequiresPlanarPath;
+                }
+                return self.modelResult(if (closed) .polygon else .polyline, values);
+            }
             if (id == .path and from_list and hasArgument(args, 2)) {
                 const kinds = try sequence(args[2]);
                 const points = try self.gpa.alloc(g.Point, values.len);
@@ -1396,15 +1542,15 @@ fn intersections(self: *Runtime, a: std.mem.Allocator, first: Path, second: Path
     const hits = if (times) try first.intersectionDetails(self.gpa, second, tolerance) else try first.intersections(self.gpa, second, tolerance);
     defer self.gpa.free(hits);
     const values = try a.alloc(Value, hits.len);
-    for (hits, values) |hit, *value| value.* = .{ .pair = if (times) .{ .x = hit.a, .y = hit.b } else types.Pair.fromPoint(hit) };
+    for (hits, values) |hit, *value| value.* = .{ .vec2 = if (times) .{ .x = hit.a, .y = hit.b } else types.Vec2.fromPoint(hit) };
     return types.listView(values);
 }
 
 fn sampleValue(allocator: std.mem.Allocator, sample: Measure.Sample) !Value {
     return types.listView(try allocator.dupe(Value, &.{
         .{ .number = sample.u },
-        .{ .pair = types.Pair.fromPoint(sample.point) },
-        .{ .pair = .{ .x = sample.tangent.x, .y = sample.tangent.y } },
+        .{ .vec2 = types.Vec2.fromPoint(sample.point) },
+        .{ .vec2 = .{ .x = sample.tangent.x, .y = sample.tangent.y } },
         .{ .number = sample.time },
         .{ .int = @intCast(sample.contour) },
     }));
@@ -1485,7 +1631,7 @@ fn lengthResult(v: f64) !Value {
     return .{ .quantity = units.fromPoints(v) };
 }
 
-fn lengthPoints(v: Value) !f64 {
+pub fn lengthPoints(v: Value) !f64 {
     return if (v == .quantity) units.toPoints(v.quantity) else numeric(v);
 }
 
@@ -1498,7 +1644,7 @@ fn sampleAtLength(measure: Measure, distance: Value) !Measure.Sample {
     return measure.sample(points);
 }
 
-fn angular(v: Value) !f64 {
+pub fn angular(v: Value) !f64 {
     if (v == .quantity) {
         if (!v.quantity.dimension.eql(.rotation)) return error.DimensionMismatch;
         _ = try v.quantity.checked();
@@ -1507,13 +1653,13 @@ fn angular(v: Value) !f64 {
     return numeric(v);
 }
 
-fn vector(v: Value) !types.Pair {
-    return if (v == .pair and v.pair.isFinite()) v.pair else error.TypeMismatch;
+fn vector(v: Value) !types.Vec2 {
+    return if (v == .vec2 and v.vec2.isFinite()) v.vec2 else error.TypeMismatch;
 }
 
 fn point(v: Value) !g.Point {
     return switch (v) {
-        .pair => |p| p.nativePoint(),
+        .vec2 => |p| p.nativePoint(),
         else => error.TypeMismatch,
     };
 }
@@ -1540,8 +1686,8 @@ fn compoundAllocationExercise(a: std.mem.Allocator) !void {
     var unused_library: typst.Library = undefined;
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
-    const start: Value = .{ .pair = .{ .x = -5, .y = 2 } };
-    const end: Value = .{ .pair = .{ .x = 5, .y = 7 } };
+    const start: Value = .{ .vec2 = .{ .x = -5, .y = 2 } };
+    const end: Value = .{ .vec2 = .{ .x = 5, .y = 7 } };
     const open = try runtime.invoke(a, .path, &.{ start, end });
     const closed = try runtime.invoke(a, .rectangle, &.{ start, .{ .number = 5 }, .{ .number = 8 } });
     const combined = try runtime.invoke(a, .compound, &.{types.listView(&.{ open, closed, open })});
@@ -1567,12 +1713,12 @@ fn subpathsAllocationExercise(a: std.mem.Allocator) !void {
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
     const open = try runtime.invoke(out, .bezier, &.{
-        .{ .pair = .zero },
-        .{ .pair = .{ .x = 0, .y = 2 } },
-        .{ .pair = .{ .x = 2, .y = 2 } },
-        .{ .pair = .{ .x = 2, .y = 0 } },
+        .{ .vec2 = .zero },
+        .{ .vec2 = .{ .x = 0, .y = 2 } },
+        .{ .vec2 = .{ .x = 2, .y = 2 } },
+        .{ .vec2 = .{ .x = 2, .y = 0 } },
     });
-    const closed = try runtime.invoke(out, .rectangle, &.{ .{ .pair = .zero }, .{ .number = 5 }, .{ .number = 8 } });
+    const closed = try runtime.invoke(out, .rectangle, &.{ .{ .vec2 = .zero }, .{ .number = 5 }, .{ .number = 8 } });
     const combined = try runtime.invoke(out, .compound, &.{types.listView(&.{ open, closed, open })});
     const parts = try sequence(try runtime.invoke(out, .subpaths, &.{combined}));
     try std.testing.expectEqual(@as(usize, 3), parts.len);
@@ -1596,7 +1742,7 @@ fn outlineAllocationExercise(a: std.mem.Allocator) !void {
     var unused_library: typst.Library = undefined;
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
-    const rectangle = try runtime.invoke(a, .rectangle, &.{ .{ .pair = .zero }, .{ .number = 5 }, .{ .number = 8 } });
+    const rectangle = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .zero }, .{ .number = 5 }, .{ .number = 8 } });
     const result = try runtime.invoke(a, .outlines, &.{rectangle});
     try std.testing.expectEqual(Type.object, result.valueType());
     const host_value = runtime.host();
@@ -1625,10 +1771,10 @@ test "outline snapshots preserve original cubic controls styles and independent 
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
     const curve = try runtime.invoke(a, .bezier, &.{
-        .{ .pair = .{ .x = 0.125, .y = -0.375 } },
-        .{ .pair = .{ .x = 1.0 / 3.0, .y = 17.0 / 11.0 } },
-        .{ .pair = .{ .x = 9.0 / 7.0, .y = -3.0 / 13.0 } },
-        .{ .pair = .{ .x = 2.625, .y = 0.875 } },
+        .{ .vec2 = .{ .x = 0.125, .y = -0.375 } },
+        .{ .vec2 = .{ .x = 1.0 / 3.0, .y = 17.0 / 11.0 } },
+        .{ .vec2 = .{ .x = 9.0 / 7.0, .y = -3.0 / 13.0 } },
+        .{ .vec2 = .{ .x = 2.625, .y = 0.875 } },
     });
     const source = try runtime.path(curve);
     const snapshot = try runtime.invoke(a, .outlines, &.{curve});
@@ -1642,7 +1788,7 @@ test "outline snapshots preserve original cubic controls styles and independent 
     const returned = try runtime.path(entries[0]);
     try std.testing.expectEqualDeep(source.segments.items, returned.segments.items);
     try std.testing.expectEqual(@as(usize, 1), returned.segmentCount());
-    const marker = try runtime.invoke(a, .path, &.{.{ .pair = .{ .x = 4, .y = -2 } }});
+    const marker = try runtime.invoke(a, .path, &.{.{ .vec2 = .{ .x = 4, .y = -2 } }});
     const marker_copy = try runtime.invoke(a, .outlines, &.{marker});
     try std.testing.expectEqualDeep((try runtime.path(marker)).segments.items, (try runtime.objectValue(marker_copy, false)).owner.scene.storage.segments.items);
     const marker_region = try runtime.invoke(a, .region, &.{marker});
@@ -1706,13 +1852,13 @@ test "region clipping fill rule preserves the hole between nested same-direction
     var unused_library: typst.Library = undefined;
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
-    const outer = try runtime.invoke(a, .rectangle, &.{ .{ .pair = .{ .x = 0, .y = 0 } }, .{ .number = 10 }, .{ .number = 10 } });
-    const inner = try runtime.invoke(a, .rectangle, &.{ .{ .pair = .{ .x = 2, .y = 2 } }, .{ .number = 6 }, .{ .number = 6 } });
+    const outer = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .{ .x = 0, .y = 0 } }, .{ .number = 10 }, .{ .number = 10 } });
+    const inner = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .{ .x = 2, .y = 2 } }, .{ .number = 6 }, .{ .number = 6 } });
     var compound = try (try runtime.path(outer)).clone(runtime.mem());
     try compound.append(try runtime.path(inner));
     const nested = try runtime.pathResult(compound);
-    const min: Value = .{ .pair = .{ .x = -1, .y = -1 } };
-    const max: Value = .{ .pair = .{ .x = 11, .y = 11 } };
+    const min: Value = .{ .vec2 = .{ .x = -1, .y = -1 } };
+    const max: Value = .{ .vec2 = .{ .x = 11, .y = 11 } };
     const solid = try runtime.invoke(a, .clip_region, &.{ nested, min, max });
     const ring = try runtime.invoke(a, .clip_region, &.{ nested, min, max, .{ .number = 0.001 }, .{ .string = "evenodd" } });
     var solid_contours: usize = 0;
@@ -1774,15 +1920,15 @@ test "native geometry converts physical lengths while vector arithmetic retains 
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
     const cm: Value = .{ .quantity = try units.applyUnit(1, .cm) };
-    const centre = try numeric_ops.makePair(cm, .{ .int = 0 });
+    const centre = try numeric_ops.makeVec2(cm, .{ .int = 0 });
     const canvas = try runtime.invoke(a, .picture, &.{ cm, cm });
     try std.testing.expectApproxEqAbs(@as(f64, 720.0 / 25.4), (try testOwner(canvas).scene.settings(canvas.object.index)).size.?.x, 1e-12);
     const curve = try runtime.invoke(a, .circle, &.{ centre, cm });
     const result = (try runtime.path(curve)).bounds().?;
     try std.testing.expectApproxEqAbs(@as(f64, 1440.0 / 25.4), result.max.x, 1e-12);
     const unit = try runtime.invoke(a, .unit, &.{centre});
-    try std.testing.expect(unit.pair.dimension.eql(.scalar));
-    try std.testing.expectApproxEqAbs(@as(f64, 1), unit.pair.x, 1e-12);
+    try std.testing.expect(unit.vec2.dimension.eql(.scalar));
+    try std.testing.expectApproxEqAbs(@as(f64, 1), unit.vec2.x, 1e-12);
     const norm = try runtime.invoke(a, .norm, &.{centre});
     try std.testing.expectEqual(cm.quantity, norm.quantity);
     const dot = try runtime.invoke(a, .dot, &.{ centre, centre });
@@ -1804,7 +1950,7 @@ test "explicit nib animations preserve transform tracks and reject unnormalized 
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
     const picture = try runtime.invoke(a, .picture, &.{});
-    const path_value = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 10, .y = 10 } } });
+    const path_value = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 10, .y = 10 } } });
     const nib = try runtime.invoke(a, .pencircle, &.{.{ .int = 3 }});
     const id = try runtime.invoke(a, .append, &.{ picture, try runtime.invoke(a, .draw, &.{ path_value, nib }) });
     const scalar_keys = types.listView(&.{ types.listView(&.{ .{ .int = 0 }, .{ .int = 0 } }), types.listView(&.{ .{ .int = 1 }, .{ .int = 1 } }) });
@@ -1832,7 +1978,7 @@ test "animated ancestors constrain placed subtrees and style changes without rej
     const group = try runtime.invoke(a, .append, &.{ picture, try runtime.invoke(a, .picture, &.{ .omitted, .omitted, transform }) });
     const keys = types.listView(&.{ types.listView(&.{ .{ .int = 0 }, .{ .int = 1 } }), types.listView(&.{ .{ .int = 1 }, .{ .int = 2 } }) });
     _ = try runtime.invoke(a, .animate, &.{ group, .{ .string = "stroke_width" }, keys });
-    const path_value = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 10, .y = 10 } } });
+    const path_value = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 10, .y = 10 } } });
     const nib = try runtime.invoke(a, .pensquare, &.{.{ .int = 3 }});
     const ordinary = try runtime.invoke(a, .append, &.{ group, try runtime.invoke(a, .draw, &.{path_value}) });
     const scene = &(try runtime.objectValue(ordinary, false)).owner.scene;
@@ -1883,7 +2029,7 @@ test "pictures keep dimensions children and stable aliases independent" {
     _ = try runtime.invoke(a, .canvas, &.{ second, .{ .int = 300 }, .{ .int = 150 } });
     try std.testing.expectEqual(@as(f64, 300), (try testOwner(second).scene.settings(second.object.index)).size.?.x);
     try std.testing.expectEqual(@as(f64, 640), (try first_target.scene.settings(first.object.index)).size.?.x);
-    const curve = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 10, .y = 10 } } });
+    const curve = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 10, .y = 10 } } });
     const first_object = try runtime.invoke(a, .append, &.{ first, try runtime.invoke(a, .draw, &.{curve}) });
     const alias = first;
     const second_object = try runtime.invoke(a, .append, &.{ alias, try runtime.invoke(a, .draw, &.{curve}) });
@@ -1923,7 +2069,7 @@ test "object placement preserves handles geometry and animation across canvases"
     defer runtime.deinit();
     const first = try runtime.invoke(a, .picture, &.{});
     const second = try runtime.invoke(a, .picture, &.{});
-    const curve = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 10, .y = 10 } } });
+    const curve = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 10, .y = 10 } } });
     const item = try runtime.invoke(a, .draw, &.{curve});
     const instance = try runtime.objectValue(item, false);
     const geometry = instance.owner.scene.storage.segments.items.ptr;
@@ -1961,15 +2107,15 @@ fn pictureAllocationScenario(a: std.mem.Allocator) !void {
     defer runtime.deinit();
     const first = try runtime.invoke(a, .picture, &.{});
     const second = try runtime.invoke(a, .picture, &.{});
-    const curve = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     for (0..5) |_| {
         _ = try runtime.invoke(a, .append, &.{ first, try runtime.invoke(a, .draw, &.{curve}) });
     }
     _ = try runtime.invoke(a, .append, &.{ second, first });
-    const transform = try runtime.transformResult(.translation(4, 7));
+    const transform = try runtime.transformResult(.translation(4, 7), 1);
     _ = try runtime.invoke(a, .transformed, &.{ first, transform });
     _ = try runtime.invoke(a, .snapshot, &.{first});
-    const clip = try runtime.invoke(a, .rectangle, &.{ .{ .pair = .zero }, .{ .int = 10 }, .{ .int = 10 } });
+    const clip = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .zero }, .{ .int = 10 }, .{ .int = 10 } });
     _ = try runtime.invoke(a, .object_clip, &.{ first, clip });
     try std.testing.expectEqual(@as(usize, 5), try testChildCount(first));
 }
@@ -1984,7 +2130,7 @@ fn penSnapshotAllocationScenario(a: std.mem.Allocator) !void {
     defer runtime.deinit();
     const points = [_]g.Point{ .{ .x = -2, .y = -1 }, .{ .x = 2, .y = -1 }, .{ .x = 2, .y = 1 }, .{ .x = -2, .y = 1 } };
     const brush = try runtime.store(DisplayList.Pen, &runtime.pens, .{ .dash = &.{ 3, 2 }, .nib = .{ .polygon = &points } }, .pen);
-    const curve = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
+    const curve = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const item = try runtime.invoke(a, .draw, &.{ curve, brush });
     const host_value = runtime.host();
     const saved = try host_value.field(a, item, "pen");
@@ -2084,8 +2230,8 @@ test "aggregate runtime sparse optional builtin slots retain host defaults" {
     const target = try runtime.invoke(a, .picture, &.{ .{ .int = 640 }, .{ .int = 123 }, .omitted, .omitted });
     try std.testing.expectEqual(@as(f64, 640), (try testOwner(target).scene.settings(target.object.index)).size.?.x);
     try std.testing.expectEqual(@as(f64, 123), (try testOwner(target).scene.settings(target.object.index)).size.?.y);
-    const curve = try runtime.invoke(a, .path, &.{ .{ .pair = .zero }, .{ .pair = .{ .x = 20, .y = 10 } } });
-    const shifted = try runtime.transformResult(.translation(5, 6));
+    const curve = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
+    const shifted = try runtime.transformResult(.translation(5, 6), 1);
     const item = try runtime.invoke(a, .append, &.{ target, try runtime.invoke(a, .draw, &.{ curve, .omitted, shifted }) });
     const instance = try runtime.objectValue(item, false);
     const command = (try instance.owner.scene.getNode(instance.index)).path;
@@ -2205,16 +2351,22 @@ fn appendValue(a: std.mem.Allocator, output: *std.ArrayList(u8), value: Value, d
                 if (x.dimension.angle != 1) try appendBytes(a, output, std.fmt.bufPrint(&buffer, "^{d}", .{x.dimension.angle}) catch return error.ValueFormattingLimit);
             }
         },
-        .pair => |x| {
+        inline .vec2, .vec3 => |x| {
             try appendBytes(a, output, "(");
             try appendValue(a, output, x.component(x.x), depth + 1, remaining, ancestors);
             try appendBytes(a, output, ", ");
             try appendValue(a, output, x.component(x.y), depth + 1, remaining, ancestors);
+            if (@hasField(@TypeOf(x), "z")) {
+                try appendBytes(a, output, ", ");
+                try appendValue(a, output, x.component(x.z), depth + 1, remaining, ancestors);
+            }
             try appendBytes(a, output, ")");
         },
         .function => |x| try appendBytes(a, output, std.fmt.bufPrint(&buffer, "<function:{s}:{d}>", .{ @tagName(x), switch (x) {
             .bytecode, .native => |i| i,
-            .bound => |bound| switch (bound.target) { .bytecode, .native => |i| i },
+            .bound => |bound| switch (bound.target) {
+                .bytecode, .native => |i| i,
+            },
         } }) catch return error.ValueFormattingLimit),
         .object => try appendBytes(a, output, "<object>"),
         .handle => |x| try appendBytes(a, output, std.fmt.bufPrint(&buffer, "<{s}:{d}>", .{ x.kind.name(), x.index }) catch return error.ValueFormattingLimit),
@@ -2231,10 +2383,10 @@ test "path queries keep source geometry and release native scratch and caller re
             var runtime = try Runtime.init(allocator, allocator, &unused_library, .{});
             defer runtime.deinit();
             const curve = try runtime.invoke(out, .bezier, &.{
-                .{ .pair = .zero },
-                .{ .pair = .{ .x = 0, .y = 2 } },
-                .{ .pair = .{ .x = 2, .y = 2 } },
-                .{ .pair = .{ .x = 2, .y = 0 } },
+                .{ .vec2 = .zero },
+                .{ .vec2 = .{ .x = 0, .y = 2 } },
+                .{ .vec2 = .{ .x = 2, .y = 2 } },
+                .{ .vec2 = .{ .x = 2, .y = 0 } },
             });
             const original = try runtime.path(curve);
             const controls = original.segments.items[1].cubic;
@@ -2243,14 +2395,14 @@ test "path queries keep source geometry and release native scratch and caller re
             try std.testing.expect(!closed_path.open and closed_path.segments.items.len == 3);
             try std.testing.expect(closed_path.segments.items.ptr != original.segments.items.ptr);
             const crossing = try runtime.invoke(out, .path, &.{
-                .{ .pair = .{ .x = 1, .y = -1 } },
-                .{ .pair = .{ .x = 1, .y = 2 } },
+                .{ .vec2 = .{ .x = 1, .y = -1 } },
+                .{ .vec2 = .{ .x = 1, .y = 2 } },
             });
             const times = try sequence(try runtime.invoke(out, .intersection_times, &.{ curve, crossing }));
             try std.testing.expectEqual(@as(usize, 1), times.len);
-            try std.testing.expect(times[0].pair.dimension.eql(.scalar));
-            try std.testing.expectApproxEqAbs(@as(f64, 0.5), times[0].pair.x, 1e-9);
-            try std.testing.expectApproxEqAbs(@as(f64, 5.0 / 6.0), times[0].pair.y, 1e-9);
+            try std.testing.expect(times[0].vec2.dimension.eql(.scalar));
+            try std.testing.expectApproxEqAbs(@as(f64, 0.5), times[0].vec2.x, 1e-9);
+            try std.testing.expectApproxEqAbs(@as(f64, 5.0 / 6.0), times[0].vec2.y, 1e-9);
 
             const events = try sequence(try runtime.invoke(out, .path_crossings, &.{types.listView(&.{ curve, crossing })}));
             try std.testing.expectEqual(@as(usize, 1), events.len);
@@ -2277,19 +2429,19 @@ test "path queries keep source geometry and release native scratch and caller re
                 const row = try sequence(value);
                 try std.testing.expectEqual(@as(usize, 5), row.len);
                 try std.testing.expectApproxEqAbs(@as(f64, 0.5), row[0].number, 1e-3);
-                const position = try row[1].pair.nativePoint();
+                const position = try row[1].vec2.nativePoint();
                 try std.testing.expectApproxEqAbs(@as(f64, 1), position.x, 1e-3);
                 try std.testing.expectApproxEqAbs(@as(f64, 1.5), position.y, 1e-3);
-                try std.testing.expect(row[2].pair.dimension.eql(.scalar));
-                try std.testing.expectApproxEqAbs(@as(f64, 1), row[2].pair.x, 1e-3);
-                try std.testing.expectApproxEqAbs(@as(f64, 0), row[2].pair.y, 1e-3);
+                try std.testing.expect(row[2].vec2.dimension.eql(.scalar));
+                try std.testing.expectApproxEqAbs(@as(f64, 1), row[2].vec2.x, 1e-3);
+                try std.testing.expectApproxEqAbs(@as(f64, 0), row[2].vec2.y, 1e-3);
                 try std.testing.expectApproxEqAbs(@as(f64, 0.5), row[3].number, 1e-3);
                 try std.testing.expectEqual(@as(i64, 0), row[4].int);
             }
             const start = try sequence(batch[0]);
             try std.testing.expectEqual(@as(usize, 5), start.len);
             try std.testing.expectEqual(@as(f64, 0), start[0].number);
-            try std.testing.expectEqualDeep(g.Point.zero, try start[1].pair.nativePoint());
+            try std.testing.expectEqualDeep(g.Point.zero, try start[1].vec2.nativePoint());
             try std.testing.expectEqual(@as(f64, 0), start[3].number);
             const unchanged = try runtime.path(curve);
             try std.testing.expect(unchanged.open and unchanged.segments.items.len == 2);

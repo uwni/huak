@@ -753,7 +753,7 @@ test "standalone language server implements lifecycle diagnostics UTF16 edits co
                     has_math = has_math or std.mem.eql(u8, label, "math");
                     has_mixfix = has_mixfix or std.mem.eql(u8, label, "mixfix");
                     if (std.mem.eql(u8, label, "path")) {
-                        try t.expectEqualStrings("fn path(any...) -> path", item.object.get("detail").?.string);
+                        try t.expectEqualStrings("fn path(any...) -> path | shape", item.object.get("detail").?.string);
                         has_path = true;
                     }
                 }

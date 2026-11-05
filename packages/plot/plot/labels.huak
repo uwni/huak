@@ -35,14 +35,14 @@ export fn number(value:float, size:length = 9pt, format:string = "auto") -> text
 end
 
 // Alignment uses the rotated native text bounds, including the real baseline.
-export fn place(dst:picture, body:text, point:pair, anchor:pair = (0.5,0.5), angle:angle = 0deg)
+export fn place(dst:picture, body:text, point:vec2, anchor:vec2 = (0.5,0.5), angle:angle = 0deg)
     item := transformed(label(body,(0pt,0pt)),rotate(angle))
     box := bounds(item)
     origin := (box[0].x+(box[1].x-box[0].x)*anchor.x,box[0].y+(box[1].y-box[0].y)*anchor.y)
     append(dst,item,translate(point-origin))
 end
 
-export fn extent(body:text, angle:angle = 0deg) -> pair
+export fn extent(body:text, angle:angle = 0deg) -> vec2
     box := bounds(transformed(label(body,(0pt,0pt)),rotate(angle)))
     return box[1]-box[0]
 end

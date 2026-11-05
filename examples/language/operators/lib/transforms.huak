@@ -12,7 +12,7 @@ end
 mixfix(scaled) _ scaled _ in transform
 export scaled
 
-fn shifted(value: path, offset: pair) -> path
+fn shifted(value: path, offset: vec2) -> path
     return transformed(value, translate(offset))
 end
 mixfix(shifted) _ shifted _ in transform

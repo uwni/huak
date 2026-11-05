@@ -197,11 +197,11 @@ const Analysis = struct {
                 self.observe(left);
                 self.observe(right);
                 const ordinary = (left.kind.isScalar() and right.kind.isScalar()) or
-                    (left.kind == .pair and (right.kind == .pair or right.kind.isScalar())) or
-                    (right.kind == .pair and left.kind.isScalar()) or
+                    (left.kind.isVector() and (right.kind.isVector() or right.kind.isScalar())) or
+                    (right.kind.isVector() and left.kind.isScalar()) or
                     (instruction_.op == .add and left.kind == .string and right.kind == .string);
                 if (!ordinary) self.safe = false; // nativeBinary includes solver effects.
-                const kind: Type = if (left.kind == .pair or right.kind == .pair) .pair else if (left.kind == .string and right.kind == .string) .string else joinType(left.kind, right.kind);
+                const kind: Type = if (left.kind.isVector()) left.kind else if (right.kind.isVector()) right.kind else if (left.kind == .string and right.kind == .string) .string else joinType(left.kind, right.kind);
                 try self.push(state, Value.ordinary(kind));
             },
             .positive, .negate, .logical_not => {
@@ -209,7 +209,7 @@ const Analysis = struct {
                 self.observe(operand);
                 if (instruction_.op == .logical_not) {
                     operand = Value.ordinary(.boolean);
-                } else if (!operand.kind.isScalar() and operand.kind != .pair) self.safe = false;
+                } else if (!operand.kind.isScalar() and !operand.kind.isVector()) self.safe = false;
                 try self.push(state, operand);
             },
             .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => {
@@ -285,11 +285,12 @@ const Analysis = struct {
                 state.stack.items.len -= instruction_.b;
                 try self.push(state, result);
             },
-            .make_pair => {
-                const y = state.pop(self);
-                const x = state.pop(self);
-                if (!x.kind.isScalar() or !y.kind.isScalar()) self.safe = false;
-                try self.push(state, Value.ordinary(.pair));
+            .make_vec2, .make_vec3 => {
+                const is_three = instruction_.op == .make_vec3;
+                for (0..@as(usize, if (is_three) 3 else 2)) |_| {
+                    if (!state.pop(self).kind.isScalar()) self.safe = false;
+                }
+                try self.push(state, Value.ordinary(if (is_three) .vec3 else .vec2));
             },
             .make_list => {
                 const arguments = self.args(state, instruction_.a);
@@ -340,7 +341,7 @@ const Analysis = struct {
                 const object = state.pop(self);
                 if (instruction_.a >= self.program.constants.len or self.program.constants[instruction_.a] != .string) return self.invalid();
                 const name = self.program.constants[instruction_.a].string;
-                if (object.kind != .pair and object.kind != .text and object.kind != .picture and object.kind != .object and object.kind != .measure) self.safe = false;
+                if (!object.kind.isVector() and object.kind != .text and object.kind != .picture and object.kind != .object and object.kind != .measure) self.safe = false;
                 if (object.kind == .text) self.uses_typst = true;
                 const raw_paths = object.kind.isObject() and std.mem.eql(u8, name, "paths");
                 if (raw_paths) self.uses_typst = true;
@@ -548,7 +549,7 @@ const Analysis = struct {
             .outlines, .region, .snapshot, .object_clip => {
                 if (id != .region) result.fresh_owner = true;
                 if (arguments.len == 0) self.safe = false else switch (arguments[0].kind) {
-                    .path => {},
+                    .path, .path_or_shape => {},
                     .text, .object, .picture => self.uses_typst = true,
                     else => self.safe = false,
                 }
@@ -563,7 +564,7 @@ const Analysis = struct {
                     // Any picture returned by a map is newly owned, including
                     // generic wrappers whose input type is checked at runtime.
                     result.fresh_owner = result.kind.isObject() or result.kind == .any;
-                    if (result.kind != .path and !result.kind.isObject() and result.kind != .any) self.safe = false;
+                    if (result.kind != .path and result.kind != .path_or_shape and !result.kind.isObject() and result.kind != .any) self.safe = false;
                     if (id == .mapped) {
                         if (arguments[1].callable) |function| switch (function) {
                             .bytecode => |index| _ = self.mergeCall(index),
@@ -625,14 +626,14 @@ const Analysis = struct {
 
 fn supportedType(kind: Type) bool {
     return switch (kind) {
-        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .pair, .list, .path, .color, .pen, .transform, .text, .picture, .function, .measure, .object => true,
+        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .pen, .transform, .text, .picture, .function, .measure, .object => true,
         else => false,
     };
 }
 
 fn simpleType(kind: Type) bool {
     return kind.isScalar() or switch (kind) {
-        .unit, .boolean, .string, .pair, .object, .picture => true,
+        .unit, .boolean, .string, .vec2, .vec3, .object, .picture => true,
         else => false,
     };
 }
@@ -816,7 +817,7 @@ pub fn expression(allocator: Allocator, program: *const bc.Program, summaries: [
     var state: State = .{ .locals = &.{} };
     for (code) |instruction| {
         switch (instruction.op) {
-            .constant, .load_global, .pop, .duplicate, .add, .subtract, .multiply, .divide, .remainder, .power, .positive, .negate, .logical_not, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal, .call, .call_builtin, .check_module, .make_pair, .make_list, .bind_arguments, .index, .slice, .field => {},
+            .constant, .load_global, .pop, .duplicate, .add, .subtract, .multiply, .divide, .remainder, .power, .positive, .negate, .logical_not, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal, .call, .call_builtin, .check_module, .make_vec2, .make_vec3, .make_list, .bind_arguments, .index, .slice, .field => {},
             else => return null,
         }
         try analysis.instruction(&state, instruction);

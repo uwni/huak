@@ -1,4 +1,4 @@
-import paint.{rgb, rectangle, fill, picture};fn marker(dst: object, at: pair) -> void
+import paint.{rgb, rectangle, fill, picture};fn marker(dst: object, at: vec2) -> void
 object.append(dst, object.fill(rectangle(at,4,5), rgb(1,0,0)))
 end
 selected:=picture(90,45); other:=picture(200,100); alias:=selected

@@ -20,12 +20,12 @@ end
 
 export struct ResolvedNode
     name:string
-    center:pair
-    body_center:pair
+    center:vec2
+    body_center:vec2
     body:text
     options:dict
     snapping:path
-    size:pair
+    size:vec2
     outline:path
     kind:string = "node"
 end
@@ -45,7 +45,7 @@ export struct LayoutResult
     axes:list
 end
 
-export fn node_size(item:any) -> pair
+export fn node_size(item:any) -> vec2
     body:text := item.body
     options:dict := item.options
     inset:length := opt.get(options, "inset", 6pt)
@@ -66,7 +66,7 @@ export fn node_size(item:any) -> pair
     return size
 end
 
-fn axis_value(point:pair, axis:int) -> float
+fn axis_value(point:vec2, axis:int) -> float
     if axis == 0 then return point.x end
     return point.y
 end
@@ -83,7 +83,7 @@ fn grid_points(coordinate:any) -> list
     return []
 end
 
-fn node_span(item:any, direction:pair) -> length
+fn node_span(item:any, direction:vec2) -> length
     options:dict := item.options
     size := node_size(item)
     outline := shapes.shape_outline(opt.get(options, "shape", "rect"), (0pt, 0pt), size, opt.get(options, "corner_radius", 0pt), opt.get(options, "shape_options", {}))
@@ -95,7 +95,7 @@ fn node_span(item:any, direction:pair) -> length
     return max(frame_box[1].x, shape_box[1].x)-min(frame_box[0].x, shape_box[0].x)
 end
 
-fn axis_cells(items:list, axis:int, spacing:length, minimum:length, direction:pair) -> list
+fn axis_cells(items:list, axis:int, spacing:length, minimum:length, direction:vec2) -> list
     points := []
     for i in 0:len(items)-1 do
         item:any := items[i]
@@ -168,7 +168,7 @@ export fn known(nodes:Geometry, name:string) -> bool
     return dict_contains(nodes.by_name, name)
 end
 
-export fn anchor(nodes:Geometry, name:string, side:string = "center") -> pair
+export fn anchor(nodes:Geometry, name:string, side:string = "center") -> vec2
     item := find(nodes, name)
     if item.kind == "edge" then
         curve:path := item.curve
@@ -178,7 +178,7 @@ export fn anchor(nodes:Geometry, name:string, side:string = "center") -> pair
         samples := sample_path(curve, 3)
         return samples[1][1]
     end
-    center:pair := item.center
+    center:vec2 := item.center
     if side == "center" then return center end
     direction := (0, 0)
     if side == "east" then direction = (1, 0)
@@ -195,7 +195,7 @@ export fn anchor(nodes:Geometry, name:string, side:string = "center") -> pair
     reach := 2*norm(box[1]-box[0])
     hits := intersections(path(center, center+unit(direction)*reach), curve)
     assert(len(hits) > 0, "anchor ray misses node outline")
-    best:pair := hits[0]
+    best:vec2 := hits[0]
     for i in 1:len(hits)-1 do
         if norm(hits[i]-center) > norm(best-center) then best = hits[i] end
     end
@@ -212,11 +212,11 @@ export fn ready(coordinate:any, nodes:Geometry) -> bool
     return false
 end
 
-export fn resolve(coordinate:any, nodes:Geometry, cells:list, axes:list) -> pair
+export fn resolve(coordinate:any, nodes:Geometry, cells:list, axes:list) -> vec2
     kind:string := coordinate.kind
     if kind == "absolute" then return coordinate.position end
     if kind == "grid" then
-        value:pair := coordinate.value
+        value:vec2 := coordinate.value
         return axes[0]*cell_position(cells[0], value.x)+axes[1]*cell_position(cells[1], value.y)
     end
     if kind == "named" then return anchor(nodes, coordinate.name, coordinate.anchor) end
@@ -228,7 +228,7 @@ export fn resolve(coordinate:any, nodes:Geometry, cells:list, axes:list) -> pair
     return (0pt, 0pt)
 end
 
-export fn resolve_node(item:any, center:pair, size:pair) -> ResolvedNode
+export fn resolve_node(item:any, center:vec2, size:vec2) -> ResolvedNode
     options:dict := item.options
     kind:string := opt.get(options, "shape", "rect")
     outline := shapes.shape_outline(kind, (0pt, 0pt), size, opt.get(options, "corner_radius", 0pt), opt.get(options, "shape_options", {}))
@@ -243,8 +243,8 @@ export fn resolve_node(item:any, center:pair, size:pair) -> ResolvedNode
 end
 
 export fn nodes(items:list, options:dict) -> LayoutResult
-    spacing:pair := opt.get(options, "spacing", (24pt, 24pt))
-    minimum:pair := opt.get(options, "cell_size", (0pt, 0pt))
+    spacing:vec2 := opt.get(options, "spacing", (24pt, 24pt))
+    minimum:vec2 := opt.get(options, "cell_size", (0pt, 0pt))
     axes:list := opt.get(options, "axes", [(1, 0), (0, -1)])
     assert(len(axes) == 2, "axes requires two unit vectors")
     assert(abs(norm(axes[0])-1) < 1e-12 and abs(norm(axes[1])-1) < 1e-12 and abs(dot(axes[0], axes[1])) < 1e-12, "axes must be orthogonal unit vectors")
@@ -273,8 +273,8 @@ export fn nodes(items:list, options:dict) -> LayoutResult
                     angle:angle := opt.get(item.options, "rotate", 0deg)
                     local := rotate(-angle)
                     first := bounds(transformed(find(result, members[0]).snapping, local))
-                    low:pair := first[0]
-                    high:pair := first[1]
+                    low:vec2 := first[0]
+                    high:vec2 := first[1]
                     for j in 1:len(members)-1 do
                         box := bounds(transformed(find(result, members[j]).snapping, local))
                         low = (min(low.x, box[0].x), min(low.y, box[0].y))

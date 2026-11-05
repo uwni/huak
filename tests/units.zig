@@ -29,6 +29,16 @@ test "unit syntax and dimensions reach native geometry and typography with ident
         \\assert(abs(sin(90deg)-1)<1e-12)
         \\offset:=(1cm,0); assert(offset.x==10mm)
         \\assert(norm((3mm,4mm))==5mm)
+        \\import math.{dot, unit, lerp}
+        \\fn lift(v:vec2, z:length) -> vec3
+        \\    return (v.x, v.y, z)
+        \\end
+        \\w := lift(vec2(2cm,0), 0mm)
+        \\assert(w == vec3(20mm,0,0)); assert(w.z == 0mm)
+        \\assert((w + w)/2 == w); assert(-w == (-20mm,0,0))
+        \\assert(norm((2mm,3mm,6mm)) == 7mm)
+        \\assert(dot(w,w) == 400mm*mm); assert(unit(w) == (1,0,0))
+        \\assert(lerp(w,-w,0.25) == w/2)
         \\export pic:=picture(8cm,5cm)
         \\curve:=circle((2cm,2cm),radius)
         \\drawing pic do;+draw curve;end
@@ -72,8 +82,12 @@ test "unit syntax and dimensions reach native geometry and typography with ident
 
 test "known incompatible dimensions fail during compilation including dead code" {
     const invalid = [_][]const u8{
-        "x:=1cm+1deg", "x:=1cm+1",                      "x:=1cm<1deg",               "x:=1cm==1deg",                    "x:=(1cm,1deg)",
-        "x:=(1,1cm)",  "if false then;x:=1cm+1deg;end", "param length:length=90deg", "import math.floor;x:=floor(1cm)", "import math.ceil;x:=ceil(90deg)",
+        "x:=(0,1cm,1deg)",                 "fn f(v:vec2) -> vec2; return v; end; x:=f((1,2,3))",
+        "x:=1cm+1deg",                     "x:=1cm+1",
+        "x:=1cm<1deg",                     "x:=1cm==1deg",
+        "x:=(1cm,1deg)",                   "x:=(1,1cm)",
+        "if false then;x:=1cm+1deg;end",   "param length:length=90deg",
+        "import math.floor;x:=floor(1cm)", "import math.ceil;x:=ceil(90deg)",
     };
     for (invalid) |source| {
         var diagnostic: ?l.compiler.Diagnostic = null;
