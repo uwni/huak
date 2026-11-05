@@ -1,0 +1,17 @@
+import "../plot.huak".*
+fig := figure with width 16cm height 8cm
+a := axis of fig at (0,0)
+b := axis of fig at (0,1)
+data := [[0,1,2,3],[1,2,false,4],[2,3,4,5]]
+plotting a do
+    title typ[Matrix: rows increase upward]
+    +heatmap data
+    colorbar "right"
+end
+plotting b do
+    title typ[Diverging, unequal cells]
+    settings {"yreverse":true,"grid":false}
+    +heatmap(data,xedges:[0,1,2,4,7],yedges:[0,0.5,2,3]) styled {"colormap":colormap("diverging"),"clim":[0,5]}
+    colorbar "bottom"
+end
+default render fig

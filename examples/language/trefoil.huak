@@ -1,0 +1,32 @@
+import paint.*
+import math.sqrt
+import weave
+
+export plate := picture with width 120mm height 115mm
+default plate
+ink := pen(rgb(0.18, 0.34, 0.68, 0.75), 3mm, "round", "round")
+grid := pen(rgb(0.78, 0.82, 0.86), 0.15mm)
+
+drawing plate do
+    +rectangle with origin (0mm, 0mm) width 120mm height 115mm filled rgb(0.96, 0.97, 0.98)
+    for x in 10:10:110 do +draw ((x*1mm, 15mm) -- (x*1mm, 105mm)) with grid end
+    for y in 15:10:105 do +draw ((10mm, y*1mm) -- (110mm, y*1mm)) with grid end
+    +typ[One closed path, three crossings] at (12mm, 108mm)
+    +typ[$+1, -2, +3, -1, +2, -3$] at (17mm, 6mm)
+end
+
+// Three cubic segments meet at their original smooth nodes. The signed list
+// follows the closed path from a, rather than sorting the crossing IDs.
+a := (60mm, 90mm)
+b := (60mm-sqrt(3)*20mm, 30mm)
+c := (60mm+sqrt(3)*20mm, 30mm)
+dx := 22mm
+dy := sqrt(3)*22mm
+ab := bezier(a, a+(44mm, 0mm), b+(dx, -dy), b)
+bc := bezier(b, b+(-dx, dy), c+(dx, dy), c)
+ca := bezier(c, c+(-dx, -dy), a+(-44mm, 0mm), a)
+knot := closed(joined(joined(ab, bc), ca))
+
+weave.drawing weave.context(plate, gap:1mm) do
+    draw knot with ink crossings [1, -2, 3, -1, 2, -3]
+end

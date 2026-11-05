@@ -1,0 +1,34 @@
+import paint.*
+import collections.get
+
+struct Style
+    ink: color = rgb(0.15, 0.35, 0.75)
+    width: length = 0.6mm
+    radius: length = 6mm
+end
+
+fn marker(center: pair, style: Style) -> object
+    return draw(circle(center, style.radius), pen(style.ink, style.width))
+end
+
+options := {"count": 6, "caption": "Records and dictionaries"}
+count: int := get(options, "count", 4)
+style := Style(width: 0.8mm)
+accent := copy(style)
+accent.ink = rgb(0.8, 0.2, 0.3)
+
+export plate := picture(height: 75mm, width: 120mm)
+default plate
+drawing plate do
+    for i in 0:count-1 do
+        angle := i * math.TAU / count
+        center := (60mm, 37mm) + 24mm * (math.cos(angle), math.sin(angle))
+        +marker(center, style)
+    end
+    +marker((60mm, 37mm), accent)
+end
+caption: string := options["caption"]
+typst_expose caption
+drawing plate do
+    +typ[#huak.caption] at (28mm, 5mm)
+end

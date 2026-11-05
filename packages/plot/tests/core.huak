@@ -1,0 +1,47 @@
+import assertions.assert
+import "../plot.huak".*
+import "../plot/markers.huak" as marks
+import "../plot/scales.huak" as scales
+import object.bounds
+
+fig := figure with width 300pt height 200pt
+a := axis of fig at (0,0)
+b := axis of fig at (0,1)
+calls := [0]
+fn values(calls:list) -> list
+    calls[0] = calls[0]+1
+    return [0,1,2]
+end
+base := lines x [0,1,2] y [1,2,1]
+decorated := base named typ[one]
+assert(not dict_contains(base.options,"label"))
+plotting a do
+    unused := scatter x [0] y [0]
+    +lines x (values(calls)) y [1,2,1] named typ[series]
+    plotting b do +scatter x [1] y [2] end
+    +decorated
+end
+assert(calls[0]==1)
+assert(len(a.layers)==2 and len(b.layers)==1)
+assert(+2+3==5)
+block
+    import "../plot.huak".{plotting as chart,lines as curve,figure as canvas,axis as coordinate}
+    other := canvas with width 200pt height 160pt
+    target := coordinate of other at (0,0)
+    chart target do +curve x [0,1] y [2,3] named typ[Alias] end
+    assert(len(target.layers)==1 and dict_contains(target.layers[0].options,"label"))
+end
+for name in ["circle","square","diamond","triangle_up","triangle_down","triangle_left","triangle_right","plus","cross","star"] do
+    mark := marker name sized 8pt
+    bb := bounds(marks.prepare(mark,color.rgb(0,0,0)))
+    assert(math.abs(math.max(bb[1].x-bb[0].x,bb[1].y-bb[0].y)-8pt)<0.00001pt)
+end
+custom := custom_marker path((0pt,0pt),(2pt,4pt))
+assert(custom.kind=="marker")
+s := scales.resolve([0,10],"linear",[0,10])
+assert(scales.coordinate(s,5)==0.5)
+assert(scales.coordinate(scales.resolve([1,100],"log10",[1,100]),10)==0.5)
+assert(scales.coordinate(scales.resolve([0,10],"linear",[0,10],true),0)==1)
+assert(len(scales.ticks(scales.resolve([],"linear")))>0)
+assert(math.log(1)==0 and math.log10(1000)==3)
+print("plot core checks passed")

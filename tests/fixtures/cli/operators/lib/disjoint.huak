@@ -1,0 +1,12 @@
+precedence first
+below addition
+above path
+associativity left
+end
+precedence second
+below addition
+above path
+associativity left
+end
+export first
+export second

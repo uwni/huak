@@ -1,0 +1,4 @@
+import drawing.drawing
+values:=[1]
+drawing values[0] do
+end

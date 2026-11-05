@@ -1,0 +1,595 @@
+//! Encodes picture commands directly into immutable native scenes. Only
+//! physical-pen geometry needs preparation; ordinary commands are borrowed.
+const std = @import("std");
+const typst = @import("libtypst");
+const c = typst.c;
+const g = @import("../../drawing/geometry.zig");
+const DisplayList = @import("../../drawing/DisplayList.zig");
+const Path = @import("../../drawing/path/Path.zig");
+const pens = @import("../../drawing/pen/root.zig");
+const physical = @import("pen.zig");
+
+pub const Options = struct {
+    origin: g.Point = .zero,
+    frames: ?[]const typst.FrameRef = null,
+    /// IDs address picture.commands. Zero is unmarked; UINT64_MAX identifies
+    /// huak's mathematical root group when animation IDs are present.
+    object_ids: ?[]const u64 = null,
+    pen_geometry: pens.StrokeOptions = .{},
+};
+
+pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, size: c.TypstPoint, options: Options) !typst.Document {
+    var builder: Builder = .{ .arena = .init(allocator), .library = library, .size = size };
+    defer builder.deinit();
+    const memory = builder.arena.allocator();
+    // Resolve all physical pens before native submission, preserving geometry
+    // diagnostics ahead of frame-reference or native scene errors.
+    const strokes = try builder.prepareStrokes(picture, options.pen_geometry);
+    builder.segments = try NativeSegments.init(memory, picture);
+    try builder.levels.append(memory, .{});
+    const labels = options.frames orelse &.{};
+    var stroke_index: usize = 0;
+    for (picture.commands.items, 0..) |*command, index| {
+        const id = if (options.object_ids) |ids| ids[index] else 0;
+        switch (command.*) {
+            .push => |*group| try builder.group(group.transform, group.clip, id),
+            .pop => try builder.endScope(),
+            .path => |*draw| {
+                if (draw.style.pen) |*pen| if (pen.nib != null) {
+                    try builder.nibPath(draw, strokes[stroke_index], id);
+                    stroke_index += 1;
+                    continue;
+                };
+                try builder.paint(try builder.path(draw.path), try builder.style(draw.style), draw.transform, id);
+            },
+            .label => |*label| {
+                if (label.reference >= labels.len) return error.InvalidFrameReference;
+                var raw = try builder.item(label.transform, null, id);
+                raw.kind = c.TYPST_ITEM_LAYOUT;
+                raw.layout = try labels[label.reference].nativeLayout(library);
+                try builder.append(raw);
+            },
+        }
+    }
+    if (builder.levels.items.len != 1) return error.UnbalancedGroup;
+    const child = try builder.childScene(builder.levels.items[0].items.items);
+    var root_item = try builder.item(.{ .d = -1, .e = 0 - options.origin.x, .f = size.y + options.origin.y }, null, if (options.object_ids != null) std.math.maxInt(u64) else 0);
+    root_item.kind = c.TYPST_ITEM_SCENE;
+    root_item.scene = child;
+    const root = try builder.scene(&.{root_item});
+    return typst.Document.fromSceneOwned(library, root);
+}
+
+const Level = struct {
+    transform: g.Transform = .{},
+    clip: ?DisplayList.PathRef = null,
+    id: u64 = 0,
+    items: std.ArrayList(c.TypstSceneItem) = .empty,
+};
+
+const NativeSegments = struct {
+    const Interval = struct {
+        source: u32,
+        first: usize,
+        end: usize,
+        native_first: usize = 0,
+
+        fn tryMerge(self: *Interval, other: *const Interval) bool {
+            if (self.source != other.source or other.first > self.end or self.first > other.end) return false;
+            self.first = @min(self.first, other.first);
+            self.end = @max(self.end, other.end);
+            return true;
+        }
+        fn less(_: void, a: Interval, b: Interval) bool {
+            if (a.source != b.source) return a.source < b.source;
+            return a.first < b.first;
+        }
+        fn startsAtOrBefore(range: DisplayList.PathRef, interval: Interval) bool {
+            if (interval.source != range.source) return interval.source < range.source;
+            return interval.first <= range.first;
+        }
+    };
+
+    geometry: DisplayList.Geometry,
+    data: []const c.TypstPathSegment,
+    intervals: []const Interval,
+
+    fn init(allocator: std.mem.Allocator, picture: *const DisplayList) !NativeSegments {
+        var intervals: std.ArrayList(Interval) = .empty;
+        defer intervals.deinit(allocator);
+        for (picture.commands.items) |*command| {
+            const range = switch (command.*) {
+                .path => |*draw| range: {
+                    if (draw.style.fill == null) if (draw.style.pen) |pen| if (pen.nib != null) continue;
+                    break :range draw.path;
+                },
+                .push => |*group| group.clip orelse continue,
+                else => continue,
+            };
+            if (range.count == 0) continue;
+            // Report invalid ranges only where their path or clip is submitted.
+            // In particular, an unmatched group must retain its earlier error.
+            _ = picture.range(range) catch continue;
+            const interval: Interval = .{ .source = range.source, .first = range.first, .end = range.first + range.count };
+            if (intervals.items.len != 0 and intervals.items[intervals.items.len - 1].tryMerge(&interval)) continue;
+            try intervals.append(allocator, interval);
+        }
+        std.mem.sort(Interval, intervals.items, {}, Interval.less);
+        var count: usize = 0;
+        for (intervals.items) |*interval| {
+            if (count != 0 and intervals.items[count - 1].tryMerge(interval)) continue;
+            intervals.items[count] = interval.*;
+            count += 1;
+        }
+        intervals.items.len = count;
+        const retained = try intervals.toOwnedSlice(allocator);
+        errdefer allocator.free(retained);
+        var segment_count: usize = 0;
+        for (retained) |*interval| {
+            interval.native_first = segment_count;
+            segment_count = std.math.add(usize, segment_count, interval.end - interval.first) catch return error.OutOfMemory;
+        }
+        const data = try allocator.alloc(c.TypstPathSegment, segment_count);
+        for (retained) |interval| {
+            const source = try picture.geometry().source(interval.source);
+            const input = source[interval.first..interval.end];
+            for (input, data[interval.native_first..][0..input.len]) |segment, *out| out.* = pathSegment(segment);
+        }
+        return .{ .geometry = picture.geometry(), .data = data, .intervals = retained };
+    }
+
+    fn deinit(self: NativeSegments, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+        allocator.free(self.intervals);
+    }
+
+    fn slice(self: *const NativeSegments, range: DisplayList.PathRef) ![]const c.TypstPathSegment {
+        _ = try self.geometry.range(range);
+        if (range.count == 0) return &.{};
+        const stop = std.sort.partitionPoint(Interval, self.intervals, range, Interval.startsAtOrBefore);
+        if (stop == 0) return error.InvalidPath;
+        const interval = self.intervals[stop - 1];
+        if (interval.source != range.source or range.first >= interval.end or range.count > interval.end - range.first) return error.InvalidPath;
+        const first = interval.native_first + (range.first - interval.first);
+        return self.data[first..][0..range.count];
+    }
+};
+
+const Builder = struct {
+    const Stroke = struct { path: *const c.TypstPath, style: *const c.TypstStyle, transform: ?g.Transform };
+    arena: std.heap.ArenaAllocator,
+    library: *typst.Library,
+    size: c.TypstPoint,
+    segments: NativeSegments = undefined,
+    children: std.ArrayList(*c.TypstScene) = .empty,
+    levels: std.ArrayList(Level) = .empty,
+
+    fn deinit(self: *Builder) void {
+        for (self.children.items) |child| self.library.functions.scene_release(child);
+        self.arena.deinit();
+    }
+
+    fn prepareStrokes(self: *Builder, picture: *const DisplayList, options: pens.StrokeOptions) ![]const ?Stroke {
+        const memory = self.arena.allocator();
+        var strokes: std.ArrayList(?Stroke) = .empty;
+        for (picture.commands.items) |*command| {
+            if (command.* != .path) continue;
+            const draw = &command.path;
+            const pen = if (draw.style.pen) |*value| value else continue;
+            if (pen.nib == null) continue;
+            var stroke = (try physical.resolve(self.arena.child_allocator, try picture.range(draw.path), pen, options)) orelse {
+                try strokes.append(memory, null);
+                continue;
+            };
+            defer stroke.deinit();
+            const data = try memory.alloc(c.TypstPathSegment, stroke.path.segments.items.len);
+            for (stroke.path.segments.items, data) |segment, *out| out.* = pathSegment(segment);
+            try strokes.append(memory, .{ .path = try self.pathData(data), .style = try self.style(&stroke.style), .transform = stroke.transform });
+        }
+        return strokes.items;
+    }
+
+    fn append(self: *Builder, item_: c.TypstSceneItem) !void {
+        try self.levels.items[self.levels.items.len - 1].items.append(self.arena.allocator(), item_);
+    }
+
+    fn group(self: *Builder, transform: g.Transform, clip: ?DisplayList.PathRef, id: u64) !void {
+        // The native limit includes the mathematical coordinate group. The
+        // public picture limit also reserves a group for marked nib filldraw.
+        if (self.levels.items.len >= 128) return error.GroupNestingLimit;
+        try self.levels.append(self.arena.allocator(), .{ .transform = transform, .clip = clip, .id = id });
+    }
+
+    fn endScope(self: *Builder) !void {
+        if (self.levels.items.len <= 1) return error.UnbalancedGroup;
+        const level = self.levels.pop().?;
+        const child_ = try self.childScene(level.items.items);
+        var raw = try self.item(level.transform, level.clip, level.id);
+        raw.kind = c.TYPST_ITEM_SCENE;
+        raw.scene = child_;
+        try self.append(raw);
+    }
+
+    fn paint(self: *Builder, path_: *const c.TypstPath, style_: *const c.TypstStyle, transform: g.Transform, id: u64) !void {
+        var raw = try self.item(transform, null, id);
+        raw.kind = c.TYPST_ITEM_PATH;
+        raw.path = path_;
+        raw.style = style_;
+        try self.append(raw);
+    }
+
+    fn nibPath(self: *Builder, draw: *const DisplayList.PathCommand, stroke: ?Stroke, id: u64) !void {
+        const grouped = draw.style.fill != null and id != 0;
+        if (grouped) try self.group(draw.transform, null, id);
+        const placement: g.Transform = if (grouped) .{} else draw.transform;
+        const child_id = if (grouped) 0 else id;
+        if (draw.style.fill) |fill| try self.paint(try self.path(draw.path), try self.style(&.{ .fill = fill, .fill_rule = draw.style.fill_rule }), placement, 0);
+        if (stroke) |value| {
+            try self.paint(value.path, value.style, if (value.transform) |transform| transform.then(placement) else placement, child_id);
+        } else if (child_id != 0) {
+            try self.group(placement, null, child_id);
+            try self.endScope();
+        }
+        if (grouped) try self.endScope();
+    }
+
+    fn childScene(self: *Builder, items: []const c.TypstSceneItem) !*c.TypstScene {
+        const result = try self.scene(items);
+        errdefer self.library.functions.scene_release(result);
+        try self.children.append(self.arena.allocator(), result);
+        return result;
+    }
+
+    fn scene(self: *Builder, items: []const c.TypstSceneItem) !*c.TypstScene {
+        const options: c.TypstSceneOptions = .{
+            .struct_size = @sizeOf(c.TypstSceneOptions),
+            .flags = 0,
+            .width_pt = self.size.x,
+            .height_pt = self.size.y,
+            .items = items.ptr,
+            .item_count = items.len,
+        };
+        var result: ?*c.TypstScene = null;
+        var diagnostic: ?*c.TypstDiagnostics = null;
+        defer self.library.functions.diagnostics_release(diagnostic);
+        const status = self.library.functions.scene_create(&options, &result, &diagnostic);
+        errdefer self.library.functions.scene_release(result);
+        try self.library.check(status, diagnostic);
+        return result orelse error.InvalidResult;
+    }
+
+    fn path(self: *Builder, range: DisplayList.PathRef) !*const c.TypstPath {
+        return self.pathData(try self.segments.slice(range));
+    }
+
+    fn pathData(self: *Builder, segments: []const c.TypstPathSegment) !*const c.TypstPath {
+        const result = try self.arena.allocator().create(c.TypstPath);
+        result.* = .{ .segments = segments.ptr, .segment_count = segments.len };
+        return result;
+    }
+
+    fn item(self: *Builder, transform: g.Transform, clip: ?DisplayList.PathRef, id: u64) !c.TypstSceneItem {
+        var result = std.mem.zeroes(c.TypstSceneItem);
+        result.transform = nativeTransform(transform);
+        if (clip) |range| result.clip = try self.path(range);
+        if (id != 0) {
+            const memory = self.arena.allocator();
+            const tag = try std.fmt.allocPrint(memory, "libtypst-object-{d}", .{id});
+            const options = try memory.create(c.TypstSceneItemOptions);
+            options.* = .{ .struct_size = @sizeOf(c.TypstSceneItemOptions), .flags = c.TYPST_SCENE_ITEM_ISOLATE_TRANSFORM, .tag = .{ .data = tag.ptr, .len = tag.len } };
+            result.options = options;
+        }
+        return result;
+    }
+
+    fn style(self: *Builder, value: *const DisplayList.Style) !*const c.TypstStyle {
+        const result = try self.arena.allocator().create(c.TypstStyle);
+        result.* = std.mem.zeroes(c.TypstStyle);
+        result.fill_rule = switch (value.fill_rule) {
+            .nonzero => c.TYPST_FILL_NONZERO,
+            .evenodd => c.TYPST_FILL_EVENODD,
+        };
+        if (value.fill) |fill| {
+            result.flags |= c.TYPST_STYLE_FILL;
+            result.fill = nativeColor(fill);
+        }
+        if (value.pen) |pen| {
+            result.flags |= c.TYPST_STYLE_STROKE;
+            result.stroke = nativeColor(pen.color);
+            result.stroke_width_pt = pen.width;
+            result.line_cap = switch (pen.cap) {
+                .butt => c.TYPST_CAP_BUTT,
+                .round => c.TYPST_CAP_ROUND,
+                .square => c.TYPST_CAP_SQUARE,
+            };
+            result.line_join = switch (pen.join) {
+                .miter => c.TYPST_JOIN_MITER,
+                .round => c.TYPST_JOIN_ROUND,
+                .bevel => c.TYPST_JOIN_BEVEL,
+            };
+            result.miter_limit = pen.miter_limit;
+            result.dashes = pen.dash.ptr;
+            result.dash_count = pen.dash.len;
+            result.dash_phase_pt = pen.dash_phase;
+        }
+        return result;
+    }
+};
+
+fn nativeColor(value: DisplayList.Color) c.TypstColor {
+    // Keep huak's existing RGBA8 output policy at the host boundary. libtypst's
+    // generic scene interface continues to accept full native float channels.
+    return .{ .r = channel(value.r), .g = channel(value.g), .b = channel(value.b), .a = channel(value.a) };
+}
+fn channel(value: f64) f64 {
+    return @round(value * 255) / 255;
+}
+fn nativeTransform(value: g.Transform) c.TypstTransform {
+    return .{ .xx = value.a, .yx = value.b, .xy = value.c, .yy = value.d, .dx = value.e, .dy = value.f };
+}
+fn pathSegment(segment: Path.Segment) c.TypstPathSegment {
+    var raw = std.mem.zeroes(c.TypstPathSegment);
+    switch (segment) {
+        .move => |point| {
+            raw.kind = c.TYPST_SEGMENT_MOVE;
+            raw.p1 = .{ .x = point.x, .y = point.y };
+        },
+        .line => |point| {
+            raw.kind = c.TYPST_SEGMENT_LINE;
+            raw.p1 = .{ .x = point.x, .y = point.y };
+        },
+        .cubic => |curve| {
+            raw.kind = c.TYPST_SEGMENT_CUBIC;
+            raw.p1 = .{ .x = curve.c1.x, .y = curve.c1.y };
+            raw.p2 = .{ .x = curve.c2.x, .y = curve.c2.y };
+            raw.p3 = .{ .x = curve.end.x, .y = curve.end.y };
+        },
+        .close => raw.kind = c.TYPST_SEGMENT_CLOSE,
+    }
+    return raw;
+}
+
+test "mixed nib and ordinary paths convert only referenced intervals" {
+    const t = std.testing;
+    const nibs = @import("../../drawing/pen/root.zig");
+    const source = [_]Path.Segment{
+        .{ .move = .{ .x = 10, .y = 20 } }, .{ .line = .{ .x = 50, .y = 20 } },
+        .{ .move = .{ .x = 10, .y = 40 } }, .{ .line = .{ .x = 50, .y = 40 } },
+    };
+    for ([_]nibs.Nib{ nibs.Nib.square(), .{ .ellipse = .{ .a = 8, .d = 2 } } }) |nib| {
+        for ([_]bool{ false, true }) |filled| {
+            var picture = DisplayList.init(t.allocator);
+            defer picture.deinit();
+            try picture.sources.append(picture.storage.allocator, &source);
+            const nib_range: DisplayList.PathRef = .{ .first = 0, .count = 2, .source = 1 };
+            const ordinary: DisplayList.PathRef = .{ .first = 2, .count = 2, .source = 1 };
+            const pen: DisplayList.Pen = .{ .nib = nib, .cap = .round, .join = .round };
+            const draw: DisplayList.PathCommand = .{ .path = nib_range, .style = &.{ .pen = pen, .fill = if (filled) DisplayList.Color.black else null }, .transform = .{} };
+            try picture.commands.append(picture.storage.allocator, .{ .path = draw });
+            try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = ordinary, .style = &.{ .pen = .{} }, .transform = .{} } });
+            var library: typst.Library = undefined;
+            var builder: Builder = .{ .arena = .init(t.allocator), .library = &library, .size = .{ .x = 10, .y = 10 } };
+            defer builder.arena.deinit();
+            const strokes = try builder.prepareStrokes(&picture, .{});
+            try t.expectEqual(@as(usize, 1), strokes.len);
+            var resolved = (try physical.resolve(t.allocator, source[0..2], &pen, .{})).?;
+            defer resolved.deinit();
+            const stroke = strokes[0].?;
+            for (resolved.path.segments.items, stroke.path.segments[0..stroke.path.segment_count]) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+            var counter = t.FailingAllocator.init(t.allocator, .{});
+            {
+                const native = try NativeSegments.init(counter.allocator(), &picture);
+                defer native.deinit(counter.allocator());
+                const needed: usize = if (filled) 4 else 2;
+                try t.expectEqual(needed, native.data.len);
+                try t.expectEqual(needed * @sizeOf(c.TypstPathSegment) + native.intervals.len * @sizeOf(NativeSegments.Interval), counter.allocated_bytes - counter.freed_bytes);
+                for (source[2..], try native.slice(ordinary)) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+                if (!filled) try t.expectError(error.InvalidPath, native.slice(nib_range));
+            }
+            try picture.commands.append(picture.storage.allocator, .{ .push = .{ .transform = .{}, .clip = nib_range } });
+            try picture.commands.append(picture.storage.allocator, .pop);
+            const clipped = try NativeSegments.init(t.allocator, &picture);
+            defer clipped.deinit(t.allocator);
+            try t.expectEqual(source.len, clipped.data.len);
+            for (source[0..2], try clipped.slice(nib_range)) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+        }
+    }
+}
+
+test "native intervals share repeated and overlapping ranges without duplicating geometry" {
+    const t = std.testing;
+    const source = [_]Path.Segment{
+        .{ .move = .{ .x = 0, .y = 0 } }, .{ .line = .{ .x = 1, .y = 1 } },
+        .{ .move = .{ .x = 2, .y = 2 } }, .{ .line = .{ .x = 3, .y = 3 } },
+        .{ .line = .{ .x = 4, .y = 4 } }, .{ .line = .{ .x = 5, .y = 5 } },
+        .{ .line = .{ .x = 6, .y = 6 } }, .{ .line = .{ .x = 7, .y = 7 } },
+        .{ .line = .{ .x = 8, .y = 8 } }, .{ .line = .{ .x = 9, .y = 9 } },
+    };
+    var picture = DisplayList.init(t.allocator);
+    defer picture.deinit();
+    try picture.sources.append(picture.storage.allocator, &source);
+    const first: DisplayList.PathRef = .{ .first = 2, .count = 5, .source = 1 };
+    const overlap: DisplayList.PathRef = .{ .first = 5, .count = 4, .source = 1 };
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = first, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .{ .push = .{ .transform = .{}, .clip = overlap } });
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = first, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .pop);
+    const native = try NativeSegments.init(t.allocator, &picture);
+    defer native.deinit(t.allocator);
+    try t.expectEqual(@as(usize, 7), native.data.len);
+    try t.expectEqual(@as(usize, 1), native.intervals.len);
+    var library: typst.Library = undefined;
+    var builder: Builder = .{ .arena = .init(t.allocator), .library = &library, .size = .{ .x = 10, .y = 10 }, .segments = native };
+    defer builder.arena.deinit();
+    const a = try builder.path(first);
+    const b = try builder.path(overlap);
+    const repeated = try builder.path(first);
+    try t.expect(a.segments == repeated.segments);
+    try t.expect(a.segments + 3 == b.segments);
+    for (source[2..7], a.segments[0..a.segment_count]) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+    for (source[5..9], b.segments[0..b.segment_count]) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+}
+
+test "consecutive native ranges allocate the same interval storage as one range" {
+    const t = std.testing;
+    var source: [1600]Path.Segment = undefined;
+    for (&source, 0..) |*segment, index| segment.* = if (index % 2 == 0)
+        .{ .move = .{ .x = @floatFromInt(index), .y = 0 } }
+    else
+        .{ .line = .{ .x = @floatFromInt(index), .y = 1 } };
+    var whole = DisplayList.init(t.allocator);
+    defer whole.deinit();
+    try whole.sources.append(whole.storage.allocator, &source);
+    try whole.commands.append(whole.storage.allocator, .{ .path = .{ .path = .{ .first = 0, .count = source.len, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
+    var separate = DisplayList.init(t.allocator);
+    defer separate.deinit();
+    try separate.sources.append(separate.storage.allocator, &source);
+    for (0..800) |index| try separate.commands.append(separate.storage.allocator, .{ .path = .{ .path = .{ .first = index * 2, .count = 2, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
+    // Repeating the final reference must not grow its interval storage either.
+    try separate.commands.append(separate.storage.allocator, .{ .path = .{ .path = .{ .first = source.len - 2, .count = 2, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
+    var whole_counter = t.FailingAllocator.init(t.allocator, .{});
+    const one = try NativeSegments.init(whole_counter.allocator(), &whole);
+    defer one.deinit(whole_counter.allocator());
+    var separate_counter = t.FailingAllocator.init(t.allocator, .{});
+    const many = try NativeSegments.init(separate_counter.allocator(), &separate);
+    defer many.deinit(separate_counter.allocator());
+    try t.expectEqual(@as(usize, 1), many.intervals.len);
+    try t.expectEqual(source.len, many.data.len);
+    try t.expectEqualDeep(one.data, many.data);
+    try t.expectEqual(whole_counter.allocations, separate_counter.allocations);
+    try t.expectEqual(whole_counter.allocated_bytes, separate_counter.allocated_bytes);
+    try t.expectEqual(whole_counter.freed_bytes, separate_counter.freed_bytes);
+    try t.expectEqual(source.len * @sizeOf(c.TypstPathSegment) + @sizeOf(NativeSegments.Interval), separate_counter.allocated_bytes - separate_counter.freed_bytes);
+
+    separate.commands.clearRetainingCapacity();
+    for ([_]DisplayList.PathRef{
+        .{ .first = 8, .count = 2, .source = 1 },
+        .{ .first = 0, .count = 2, .source = 1 },
+        .{ .first = 4, .count = 4, .source = 1 },
+        .{ .first = 2, .count = 3, .source = 1 },
+    }) |range| try separate.commands.append(separate.storage.allocator, .{ .path = .{ .path = range, .style = &.{ .fill = .black }, .transform = .{} } });
+    const unordered = try NativeSegments.init(t.allocator, &separate);
+    defer unordered.deinit(t.allocator);
+    try t.expectEqual(@as(usize, 1), unordered.intervals.len);
+    try t.expectEqual(@as(usize, 10), unordered.data.len);
+    for (source[0..10], unordered.data) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+}
+
+fn nativeIntervalExercise(allocator: std.mem.Allocator) !void {
+    const source = [_]Path.Segment{
+        .{ .move = .{ .x = 0, .y = 0 } }, .{ .line = .{ .x = 8, .y = 0 } }, .{ .line = .{ .x = 8, .y = 8 } }, .{ .line = .{ .x = 0, .y = 8 } }, .close,
+        .{ .move = .{ .x = 2, .y = 2 } }, .{ .line = .{ .x = 2, .y = 6 } }, .{ .line = .{ .x = 6, .y = 2 } }, .close,
+    };
+    var picture = DisplayList.init(std.testing.allocator);
+    defer picture.deinit();
+    try picture.sources.append(picture.storage.allocator, &source);
+    const clip: DisplayList.PathRef = .{ .first = 0, .count = source.len, .source = 1 };
+    const hole: DisplayList.PathRef = .{ .first = 5, .count = 4, .source = 1 };
+    const owned: DisplayList.PathRef = .{ .first = 0, .count = source.len };
+    try picture.storage.segments.appendSlice(picture.storage.allocator, &source);
+    try picture.commands.append(picture.storage.allocator, .{ .push = .{ .transform = .{}, .clip = clip } });
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = owned, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .{ .push = .{ .transform = .{}, .clip = hole } });
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = clip, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .pop);
+    try picture.commands.append(picture.storage.allocator, .pop);
+    const native = try NativeSegments.init(allocator, &picture);
+    defer native.deinit(allocator);
+    try std.testing.expectEqual(source.len * 2, native.data.len);
+    // Actual path/inner-clip/outer-clip submission order differs from sorted
+    // storage. The original controls and contour/hole order must stay intact.
+    for ([_]DisplayList.PathRef{ owned, clip, hole, clip }) |range| {
+        for (try picture.range(range), try native.slice(range)) |segment, converted| try std.testing.expectEqualDeep(pathSegment(segment), converted);
+    }
+}
+
+test "nested compound clips preserve contour order and release every failed interval allocation" {
+    try nativeIntervalExercise(std.testing.allocator);
+    var stable = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(stable.allocator(), nativeIntervalExercise, .{});
+}
+
+test "empty and invalid ranges retain bounds and submission error order" {
+    const t = std.testing;
+    const source = [_]Path.Segment{ .{ .move = .{ .x = 1, .y = 2 } }, .{ .line = .{ .x = 3, .y = 4 } } };
+    var picture = DisplayList.init(t.allocator);
+    defer picture.deinit();
+    try picture.sources.append(picture.storage.allocator, &source);
+    const bad: DisplayList.PathRef = .{ .first = 2, .count = 1, .source = 1 };
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = .{ .first = 1, .count = 0, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = bad, .style = &.{ .fill = .black }, .transform = .{} } });
+    const native = try NativeSegments.init(t.allocator, &picture);
+    defer native.deinit(t.allocator);
+    try t.expectEqual(@as(usize, 0), native.data.len);
+    try t.expectEqual(@as(usize, 0), (try native.slice(.{ .first = 2, .count = 0, .source = 1 })).len);
+    try t.expectError(error.InvalidPath, native.slice(bad));
+    try t.expectError(error.InvalidPath, native.slice(.{ .first = 3, .count = 0, .source = 1 }));
+    try t.expectError(error.InvalidPath, native.slice(.{ .first = std.math.maxInt(usize), .count = 1 }));
+    var library: typst.Library = undefined;
+    // Neither invalid picture reaches a native operation. Exercise document's
+    // real traversal, so preprocessing cannot replace its first diagnostic.
+    picture.commands.clearRetainingCapacity();
+    try picture.commands.append(picture.storage.allocator, .pop);
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = bad, .style = &.{ .fill = .black }, .transform = .{} } });
+    try t.expectError(error.UnbalancedGroup, document(t.allocator, &library, &picture, .{ .x = 10, .y = 10 }, .{}));
+    picture.commands.clearRetainingCapacity();
+    try picture.commands.append(picture.storage.allocator, .{ .push = .{ .transform = .{}, .clip = bad } });
+    try picture.commands.append(t.allocator, .{ .label = .{ .reference = 0, .metrics = .{ .width = 1, .height = 1, .baseline = 1 }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .pop);
+    try t.expectError(error.InvalidFrameReference, document(t.allocator, &library, &picture, .{ .x = 10, .y = 10 }, .{}));
+    // Physical geometry is still prepared before labels are submitted, even
+    // when the bad label precedes that geometry in the drawing order.
+    picture.commands.clearRetainingCapacity();
+    try picture.commands.append(t.allocator, .{ .label = .{ .reference = 0, .metrics = .{ .width = 1, .height = 1, .baseline = 1 }, .transform = .{} } });
+    try picture.commands.append(t.allocator, .{ .path = .{ .path = bad, .style = &.{ .pen = .{ .nib = pens.Nib.square() } }, .transform = .{} } });
+    try t.expectError(error.InvalidPath, document(t.allocator, &library, &picture, .{ .x = 10, .y = 10 }, .{}));
+}
+
+fn prepareStrokeExercise(allocator: std.mem.Allocator) !void {
+    const source = [_]Path.Segment{ .{ .move = .{ .x = 0, .y = 0 } }, .{ .line = .{ .x = 20, .y = 0 } } };
+    var picture = DisplayList.init(std.testing.allocator);
+    defer picture.deinit();
+    try picture.sources.append(picture.storage.allocator, &source);
+    for ([_]pens.Nib{ pens.Nib.square(), .{ .ellipse = .{ .a = 4, .d = 2 } } }) |nib| {
+        const style = try picture.storage.styles.intern(&.{ .pen = .{ .nib = nib, .dash = &.{ 4, 2 } } });
+        try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = .{ .first = 0, .count = source.len, .source = 1 }, .style = style, .transform = .{} } });
+    }
+    var library: typst.Library = undefined;
+    var builder: Builder = .{ .arena = .init(allocator), .library = &library, .size = .{ .x = 10, .y = 10 } };
+    defer builder.arena.deinit();
+    const strokes = try builder.prepareStrokes(&picture, .{});
+    try std.testing.expectEqual(@as(usize, 2), strokes.len);
+    for (strokes) |stroke| try std.testing.expect(stroke.?.path.segment_count != 0);
+    try std.testing.expect(strokes[0].?.style.flags & c.TYPST_STYLE_FILL != 0);
+    try std.testing.expect(strokes[1].?.style.flags & c.TYPST_STYLE_STROKE != 0);
+}
+
+test "native stroke preparation releases every failed allocation" {
+    try prepareStrokeExercise(std.testing.allocator);
+    var stable = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(stable.allocator(), prepareStrokeExercise, .{});
+}
+
+test "independent geometry banks preserve source identity and convert each used range once" {
+    const t = std.testing;
+    const first = [_]Path.Segment{ .{ .move = .{ .x = 1, .y = 2 } }, .{ .line = .{ .x = 3, .y = 4 } } };
+    const second = [_]Path.Segment{ .{ .move = .{ .x = 10, .y = 20 } }, .{ .line = .{ .x = 30, .y = 40 } } };
+    var picture = DisplayList.init(t.allocator);
+    try picture.sources.appendSlice(t.allocator, &.{ &first, &second });
+    defer picture.deinit();
+    const one: DisplayList.PathRef = .{ .first = 0, .count = first.len, .source = 1 };
+    const two: DisplayList.PathRef = .{ .first = 0, .count = second.len, .source = 2 };
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = two, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = one, .style = &.{ .fill = .black }, .transform = .{} } });
+    try picture.commands.append(picture.storage.allocator, .{ .push = .{ .transform = .{}, .clip = two } });
+    try picture.commands.append(picture.storage.allocator, .pop);
+    try t.expectEqual(first[0..].ptr, (try picture.range(one)).ptr);
+    try t.expectEqual(second[0..].ptr, (try picture.range(two)).ptr);
+    const native = try NativeSegments.init(t.allocator, &picture);
+    defer native.deinit(t.allocator);
+    try t.expectEqual(first.len + second.len, native.data.len);
+    for ([_]DisplayList.PathRef{ one, two }) |range| {
+        for (try picture.range(range), try native.slice(range)) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
+    }
+    try t.expectError(error.InvalidPath, native.slice(.{ .source = 3, .first = 0, .count = 1 }));
+}

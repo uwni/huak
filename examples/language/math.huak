@@ -1,0 +1,31 @@
+import paint.*
+import math.{seed, random, randint, randn, beta, erf, erfc, gamma, lgamma}
+
+param random_seed: int = 42
+seed(random_seed)
+export plot := picture(120mm, 80mm)
+default plot
+blue := rgb(0.15, 0.35, 0.8)
+red := rgb(0.8, 0.2, 0.2)
+
+drawing plot do
+    // Repeatable uniform x positions and normally distributed y positions.
+    for i in 1:80 do
+        center := (10mm + random() * 100mm, 40mm + randn() * 6mm)
+        radius := randint(1, 3) * 0.2mm
+        +(circle with center center radius radius) filled blue
+    end
+    // Plot the normal CDF using erf, with a native curved path.
+    points := []
+    for i in 0:60 do
+        x := -3 + i / 10.0
+        y := (1 + erf(x / math.sqrt(2))) / 2
+        points += (10mm + i * 100mm / 60, 10mm + y * 60mm)
+    end
+    +draw smooth(points) with (pen with color red width 0.4mm)
+end
+
+print(gamma(5))       // 24
+print(lgamma(5))      // log(24)
+print(beta(2, 3))      // 1/12
+print(erfc(10))       // ~2.08849e-45; unlike 1-erf(10), retains the tail.

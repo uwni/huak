@@ -1,0 +1,14 @@
+import paint.{label, picture};setup_typst {
+set text(size:24pt)
+}
+export caption:=typ[
+Module Ω
+]
+export tile:=picture(200,80)
+object.append(tile, object.label(caption, (5,30)))
+fn make_caption()->text
+return typ[
+Module Ω
+]
+end
+export make_caption

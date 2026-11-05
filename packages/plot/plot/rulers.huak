@@ -1,0 +1,239 @@
+// A ruler owns the data scale, tick positions, native text and margin for one edge.
+import assertions.assert
+import collections.{get,merged}
+import math.{max,ceil}
+import color.rgb
+import object.{append,draw}
+import "model.huak".{Axis,horizontal,primary}
+import "scales.huak" as scales
+import "labels.huak" as labels
+import "arrows.huak" as arrows
+import "breaks.huak" as cuts
+
+export struct Ruler
+    side:string
+    scale:scales.Scale
+    options:dict
+    ticks:list = []
+    bodies:list = []
+    minors:list = []
+    depth:length = 0pt
+    label_offset:length = 0pt
+    partition:cuts.Partition = cuts.Partition()
+end
+
+export fn options(ax:Axis, side:string) -> dict
+    dim := "y"
+    if horizontal(side) then dim = "x" end
+    inherited := {}
+    if side==primary(ax,dim) then
+        for key in ["scale","reverse","ticks","labels","step","minorticks","format","label"] do
+            if dict_contains(ax.options,dim+key) then inherited[key] = ax.options[dim+key] end
+        end
+        if dict_contains(ax.options,dim+"lim") then inherited["limits"] = ax.options[dim+"lim"] end
+        for key in ["grid","minorgrid","tick_direction","tick_size","ticks_visible","labels_visible"] do
+            if dict_contains(ax.options,key) then inherited[key] = ax.options[key] end
+        end
+        if dim=="x" and dict_contains(ax.options,"tick_rotation") then inherited["tick_rotation"] = ax.options["tick_rotation"] end
+    else inherited["grid"] = false end
+    return merged(inherited,get(ax.sides,side,{}))
+end
+
+fn tick_text(r:Ruler, size:length) -> list
+    if get(r.options,"labels",false)!=false then
+        supplied:list := r.options["labels"]
+        assert(len(supplied)==len(r.ticks),"tick positions and labels differ in length")
+        return supplied
+    end
+    result := []
+    for value in r.ticks do
+        if r.scale.kind=="category" then result += [labels.literal(str(value),size)]
+        else result += [labels.number(value,size,get(r.options,"format","auto"))] end
+    end
+    return result
+end
+
+fn automatic(r:Ruler, count:int, available:length) -> list
+    result := []
+    for i in 0:len(r.partition.pieces)-1 do
+        piece := r.partition.pieces[i]
+        if dict_contains(r.options,"decades") then
+            result += scales.decade_ticks(piece.scale,r.options["decades"])
+        else
+            local_count := max(2,int(count*((piece.stop-piece.start)/available)))
+            ticks := scales.ticks(piece.scale,local_count,get(r.options,"step",false))
+            // Label the lips of an automatic broken ruler so the reader can
+            // see exactly which interval has been omitted.
+            if len(r.partition.gaps)>0 and not dict_contains(r.options,"step") then
+                omitted := r.options["breaks"]
+                if i>0 then
+                    low := omitted[i-1][1]
+                    if len(ticks)==0 or ticks[0]!=low then result += [low] end
+                end
+                result += ticks
+                if i<len(omitted) then
+                    high := omitted[i][0]
+                    if len(ticks)==0 or ticks[len(ticks)-1]!=high then result += [high] end
+                end
+            else result += ticks end
+        end
+    end
+    return result
+end
+
+export fn measure(r:Ruler, available:length, font:length, shared:any)
+    opts := r.options
+    along_x := horizontal(r.side)
+    size:length := get(opts,"font_size",font)
+    assert(size>0pt,"font size must be positive")
+    estimate := 40pt
+    if along_x then estimate = 65pt end
+    count := max(2,int(available/estimate))
+    r.partition = cuts.split(r.scale,opts,available)
+    fixed := shared!=false or dict_contains(opts,"ticks") or dict_contains(opts,"step") or dict_contains(opts,"decades") or dict_contains(opts,"labels")
+    if dict_contains(opts,"decades") then
+        assert(not dict_contains(opts,"ticks") and not dict_contains(opts,"step"),"decades conflicts with ticks or step")
+        r.ticks = automatic(r,count,available)
+    elseif dict_contains(opts,"ticks") then r.ticks = opts["ticks"]
+    else r.ticks = automatic(r,count,available) end
+    if shared!=false then r.ticks = shared end
+    r.bodies = tick_text(r,size)
+    rotation:angle := get(opts,"tick_rotation",0deg)
+    longest := 0pt
+    for body in r.bodies do
+        extent := labels.extent(body,rotation)
+        if along_x then longest = max(longest,extent.x) else longest = max(longest,extent.y) end
+    end
+    if not fixed and longest>0pt then
+        spare := 50pt; gap := 6pt
+        if along_x then spare = 70pt; gap = 10pt end
+        fit := max(2,int(max(1pt,available-spare)/(longest+gap)))
+        if fit<count or (r.scale.kind=="category" and len(r.ticks)>fit) then
+            r.ticks = automatic(r,fit,available)
+            if r.scale.kind=="category" then
+                thinned := []
+                stride:int := max(1,int(ceil(float(len(r.ticks))/fit)))
+                for i in 0:stride:len(r.ticks)-1 do thinned += [r.ticks[i]] end
+                r.ticks = thinned
+            end
+            r.bodies = tick_text(r,size)
+        end
+    end
+    thickness := 0pt
+    if get(opts,"labels_visible",true) then
+        for body in r.bodies do
+            extent := labels.extent(body,rotation)
+            if along_x then thickness = max(thickness,extent.y) else thickness = max(thickness,extent.x) end
+        end
+    end
+    tick:length := get(opts,"tick_size",3pt)
+    assert(tick>=0pt,"tick size must be nonnegative")
+    r.depth = thickness+tick+10pt
+    r.label_offset = r.depth+2pt
+    if get(opts,"label",false)!=false then r.depth = r.depth+opts["label"].height+5pt end
+    setting:any := get(opts,"minorticks",false)
+    r.minors = []
+    if setting==true then
+        for piece in r.partition.pieces do
+            local := []
+            for tick in r.ticks do
+                t := scales.coordinate(piece.scale,tick)
+                if t>=0 and t<=1 then local += [tick] end
+            end
+            r.minors += scales.minor_ticks(piece.scale,local)
+        end
+    elseif setting!=false then r.minors = setting end
+end
+
+fn segment(dst:picture, a:pair, b:pair, stroke:pen)
+    append(dst,draw(path(a,b),stroke))
+end
+
+export fn spine(dst:picture, r:Ruler, start:pair, ink:pen)
+    tangent := (1,0); normal := (0,1)
+    if not horizontal(r.side) then tangent = (0,1); normal = (1,0) end
+    ends := get(r.options,"arrow","none")
+    size := get(r.options,"arrow_size",6pt)
+    pieces := r.partition.pieces
+    for i in 0:len(pieces)-1 do
+        piece := pieces[i]
+        low := start+tangent*piece.start; high := start+tangent*piece.stop
+        points := [low,high]
+        if r.scale.reversed then points = [high,low] end
+        arrows.stroke(dst,points,ink,arrows.visible_ends(ends,i==0,i==len(pieces)-1),size)
+    end
+    // Center one fixed-size slash on each retained spine endpoint.
+    slash := tangent*2pt+normal*4pt
+    for gap in r.partition.gaps do
+        for edge in [gap.start,gap.stop] do
+            center := start+tangent*edge
+            segment(dst,center-slash,center+slash,ink)
+        end
+    end
+end
+
+fn break_endpoint(gaps:list, distance:length) -> bool
+    for gap in gaps do
+        if math.abs(distance-gap.start)<1e-8pt or math.abs(distance-gap.stop)<1e-8pt then return true end
+    end
+    return false
+end
+
+export fn paint(dst:picture, r:Ruler, origin:pair, size:pair, ink:pen, grid:pen, foreground:bool, show_spine:bool, cross_pieces:list)
+    opts := r.options
+    along_x := horizontal(r.side)
+    start := origin
+    span := (size.x,0pt)
+    normal := (0,-1)
+    anchor := (0.5,1)
+    if r.side=="top" then start = origin+(0pt,size.y); normal = (0,1); anchor = (0.5,0) end
+    if not along_x then
+        span = (0pt,size.y); normal = (-1,0); anchor = (1,0.5)
+        if r.side=="right" then start = origin+(size.x,0pt); normal = (1,0); anchor = (0,0.5) end
+    end
+    across := (0,1)
+    if not along_x then across = (1,0) end
+    direction:string := get(opts,"tick_direction","out")
+    assert(direction=="out" or direction=="in" or direction=="both","unknown tick direction")
+    tick:length := get(opts,"tick_size",3pt)
+    first := 0pt; last := tick
+    if direction=="in" then last = -tick end
+    if direction=="both" then first = -tick/2; last = tick/2 end
+    stroke:pen := get(opts,"pen",ink)
+    for minor in [false,true] do
+        points := r.ticks
+        factor := 1.0
+        draw_grid := get(opts,"grid",true)
+        grid_pen := grid
+        if minor then
+            points = r.minors; factor = 0.5
+            draw_grid = get(opts,"minorgrid",false); grid_pen = pen(rgb(0.94,0.94,0.94),0.3pt)
+        end
+        for i in 0:len(points)-1 do
+            distance:any := cuts.position(r.partition.pieces,points[i])
+            if distance!=false then
+                offset := (distance,0pt)
+                if not along_x then offset = (0pt,distance) end
+                if foreground then
+                    at := start+offset
+                    has_slash := show_spine and break_endpoint(r.partition.gaps,distance)
+                    if get(opts,"ticks_visible",true) and not has_slash then segment(dst,at+normal*(first*factor),at+normal*(last*factor),stroke) end
+                    if not minor and get(opts,"labels_visible",true) then
+                        labels.place(dst,r.bodies[i],at+normal*(tick+3pt),anchor,get(opts,"tick_rotation",0deg))
+                    end
+                elseif draw_grid then
+                    base := origin+offset
+                    for piece in cross_pieces do
+                        segment(dst,base+across*piece.start,base+across*piece.stop,grid_pen)
+                    end
+                end
+            end
+        end
+    end
+    if foreground and show_spine then spine(dst,r,start,stroke) end
+    if foreground and get(opts,"label",false)!=false then
+        rotation := 0deg
+        if not along_x then rotation = 90deg end
+        labels.place(dst,opts["label"],start+span/2+normal*r.label_offset,anchor,rotation)
+    end
+end

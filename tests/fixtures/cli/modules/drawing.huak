@@ -1,0 +1,14 @@
+import paint.{rgb, rectangle, path, draw, fill};import assertions.assert
+import "lib/shapes.huak" as shapes
+import "lib/second.huak" as other
+secret:=100
+fn add_secret(x:int)->int
+return x+secret
+end
+assert(shapes.number==9); assert(other.number==20)
+assert(shapes.add_secret(3)==10); assert(other.add_secret(3)==23)
+assert(add_secret(3)==103)
+object.append(shapes.tile, object.fill(rectangle((2,3),4,5), rgb(1,0,0)))
+object.append(shapes.tile, object.draw(path((0,0),(20,20))))
+export result:=shapes.tile
+default shapes.tile

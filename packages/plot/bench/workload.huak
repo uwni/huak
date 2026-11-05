@@ -1,0 +1,30 @@
+import "../plot.huak".*
+param kind:string = "lines"
+param count:int = 1000
+param batch:int = 1
+
+fn make_chart(kind:string, count:int) -> picture
+    f := figure with width 400pt height 280pt
+    a := axis of f at (0,0)
+    if kind=="heatmap" then
+        rows := []
+        for y in 0:99 do
+            row := []
+            for x in 0:99 do row += [math.sin((x+y)*3deg)] end
+            rows += [row]
+        end
+        plotting a do +heatmap rows; colorbar "right" end
+    else
+        x := []; y := []
+        for i in 0:count-1 do x += [float(i)]; y += [math.sin(i*1deg)] end
+        plotting a do
+            if kind=="scatter" then +scatter x x y y
+            else +lines x x y y end
+        end
+    end
+    return render f
+end
+
+plots := []
+for i in 1:batch do plots += [make_chart(kind,count)] end
+default plots[0]

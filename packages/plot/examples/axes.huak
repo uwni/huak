@@ -1,0 +1,31 @@
+import "../plot.huak".*
+fig := figure with width 17cm height 12cm
+a := axis of fig at (0,0)
+b := axis of fig at (1,0)
+c := axis of fig at (0,1)
+d := axis of fig at (1,1)
+plotting a do
+    title typ[Logarithmic scale]
+    xscale "log10"
+    settings {"xminorticks":true,"minorgrid":true}
+    +lines x [1,10,100] y [1,3,2] marked (marker "diamond" sized 5pt) named typ[Response]
+    legend "top-left"
+end
+plotting b do
+    xscale "log10"
+    xlabel typ[Shared $x$]
+    +scatter x [2,20,200] y [4,2,3]
+end
+link_x of fig axes [a,b]
+plotting c do
+    title typ[Reversed and custom ticks]
+    settings {"xreverse":true,"xticks":[0,1,2],"xlabels":[typ[$0$],typ[$pi$],typ[$2pi$]],"spines":["left","right","top","bottom"]}
+    +lines x [0,1,2] y [0,1,0]
+end
+plotting d do
+    title typ[Equal aspect]
+    settings {"equal":true,"xlim":[0,2],"ylim":[0,1]}
+    +lines x [0,1,2] y [0,1,0] named typ[Triangle]
+    legend "outside-bottom"
+end
+default render fig

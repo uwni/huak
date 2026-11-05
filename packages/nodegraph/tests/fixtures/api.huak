@@ -1,0 +1,41 @@
+import paint.*
+import math.{abs}
+import "../../nodegraph.huak" as nodegraph
+import "../../nodegraph.huak".{scene, geometry, diagram, place, link, wire, group, matrix, anchor_node, route_edge, finish, grid, absolute, node, edge, hide, mark}
+import assertions.assert
+
+// Explicit UFCS scene construction and idempotent finish.
+f := scene({"spacing": (10pt, 10pt), "margin": 5pt})
+a := f.place(typ[A], grid(0, 0))
+b := f.place(typ[B], grid(1, 0))
+e := f.link(a, b)
+p := finish(f)
+assert(f.finished, "finish must mark the scene")
+assert(finish(f) == p, "finish must be idempotent")
+assert(anchor_node(f, a, "center").x < anchor_node(f, b, "center").x, "place order")
+assert(len(route_edge(f, e)) > 0, "link must resolve an edge handle")
+
+// Drawing-block commands, group and matrix.
+g := scene()
+nodegraph.drawing g do
+    x := place typ[X] at grid(0, 0)
+    y := place typ[Y] at grid(1, 0)
+    group [x, y] containing typ[Pair]
+    wire absolute((0pt, 0pt)) to absolute((20pt, 20pt))
+    matrix [[typ[M], typ[N]]]
+end
+assert(len(g.geometry.objects) == 6, "scene commands must all resolve")
+
+// Shapes and options are ordinary data; no callback or parser required.
+shapes := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
+for i in 0:len(shapes)-1 do
+    kind:string := shapes[i]
+    n := node("s", absolute((0pt, 0pt)), typ[], {"shape": kind, "width": 30pt, "height": 20pt, "shape_options": {"fit": 0.7}})
+    box := bounds(diagram([n]))
+    assert(len(box) == 2, "shape must render")
+end
+
+// Hiding keeps layout; mark/extrude data stays local.
+hidden := hide(node("h", grid(0, 0), typ[H]))
+assert(len(hidden.options) == 2 and hidden.options["hidden"] == true)
+print("api checks passed")

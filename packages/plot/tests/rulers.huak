@@ -1,0 +1,69 @@
+import "../plot.huak".*
+import "../plot/render.huak" as renderer
+import "../plot/scales.huak" as scales
+import assertions.assert
+import color.rgb
+
+log_axis := scales.resolve([],"log10",[0.3,21],true)
+ticks := scales.decade_ticks(log_axis,[1,2,5])
+assert(len(ticks)==6 and ticks[0]==0.5 and ticks[5]==20)
+assert(scales.coordinate(log_axis,1)>scales.coordinate(log_axis,10))
+for tick in scales.minor_ticks(log_axis,ticks) do assert(scales.index(ticks,tick)<0) end
+
+// Sharing affects the primary axis and any mirror. Each independent ruler
+// collects only observations bound to it, including limits of the statistics.
+f := figure with width 550pt height 400pt
+a := axis of f at (0,0)
+b := axis of f at (1,0)
+plotting a do
+    side "bottom" with {"scale":"log10","decades":[1],"format":"power10"}
+    remap "top" ticks [1,10] to [typ[one],typ[ten]]
+    side "right" with {"reverse":true}
+    +scatter x [1,10] y [-3,-1]
+    +errorbars x [1,10] y [100,200] errors [10,20] on_axes x "bottom" y "right"
+end
+plotting b do
+    xscale "log10"
+    +scatter x [10,1000] y [-1,-2]
+end
+link_x of f axes [a,b]
+panels := renderer.prepare(f)
+p := panels[0]
+assert(p.y.high<0 and p.rulers_by_side["right"].scale.high>220)
+assert(p.rulers_by_side["top"].scale.high==panels[1].x.high)
+assert(p.rulers_by_side["top"].scale.kind=="log10")
+renderer.layout(f,panels)
+assert(len(p.rulers_by_side["bottom"].ticks)==4 and len(p.rulers_by_side["top"].ticks)==2)
+assert(len(panels[1].xt)==4)
+assert(p.rulers_by_side["right"].scale.reversed)
+
+// Same stack name on different axes must not combine measurements. Also
+// check that partitioning for statistics preserves interleaved paint order.
+bars := figure(400pt,240pt)
+c := axis(bars)
+plotting c do
+    side "right" with {}
+    +bar categories ["A"] values [2] styled {"stack":"total"}
+    +bar categories ["A"] values [100] on_axes x "bottom" y "right" styled {"stack":"total"}
+    +bar categories ["A"] values [3] styled {"stack":"total"}
+end
+primitives := renderer.prepare(bars)[0].layers
+assert(primitives[0].data["y1"][0]==2)
+assert(primitives[1].y[0]==0 and primitives[1].data["y1"][0]==100)
+assert(primitives[2].y[0]==2 and primitives[2].data["y1"][0]==5)
+
+// Export a page with unambiguous colors for independent pixel verification.
+probe := figure(200pt,200pt,{"margin":0pt})
+ax := axis(probe)
+plotting ax do
+    for edge in ["bottom","top","left","right"] do side edge with {"ticks":[],"grid":false} end
+    side "bottom" with {"limits":[0,1]}
+    side "left" with {"limits":[0,1]}
+    side "top" with {"scale":"log10","limits":[1,100]}
+    side "right" with {"limits":[0,200],"reverse":true,"arrow":"end","arrow_size":12pt,"pen":pen(rgb(0,0,1),1.5pt)}
+    +scatter x [10] y [50] on_axes x "top" y "right" marked (marker "square" sized 8pt) styled {"color":rgb(1,0,0),"pen":false}
+    +arrow from (2,100) to (50,100) on_axes x "top" y "right" styled {"pen":pen(rgb(0,0.7,0),1.5pt),"arrow_size":12pt}
+    +lines x [0.1,0.25,0.25,false,0.6,0.8,0.8] y [0.25,0.25,0.25,false,0.25,0.25,0.25] arrowed "end" styled {"pen":pen(rgb(1,0,1),1.5pt),"arrow_size":10pt}
+end
+default render probe
+print("plot ruler checks passed")

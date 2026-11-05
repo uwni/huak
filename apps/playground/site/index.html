@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Huak Playground</title>
+<link rel="stylesheet" href="style.css">
+<header><h1>Huak <span>Playground</span></h1></header>
+<main>
+  <section aria-labelledby="source-title">
+    <div class="bar"><h2 id="source-title">Source</h2><button type="button" id="render" disabled>Render</button></div>
+    <div id="source"></div>
+  </section>
+  <section aria-labelledby="preview-title">
+    <div class="bar"><h2 id="preview-title">Preview</h2><a id="download" download="drawing.svg" hidden>Download SVG</a></div>
+    <div class="preview"><img id="preview" alt="Rendered Huak drawing" hidden></div>
+    <p id="status" role="status">Loading engine…</p>
+  </section>
+</main>
+<script type="module" src="playground.js"></script>
+</html>

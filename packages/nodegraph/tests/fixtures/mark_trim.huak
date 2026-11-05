@@ -1,0 +1,12 @@
+import paint.{trimmed, bounds, assert}
+import "../../nodegraph.huak".*
+import assertions.assert
+plain := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": []})
+trimmed := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": [mark("head", 1, false, {"tip_end": 20pt})]})
+a := bounds(diagram([plain]))
+b := bounds(diagram([trimmed]))
+assert(len(a) == 2 and len(b) == 2 and b[1].x < a[1].x-10pt, "tip_end must trim the stroke")
+print("mark trim checks passed")
+capped := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": [mark("head", 1, false, {"tip_end": 10pt, "cap_offset": 5pt})]})
+c := bounds(diagram([capped]))
+assert(c[1].x < a[1].x-10pt, "cap_offset must trim the stroke")

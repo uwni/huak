@@ -1,0 +1,4 @@
+bounds:=[5,"not numeric"]
+for i in bounds[0]:bounds[1] do
+print("unexpected iteration")
+end

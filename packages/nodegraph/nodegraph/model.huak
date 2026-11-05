@@ -1,0 +1,156 @@
+// Deferred diagram descriptions; no drawing or typography is performed here.
+import math.{cos, sin}
+import assertions.assert
+import "options.huak" as opt
+
+// Coordinates have distinct, fixed fields. The existing kind dispatch remains
+// ordinary library code; Huak does not need a tagged-union language feature.
+export struct GridCoordinate
+    value:pair
+    kind:string = "grid"
+end
+
+export struct AbsoluteCoordinate
+    position:pair
+    kind:string = "absolute"
+end
+
+export struct NamedCoordinate
+    name:string
+    anchor:string = "center"
+    kind:string = "named"
+end
+
+export struct RelativeCoordinate
+    origin:any
+    delta:pair
+    kind:string = "relative"
+end
+
+export struct BetweenCoordinate
+    first:any
+    last:any
+    position:float = 0.5
+    kind:string = "between"
+end
+
+export struct AutomaticCoordinate
+    kind:string = "auto"
+end
+
+export struct NodeDescription
+    name:string
+    position:any
+    body:text
+    options:dict = {}
+    kind:string = "node"
+end
+
+export struct EnclosureDescription
+    name:string
+    members:list
+    body:text
+    options:dict = {}
+    kind:string = "enclose"
+end
+
+export struct EdgeDescription
+    name:string
+    first:any
+    last:any
+    options:dict = {}
+    kind:string = "edge"
+end
+
+export struct MarkDescription
+    kind:string
+    position:float = 1
+    reverse:bool = false
+    options:dict = {}
+end
+
+export fn grid(x:float, y:float) -> GridCoordinate
+    return GridCoordinate(value: (x, y))
+end
+
+export fn absolute(position:pair) -> AbsoluteCoordinate
+    return AbsoluteCoordinate(position: position)
+end
+
+export fn named(name:string, anchor:string = "center") -> NamedCoordinate
+    assert(name != "", "coordinate name must not be empty")
+    return NamedCoordinate(name: name, anchor: anchor)
+end
+
+export fn relative(origin:any, delta:pair) -> RelativeCoordinate
+    return RelativeCoordinate(origin: origin, delta: delta)
+end
+
+export fn polar(origin:any, direction:angle, distance:length) -> RelativeCoordinate
+    return relative(origin, (cos(direction)*distance, sin(direction)*distance))
+end
+
+export fn between(first:any, last:any, position:float = 0.5) -> BetweenCoordinate
+    return BetweenCoordinate(first: first, last: last, position: position)
+end
+// Compass shorthand for relative offsets. Strings are finite tokens, not an
+// expression parser; arbitrary repetitions like "rrr" or comma lists remain
+// unavailable until Huak exposes string indexing/splitting.
+export fn shift(origin:any, direction:string, distance:length = 6pt) -> RelativeCoordinate
+    directions := {
+        "u": (0, 1), "up": (0, 1), "north": (0, 1), "t": (0, 1), "top": (0, 1),
+        "d": (0, -1), "down": (0, -1), "south": (0, -1), "b": (0, -1), "bottom": (0, -1),
+        "l": (-1, 0), "left": (-1, 0), "west": (-1, 0), "w": (-1, 0),
+        "r": (1, 0), "right": (1, 0), "east": (1, 0), "e": (1, 0),
+        "ur": (1, 1), "ru": (1, 1), "ne": (1, 1), "en": (1, 1), "northeast": (1, 1), "north-east": (1, 1),
+        "ul": (-1, 1), "lu": (-1, 1), "nw": (-1, 1), "wn": (-1, 1), "northwest": (-1, 1), "north-west": (-1, 1),
+        "dr": (1, -1), "rd": (1, -1), "se": (1, -1), "es": (1, -1), "southeast": (1, -1), "south-east": (1, -1),
+        "dl": (-1, -1), "ld": (-1, -1), "sw": (-1, -1), "ws": (-1, -1), "southwest": (-1, -1), "south-west": (-1, -1),
+    }
+    assert(dict_contains(directions, direction), "unknown direction shorthand: " + direction)
+    delta:pair := directions[direction]
+    return relative(origin, (delta.x*distance, delta.y*distance))
+end
+
+
+export fn automatic() -> AutomaticCoordinate
+    return AutomaticCoordinate()
+end
+
+export fn node(name:string, position:any, body:text, options:dict = {}) -> NodeDescription
+    opt.validate(options, ["shape", "width", "height", "radius", "inset", "outset", "fill", "stroke", "thickness", "corner_radius", "extrude", "rotate", "layer", "hidden", "floating", "snap", "outline", "shape_options", "defocus"])
+    shape_options:dict := opt.get(options, "shape_options", {})
+    opt.validate(shape_options, ["angle", "fit", "dir", "flip", "aspect", "truncate", "tilt", "rings", "scale"])
+    return NodeDescription(name: name, position: position, body: body, options: options)
+end
+
+export fn enclose(name:string, members:list, body:text, options:dict = {}) -> EnclosureDescription
+    assert(len(members) > 0, "enclose needs at least one node")
+    probe := node(name, absolute((0pt, 0pt)), body, options)
+    return EnclosureDescription(name: name, members: members, body: body, options: probe.options)
+end
+
+export fn edge(first:any, last:any, options:dict = {}) -> EdgeDescription
+    opt.validate(options, ["name", "via", "curve", "kind", "bend", "loop_angle", "loop_size", "corner", "corner_radius", "shift", "dodge", "snap", "stroke", "thickness", "dash", "phase", "extrude", "marks", "head", "tail", "mark_size", "label", "label_pos", "label_segment", "label_distance", "label_side", "label_sep", "label_angle", "label_tangent", "label_anchor", "label_offset", "label_fill", "label_cut", "label_padding", "crossing", "crossing_width", "decoration", "amplitude", "wavelength", "layer", "hidden", "floating"])
+    return EdgeDescription(name: opt.get(options, "name", ""), first: first, last: last, options: options)
+end
+
+export fn connect(first:string, last:string, options:dict = {}) -> EdgeDescription
+    return edge(named(first), named(last), options)
+end
+
+// Hiding keeps layout unless floating is also selected. Copy the nested options
+// before updating them: copy(record) alone would still share that dictionary.
+export fn hide(item:any, floating:bool = false) -> any
+    result := copy(item)
+    result.options = opt.setting(item.options, "hidden", true)
+    result.options["floating"] = floating
+    return result
+end
+
+// A mark may carry custom local picture geometry instead of a built-in kind.
+export fn mark(kind:string, position:float = 1, reverse:bool = false, options:dict = {}) -> MarkDescription
+    opt.validate(options, ["size", "flip", "scale", "content", "mask", "inherit", "extrude", "sharpness", "delta", "fill", "stroke", "tip_end", "tail_end", "tip_origin", "tail_origin", "cap_offset", "bend"])
+    assert(position >= 0 and position <= 1, "mark position must be in [0, 1]")
+    return MarkDescription(kind: kind, position: position, reverse: reverse, options: options)
+end

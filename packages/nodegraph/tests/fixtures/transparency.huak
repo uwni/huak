@@ -1,0 +1,7 @@
+import paint.{rgb, width, height}
+import "../../nodegraph.huak".*
+
+frame := hide(node("frame", absolute((50pt, 30pt)), typ[], {"width": 100pt, "height": 60pt}))
+lower := edge(absolute((10pt, 30pt)), absolute((90pt, 30pt)), {"marks": [], "thickness": 6pt, "stroke": rgb(0, 0, 1)})
+upper := edge(absolute((50pt, 10pt)), absolute((50pt, 50pt)), {"marks": [], "thickness": 2pt, "stroke": rgb(1, 0, 0), "crossing": true, "crossing_width": 12pt})
+default diagram([frame, lower, upper], {"margin": 0pt})

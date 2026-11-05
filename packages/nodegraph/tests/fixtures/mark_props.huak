@@ -1,0 +1,14 @@
+import paint.{rgb, path, bounds, assert}
+import "../../nodegraph.huak".*
+import "../../nodegraph/marks.huak" as marks
+import "../../nodegraph/model.huak" as model
+import assertions.assert
+a := marks.render(model.mark("head", 1, false, {"size": 8pt}), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 8pt)
+b := marks.render(model.mark("head", 1, false, {"size": 8pt, "sharpness": 30deg, "delta": 40deg, "stroke": rgb(1, 0, 0)}), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 8pt)
+assert(len(bounds(a.content)) == 2 and len(bounds(b.content)) == 2, "mark properties must render")
+print("mark properties checks passed")
+plain_edge := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": [mark("head", 1, false, {"size": 8pt})]})
+origin_edge := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": [mark("head", 1, false, {"size": 8pt, "tip_origin": 10pt})]})
+pa := bounds(diagram([plain_edge]))
+pb := bounds(diagram([origin_edge]))
+assert(pb[1].x > pa[1].x+2pt, "tip_origin must move the mark")

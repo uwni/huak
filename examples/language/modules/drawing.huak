@@ -1,0 +1,12 @@
+import drawing.drawing
+import paint.{label, picture}
+import "shapes.huak" as shapes
+
+export pic := picture(300, 120)
+default pic
+drawing pic do
+    for i in 0:4 do
+        +shapes.marker((30 + 50*i, 35))
+    end
+    +label(shapes.caption, (20, 95))
+end

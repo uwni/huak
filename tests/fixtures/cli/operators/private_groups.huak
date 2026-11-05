@@ -1,0 +1,6 @@
+import assertions.assert
+import "lib/first.huak" as first
+import "lib/second.huak" as second
+assert(1 first.combine 2 first.combine 3==123)
+assert(1 second.combine 2 second.combine 3==123)
+assert((1 first.combine 2) second.combine 3==123)

@@ -1,0 +1,19 @@
+import paint.{translate, scale, transformed}
+precedence transform
+    below addition
+    above path
+    associativity left
+end
+export transform
+
+fn scaled(value: path, factor: float) -> path
+    return transformed(value, scale(factor))
+end
+mixfix _ scaled _ in transform
+export scaled
+
+fn shifted(value: path, offset: pair) -> path
+    return transformed(value, translate(offset))
+end
+mixfix _ shifted _ in transform
+export shifted

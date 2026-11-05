@@ -1,0 +1,134 @@
+import drawing.drawing
+import math.{sin, cos, sqrt, max, norm}
+import transform.translate
+import geometry.{circle, sample_path}
+import object.bounds
+import pen.profile_outline
+import object.{draw, fill}
+// Engraving recipes. Sampling, clipping and stroke expansion remain native
+// geometry mechanisms; density, lighting and mark placement are policies here.
+import assertions.assert
+
+fn hatch(region:path, spacing:length, width:length, angle:angle, ink:color) -> object
+    assert(spacing > 0pt, "hatch spacing must be positive")
+    assert(width >= 0pt, "hatch width must be nonnegative")
+    if width == 0pt then return picture() end
+    box := bounds(region)
+    assert(len(box) == 2, "hatch needs a nonempty region")
+    center := (box[0] + box[1]) / 2
+    radius := norm(box[1] - box[0]) / 2
+    direction := (cos(angle), sin(angle))
+    normal := (-direction.y, direction.x)
+    result := picture(transform: translate((0, 0)), clip: region)
+    drawing result do
+        for distance in -radius:spacing:radius do
+            midpoint := center + normal * distance
+            +draw(path(midpoint - direction * radius, midpoint + direction * radius), pen(ink, width))
+        end
+
+    end
+
+    return result
+end
+export hatch
+
+// Uniform staggered dot screen, with deterministic placement.
+fn dots(region:path, spacing:length, radius:length, ink:color) -> object
+    assert(spacing > 0pt, "dot spacing must be positive")
+    assert(radius > 0pt, "dot radius must be positive")
+    box := bounds(region)
+    assert(len(box) == 2, "dots needs a nonempty region")
+    result := picture(transform: translate((0, 0)), clip: region)
+    drawing result do
+        row := 0
+        for y in box[0].y:spacing:box[1].y do
+            shift := (row % 2) * spacing / 2
+            for x in box[0].x - spacing:spacing:box[1].x do
+                +fill(circle((x + shift, y), radius), ink)
+            end
+            row = row + 1
+        end
+
+    end
+
+    return result
+end
+export dots
+
+fn sphere(center:pair, radius:length, ink:color, lines:int) -> object
+    assert(radius > 0pt, "sphere radius must be positive")
+    assert(lines >= 4, "sphere needs at least four shading intervals")
+    spacing := 2 * radius / lines
+    positions := []
+    for i in 0:24 do
+        positions += float(i) / 24
+    end
+    profile_positions := positions
+    result := picture(transform: translate((0, 0)), clip: circle(center, radius))
+    drawing result do
+        for row in 1:lines - 1 do
+            ny := -1 + 2 * float(row) / lines
+            half_width := radius * sqrt(max(0, 1 - ny * ny))
+            y := center.y + radius * ny
+            curve := path((center.x - half_width, y), (center.x + half_width, y))
+            widths := []
+            for i in 0:24 do
+                u := float(i) / 24
+                nx := (-1 + 2 * u) * half_width / radius
+                nz := sqrt(max(0, 1 - nx * nx - ny * ny))
+                light := max(0, -0.4 * nx + 0.5 * ny + 0.7681145748 * nz)
+                width := spacing * (1 - light) * 0.85
+                if i == 0 or i == 24 then
+                    width = 0pt
+                end
+                widths += width
+            end
+            +fill(profile_outline(curve, profile_positions, widths, "round", "round"), ink)
+        end
+
+    end
+
+    return result
+end
+export sphere
+
+// Longitudinal hatching on a tube of constant diameter. Each contour is
+// handled separately, including across pen-up moves in a compound path.
+fn tube(curve:path, diameter:length, ink:color, stripes:int, steps:int) -> object
+    assert(diameter > 0pt, "tube diameter must be positive")
+    assert(stripes >= 3, "tube needs at least three stripes")
+    assert(steps >= 2, "tube needs at least two samples per contour")
+    samples := sample_path(curve, steps)
+    boundary := profile_outline(curve, [0, 1], [diameter, diameter], "round", "round")
+    result := picture(transform: translate((0, 0)), clip: boundary)
+    drawing result do
+        for stripe in 1:stripes - 1 do
+            side := -1 + 2 * float(stripe) / stripes
+            width := diameter / stripes * (0.65 - 0.55 * side)
+            points := []
+            contour := samples[0][4]
+            for i in 0:len(samples) - 1 do
+                sample := samples[i]
+                if sample[4] != contour then
+                    if len(points) >= 2 then
+                        +draw(path(points), pen(ink, width, "round", "round"))
+                    end
+                    points = []
+                    contour = sample[4]
+                end
+                tangent := sample[2]
+                if norm(tangent) > 0 then
+                    normal := (-tangent.y, tangent.x)
+                    points += sample[1] + normal * (diameter * side / 2)
+                end
+            end
+            if len(points) >= 2 then
+                +draw(path(points), pen(ink, width, "round", "round"))
+            end
+        end
+
+    end
+
+    return result
+end
+export tube

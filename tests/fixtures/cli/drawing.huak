@@ -1,0 +1,21 @@
+import paint.{rgb, rectangle, fill, label, picture};param title: string = "CLI selectable text"
+param size: int = 18
+setup_typst {
+set text(font: "Libertinus Serif", size: int(sys.inputs.size) * 1pt)
+let quoted = "first
+end
+last"
+let fenced = ```typ
+end
+```
+/* comment
+end
+*/
+}
+export pic:=picture(240, 100)
+default pic
+object.append(pic, object.fill(rectangle((0, 0), 240, 100), rgb(1, 1, 1)))
+t := typ[
+#text(sys.inputs.title)
+]
+object.append(pic, object.label(t, (12, 35)))

@@ -1,0 +1,62 @@
+// huak logo, redrawn from the original Illustrator artwork.
+//
+// The source SVG is 58.67 x 49.67 units; one unit is drawn as one millimetre.
+// The text transforms are converted from SVG's y-down coordinates to huak's
+// y-up coordinates. Only the glyph outlines are kept: the pentagon is cut by
+// their boolean union, so the letters become transparent gaps. Split the
+// remaining compound path into subpaths and give each area its own colour.
+import paint.*
+
+tolerance := 0.001mm
+palette := [
+    rgb(231 / 255, 111 / 255, 81 / 255), // #e76f51
+    rgb(233 / 255, 196 / 255, 106 / 255), // #e9c46a
+    rgb(42 / 255, 157 / 255, 143 / 255), // #2a9d8f
+    rgb(69 / 255, 123 / 255, 157 / 255), // #457b9d
+    rgb(155 / 255, 93 / 255, 229 / 255), // #9b5de5
+    rgb(244 / 255, 162 / 255, 97 / 255), // #f4a261
+    rgb(231 / 255, 111 / 255, 167 / 255), // #e76fa7
+    rgb(120 / 255, 145 / 255, 63 / 255), // #78913f
+    rgb(64 / 255, 89 / 255, 173 / 255), // #4059ad
+]
+
+setup_typst {
+  set text(font: "Libertinus Serif", size: 33.54mm)
+}
+
+// Typeset one letter, apply its placement transform, then extract the outline
+// and reduce it to an explicit filled region.
+fn letter(content: text, placement: transform) -> path
+    page := picture()
+    object.append(page, label(content, (0mm, 0mm), placement))
+    return region(page, tolerance)
+end
+
+// Source SVG text transforms, with the baselines flipped to y-up:
+//   H translate(4.56 27.8)
+//   u translate(25.08 41.08) scale(-1 1)
+//   a translate(31.91 4.79) rotate(105.81)
+//   K translate(24.6 41.02)
+h := letter(typ[H], translate((4.56mm, 21.87mm)))
+u := letter(typ[u], compose(scale(-1, 1), translate((25.08mm, 8.59mm))))
+a := letter(typ[a], compose(rotate(-105.81deg), translate((31.91mm, 44.88mm))))
+k := letter(typ[K], translate((24.6mm, 8.65mm)))
+
+// Union the four glyph regions before subtracting them from the seal.
+letters := region_union(
+    region_union(h, u),
+    region_union(a, k)
+)
+
+// Pentagon from the source SVG, flipped to y-up.
+pentagon := (43.04mm, 43.35mm) -- (13.55mm, 48.02mm) -- (0mm, 21.42mm) --
+    (21.11mm, 0.31mm) -- (47.71mm, 13.87mm) -- cycle
+
+plate := picture with width 58.67mm height 49.67mm
+areas := subpaths(region_difference(pentagon, letters, tolerance))
+for i in 0:len(areas)-1 do
+    object.append(plate, fill(areas[i], palette[i % len(palette)]))
+end
+
+export logo := plate
+default logo

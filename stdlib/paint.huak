@@ -1,0 +1,108 @@
+import math.{min, max}
+import drawing.drawing
+export drawing
+import color.rgb
+import pen.{pencircle, pensquare, makepen, makepath, penoffset, stroke_outline, envelope, profile_outline, stroke_path}
+import transform.{translate, scale, rotate, compose, apply, transformed, bent}
+import geometry.{closed, intersection_times, sample_at_length, sample_at_fraction, samples_at_length, rectangle, circle, compound, subpaths, smooth, bezier, reverse, joined, trimmed, point_at, tangent_at, arclength, sample_path, intersections, clipped, region_union, region_intersection, region_difference, region_xor, offset, clip_region, clip_lines}
+import picture.canvas
+import object.{draw, fill, filldraw, label, append, bounds, outlines, region, snapshot, clipped as clipped_object}
+import object.transform as transform_object
+import text.{width, height, baseline}
+import animation.{timeline, animate, motion}
+export rgb, pen, pencircle, pensquare, makepen, makepath, penoffset, stroke_outline, envelope, translate
+export scale, rotate, compose, apply, rectangle, circle, path, compound, subpaths, smooth, bezier
+export closed, intersection_times, sample_at_length, sample_at_fraction, samples_at_length
+export reverse, transformed, bent, joined, trimmed, point_at, tangent_at, arclength, sample_path, profile_outline, bounds
+export intersections, clipped, region, region_union, region_intersection, region_difference, region_xor, offset, stroke_path, clip_region
+export clip_lines, canvas, draw, fill, filldraw, label, width, height
+export baseline, outlines, picture, object, append, timeline, animate, motion
+
+// Composable object expressions and word operators. Detailed policy controls
+// remain available in brush/engraving; these functions choose drawing defaults.
+import brush
+import engraving
+import assertions.assert
+import brush.rainbow_color
+import engraving.{hatch, dots}
+export assert, rainbow_color, hatch, dots
+
+fn tapered(curve:path, width:length) -> path
+    return brush.tapered(curve, width, 48)
+end
+mixfix _ tapered _ in path
+export tapered
+
+fn rainbow(curve:path, width:length) -> object
+    return brush.rainbow(curve, width, 400)
+end
+mixfix _ rainbow _ in path
+export rainbow
+
+// A black, origin-centered sphere; shifted positions the resulting object.
+fn sphere(radius:length) -> object
+    return engraving.sphere((0mm, 0mm), radius, rgb(0, 0, 0), 40)
+end
+mixfix sphere _ in unary
+export sphere
+
+fn tube(curve:path, diameter:length) -> object
+    return engraving.tube(curve, diameter, rgb(0, 0, 0), 15, 80)
+end
+mixfix _ tube _ in path
+export tube
+
+fn filled(curve:path, ink:color) -> object
+    return object(curve, fill: ink)
+end
+mixfix _ filled _ in path
+export filled
+
+fn at(content:text, position:pair) -> object
+    result := object(content)
+    transform_object(result, translate(position))
+    return result
+end
+mixfix _ at _ in path
+export at
+
+fn shifted(source:object, offset:pair) -> object
+    return transformed(source, translate(offset))
+end
+mixfix _ shifted _ in path
+export shifted
+
+// Clip an independent instance snapshot. The mask is the actual ink region;
+// text in the copied content stays native and the removed area is transparent.
+fn cut(source:object, hole:any, tolerance:length = 0.001pt) -> picture
+    assert(not source.animated, "cut requires a static object")
+    assert(tolerance > 0pt, "cut tolerance must be positive")
+    mask := region(hole, tolerance)
+    box := bounds(source)
+    if len(box) == 0 or len(mask) == 0 then return snapshot(source) end
+    minimum := box[0] - (tolerance, tolerance)
+    maximum := box[1] + (tolerance, tolerance)
+    domain := rectangle(minimum, maximum.x-minimum.x, maximum.y-minimum.y)
+    keep := region_difference(domain, mask, tolerance)
+    if len(keep) == 0 then
+        return picture()
+    end
+    return clipped_object(source, keep)
+end
+mixfix _ cut _ in path
+export cut
+
+// Call forms belong to the library; native constructors keep their original
+// implementation and may still be called with ordinary positional arguments.
+mixfix draw _ in logical_or
+mixfix fill _ in logical_or
+mixfix circle with center _ radius _ in unary
+mixfix rectangle with origin _ width _ height _ in unary
+mixfix picture with width _ height _ in unary
+mixfix pen with color _ width _ in unary
+mixfix rgb with red _ green _ blue _ in unary
+mixfix envelope of _ with _ in unary
+
+mixfix tapered along _ width _ in unary
+mixfix rainbow along _ width _ in unary
+mixfix tube along _ diameter _ in unary

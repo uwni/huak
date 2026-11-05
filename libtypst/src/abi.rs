@@ -1,0 +1,450 @@
+//! Stable C data types. These layouts and numeric values belong to libtypst.
+pub type TypstStatus = u32;
+pub const TYPST_OK: TypstStatus = 0;
+pub const TYPST_INVALID_ARGUMENT: TypstStatus = 1;
+pub const TYPST_INVALID_UTF8: TypstStatus = 2;
+pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
+pub const TYPST_UNSUPPORTED: TypstStatus = 4;
+pub const TYPST_PANIC: TypstStatus = 5;
+pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0001;
+pub const TYPST_CAP_PDF: u64 = 1;
+pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
+pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
+pub const TYPST_CAP_TEXT_OUTLINE: u64 = 8;
+/// Per-request lexical bindings in content layout options.
+pub const TYPST_CAP_LAYOUT_BINDINGS: u64 = 16;
+pub const TYPST_VALUE_NONE: u32 = 0;
+pub const TYPST_VALUE_BOOL: u32 = 1;
+pub const TYPST_VALUE_INT: u32 = 2;
+pub const TYPST_VALUE_FLOAT: u32 = 3;
+pub const TYPST_VALUE_STRING: u32 = 4;
+pub const TYPST_VALUE_ARRAY: u32 = 5;
+pub const TYPST_VALUE_DICT: u32 = 6;
+/// `number` is an absolute length in points.
+pub const TYPST_VALUE_LENGTH: u32 = 7;
+pub const TYPST_VALUE_COLOR: u32 = 8;
+pub const TYPST_CONTEXT_NO_BUILTIN_FONTS: u32 = 1;
+pub const TYPST_CONTEXT_DISABLE_PLUGINS: u32 = 2;
+pub const TYPST_SYNTAX_MARKUP: u32 = 0;
+pub const TYPST_SYNTAX_CODE: u32 = 1;
+pub const TYPST_SYNTAX_MATH: u32 = 2;
+pub const TYPST_EXPAND_X: u32 = 1;
+pub const TYPST_EXPAND_Y: u32 = 2;
+/// Marks an explicitly bounded dimension, including a finite zero-point region.
+pub const TYPST_BOUND_X: u32 = 4;
+pub const TYPST_BOUND_Y: u32 = 8;
+pub const TYPST_DIAGNOSTIC_ERROR: u32 = 1;
+pub const TYPST_DIAGNOSTIC_WARNING: u32 = 2;
+pub const TYPST_DIAGNOSTIC_NOTE: u32 = 3;
+pub const TYPST_DIAGNOSTIC_HAS_RANGE: u32 = 1;
+pub const TYPST_DIAGNOSTIC_HINT: u32 = 2;
+pub const TYPST_DIAGNOSTIC_TRACE: u32 = 4;
+pub const TYPST_SEGMENT_MOVE: u32 = 0;
+pub const TYPST_SEGMENT_LINE: u32 = 1;
+pub const TYPST_SEGMENT_CUBIC: u32 = 2;
+pub const TYPST_SEGMENT_CLOSE: u32 = 3;
+pub const TYPST_STYLE_FILL: u32 = 1;
+pub const TYPST_STYLE_STROKE: u32 = 2;
+pub const TYPST_FILL_NONZERO: u32 = 0;
+pub const TYPST_FILL_EVENODD: u32 = 1;
+pub const TYPST_CAP_BUTT: u32 = 0;
+pub const TYPST_CAP_ROUND: u32 = 1;
+pub const TYPST_CAP_SQUARE: u32 = 2;
+pub const TYPST_JOIN_MITER: u32 = 0;
+pub const TYPST_JOIN_ROUND: u32 = 1;
+pub const TYPST_JOIN_BEVEL: u32 = 2;
+pub const TYPST_ITEM_PATH: u32 = 0;
+pub const TYPST_ITEM_LAYOUT: u32 = 1;
+pub const TYPST_ITEM_SCENE: u32 = 2;
+pub const TYPST_OUTLINE_GLYPH: u32 = 0;
+pub const TYPST_OUTLINE_SHAPE: u32 = 1;
+/// A clipping scope in the ordered outline stream. Its path and transform
+/// describe a nonzero-rule clip in layout coordinates; paints are unused.
+pub const TYPST_OUTLINE_BEGIN_CLIP: u32 = 2;
+/// Closes the most recent clipping scope. Geometry and paints are unused.
+pub const TYPST_OUTLINE_END_CLIP: u32 = 3;
+pub const TYPST_SCENE_ITEM_ISOLATE_TRANSFORM: u32 = 1;
+
+/// A borrowed UTF-8 view; the pointer may be NULL only when len is zero.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TypstStr {
+    pub data: *const u8,
+    pub len: usize,
+}
+impl Default for TypstStr {
+    fn default() -> Self {
+        Self {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+}
+impl TypstStr {
+    pub(crate) fn view(value: &str) -> Self {
+        Self {
+            data: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+}
+/// A borrowed binary view with the same null/length rule as TypstStr.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TypstBytes {
+    pub data: *const u8,
+    pub len: usize,
+}
+impl Default for TypstBytes {
+    fn default() -> Self {
+        Self {
+            data: std::ptr::null(),
+            len: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstFontSource {
+    pub data: TypstBytes,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstFile {
+    pub path: TypstStr,
+    pub data: TypstBytes,
+}
+
+/// Pass by pointer. Zero/null fields request defaults. Unknown trailing fields
+/// are ignored; this library reads no more than struct_size bytes.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstContextOptions {
+    pub struct_size: u32,
+    pub flags: u32,
+    pub fonts: *const TypstFontSource,
+    pub font_count: usize,
+    pub files: *const TypstFile,
+    pub file_count: usize,
+    /// JSON object made available as Typst sys.inputs, using upstream decoding.
+    pub inputs_json: TypstStr,
+}
+impl Default for TypstContextOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            flags: 0,
+            fonts: std::ptr::null(),
+            font_count: 0,
+            files: std::ptr::null(),
+            file_count: 0,
+            inputs_json: TypstStr::default(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstLayoutOptions {
+    pub struct_size: u32,
+    /// TYPST_EXPAND_X/Y and TYPST_BOUND_X/Y. Expansion requires a bounded,
+    /// finite, nonnegative dimension; zero also requires its BOUND flag.
+    pub flags: u32,
+    /// Sizes are in points. Zero is unbounded unless its BOUND flag is set.
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub syntax: u32,
+    pub reserved: u32,
+    /// Independent Typst setup code evaluated in the same native lexical scope
+    /// before the body. Trees retain separate source names and byte ranges.
+    pub setup_code: TypstStr,
+    pub setup_source_name: TypstStr,
+    /// Borrowed values become request-local native Typst bindings. The library
+    /// copies their data during the call; context/import scopes are unaffected.
+    pub bindings: *const TypstBinding,
+    pub binding_count: usize,
+}
+impl Default for TypstLayoutOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            flags: 0,
+            width_pt: 0.0,
+            height_pt: 0.0,
+            syntax: TYPST_SYNTAX_MARKUP,
+            reserved: 0,
+            setup_code: TypstStr::default(),
+            setup_source_name: TypstStr::default(),
+            bindings: std::ptr::null(),
+            binding_count: 0,
+        }
+    }
+}
+/// Frozen array element layout. Extend the pointed-to options, not this record.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstLayoutRequest {
+    pub source: TypstStr,
+    pub source_name: TypstStr,
+    pub options: *const TypstLayoutOptions,
+}
+
+/// Each completed batch request owns its layout (on success) and optional
+/// diagnostics. Release both handles independently, including on partial error.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstLayoutResult {
+    pub status: TypstStatus,
+    pub reserved: u32,
+    pub layout: *mut crate::handles::TypstLayout,
+    pub diagnostics: *mut crate::handles::TypstDiagnostics,
+}
+impl Default for TypstLayoutResult {
+    fn default() -> Self {
+        Self {
+            status: TYPST_INVALID_ARGUMENT,
+            reserved: 0,
+            layout: std::ptr::null_mut(),
+            diagnostics: std::ptr::null_mut(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypstMetrics {
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub baseline_pt: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypstPoint {
+    pub x: f64,
+    pub y: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TypstTransform {
+    pub xx: f64,
+    pub yx: f64,
+    pub xy: f64,
+    pub yy: f64,
+    pub dx: f64,
+    pub dy: f64,
+}
+impl Default for TypstTransform {
+    fn default() -> Self {
+        Self {
+            xx: 1.0,
+            yx: 0.0,
+            xy: 0.0,
+            yy: 1.0,
+            dx: 0.0,
+            dy: 0.0,
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypstColor {
+    pub r: f64,
+    pub g: f64,
+    pub b: f64,
+    pub a: f64,
+}
+
+/// A borrowed named value. Record layouts are fixed for this ABI series.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstBinding {
+    pub name: TypstStr,
+    pub value: *const TypstValueInput,
+}
+
+/// Borrowed native-value input. Only the field selected by `kind` is read:
+/// BOOL/INT use `integer`, FLOAT/LENGTH use `number`, STRING uses `text`, COLOR
+/// uses `color`, ARRAY uses `items/item_count`, DICT uses `bindings/binding_count`.
+/// `reserved` must be zero. Nested inputs are limited to depth 64 and one
+/// million nodes per request. These are C contract kinds, not Rust enum values.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstValueInput {
+    pub kind: u32,
+    pub reserved: u32,
+    pub integer: i64,
+    pub number: f64,
+    pub text: TypstStr,
+    pub color: TypstColor,
+    pub items: *const TypstValueInput,
+    pub item_count: usize,
+    pub bindings: *const TypstBinding,
+    pub binding_count: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypstPathSegment {
+    pub kind: u32,
+    pub reserved: u32,
+    pub p1: TypstPoint,
+    pub p2: TypstPoint,
+    pub p3: TypstPoint,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstPath {
+    pub segments: *const TypstPathSegment,
+    pub segment_count: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstStyle {
+    pub flags: u32,
+    pub fill_rule: u32,
+    pub fill: TypstColor,
+    pub stroke: TypstColor,
+    pub stroke_width_pt: f64,
+    pub line_cap: u32,
+    pub line_join: u32,
+    pub miter_limit: f64,
+    pub dashes: *const f64,
+    pub dash_count: usize,
+    pub dash_phase_pt: f64,
+}
+/// Each item selects exactly one path, layout or nested scene. clip is optional.
+/// All input views are borrowed only for scene creation. The resulting scene
+/// retains referenced layouts/scenes and can outlive their original owners.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstSceneItem {
+    pub kind: u32,
+    pub reserved: u32,
+    pub transform: TypstTransform,
+    pub path: *const TypstPath,
+    pub style: *const TypstStyle,
+    pub layout: *const crate::handles::TypstLayout,
+    pub scene: *const crate::handles::TypstScene,
+    pub clip: *const TypstPath,
+    pub options: *const TypstSceneItemOptions,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstSceneItemOptions {
+    pub struct_size: u32,
+    pub flags: u32,
+    /// Optional metadata label retained in native SVG output.
+    pub tag: TypstStr,
+}
+impl Default for TypstSceneItemOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            flags: 0,
+            tag: TypstStr::default(),
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstSceneOptions {
+    pub struct_size: u32,
+    pub flags: u32,
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub items: *const TypstSceneItem,
+    pub item_count: usize,
+}
+impl Default for TypstSceneOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            flags: 0,
+            width_pt: 0.0,
+            height_pt: 0.0,
+            items: std::ptr::null(),
+            item_count: 0,
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstPdfOptions {
+    pub struct_size: u32,
+    pub flags: u32,
+    pub standard: TypstStr,
+}
+impl Default for TypstPdfOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            flags: 0,
+            standard: TypstStr::default(),
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypstDiagnosticView {
+    pub severity: u32,
+    pub flags: u32,
+    pub message: TypstStr,
+    pub source_name: TypstStr,
+    pub byte_start: usize,
+    pub byte_end: usize,
+    /// SIZE_MAX denotes a request-independent diagnostic.
+    pub request_index: usize,
+    pub note_count: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TypstOutlinedPath {
+    pub segment_offset: usize,
+    pub segment_count: usize,
+    /// Maps local point coordinates into the layout coordinate system. Keeping
+    /// this transform preserves nonuniformly transformed native strokes.
+    pub transform: TypstTransform,
+    pub flags: u32,
+    pub fill_rule: u32,
+    pub fill: TypstColor,
+    pub stroke: TypstColor,
+    pub stroke_width_pt: f64,
+    pub line_cap: u32,
+    pub line_join: u32,
+    pub miter_limit: f64,
+    pub dash_offset: usize,
+    pub dash_count: usize,
+    pub dash_phase_pt: f64,
+    /// Glyph records include whitespace with zero segments and a real advance.
+    /// BEGIN_CLIP/END_CLIP bracket paths in native paint order. Clips nest;
+    /// their transforms are absolute, just like glyph/shape transforms.
+    pub kind: u32,
+    pub glyph_id: u32,
+    pub run_index: usize,
+    pub run_text: TypstStr,
+    pub cluster_start: usize,
+    pub cluster_end: usize,
+    /// Advance vector in the layout's y-down point coordinates.
+    pub advance: TypstPoint,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstOutlineView {
+    pub paths: *const TypstOutlinedPath,
+    pub path_count: usize,
+    pub segments: *const TypstPathSegment,
+    pub segment_count: usize,
+    pub dashes: *const f64,
+    pub dash_count: usize,
+    pub run_count: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TypstVersionInfo {
+    pub abi_major: u32,
+    pub abi_minor: u32,
+    pub capabilities: u64,
+    pub library_version: TypstStr,
+    pub typst_version: TypstStr,
+}

@@ -1,0 +1,32 @@
+[package]
+name = "libtypst"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+
+[lib]
+name = "typst"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "headers"
+required-features = ["headers"]
+
+[features]
+headers = ["dep:cbindgen"]
+
+[dependencies]
+cbindgen = { version = "=0.29.4", optional = true, default-features = false }
+typst_core = { package = "typst", version = "=0.15.1" }
+typst_layout = { package = "typst-layout", version = "=0.15.1" }
+typst_svg = { package = "typst-svg", version = "=0.15.1" }
+typst_pdf = { package = "typst-pdf", version = "=0.15.1" }
+typst_assets = { package = "typst-assets", version = "=0.15.1", features = ["fonts"] }
+serde = "=1.0.229"
+typst_eval = { package = "typst-eval", version = "=0.15.1" }
+comemo = "=0.5.1"
+serde_json = "=1.0.154"
+rayon = "=1.12.0"
+ttf-parser = "=0.25.1"
+kurbo = "=0.13.1"
+

@@ -1,0 +1,16 @@
+// Huak-native drawing-block entry. Run from the package directory:
+//   ../../zig-out/bin/huak run examples/scene.huak --output=scene.svg
+import paint.*
+import "../nodegraph.huak" as nodegraph
+import "../nodegraph.huak".{scene, place, link, group, grid}
+
+f := scene({"spacing": (14pt, 14pt), "margin": 8pt})
+nodegraph.drawing f do
+    a := place typ[$A$] at grid(0, 0)
+    b := place typ[$B$] at grid(1, 0)
+    c := place typ[$C$] at grid(1, 1)
+    group [a, b] containing typ[Pair]
+    link a to b
+    link b to c
+end
+default f.picture

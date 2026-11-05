@@ -1,0 +1,4 @@
+fn own_answer()->int
+return 42
+end
+export answer:=own_answer()

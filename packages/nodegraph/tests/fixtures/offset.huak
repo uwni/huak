@@ -1,0 +1,12 @@
+import paint.{bezier, point_at, offset, assert, shifted}
+import math.{abs, norm}
+import "../../nodegraph.huak".*
+import "../../nodegraph/curves.huak" as curves
+import assertions.assert
+curve := bezier((0pt, 0pt), (20pt, 40pt), (60pt, 40pt), (80pt, 0pt))
+shifted := curves.parallel_route(curve, 5pt)
+assert(len(shifted) > 0, "parallel route must produce geometry")
+start_shift := norm(point_at(shifted, 0)-point_at(curve, 0))
+end_shift := norm(point_at(shifted, len(shifted))-point_at(curve, len(curve)))
+assert(abs(start_shift-5pt) < 0.01pt and abs(end_shift-5pt) < 0.01pt, "parallel route endpoints must be offset")
+print("offset checks passed")

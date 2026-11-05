@@ -1,0 +1,111 @@
+// Route construction and sampling policy. Subdivision, measurement, intersection
+// and trimming stay in Huak's native path implementation.
+import math.{abs, atan2, ceil, cos, floor, max, min, norm, sin, tan, unit, PI}
+import geometry.{arclength, bezier, compound, joined, sample_at_fraction, sample_at_length, sample_path}
+import assertions.assert
+
+export struct RoutePosition
+    point:pair
+    tangent:pair
+end
+
+export fn arc(center:pair, radius:length, start:angle, sweep:angle) -> path
+    assert(radius > 0pt and abs(sweep) > 0deg and abs(sweep) <= 360deg, "arc needs positive radius and sweep in (-360, 360]")
+    count := int(ceil(abs(sweep)/90deg))
+    delta := sweep/count
+    result := compound([])
+    for i in 0:count-1 do
+        a := start+i*delta
+        b := a+delta
+        factor := 4/3*tan(delta/4)
+        p := center+(cos(a), sin(a))*radius
+        q := center+(cos(b), sin(b))*radius
+        segment := bezier(p, p+(-sin(a), cos(a))*(radius*factor), q-(-sin(b), cos(b))*(radius*factor), q)
+        if i == 0 then result = segment else result = joined(result, segment) end
+    end
+    return result
+end
+
+export fn bent(first:pair, last:pair, bend:angle) -> path
+    delta := last-first
+    assert(norm(delta) > 0pt, "bent route endpoints coincide; use a loop")
+    if abs(bend) < 1e-9deg then return path(first, last) end
+    assert(abs(bend) < 180deg, "bend must be between -180deg and 180deg")
+    tangent := unit(delta)
+    normal := (-tangent.y, tangent.x)
+    center := (first+last)/2+normal*(norm(delta)/(2*tan(bend)))
+    radius := norm(first-center)
+    return arc(center, radius, atan2(first.y-center.y, first.x-center.x), 2*bend)
+end
+
+export fn rounded_route(points:list, radius:length = 0pt) -> path
+    assert(len(points) >= 2, "route requires at least two vertices")
+    if radius <= 0pt or len(points) == 2 then return path(points) end
+    result := path(points[0], points[0])
+    previous:pair := points[0]
+    for i in 1:len(points)-2 do
+        a:pair := points[i-1]
+        b:pair := points[i]
+        c:pair := points[i+1]
+        assert(norm(b-a) > 0pt and norm(c-b) > 0pt, "route has repeated adjacent vertices")
+        before := b-unit(b-a)*min(radius, norm(b-a)/2)
+        after := b+unit(c-b)*min(radius, norm(c-b)/2)
+        segment := path(previous, before)
+        if i == 1 then result = segment else result = joined(result, segment) end
+        // Quadratic rounding represented exactly as a cubic.
+        result = joined(result, bezier(before, before+(b-before)*2/3, after+(b-after)*2/3, after))
+        previous = after
+    end
+    return joined(result, path(previous, points[len(points)-1]))
+end
+
+export fn distance_time(curve:path, distance:length) -> float
+    sample := sample_at_length(curve, distance)
+    return sample[3]
+end
+
+export fn position(curve:path, fraction:float) -> RoutePosition
+    assert(fraction >= 0 and fraction <= 1, "route position must be in [0, 1]")
+    sample := sample_at_fraction(curve, fraction)
+    tangent:pair := sample[2]
+    assert(norm(tangent) > 0, "route position has zero tangent")
+    return RoutePosition(point: sample[1], tangent: tangent)
+end
+
+export fn parallel_route(curve:path, distance:length, samples:int = 65) -> path
+    assert(samples >= 2, "parallel route requires at least two samples")
+    if distance == 0pt then return curve end
+    points := []
+    source := sample_path(curve, samples)
+    for i in 0:len(source)-1 do
+        assert(source[i][4] == 0, "parallel routes require a single contour")
+        tangent:pair := source[i][2]
+        assert(norm(tangent) > 0, "parallel route has zero tangent")
+        points += source[i][1]+(-tangent.y, tangent.x)*distance
+    end
+    return path(points)
+end
+
+export fn decorated(curve:path, kind:string, amplitude:length, wavelength:length) -> path
+    assert(amplitude >= 0pt and wavelength > 0pt, "invalid decoration amplitude or wavelength")
+    if kind == "none" then return curve end
+    assert(kind == "wave" or kind == "zigzag" or kind == "coil", "unknown edge decoration: " + kind)
+    periods := max(1, int(ceil(arclength(curve)/wavelength)))
+    count := periods*16+1
+    assert(count <= 16385, "edge decoration exceeds 16385 samples")
+    samples := sample_path(curve, count)
+    points := []
+    for i in 0:len(samples)-1 do
+        assert(samples[i][4] == 0, "decorations require a single contour")
+        tangent:pair := samples[i][2]
+        normal := (-tangent.y, tangent.x)
+        phase := float(i)/16
+        displacement := sin(2*PI*phase)*amplitude
+        if kind == "zigzag" then displacement = (1-4*abs(phase-floor(phase)-0.5))*amplitude end
+        forward := 0pt
+        if kind == "coil" then forward = (1-cos(2*PI*phase))*amplitude end
+        if i == 0 or i == len(samples)-1 then displacement = 0pt; forward = 0pt end
+        points += samples[i][1]+normal*displacement+tangent*forward
+    end
+    return path(points)
+end

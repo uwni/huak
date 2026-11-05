@@ -1,0 +1,4 @@
+fn hello()->int
+return 42
+end
+export hello

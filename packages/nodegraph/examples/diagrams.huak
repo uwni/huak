@@ -1,0 +1,60 @@
+// Run from the repository: huak run packages/nodegraph/examples/diagrams.huak
+//   --output commutative=commutative.svg --output flowchart=flowchart.pdf
+// Explicit source import is intentional while the Zig catalog is unchanged.
+import paint.*
+import "../nodegraph.huak".{anchor, diagram, wire, matrix, finish, matrix_nodes, grid, absolute, named, automatic, shift, node, enclose, edge, connect, arrows}
+setup_typst {
+    set block(fill: red)
+    set box(fill: red)
+}
+
+matrix := matrix_nodes([[typ[$G$], typ[$"im"(f)$]], [typ[$G / "ker"(f)$], typ[$H$]]])
+matrix += [connect("r0c0", "r0c1", {"label": typ[$f$]})]
+matrix += [connect("r0c0", "r1c0", {"label": typ[$pi$], "marks": arrows("->>")})]
+matrix += [connect("r1c0", "r0c1", {"label": typ[$tilde(f)$], "marks": arrows("hook->")})]
+matrix += [connect("r1c0", "r1c1", {"marks": arrows("-|>")})]
+export commutative := diagram of matrix
+default commutative
+
+
+flow := [
+    node("start", grid(0, 0), typ[Start], {"shape": "pill"}),
+    edge(automatic(), automatic()),
+    node("question", grid(0, 1), typ[Ready?], {"shape": "diamond"}),
+    node("finish", grid(1, 1), typ[Finish], {"shape": "pill"}),
+    connect("question", "finish", {"head": "solid", "label": typ[Yes]}),
+    connect("question", "start", {"corner": "vertical", "shift": -12pt, "label": typ[No], "label_side": "right"}),
+]
+export flowchart := diagram(flow, {"node_options": {"thickness": 0.7pt, "fill": rgb(0.9, 0.95, 1)}})
+
+states := [
+    node("reading", grid(0, 0), typ[reading], {"shape": "circle"}),
+    node("eof", grid(1, 0), typ[eof], {"shape": "circle"}),
+    node("closed", grid(2, 0), typ[closed], {"shape": "circle", "extrude": [-2pt, 0pt]}),
+    connect("reading", "reading", {"label": typ[read], "loop_angle": 90deg}),
+    connect("reading", "eof", {"label": typ[read]}),
+    connect("eof", "closed", {"label": typ[close]}),
+    connect("reading", "closed", {"bend": 30deg, "label": typ[close], "label_side": "right"}),
+]
+export state_machine := diagram(states, {"spacing": (54pt, 24pt), "node_options": {"thickness": 0.7pt}})
+
+grouped := [
+    node("a", grid(0, 0), typ[A]),
+    node("b", grid(1, 0), typ[B]),
+    node("c", grid(2, 0), typ[C]),
+    enclose("ab", ["a", "b"], typ[], {"layer": -2, "inset": 12pt, "corner_radius": 5pt, "fill": rgb(0.9, 0.95, 1), "thickness": 0.6pt}),
+    enclose("outer", ["ab", "c"], typ[], {"layer": -3, "inset": 8pt, "thickness": 0.6pt}),
+    connect("a", "b", {"name": "ab_edge"}),
+    connect("b", "c"),
+    edge(named("ab_edge"), absolute((40pt, -60pt)), {"head": "solid", "label": typ[edge anchor]}),
+]
+export groups := diagram(grouped)
+
+// A center label and an overpassing wire really cut the lower objects; neither
+// paints a white backdrop. The same export works on any page background.
+crossings := [
+    edge(absolute((0pt, 0pt)), absolute((160pt, 80pt)), {"head": "none", "thickness": 5pt, "stroke": rgb(0.15, 0.45, 0.8)}),
+    edge(absolute((0pt, 80pt)), absolute((160pt, 0pt)), {"head": "solid", "thickness": 3pt, "stroke": rgb(0.85, 0.2, 0.15), "crossing": true, "crossing_width": 10pt}),
+    edge(absolute((0pt, 40pt)), absolute((160pt, 40pt)), {"head": "head", "label": typ[Native text], "label_side": "center", "layer": 1}),
+]
+export transparent_crossings := diagram(crossings)

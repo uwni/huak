@@ -1,0 +1,11 @@
+import paint.{picture};secret:=7
+export number:=secret+2
+export tile:=picture(80,40)
+default tile
+fn add_secret(x:int)->int
+return x+secret
+end
+export add_secret
+fn private_helper()->int
+return secret
+end

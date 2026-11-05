@@ -1,0 +1,86 @@
+import paint.*
+import weave
+import assertions.assert
+import geometry.path_crossings
+import math.sqrt
+
+red := pen(rgb(0.8, 0.1, 0.1), 6pt, "round", "round")
+blue := pen(rgb(0.1, 0.3, 0.8), 6pt, "round", "round")
+a := path((10pt, 50pt), (90pt, 50pt))
+b := path((50pt, 10pt), (50pt, 90pt))
+
+export automatic := picture(100pt, 100pt)
+default automatic
+weave.drawing weave.context(automatic, gap:4pt) do
+    draw a with red
+    draw b with blue
+end
+assert(len(region_intersection(region(automatic), rectangle((44pt, 49pt), 2pt, 2pt))) == 0, "weave clearance must be empty")
+assert(len(region_intersection(region(automatic), rectangle((49pt, 49pt), 2pt, 2pt))) > 0, "over passage must remain")
+assert(len(region_intersection(region(automatic), rectangle((24pt, 49pt), 2pt, 2pt))) > 0, "unaffected under stroke must remain")
+
+export explicit := picture(100pt, 100pt)
+visits := [-1]
+weave.drawing weave.context(explicit, gap:4pt) do
+    draw a with red crossings visits
+    visits[0] = 1
+    draw b with blue crossings [1]
+end
+
+export reversed := picture(100pt, 100pt)
+weave.drawing weave.context(reversed, gap:4pt) do
+    draw a with red crossings [1]
+    draw b with blue crossings [-1]
+end
+assert(len(region_intersection(region(reversed), rectangle((49pt, 44pt), 2pt, 2pt))) == 0)
+assert(len(region_intersection(region(reversed), rectangle((49pt, 49pt), 2pt, 2pt))) > 0)
+
+export self_crossing := picture(100pt, 100pt)
+weave.drawing weave.context(self_crossing, gap:2pt) do
+    draw (10pt,10pt) -- (90pt, 90pt) -- (10pt, 90pt) -- (90pt, 10pt) with red crossings [1, -1]
+end
+
+export hopf := picture(100pt, 100pt)
+weave.drawing weave.context(hopf, gap:2pt) do
+    draw circle((40pt, 50pt), 25pt) with red crossings [1, -2]
+    draw circle((60pt, 50pt), 25pt) with blue crossings [-1, 2]
+end
+
+export partial_hopf := picture(100pt, 100pt)
+weave.drawing weave.context(partial_hopf, gap:2pt) do
+    draw circle((40pt, 50pt), 25pt) with red crossings [1, -2]
+    draw circle((60pt, 50pt), 25pt) with blue
+end
+
+export partial_second_hopf := picture(100pt, 100pt)
+weave.drawing weave.context(partial_second_hopf, gap:2pt) do
+    draw circle((40pt, 50pt), 25pt) with red
+    draw circle((60pt, 50pt), 25pt) with blue crossings [-1, 2]
+end
+
+caption := typ[Hopf link]
+variants := [hopf, partial_hopf, partial_second_hopf]
+for i in 0:2 do object.append(variants[i], label(caption, (10pt, 90pt))) end
+
+// A genuinely closed three-cubic trefoil, with three crossings and six visits.
+t0 := (50pt, 74pt)
+t1 := (50pt-sqrt(3)*12pt, 38pt)
+t2 := (50pt+sqrt(3)*12pt, 38pt)
+tx := 13.2pt
+ty := sqrt(3)*tx
+ta := bezier(t0, t0+(26.4pt, 0pt), t1+(tx, -ty), t1)
+tb := bezier(t1, t1+(-tx, ty), t2+(tx, ty), t2)
+tc := bezier(t2, t2+(-tx, -ty), t0+(-26.4pt, 0pt), t0)
+trefoil_curve := closed(joined(joined(ta, tb), tc))
+assert(len(path_crossings([trefoil_curve])) == 3, "ordinary trefoil nodes must not be crossings")
+export trefoil := picture(100pt, 100pt)
+translucent := pen(rgb(0.8, 0.1, 0.1, 0.5), 6pt, "round", "round")
+weave.drawing weave.context(trefoil, gap:2pt) do
+    draw trefoil_curve with translucent crossings [1, -2, 3, -1, 2, -3]
+end
+
+// Ordinary picture drawing keeps its original immediate behavior and target.
+ordinary := picture(100pt, 100pt)
+drawing ordinary do +draw a end
+assert(len(bounds(ordinary)) == 2)
+print("weave checks passed")

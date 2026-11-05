@@ -1,0 +1,22 @@
+// Sparse public options use dictionaries. Schema policy stays in the library.
+import collections.{get, setting, defaults}
+import assertions.assert
+
+export get, setting, defaults
+
+export fn contains(values:list, wanted:any) -> bool
+    for i in 0:len(values)-1 do
+        if values[i] == wanted then return true end
+    end
+    return false
+end
+
+export fn has(options:dict, name:string) -> bool
+    return dict_contains(options, name)
+end
+
+export fn validate(options:dict, names:list)
+    for name in options.keys() do
+        assert(contains(names, name), "unknown nodegraph option: " + name)
+    end
+end

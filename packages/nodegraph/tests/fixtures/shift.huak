@@ -1,0 +1,8 @@
+import paint.{assert}
+import "../../nodegraph.huak".*
+import assertions.assert
+n := node("a", absolute((0pt, 0pt)), typ[A])
+p := node("p", shift(named("a"), "ne", 10pt), typ[P])
+g := geometry([n, p])
+assert(anchor(g, "p").x > anchor(g, "a").x and anchor(g, "p").y > anchor(g, "a").y, "shift ne")
+print("shift checks passed")

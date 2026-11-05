@@ -1,0 +1,5 @@
+start()
+import "lib/scaling.huak" as operators
+fn start()->int
+return 3 operators.scaled 4
+end

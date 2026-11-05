@@ -1,0 +1,182 @@
+// Arrow and relationship marks are ordinary pictures in local coordinates.
+// No shared mark registry or renderer state is needed.
+import math.{atan2}
+import object.{append, draw, fill}
+import geometry.{arclength, circle, closed, compound, joined, point_at, rectangle, region_union, reverse}
+import transform.{bent, compose, rotate, scale, transformed, translate}
+import assertions.assert
+import "options.huak" as opt
+import "model.huak" as model
+import "curves.huak" as curves
+
+export struct MarkObject
+    content:object
+    mask:path
+end
+
+export fn arrows(spec:string) -> list
+    if spec == "-" or spec == " " then return [] end
+    if spec == "->" then return [model.mark("head")] end
+    if spec == "<-" then return [model.mark("head", 0, true)] end
+    if spec == "<->" then return [model.mark("head", 0, true), model.mark("head")] end
+    if spec == "->>" then return [model.mark("doublehead")] end
+    if spec == "<<-" then return [model.mark("doublehead", 0, true)] end
+    if spec == "->>>" then return [model.mark("triplehead")] end
+    if spec == "-|>" then return [model.mark("solid")] end
+    if spec == "<|-" then return [model.mark("solid", 0, true)] end
+    if spec == "<|-|>" then return [model.mark("solid", 0, true), model.mark("solid")] end
+    if spec == "|->" then return [model.mark("bar", 0), model.mark("head")] end
+    if spec == "hook->" then return [model.mark("hook", 0), model.mark("head")] end
+    if spec == ">->" then return [model.mark("head", 0), model.mark("head")] end
+    panic("unsupported arrow shorthand; use explicit mark descriptors: " + spec)
+    return []
+end
+
+export fn canonical(kind:string) -> string
+    aliases := {">": "head", "<": "head", ">>": "doublehead", "<<": "doublehead", ">>>": "triplehead", "<<<": "triplehead", "|>": "solid", "<|": "solid", "}>": "stealth", "<{": "stealth", "o": "circle", "O": "circle", "*": "dot", "@": "dot", "[]": "square", "<>": "diamond", "|": "bar", "||": "doublebar", "|||": "triplebar", "x": "cross", "X": "cross", "]": "bracket", "[": "bracket", ")": "parenthesis", "(": "parenthesis"}
+    if dict_contains(aliases, kind) then return aliases[kind] end
+    return kind
+end
+
+export fn render(description:model.MarkDescription, guide:path, ink:color, width:length, default_size:length) -> MarkObject
+    raw:string := description.kind
+    options:dict := description.options
+    if opt.has(options, "inherit") then raw = opt.get(options, "inherit", raw) end
+    kind := canonical(raw)
+    where := curves.position(guide, description.position)
+    origin:length := 0pt
+    if description.position <= 0 then origin = opt.get(options, "tail_origin", 0pt) end
+    if description.position >= 1 then origin = opt.get(options, "tip_origin", 0pt) end
+    location:pair := where.point+where.tangent*origin
+    direction:pair := where.tangent
+    size:length := opt.get(options, "size", default_size)
+    size = size*opt.get(options, "scale", 1)
+    assert(size > 0pt and width > 0pt, "mark size and stroke thickness must be positive")
+    base := picture()
+    mask := compound([])
+    stroke_ink:color := opt.get(options, "stroke", ink)
+    fill_ink:color := opt.get(options, "fill", ink)
+    stroke := pen(stroke_ink, width, "round", "round")
+    if opt.has(options, "content") then
+        append(base, copy(opt.get(options, "content", base)))
+        if opt.has(options, "mask") then mask = opt.get(options, "mask", mask) end
+    elseif kind == "head" or kind == "doublehead" or kind == "triplehead" or kind == "harpoon" then
+        copies := 1
+        if kind == "doublehead" then copies = 2 end
+        if kind == "triplehead" then copies = 3 end
+        for repetition in 0:copies-1 do
+            for side in -1:2:1 do
+                if kind != "harpoon" or side == 1 then
+                    sharpness:angle := opt.get(options, "sharpness", 53.5deg)
+                    delta:angle := opt.get(options, "delta", 61.2deg)
+                    wing := curves.arc((0pt, 0pt), size, side*(sharpness+delta), side*sharpness)
+                    wing = transformed(wing, translate((-repetition*width*3, 0pt)-point_at(wing, 0)))
+                    object.append(base, draw(wing, stroke))
+                end
+            end
+        end
+    elseif kind == "straight" then
+        object.append(base, draw(path((-size, size/3), (0pt, 0pt), (-size, -size/3)), stroke))
+    elseif kind == "solid" or kind == "stealth" or kind == "diamond" or kind == "latex" or kind == "cone" then
+        points := [(0pt, 0pt), (-size, size/3), (-size, -size/3)]
+        if kind == "stealth" then points = [(0pt, 0pt), (-size, size/2), (-size*0.7, 0pt), (-size, -size/2)] end
+        if kind == "diamond" then points = [(0pt, 0pt), (-size/2, size/3), (-size, 0pt), (-size/2, -size/3)] end
+        if kind == "latex" then
+            wing := curves.arc((0pt, 0pt), size*23/7, 100deg, 20deg)
+            wing = transformed(wing, translate(-point_at(wing, 0)))
+            reflected := transformed(reverse(wing), scale(1, -1))
+            back := path(point_at(wing, len(wing)), point_at(reflected, 0))
+            mask = closed(joined(joined(wing, back), reflected))
+        elseif kind == "cone" then
+            back := curves.arc((-size, 0pt), size/3, 90deg, 180deg)
+            mask = closed(joined(path((0pt, 0pt), point_at(back, 0)), back))
+        else
+            mask = path(points, true)
+        end
+        if kind == "diamond" then base.append(draw(mask, stroke)) else base.append(fill(mask, fill_ink)) end
+    elseif kind == "circle" or kind == "dot" then
+        mask = circle((-size/2, 0pt), size/2)
+        if kind == "dot" then object.append(base, fill(mask, fill_ink)) else object.append(base, draw(mask, stroke)) end
+    elseif kind == "square" then
+        mask = rectangle((-size, -size/2), size, size)
+        object.append(base, draw(mask, stroke))
+    elseif kind == "bar" or kind == "doublebar" or kind == "triplebar" or kind == "/" or kind == "\\" then
+        copies := 1
+        if kind == "doublebar" then copies = 2 end
+        if kind == "triplebar" then copies = 3 end
+        for repetition in 0:copies-1 do
+            x := -repetition*width*3
+            lean := 0pt
+            if kind == "/" then lean = size/3 end
+            if kind == "\\" then lean = -size/3 end
+            object.append(base, draw(path((x-lean, -size/2), (x+lean, size/2)), stroke))
+        end
+    elseif kind == "cross" then
+        object.append(base, draw(path((-size/2, -size/2), (size/2, size/2)), stroke))
+        object.append(base, draw(path((-size/2, size/2), (size/2, -size/2)), stroke))
+    elseif kind == "bracket" then
+        object.append(base, draw(path((-size/3, size/2), (0pt, size/2), (0pt, -size/2), (-size/3, -size/2)), stroke))
+    elseif kind == "parenthesis" then
+        curve := curves.arc((-size, 0pt), size, -50deg, 100deg)
+        object.append(base, draw(curve, stroke))
+    elseif kind == "hook" or kind == "hooks" then
+        object.append(base, draw(curves.arc((-size/2, size/2), size/2, -90deg, 180deg), stroke))
+        if kind == "hooks" then object.append(base, draw(curves.arc((-size/2, -size/2), size/2, 90deg, -180deg), stroke)) end
+    elseif kind == "n" or kind == "n?" or kind == "n!" or kind == "1" or kind == "1?" or kind == "1!" or kind == "crowfoot" then
+        many := kind == "n" or kind == "n?" or kind == "n!" or kind == "crowfoot"
+        one := kind == "1" or kind == "1?" or kind == "1!" or kind == "n!" or kind == "crowfoot"
+        zero := kind == "n?" or kind == "1?" or kind == "crowfoot"
+        x := 0pt
+        if many then
+            object.append(base, draw(path((0pt, size/2), (-size, 0pt), (0pt, -size/2)), stroke))
+            x = -size
+        end
+        if one then
+            x = x-size/3
+            object.append(base, draw(path((x, size/2), (x, -size/2)), stroke))
+            if kind == "1!" then object.append(base, draw(path((x-size/3, size/2), (x-size/3, -size/2)), stroke)) end
+        end
+        if zero then
+            mask = circle((x-size*0.7, 0pt), size/3)
+            object.append(base, draw(mask, stroke))
+        end
+    elseif kind != "none" then
+        panic("unknown arrow mark: " + raw)
+    end
+    flip := 1.0
+    if opt.get(options, "flip", false) then flip = -1 end
+    angle := atan2(direction.y, direction.x)
+    reversed:bool := description.reverse
+    if raw == "<" or raw == "<<" or raw == "<<<" or raw == "<|" or raw == "<{" or raw == "[" or raw == "(" then reversed = not reversed end
+    if reversed then angle = angle+180deg end
+    transform := compose(scale(1, flip), compose(rotate(angle), translate(location)))
+    local := picture()
+    extrude:list := opt.get(options, "extrude", [0pt])
+    if len(extrude) == 0 then extrude = [0pt] end
+    base_mask := mask
+    mask = compound([])
+    for i in 0:len(extrude)-1 do
+        offset:length := extrude[i]
+        append(local, copy(base), translate((offset, 0pt)))
+        if len(base_mask) > 0 then mask = region_union(mask, transformed(base_mask, translate((offset, 0pt)))) end
+    end
+    result := picture()
+    arrow := kind == "head" or kind == "doublehead" or kind == "triplehead" or kind == "harpoon" or kind == "straight" or kind == "solid" or kind == "stealth" or kind == "latex" or kind == "cone"
+    bend:bool := opt.get(options, "bend", arrow and not opt.has(options, "content"))
+    if bend then
+        orientation := 1
+        if reversed then orientation = -1 end
+        local_transform := scale(orientation, orientation*flip)
+        append(result, local, local_transform)
+        distance := arclength(guide)*description.position+origin
+        result = bent(result, guide, distance)
+        mask = bent(transformed(mask, local_transform), guide, distance)
+    else
+        append(result, local, transform)
+        mask = transformed(mask, transform)
+    end
+    // Reflections reverse winding. Normalize each independent mask once, so
+    // compound masks add coverage instead of cancelling overlapping regions.
+    if len(mask) > 0 then mask = region_union(mask, compound([])) end
+    return MarkObject(content: result, mask: mask)
+end

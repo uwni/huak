@@ -1,0 +1,4 @@
+import paint.{picture};hidden:=picture(640, 480)
+export shown:=picture(640, 480)
+export answer:=42
+print("script executed")

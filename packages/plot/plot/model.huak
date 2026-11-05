@@ -1,0 +1,156 @@
+// Plot descriptions are ordinary Huak values. No renderer or global current axis.
+import assertions.assert
+import collections.{get, merged}
+
+export struct Marker
+    shape:path
+    options:dict = {}
+    kind:string = "marker"
+end
+
+export struct Layer
+    kind:string
+    x:list = []
+    y:list = []
+    data:dict = {}
+    options:dict = {}
+end
+
+export struct Axis
+    cell:pair
+    layers:list = []
+    options:dict = {}
+    sides:dict = {}
+end
+
+export struct Figure
+    width:length
+    height:length
+    axes:list = []
+    xlinks:list = []
+    ylinks:list = []
+    options:dict = {}
+end
+
+export fn validate(options:dict, allowed:list)
+    for key in keys(options) do
+        found := false
+        for name in allowed do if name == key then found = true end end
+        assert(found, "unknown plot option: " + key)
+    end
+end
+
+export fn figure(width:length = 400pt, height:length = 280pt, options:dict = {}) -> Figure
+    assert(width > 0pt and height > 0pt, "figure dimensions must be positive")
+    validate(options, ["margin", "gap", "background", "palette", "font_size", "ink", "grid_color", "line_width"])
+    return Figure(width:width, height:height, options:copy(options))
+end
+
+export fn axis(fig:Figure, cell:pair = (0,0), options:dict = {}) -> Axis
+    assert(cell.x >= 0 and cell.y >= 0 and cell.x == int(cell.x) and cell.y == int(cell.y), "axis cell requires nonnegative integer row and column")
+    for existing in fig.axes do assert(existing.cell != cell, "axis cell is already occupied") end
+    validate(options, AXIS_OPTIONS)
+    result := Axis(cell:cell, options:copy(options))
+    fig.axes += [result]
+    return result
+end
+
+export AXIS_OPTIONS := ["title", "xlabel", "ylabel", "xscale", "yscale", "xlim", "ylim", "xreverse", "yreverse", "xticks", "yticks", "xlabels", "ylabels", "xstep", "ystep", "xminorticks", "yminorticks", "grid", "minorgrid", "legend", "legend_columns", "spines", "xside", "yside", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "equal", "colorbar", "font_size", "xformat", "yformat"]
+export LAYER_OPTIONS := ["label", "color", "fill", "pen", "width", "dash", "marker", "sizes", "colors", "orientation", "bar_width", "baseline", "stack", "group", "upper", "cap_size", "colormap", "clim", "clip", "xaxis", "yaxis", "arrow", "arrow_size"]
+
+export fn horizontal(side:string) -> bool
+    if side=="top" or side=="bottom" then return true end
+    assert(side=="left" or side=="right","unknown axis side: "+side)
+    return false
+end
+
+export fn primary(ax:Axis, dimension:string) -> string
+    if dimension=="x" then return get(ax.options,"xside","bottom") end
+    return get(ax.options,"yside","left")
+end
+
+export fn side(ax:Axis, name:string, options:dict)
+    horizontal(name)
+    validate(options,["scale","limits","reverse","ticks","labels","step","minorticks","decades","format","label","pen","arrow","arrow_size","grid","minorgrid","tick_direction","tick_size","tick_rotation","ticks_visible","labels_visible","font_size","breaks","break_gap"])
+    ax.sides[name] = merged(get(ax.sides,name,{}),options)
+end
+
+export fn remap(ax:Axis, name:string, positions:list, labels:list)
+    assert(len(positions)==len(labels),"tick positions and labels differ in length")
+    side(ax,name,{"ticks":positions,"labels":labels})
+end
+
+export fn breaks(ax:Axis, name:string, ranges:list, gap:length = 8pt)
+    side(ax,name,{"breaks":ranges,"break_gap":gap})
+end
+
+export fn on_axes(item:Layer, x:string, y:string) -> Layer
+    assert(horizontal(x) and not horizontal(y),"on_axes requires a horizontal x axis and a vertical y axis")
+    return styled(item,{"xaxis":x,"yaxis":y})
+end
+
+export fn arrow(start:pair, finish:pair) -> Layer
+    return Layer(kind:"arrow",x:[start.x,finish.x],y:[start.y,finish.y])
+end
+
+export fn arrowed(item:Layer, ends:string) -> Layer
+    assert(item.kind=="lines" or item.kind=="arrow" or item.kind=="vline" or item.kind=="hline","arrowed requires a line or arrow layer")
+    return styled(item,{"arrow":ends})
+end
+
+export fn configure(ax:Axis, options:dict) -> Axis
+    validate(options, AXIS_OPTIONS)
+    ax.options = merged(ax.options, options)
+    return ax
+end
+
+export fn styled(item:any, options:dict) -> any
+    if item.kind == "marker" then validate(options, ["size", "fill", "pen", "rotation"])
+    else validate(options, LAYER_OPTIONS) end
+    result := copy(item)
+    result.options = merged(item.options, options)
+    return result
+end
+
+export fn named(item:Layer, body:text) -> Layer
+    return styled(item, {"label":body})
+end
+export fn marked(item:Layer, symbol:Marker) -> Layer
+    return styled(item, {"marker":symbol})
+end
+export fn sized(symbol:Marker, size:length) -> Marker
+    assert(size > 0pt, "marker size must be positive")
+    return styled(symbol, {"size":size})
+end
+
+export fn insert(target:Axis, item:Layer)
+    target.layers += [item]
+end
+
+export fn lines(x:list, y:list, options:dict = {}) -> Layer
+    assert(len(x) == len(y), "x and y lengths differ")
+    validate(options, LAYER_OPTIONS)
+    return Layer(kind:"lines", x:x, y:y, options:copy(options))
+end
+export fn scatter(x:list, y:list, options:dict = {}) -> Layer
+    result := lines(x,y,options)
+    result.kind = "scatter"
+    return result
+end
+
+export fn link_x(fig:Figure, axes:list)
+    check_members(fig, axes)
+    fig.xlinks += [copy(axes)]
+end
+export fn link_y(fig:Figure, axes:list)
+    check_members(fig, axes)
+    fig.ylinks += [copy(axes)]
+end
+fn check_members(fig:Figure, axes:list)
+    assert(len(axes) >= 2, "shared axes require at least two members")
+    for ax in axes do
+        found := false
+        for member in fig.axes do if member == ax then found = true end end
+        assert(found, "shared axis belongs to another figure")
+    end
+end

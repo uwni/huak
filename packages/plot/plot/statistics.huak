@@ -1,0 +1,265 @@
+// Statistics operate on the original data, before display scales or clipping.
+import math.{min,max,floor,ceil}
+import collections.get
+import assertions.assert
+import "model.huak".{Layer,validate,LAYER_OPTIONS}
+import "scales.huak".{index}
+import "heatmap.huak" as heat
+
+export fn sorted(values:list) -> list
+    result := []
+    for value in values do
+        if value != false then
+            n:float := value
+            result += [n]
+        end
+    end
+    width := 1
+    while width<len(result) do
+        next := []
+        start := 0
+        while start<len(result) do
+            middle := min(start+width,len(result))
+            finish := min(start+2*width,len(result))
+            i := start; j := middle
+            while i<middle or j<finish do
+                if i<middle and (j>=finish or result[i]<=result[j]) then next += [result[i]]; i = i+1
+                else next += [result[j]]; j = j+1 end
+            end
+            start = finish
+        end
+        result = next; width = width*2
+    end
+    return result
+end
+
+export fn quantile(sorted_values:list, probability:float) -> float
+    assert(len(sorted_values)>0 and probability>=0 and probability<=1,"invalid quantile input")
+    position := (len(sorted_values)-1)*probability
+    lower := int(floor(position)); upper := int(ceil(position))
+    return sorted_values[lower]*(1-position+lower)+sorted_values[upper]*(position-lower)
+end
+
+export fn histogram(values:list, bins:any = 10, normalization:string = "count", edges:list = []) -> dict
+    assert(normalization=="count" or normalization=="probability" or normalization=="density","unknown histogram normalization")
+    valid := []
+    low := 0.0; high := 1.0
+    for value in values do
+        if value!=false then
+            n:float := value
+            if len(valid)==0 then low = n; high = n else low = min(low,n); high = max(high,n) end
+            valid += [n]
+        end
+    end
+    boundaries := copy(edges)
+    if len(boundaries)==0 then
+        count:int := bins
+        assert(count>0 and count<=100000,"histogram bin count must be in 1..100000")
+        if low==high then
+            pad := max(0.5,math.abs(low)*0.05)
+            low = low-pad; high = high+pad
+        end
+        for i in 0:count do
+            fraction := float(i)/count
+            boundaries += [low*(1-fraction)+high*fraction]
+        end
+    end
+    assert(len(boundaries)>=2,"histogram requires at least two edges")
+    for i in 1:len(boundaries)-1 do assert(boundaries[i]>boundaries[i-1],"histogram edges must increase") end
+    counts := []
+    for i in 1:len(boundaries)-1 do counts += [0.0] end
+    included := 0
+    for value in valid do
+        if value>=boundaries[0] and value<=boundaries[len(boundaries)-1] then
+            lo := 0; hi := len(boundaries)-1
+            while hi-lo>1 do
+                mid := int((lo+hi)/2)
+                if value<boundaries[mid] then hi = mid else lo = mid end
+            end
+            counts[lo] = counts[lo]+1
+            included = included+1
+        end
+    end
+    if included>0 and normalization!="count" then
+        for i in 0:len(counts)-1 do
+            counts[i] = counts[i]/included
+            if normalization=="density" then counts[i] = counts[i]/(boundaries[i+1]-boundaries[i]) end
+        end
+    end
+    return {"edges":boundaries,"values":counts,"included":included}
+end
+
+export fn bar(x:list, y:list, options:dict = {}) -> Layer
+    assert(len(x)==len(y),"x and y lengths differ")
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"bar",x:x,y:y,options:copy(options))
+end
+export fn hist(values:list, bins:int = 10, normalization:string = "count", edges:list = [], options:dict = {}) -> Layer
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"hist",y:values,data:{"bins":bins,"normalization":normalization,"edges":edges},options:copy(options))
+end
+export fn errorbars(x:list, y:list, errors:list, options:dict = {}) -> Layer
+    assert(len(x)==len(y) and len(x)==len(errors),"errorbar data lengths differ")
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"errorbars",x:x,y:y,data:{"errors":errors},options:copy(options))
+end
+export fn band(x:list, lower:list, upper:list, options:dict = {}) -> Layer
+    assert(len(x)==len(lower) and len(x)==len(upper),"band data lengths differ")
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"band",x:x,y:lower,data:{"upper":upper},options:copy(options))
+end
+export fn area(x:list, y:list, baseline:float = 0, options:dict = {}) -> Layer
+    lower := []
+    for value in y do lower += [baseline] end
+    result := band(x,lower,y,options)
+    result.kind = "area"
+    return result
+end
+export fn boxplot(categories:list, samples:list, options:dict = {}) -> Layer
+    assert(len(categories)==len(samples),"boxplot category and sample lengths differ")
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"boxplot",x:categories,y:samples,options:copy(options))
+end
+export fn hline(value:float, options:dict = {}) -> Layer
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"hline",y:[value],options:copy(options))
+end
+export fn vline(value:float, options:dict = {}) -> Layer
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"vline",x:[value],options:copy(options))
+end
+export fn annotate(x:any, y:any, body:text, options:dict = {}) -> Layer
+    validate(options,LAYER_OPTIONS)
+    return Layer(kind:"annotation",x:[x],y:[y],data:{"body":body},options:copy(options))
+end
+
+fn category_axis(item:Layer, options:dict) -> string
+    dimension := "x"
+    if get(item.options,"orientation","vertical")=="horizontal" then dimension = "y" end
+    if get(options,dimension+"scale","category")!="category" then return "" end
+    return dimension
+end
+
+// Common category order and group/stack bookkeeping are resolved once per axis.
+export fn prepare(layers:list, options:dict, indices:list = []) -> list
+    xc := []; yc := []
+    for item in layers do
+        if item.kind=="bar" or item.kind=="boxplot" then
+            dim := category_axis(item,options)
+            cats := xc
+            if dim=="y" then cats = yc end
+            if dim!="" then
+                for value in item.x do if value!=false and index(cats,value)<0 then cats += [value] end end
+            end
+        end
+    end
+    result := []; stacks := []; stack_values := []
+    for number in 0:len(layers)-1 do
+        item:Layer := layers[number]
+        opts := copy(item.options)
+        opts["series_index"] = number
+        if len(indices)>0 then opts["series_index"] = indices[number] end
+        prepared := copy(item); prepared.options = opts
+        if item.kind=="heatmap" then result += [heat.prepare(prepared)]
+        elseif item.kind=="hist" then
+            stat := histogram(item.y,item.data["bins"],item.data["normalization"],item.data["edges"])
+            x := []; right := []; bottom := []
+            for i in 0:len(stat["values"])-1 do x += [stat["edges"][i]]; right += [stat["edges"][i+1]]; bottom += [0.0] end
+            result += [Layer(kind:"rectangles",x:x,y:bottom,data:{"x1":right,"y1":stat["values"]},options:opts)]
+        elseif item.kind=="bar" or item.kind=="boxplot" then
+            dim := category_axis(item,options)
+            cats := xc
+            if dim=="y" then cats = yc end
+            horizontal := get(opts,"orientation","vertical")=="horizontal"
+            orientation:string := get(opts,"orientation","vertical")
+            assert(orientation=="horizontal" or orientation=="vertical","unknown orientation")
+            width:float := get(opts,"bar_width",0.8)
+            assert(width>0 and (dim=="" or width<=1),"invalid bar width")
+            group:any := get(opts,"group",false)
+            stack:any := get(opts,"stack",false)
+            assert(group==false or stack==false,"bar group and stack are mutually exclusive")
+            groups := 1; rank := 0
+            if group!=false then
+                groups = 0
+                for j in 0:len(layers)-1 do
+                    other := layers[j]
+                    if other.kind=="bar" and get(other.options,"group",false)==group and get(other.options,"orientation","vertical")==orientation then
+                        if j<number then rank = rank+1 end
+                        groups = groups+1
+                    end
+                end
+            end
+            x := []; y := []; x1 := []; y1 := []
+            anchors := []; segment_anchors := []; outlier_anchors := []
+            segments_x := []; segments_y := []; ends_x := []; ends_y := []
+            outx := []; outy := []
+            for i in 0:len(item.x)-1 do
+                if item.x[i]!=false and item.y[i]!=false then
+                    center := 0.0
+                    if dim!="" then center = float(index(cats,item.x[i])) else center = float(item.x[i]) end
+                    anchor := 0
+                    if dim!="" then anchor = int(center) end
+                    center = center-width/2+width*(rank+0.5)/groups
+                    half := width/groups/2
+                    if item.kind=="bar" then
+                        value:float := item.y[i]
+                        base:float := get(opts,"baseline",0.0)
+                        if stack!=false then
+                            assert(base==0,"stacked bars require zero baseline")
+                            slot := -1
+                            for k in 0:len(stacks)-1 do
+                                key := stacks[k]
+                                if key[0]==orientation and key[1]==stack and key[2]==item.x[i] and key[3]==(value>=0) then slot = k end
+                            end
+                            if slot<0 then
+                                stacks += [[orientation,stack,item.x[i],value>=0]]
+                                stack_values += [0.0]; slot = len(stacks)-1
+                            end
+                            base = stack_values[slot]
+                            stack_values[slot] = base+value
+                        end
+                        x += [center-half]; x1 += [center+half]; y += [base]; y1 += [base+value]
+                        anchors += [anchor]
+                    else
+                        values := sorted(item.y[i])
+                        if len(values)>0 then
+                            q1 := quantile(values,0.25); q2 := quantile(values,0.5); q3 := quantile(values,0.75)
+                            low := q1; high := q3
+                            for value in values do
+                                if value>=q1-1.5*(q3-q1) and value<=q3+1.5*(q3-q1) then low = min(low,value); high = max(high,value)
+                                else outx += [center]; outy += [value]; outlier_anchors += [anchor] end
+                            end
+                            x += [center-half]; x1 += [center+half]; y += [q1]; y1 += [q3]
+                            anchors += [anchor]
+                            for j in 0:4 do segment_anchors += [anchor] end
+                            segments_x += [center-half,center,center,center-half/2,center-half/2]
+                            ends_x += [center+half,center,center,center+half/2,center+half/2]
+                            segments_y += [q2,q1,q3,low,high]; ends_y += [q2,low,high,low,high]
+                        end
+                    end
+                end
+            end
+            data := {"x1":x1,"y1":y1,"categories":cats,"category_dimension":dim,"category_indices":anchors}
+            if horizontal then
+                data["x1"] = y1; data["y1"] = x1
+                result += [Layer(kind:"rectangles",x:y,y:x,data:data,options:opts)]
+            else result += [Layer(kind:"rectangles",x:x,y:y,data:data,options:opts)] end
+            if item.kind=="boxplot" then
+                extra := copy(opts)
+                dict_remove(extra,"label")
+                segments := {"x1":ends_x,"y1":ends_y,"categories":cats,"category_dimension":dim,"category_indices":segment_anchors}
+                outlier_data := copy(data)
+                outlier_data["category_indices"] = outlier_anchors
+                if horizontal then
+                    segments["x1"] = ends_y; segments["y1"] = ends_x
+                    result += [Layer(kind:"segments",x:segments_y,y:segments_x,data:segments,options:extra)]
+                    result += [Layer(kind:"raw_scatter",x:outy,y:outx,data:outlier_data,options:extra)]
+                else
+                    result += [Layer(kind:"segments",x:segments_x,y:segments_y,data:segments,options:extra)]
+                    result += [Layer(kind:"raw_scatter",x:outx,y:outy,data:outlier_data,options:extra)]
+                end
+            end
+        else result += [prepared] end
+    end
+    return result
+end

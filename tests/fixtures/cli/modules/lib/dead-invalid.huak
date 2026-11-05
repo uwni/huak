@@ -1,0 +1,4 @@
+if false then
+missing_function()
+end
+export number:=1

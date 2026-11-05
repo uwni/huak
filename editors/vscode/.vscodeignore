@@ -1,0 +1,11 @@
+test/**
+scripts/**
+src/**
+node_modules/**
+!node_modules/**/LICENSE*
+!node_modules/**/License*
+!node_modules/**/ThirdPartyNotices*
+.test-data/**
+.gitignore
+package-lock.json
+**/*.vsix

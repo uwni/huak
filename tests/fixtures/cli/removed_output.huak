@@ -1,0 +1,1 @@
+import paint.{picture};p:=picture(640, 480); p.output("legacy.svg")

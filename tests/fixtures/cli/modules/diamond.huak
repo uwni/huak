@@ -1,0 +1,7 @@
+import paint.{bounds};import assertions.assert
+import "lib/left.huak" as left
+import "lib/right.huak" as right
+import "lib/../lib/shared.huak" as direct
+assert(left.canvas==right.canvas); assert(right.canvas==direct.canvas)
+assert(len(direct.canvas.bounds())==2)
+default direct.canvas

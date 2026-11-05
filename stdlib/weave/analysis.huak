@@ -1,0 +1,92 @@
+// Crossing labels and over/under choices are drawing policy. The native query
+// supplies the actual source-contour intersections without projecting points.
+import geometry.path_crossings
+import assertions.assert
+
+export struct Strand
+    curve:path
+    stroke:pen
+    visits:list
+end
+
+export struct Passage
+    strand:int
+    contour:int
+    time:float
+    crossing:int
+    over:bool
+    section:int = -1
+end
+
+export struct Crossing
+    point:pair
+    first:Passage
+    second:Passage
+end
+
+export struct Plan
+    strands:list
+    crossings:list
+    visits:list
+end
+
+fn before(left:Passage, right:Passage) -> bool
+    if left.contour != right.contour then return left.contour < right.contour end
+    if left.time != right.time then return left.time < right.time end
+    return left.crossing < right.crossing
+end
+
+fn insert(visits:list, passage:Passage)
+    visits += [passage]
+    index := len(visits)-1
+    while index > 0 and before(passage, visits[index-1]) do
+        visits[index] = visits[index-1]
+        index = index-1
+    end
+    visits[index] = passage
+end
+
+export fn analyze(strands:list, tolerance:length) -> Plan
+    curves := []
+    visits := []
+    for i in 0:len(strands)-1 do
+        curves += strands[i].curve
+        visits += [[]]
+    end
+    rows := path_crossings(curves, tolerance)
+    crossings := []
+    for i in 0:len(rows)-1 do
+        row:list := rows[i]
+        id := i+1
+        first := Passage(strand:row[1], contour:row[2], time:row[3], crossing:id, over:false)
+        second := Passage(strand:row[4], contour:row[5], time:row[6], crossing:id, over:true)
+        crossings += [Crossing(point:row[0], first:first, second:second)]
+        insert(visits[first.strand], first)
+        insert(visits[second.strand], second)
+    end
+    for i in 0:len(strands)-1 do
+        declared:list := strands[i].visits
+        actual:list := visits[i]
+        if len(declared) != 0 then
+            assert(len(declared) == len(actual), "weave strand " + str(i+1) + " needs one signed ID for each crossing passage")
+            for j in 0:len(actual)-1 do
+                signed:int := declared[j]
+                passage:Passage := actual[j]
+                assert(signed == passage.crossing or signed == -passage.crossing, "weave strand " + str(i+1) + " expected crossing " + str(passage.crossing) + " at passage " + str(j+1))
+                passage.over = signed > 0
+            end
+        end
+    end
+    for i in 0:len(crossings)-1 do
+        crossing:Crossing := crossings[i]
+        first_explicit := len(strands[crossing.first.strand].visits) != 0
+        second_explicit := len(strands[crossing.second.strand].visits) != 0
+        if first_explicit and not second_explicit then
+            crossing.second.over = not crossing.first.over
+        elseif second_explicit and not first_explicit then
+            crossing.first.over = not crossing.second.over
+        end
+        assert(crossing.first.over != crossing.second.over, "weave crossing " + str(i+1) + " needs one over passage and one under passage")
+    end
+    return Plan(strands:strands, crossings:crossings, visits:visits)
+end

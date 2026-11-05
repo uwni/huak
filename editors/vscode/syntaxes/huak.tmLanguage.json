@@ -1,0 +1,85 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Huak",
+  "scopeName": "source.huak",
+  "patterns": [{ "include": "#comments" }, { "include": "#dictionary-keys" }, { "include": "#strings" }, { "include": "#typst" }, { "include": "#structures" }, { "include": "#annotations" }, { "include": "#call-forms" }, { "include": "#members" }, { "include": "#keywords" }, { "include": "#numbers" }, { "include": "#functions" }, { "include": "#operators" }],
+  "repository": {
+    "comments": { "patterns": [{ "name": "comment.line.double-slash.huak", "match": "//.*$" }, { "name": "comment.line.number-sign.huak", "match": "#.*$" }] },
+    "strings": { "name": "string.quoted.double.huak", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.huak", "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})" }] },
+    "dictionary-keys": { "match": "(\"(?:\\\\.|[^\"\\\\])*\")([ \\t]*:)", "captures": { "1": { "name": "string.quoted.double.huak meta.mapping.key.huak" }, "2": { "name": "punctuation.separator.huak" } } },
+    "structures": {
+      "name": "meta.struct.huak",
+      "begin": "\\b(struct)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)",
+      "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.type.huak" } },
+      "end": "\\b(end)\\b", "endCaptures": { "1": { "name": "keyword.control.huak" } },
+      "patterns": [
+        { "match": "\\b([A-Za-z_][A-Za-z_0-9]*)([ \\t]*:)[ \\t]*([A-Za-z_][A-Za-z_0-9]*(?:\\.[A-Za-z_][A-Za-z_0-9]*)*)", "captures": { "1": { "name": "variable.other.property.huak" }, "2": { "name": "punctuation.separator.huak" }, "3": { "name": "storage.type.huak" } } },
+        { "include": "$self" }
+      ]
+    },
+    "members": { "patterns": [
+      { "match": "(\\.)([A-Za-z_][A-Za-z_0-9]*)(?![A-Za-z_0-9]|[ \\t]*\\()", "captures": { "1": { "name": "punctuation.accessor.huak" }, "2": { "name": "variable.other.property.huak" } } },
+      { "name": "variable.parameter.huak", "match": "\\b[A-Za-z_][A-Za-z_0-9]*(?=[ \t]*:(?!=))" }
+    ] },
+    "typst": {
+      "patterns": [
+        { "name": "meta.embedded.block.typst", "begin": "\\b(typ)(?=\\s*\\[)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\])", "patterns": [{ "include": "source.typst#contentBlock" }] },
+        { "name": "meta.embedded.block.typst-code", "begin": "\\b(setup_typst)(?=\\s*\\{)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\})", "patterns": [{ "include": "source.typst#codeBlock" }] }
+      ]
+    },
+    "call-forms": { "patterns": [
+      { "match": "\\b(fn|expand_block)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)", "captures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.function.huak" } } },
+      { "match": "\\b(mixfix)\\s+(?:_\\s+)?([A-Za-z_][A-Za-z_0-9]*)", "captures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.function.huak" } } }
+    ] },
+    "annotations": { "patterns": [
+      {
+        "name": "meta.function.parameters.huak",
+        "begin": "\\b(fn|expand_block)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(\\()",
+        "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "entity.name.function.huak" }, "3": { "name": "punctuation.section.huak" } },
+        "end": "\\)",
+        "endCaptures": { "0": { "name": "punctuation.section.huak" } },
+        "patterns": [
+          { "include": "#comments" }, { "include": "#strings" }, { "include": "#typst" }, { "include": "#signature-groups" },
+          {
+            "begin": ":", "beginCaptures": { "0": { "name": "punctuation.separator.huak" } },
+            "end": "(?=[,)=])",
+            "patterns": [{ "include": "#comments" }, { "name": "storage.type.huak", "match": "\\b[A-Za-z_][A-Za-z_0-9]*\\b" }, { "include": "#operators" }]
+          },
+          { "include": "#keywords" }, { "include": "#numbers" }, { "include": "#functions" }, { "include": "#operators" }
+        ]
+      },
+      {
+        "match": "(->)[ \\t]*([A-Za-z_][A-Za-z_0-9]*(?:\\.[A-Za-z_][A-Za-z_0-9]*)*)",
+        "captures": { "1": { "name": "keyword.operator.huak" }, "2": { "name": "storage.type.huak" } }
+      },
+      {
+        "match": "\\b(param)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(:)[ \\t]*([A-Za-z_][A-Za-z_0-9]*(?:\\.[A-Za-z_][A-Za-z_0-9]*)*)",
+        "captures": { "1": { "name": "keyword.control.huak" }, "3": { "name": "punctuation.separator.huak" }, "4": { "name": "storage.type.huak" } }
+      },
+      {
+        "match": "\\b([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(:)[ \\t]*([A-Za-z_][A-Za-z_0-9]*(?:\\.[A-Za-z_][A-Za-z_0-9]*)*)(?=[ \\t]*=(?!=))",
+        "captures": { "2": { "name": "punctuation.separator.huak" }, "3": { "name": "storage.type.huak" } }
+      }
+    ] },
+    "signature-groups": { "patterns": [
+      { "begin": "\\(", "end": "\\)", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] },
+      { "begin": "\\[", "end": "\\]", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] },
+      { "begin": "\\{", "end": "\\}", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] }
+    ] },
+    "keywords": { "patterns": [
+      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|as|precedence|mixfix|and|or|not|typ|setup_typst|typst_expose|cycle)\\b" },
+      { "name": "constant.language.boolean.huak", "match": "\\b(?:true|false)\\b" }
+    ] },
+    "numbers": { "patterns": [
+      { "name": "constant.numeric.huak", "match": "(?<![\\w.])(?:[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\\s*pi)?(?:\\s*(?:mm|cm|m|in|pt|bp|texpt|rad|deg|turn)\\b)?" }
+    ] },
+    "functions": { "patterns": [
+      { "name": "entity.name.function.huak", "match": "\\b[A-Za-z_][A-Za-z_0-9]*(?=\\()" }
+    ] },
+    "operators": { "patterns": [
+      { "name": "keyword.operator.huak", "match": "\\+=|~~|--|->|:=|==|!=|<=|>=|[+*/%\\^=<>-]" },
+      { "name": "punctuation.separator.huak", "match": "[,;:.]" },
+      { "name": "punctuation.section.huak", "match": "[()\\[\\]{}]" }
+    ] }
+  }
+}

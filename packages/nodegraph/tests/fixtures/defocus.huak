@@ -1,0 +1,13 @@
+import paint.{point_at, width, height, assert}
+import math.{norm}
+import "../../nodegraph.huak".*
+import assertions.assert
+
+target := node("n", absolute((0pt, 0pt)), typ[Wide], {"width": 80pt, "height": 20pt})
+wire := edge(absolute((-100pt, -100pt)), named("n"), {"name": "e"})
+a := geometry([target, wire], {"node_defocus": 0})
+b := geometry([target, wire], {"node_defocus": 1})
+pa := point_at(route(a, "e"), len(route(a, "e")))
+pb := point_at(route(b, "e"), len(route(b, "e")))
+assert(norm(pa-pb) > 0.5pt, "defocus must move the snapped endpoint")
+print("defocus checks passed")

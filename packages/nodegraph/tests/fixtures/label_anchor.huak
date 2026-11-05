@@ -1,0 +1,7 @@
+import paint.{bounds, label, assert}
+import math.{norm}
+import "../../nodegraph.huak".*
+import assertions.assert
+e := edge(absolute((0pt, 0pt)), absolute((80pt, 0pt)), {"label": typ[L], "label_anchor": "ne"})
+assert(len(bounds(diagram([e]))) == 2, "corner label anchor must render")
+print("label anchor checks passed")

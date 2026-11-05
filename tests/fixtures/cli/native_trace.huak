@@ -1,0 +1,6 @@
+fn broken() -> text
+return typ[
+#text(unknown_native_value)
+]
+end
+broken()

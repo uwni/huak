@@ -1,0 +1,306 @@
+// Deferred coordinates and elastic rows/columns. Resolution is independent of
+// paint order; unknown names and dependency cycles are errors, never (0,0).
+import math.{abs, atan2, ceil, dot, floor, lerp, max, min, norm, sqrt, unit}
+import geometry.{intersections, offset, point_at, rectangle, sample_path}; import object.{bounds}
+import transform.{apply, compose, rotate, transformed, translate}
+import assertions.assert
+import "options.huak" as opt
+import "shapes.huak" as shapes
+
+export struct AxisExtent
+    index:float
+    projected:length
+end
+
+export struct AxisCell
+    index:int
+    center:length
+    width:length
+end
+
+export struct ResolvedNode
+    name:string
+    center:pair
+    body_center:pair
+    body:text
+    options:dict
+    snapping:path
+    size:pair
+    outline:path
+    kind:string = "node"
+end
+
+// Preserve source order separately from the lookup table of user-chosen names.
+export struct Geometry
+    objects:list = []
+    by_name:dict = {}
+    cells:list = []
+    axes:list = []
+    kind:string = "geometry"
+end
+
+export struct LayoutResult
+    geometry:Geometry
+    cells:list
+    axes:list
+end
+
+export fn node_size(item:any) -> pair
+    body:text := item.body
+    options:dict := item.options
+    inset:length := opt.get(options, "inset", 6pt)
+    assert(inset >= 0pt, "node inset must be nonnegative")
+    size := (body.width+2*inset, body.height+2*inset)
+    kind:string := opt.get(options, "shape", "rect")
+    if kind == "diamond" then size = size*2 end
+    if kind == "triangle" then size = size*3 end
+    if kind == "ellipse" then size = size*sqrt(2) end
+    if opt.has(options, "radius") then
+        radius:length := opt.get(options, "radius", 0pt)
+        assert(radius > 0pt, "node radius must be positive")
+        size = (2*radius, 2*radius)
+    end
+    size = (opt.get(options, "width", size.x), opt.get(options, "height", size.y))
+    assert(size.x > 0pt and size.y > 0pt, "node dimensions must be positive")
+    if kind == "circle" then size = (max(size.x, size.y), max(size.x, size.y)) end
+    return size
+end
+
+fn axis_value(point:pair, axis:int) -> float
+    if axis == 0 then return point.x end
+    return point.y
+end
+
+fn grid_points(coordinate:any) -> list
+    kind:string := coordinate.kind
+    if kind == "grid" then return [coordinate.value] end
+    if kind == "relative" then return grid_points(coordinate.origin) end
+    if kind == "between" then
+        result := grid_points(coordinate.first)
+        result += grid_points(coordinate.last)
+        return result
+    end
+    return []
+end
+
+fn node_span(item:any, direction:pair) -> length
+    options:dict := item.options
+    size := node_size(item)
+    outline := shapes.shape_outline(opt.get(options, "shape", "rect"), (0pt, 0pt), size, opt.get(options, "corner_radius", 0pt), opt.get(options, "shape_options", {}))
+    if opt.has(options, "outline") then outline = opt.get(options, "outline", outline) end
+    transform := rotate(opt.get(options, "rotate", 0deg)-atan2(direction.y, direction.x))
+    frame_box := bounds(transformed(rectangle(-size/2, size.x, size.y), transform))
+    shape_box := bounds(transformed(outline, transform))
+    assert(len(shape_box) == 2, "node outline must be nonempty")
+    return max(frame_box[1].x, shape_box[1].x)-min(frame_box[0].x, shape_box[0].x)
+end
+
+fn axis_cells(items:list, axis:int, spacing:length, minimum:length, direction:pair) -> list
+    points := []
+    for i in 0:len(items)-1 do
+        item:any := items[i]
+        if item.kind == "node" then points += grid_points(item.position) end
+        if item.kind == "edge" then
+            points += grid_points(item.first)
+            points += grid_points(item.last)
+            via:list := opt.get(item.options, "via", [])
+            for j in 0:len(via)-1 do points += grid_points(via[j]) end
+        end
+    end
+    if len(points) == 0 then points += (0, 0) end
+    low := int(floor(axis_value(points[0], axis)))
+    high := int(ceil(axis_value(points[0], axis)))
+    for i in 1:len(points)-1 do
+        low = min(low, int(floor(axis_value(points[i], axis))))
+        high = max(high, int(ceil(axis_value(points[i], axis))))
+    end
+    assert(high-low <= 4096, "elastic grid exceeds 4096 cells per axis")
+    result := []
+    cursor := 0pt
+    extents := []
+    for i in 0:len(items)-1 do
+        item:any := items[i]
+        if item.kind == "node" then
+            coordinate:any := item.position
+            if coordinate.kind == "grid" and not opt.get(item.options, "floating", false) then
+                extents += [AxisExtent(index: axis_value(coordinate.value, axis), projected: node_span(item, direction))]
+            end
+        end
+    end
+    for cell in low:high do
+        width := minimum
+        for i in 0:len(extents)-1 do
+            value:float := extents[i].index
+            projected:length := extents[i].projected
+            if value == cell then
+                width = max(width, projected)
+            elseif value > cell and value < cell+1 then
+                width = max(width, projected*(ceil(value)-value))
+            elseif value > cell-1 and value < cell then
+                width = max(width, projected*(value-floor(value)))
+            end
+        end
+        result += [AxisCell(index: cell, center: cursor+width/2, width: width)]
+        cursor = cursor+width+spacing
+    end
+    return result
+end
+
+fn cell_position(cells:list, index:float) -> length
+    low := int(floor(index))
+    for i in 0:len(cells)-1 do
+        if cells[i].index == low then
+            if index == low then return cells[i].center end
+            assert(i+1 < len(cells), "grid coordinate outside layout")
+            return cells[i].center+(cells[i+1].center-cells[i].center)*(index-low)
+        end
+    end
+    panic("grid coordinate outside layout")
+    return 0pt
+end
+
+export fn find(nodes:Geometry, name:string) -> any
+    assert(dict_contains(nodes.by_name, name), "unknown diagram object: " + name)
+    return nodes.by_name[name]
+end
+
+export fn known(nodes:Geometry, name:string) -> bool
+    return dict_contains(nodes.by_name, name)
+end
+
+export fn anchor(nodes:Geometry, name:string, side:string = "center") -> pair
+    item := find(nodes, name)
+    if item.kind == "edge" then
+        curve:path := item.curve
+        if side == "start" then return point_at(curve, 0) end
+        if side == "end" then return point_at(curve, len(curve)) end
+        assert(side == "center", "edge anchors are start, center or end")
+        samples := sample_path(curve, 3)
+        return samples[1][1]
+    end
+    center:pair := item.center
+    if side == "center" then return center end
+    direction := (0, 0)
+    if side == "east" then direction = (1, 0)
+    elseif side == "west" then direction = (-1, 0)
+    elseif side == "north" then direction = (0, 1)
+    elseif side == "south" then direction = (0, -1)
+    elseif side == "north_east" or side == "north-east" or side == "ne" then direction = (1, 1)
+    elseif side == "north_west" or side == "north-west" or side == "nw" then direction = (-1, 1)
+    elseif side == "south_east" or side == "south-east" or side == "se" then direction = (1, -1)
+    elseif side == "south_west" or side == "south-west" or side == "sw" then direction = (-1, -1)
+    else panic("unknown node anchor: " + side) end
+    curve:path := item.snapping
+    box := bounds(curve)
+    reach := 2*norm(box[1]-box[0])
+    hits := intersections(path(center, center+unit(direction)*reach), curve)
+    assert(len(hits) > 0, "anchor ray misses node outline")
+    best:pair := hits[0]
+    for i in 1:len(hits)-1 do
+        if norm(hits[i]-center) > norm(best-center) then best = hits[i] end
+    end
+    return best
+end
+
+export fn ready(coordinate:any, nodes:Geometry) -> bool
+    kind:string := coordinate.kind
+    if kind == "grid" or kind == "absolute" then return true end
+    if kind == "named" then return known(nodes, coordinate.name) end
+    if kind == "relative" then return ready(coordinate.origin, nodes) end
+    if kind == "between" then return ready(coordinate.first, nodes) and ready(coordinate.last, nodes) end
+    panic("unknown coordinate kind: " + kind)
+    return false
+end
+
+export fn resolve(coordinate:any, nodes:Geometry, cells:list, axes:list) -> pair
+    kind:string := coordinate.kind
+    if kind == "absolute" then return coordinate.position end
+    if kind == "grid" then
+        value:pair := coordinate.value
+        return axes[0]*cell_position(cells[0], value.x)+axes[1]*cell_position(cells[1], value.y)
+    end
+    if kind == "named" then return anchor(nodes, coordinate.name, coordinate.anchor) end
+    if kind == "relative" then return resolve(coordinate.origin, nodes, cells, axes)+coordinate.delta end
+    if kind == "between" then
+        return lerp(resolve(coordinate.first, nodes, cells, axes), resolve(coordinate.last, nodes, cells, axes), coordinate.position)
+    end
+    panic("unresolved coordinate: " + kind)
+    return (0pt, 0pt)
+end
+
+export fn resolve_node(item:any, center:pair, size:pair) -> ResolvedNode
+    options:dict := item.options
+    kind:string := opt.get(options, "shape", "rect")
+    outline := shapes.shape_outline(kind, (0pt, 0pt), size, opt.get(options, "corner_radius", 0pt), opt.get(options, "shape_options", {}))
+    if opt.has(options, "outline") then outline = opt.get(options, "outline", outline) end
+    transform := compose(rotate(opt.get(options, "rotate", 0deg)), translate(center))
+    outline = transformed(outline, transform)
+    outset:length := opt.get(options, "outset", 0pt)
+    assert(outset >= 0pt, "node outset must be nonnegative")
+    snapping := outline
+    if outset > 0pt then snapping = offset(outline, outset, "round") end
+    return ResolvedNode(name: item.name, center: center, body_center: center, body: item.body, options: options, snapping: snapping, size: size, outline: outline)
+end
+
+export fn nodes(items:list, options:dict) -> LayoutResult
+    spacing:pair := opt.get(options, "spacing", (24pt, 24pt))
+    minimum:pair := opt.get(options, "cell_size", (0pt, 0pt))
+    axes:list := opt.get(options, "axes", [(1, 0), (0, -1)])
+    assert(len(axes) == 2, "axes requires two unit vectors")
+    assert(abs(norm(axes[0])-1) < 1e-12 and abs(norm(axes[1])-1) < 1e-12 and abs(dot(axes[0], axes[1])) < 1e-12, "axes must be orthogonal unit vectors")
+    assert(spacing.x >= 0pt and spacing.y >= 0pt and minimum.x >= 0pt and minimum.y >= 0pt, "grid spacing and cell size must be nonnegative")
+    cells := [axis_cells(items, 0, spacing.x, minimum.x, axes[0]), axis_cells(items, 1, spacing.y, minimum.y, axes[1])]
+    result := Geometry(cells: cells, axes: axes)
+    pending := []
+    for i in 0:len(items)-1 do
+        if items[i].kind != "edge" then pending += [items[i]] end
+    end
+    while len(pending) > 0 do
+        waiting := []
+        for i in 0:len(pending)-1 do
+            item:any := pending[i]
+            if item.kind == "node" then
+                if ready(item.position, result) then
+                    resolved := resolve_node(item, resolve(item.position, result, cells, axes), node_size(item))
+                    result.objects += [resolved]
+                    result.by_name[resolved.name] = resolved
+                else waiting += [item] end
+            else
+                members:list := item.members
+                complete := true
+                for j in 0:len(members)-1 do complete = complete and known(result, members[j]) end
+                if complete then
+                    angle:angle := opt.get(item.options, "rotate", 0deg)
+                    local := rotate(-angle)
+                    first := bounds(transformed(find(result, members[0]).snapping, local))
+                    low:pair := first[0]
+                    high:pair := first[1]
+                    for j in 1:len(members)-1 do
+                        box := bounds(transformed(find(result, members[j]).snapping, local))
+                        low = (min(low.x, box[0].x), min(low.y, box[0].y))
+                        high = (max(high.x, box[1].x), max(high.y, box[1].y))
+                    end
+                    padding:length := opt.get(item.options, "inset", 6pt)
+                    requested := node_size(item)
+                    body:text := item.body
+                    // Reserve a title row above the members in the group's
+                    // local axes. Empty bodies preserve the member-only box.
+                    header := 0pt
+                    if body.height > 0pt then header = body.height+padding end
+                    size := (max(requested.x, max(high.x-low.x, body.width)+2*padding), max(requested.y, high.y-low.y+2*padding+header))
+                    center := (low+high+(0pt, header))/2
+                    rotation := rotate(angle)
+                    resolved := resolve_node(item, apply(rotation, center), size)
+                    if header > 0pt then
+                        resolved.body_center = apply(rotation, (center.x, high.y+padding+body.height/2))
+                    end
+                    result.objects += [resolved]
+                    result.by_name[resolved.name] = resolved
+                else waiting += [item] end
+            end
+        end
+        assert(len(waiting) < len(pending), "cyclic or unknown node coordinate/enclosure dependency")
+        pending = waiting
+    end
+    return LayoutResult(geometry: result, cells: cells, axes: axes)
+end

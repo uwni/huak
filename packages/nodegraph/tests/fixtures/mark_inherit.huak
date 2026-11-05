@@ -1,0 +1,7 @@
+import paint.{bounds, assert}
+import "../../nodegraph.huak".*
+import assertions.assert
+e := edge(absolute((0pt, 0pt)), absolute((40pt, 0pt)), {"marks": [mark("alias", 1, false, {"inherit": "head"})]})
+p := diagram([e])
+assert(len(bounds(p)) == 2, "inherited mark must render")
+print("mark inherit checks passed")

@@ -1,0 +1,12 @@
+import paint.{rgb, circle, path, fill, label, picture, timeline, animate, motion};pic:=picture(240,100)
+export pic
+default pic
+pic.timeline(2,false)
+t:=typ[
+One retained text
+]
+title_id:=object.append(pic, object.label(t, (12,35)))
+animate(title_id,"translate",[[0,(0,0)],[0.37,(25,0)],[1,(100,0)]])
+animate(title_id,"opacity",[[0,0.2],[1,1]])
+dot_id:=object.append(pic, object.fill(circle((20,70),5), rgb(0,0.3,0.8)))
+motion(dot_id,path((0,0),(150,0)),[[0,0],[1,1]],"none")

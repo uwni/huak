@@ -1,0 +1,147 @@
+// Diagram shape policy; curves, transformations and offsets use native geometry.
+import math.{abs, atan2, max, min, sin, tan}
+import object.{append, label}
+import geometry.{circle, offset, rectangle, region_union}
+import transform.{compose, rotate, scale, transformed, translate}
+import pen.stroke_path
+import assertions.assert
+import "options.huak" as opt
+
+export fn rounded_rect(center:pair, size:pair, radius:length) -> path
+    r := min(radius, min(size.x, size.y)/2)
+    if r <= 0pt then return rectangle(center-size/2, size.x, size.y) end
+    x := size.x/2-r
+    y := size.y/2-r
+    if x == 0pt and y == 0pt then return circle(center, r) end
+    if x == 0pt or y == 0pt then
+        return stroke_path(path(center-(x, y), center+(x, y)), 2*r, "round", "round")
+    end
+    // Native region offset rounds and closes the rectangle.
+    return offset(rectangle(center-(x, y), 2*x, 2*y), r, "round")
+end
+
+export fn ellipse_shape(center:pair, size:pair, factor:float = 1) -> path
+    assert(size.x > 0pt and size.y > 0pt and factor > 0, "shape dimensions must be positive")
+    return transformed(circle((0pt, 0pt), 1pt), compose(scale(size.x*factor/2pt, size.y*factor/2pt), translate(center)))
+end
+
+fn oriented(points:list, dir:string) -> list
+    flip := dir == "left" or dir == "right"
+    rotate := dir == "left" or dir == "bottom"
+    result := []
+    for i in 0:len(points)-1 do
+        p:pair := points[i]
+        if flip then p = (p.y, p.x) end
+        if rotate then p = (-p.x, -p.y) end
+        result += [p]
+    end
+    return result
+end
+
+export fn shape_outline(kind:string, center:pair, size:pair, radius:length = 0pt, options:dict = {}) -> path
+    assert(size.x > 0pt and size.y > 0pt, "shape dimensions must be positive")
+    w := size.x/2
+    h := size.y/2
+    fit:float := opt.get(options, "fit", 0.8)
+    angle:angle := opt.get(options, "angle", 20deg)
+    if kind == "rect" then return rounded_rect(center, size, radius) end
+    if kind == "circle" then return circle(center, max(w, h)) end
+    if kind == "ellipse" then return ellipse_shape(center, size, opt.get(options, "scale", 1)) end
+    if kind == "pill" then return rounded_rect(center, size, min(w, h)) end
+    points := []
+    if kind == "diamond" then
+        x := w*(1+opt.get(options, "fit", 0.5))
+        y := h*(1+opt.get(options, "fit", 0.5))
+        points = [(-x, 0pt), (0pt, -y), (x, 0pt), (0pt, y)]
+    elseif kind == "parallelogram" then
+        if opt.get(options, "flip", false) then
+            swap := w
+            w = h
+            h = swap
+        end
+        d := h*tan(angle)
+        x := w + d*fit
+        points = [(-x, -h), (x-d, -h), (x, h), (-x+d, h)]
+    elseif kind == "trapezium" then
+        if opt.get(options, "flip", false) then
+            swap := w
+            w = h
+            h = swap
+        end
+        d := h*tan(angle)
+        x := w + d*fit
+        points = [(-x, -h), (x, -h), (x-d, h), (-x+d, h)]
+        points = oriented(points, opt.get(options, "dir", "top"))
+    elseif kind == "triangle" then
+        aspect:float := opt.get(options, "aspect", w/h)
+        triangle_angle:angle := opt.get(options, "angle", 0deg)
+        if triangle_angle != 0deg then aspect = 2*tan(triangle_angle/2) end
+        a := aspect*h/2 + fit*w/2
+        b := (a + fit*w/2)/aspect
+        points = [(-a, -h), (a, -h), (0pt, b)]
+        points = oriented(points, opt.get(options, "dir", "top"))
+    elseif kind == "house" then
+        roof_angle:angle := opt.get(options, "angle", 10deg)
+        x := w
+        y := h
+        roof := h + w*tan(roof_angle)
+        points = [(-x, -y), (-x, y), (0pt, roof), (x, y), (x, -y)]
+        points = oriented(points, opt.get(options, "dir", "top"))
+    elseif kind == "chevron" then
+        chevron_angle:angle := opt.get(options, "angle", 30deg)
+        c := w*tan(chevron_angle)
+        x := w
+        y := h + c*fit
+        points = [(-x, y-c), (0pt, y), (x, y-c), (x, -y), (0pt, -y), (-x, -y)]
+        points = oriented(points, opt.get(options, "dir", "right"))
+    elseif kind == "hexagon" then
+        hex_angle:angle := opt.get(options, "angle", 30deg)
+        f := h*tan(hex_angle)*(1-fit)
+        x := w - f
+        y := h
+        z := y*tan(hex_angle)
+        points = [(x, -y), (x+z, 0pt), (x, y), (-x, y), (-x-z, 0pt), (-x, -y)]
+    elseif kind == "octagon" then
+        truncate:float := opt.get(options, "truncate", 0.5)
+        d := truncate*min(w, h)
+        points = [(-w+d, -h), (w-d, -h), (w, -h+d), (w, h-d), (w-d, h), (-w+d, h), (-w, h-d), (-w, -h+d)]
+    elseif kind == "cylinder" then
+        tilt:angle := opt.get(options, "tilt", 0deg)
+        r := min(h/4, w/4)
+        if tilt != 0deg then r = min(h/2, max(0.1pt, abs(w*sin(tilt)))) end
+        body := rectangle(center+(-w, -h+r), 2*w, 2*(h-r))
+        top := ellipse_shape(center+(0pt, h-r), (2*w, 2*r))
+        bottom := ellipse_shape(center+(0pt, -h+r), (2*w, 2*r))
+        return region_union(region_union(body, top), bottom)
+    elseif kind == "brace" or kind == "bracket" or kind == "paren" or kind == "none" then
+        return rectangle(center-size/2, size.x, size.y)
+    else
+        panic("unsupported nodegraph shape: " + kind)
+    end
+    moved := []
+    for i in 0:len(points)-1 do moved += center+points[i] end
+    return path(moved, true)
+end
+
+export fn text_center(dst:object, body:text, center:pair, angle:angle = 0deg)
+    local := picture()
+    object.append(local, label(body, (-body.width/2, body.height/2-body.baseline)))
+    append(dst, local, compose(rotate(angle), translate(center)))
+end
+
+// Stretch uses Typst's own glyph assembly, preserving a native text frame.
+// Pass an explicitly styled typ[...] frame to node() for other typography.
+export fn stretched_glyph(kind:string, extent:length, side:string = "bottom") -> text
+    assert(extent > 0pt, "stretched glyph extent must be positive")
+    assert(kind == "brace" or kind == "bracket" or kind == "paren", "unknown stretched glyph kind")
+    assert(side == "bottom" or side == "top" or side == "left" or side == "right", "unknown glyph side")
+    typst_expose kind, extent, side
+    return typ[#{
+        let glyphs = (
+            brace: (bottom: sym.brace.b, top: sym.brace.t, left: sym.brace.l, right: sym.brace.r),
+            bracket: (bottom: sym.bracket.b, top: sym.bracket.t, left: sym.bracket.l, right: sym.bracket.r),
+            paren: (bottom: sym.paren.b, top: sym.paren.t, left: sym.paren.l, right: sym.paren.r),
+        )
+        math.stretch(glyphs.at(huak.kind).at(huak.side), size: huak.extent)
+    }]
+end

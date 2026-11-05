@@ -1,0 +1,4 @@
+fn broken()->int
+return "wrong type"
+end
+export broken

@@ -1,0 +1,18 @@
+import paint.*
+
+setup_typst { set text(size: 15pt, fill: rgb("#243d39")) }
+
+curve := bezier((40, 35), (110, 35), (180, 75), (250, 155))
+area := joined(curve, (250, 155) -- (250, 35) -- (40, 35))
+ink := pen(rgb(0.12, 0.36, 0.30), 2)
+axis := pen(rgb(0.35, 0.42, 0.40), 0.7)
+
+default drawing picture(300, 205) do
+    +fill(closed(area), rgb(0.75, 0.88, 0.76))
+    +draw curve with ink
+    +draw ((40, 170) -- (40, 35) -- (268, 35)) with axis
+    +typ[$ integral_0^1 x^2 dif x = 1/3 $] at (66, 148)
+    +typ[$0$] at (31, 20)
+    +typ[$1$] at (247, 20)
+    +typ[$x$] at (273, 32)
+end

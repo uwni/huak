@@ -1,0 +1,1379 @@
+//! Stable C entry points and their pointer, ownership and panic contracts.
+//!
+//! # Pointer and ownership contract
+//!
+//! Input records and nonempty views must point to aligned, initialized, readable
+//! storage covering the declared prefix or array. Views may use null for zero
+//! length. Inputs, including nested views, remain immutable for the entire call.
+//! A versioned options record must expose its declared prefix, capped at the
+//! known record size; a null options pointer selects defaults.
+//!
+//! Output pointers must address aligned, writable storage of the declared type,
+//! disjoint from inputs and other outputs. An optional diagnostics output may be
+//! null; otherwise it must be an empty writable handle slot. Reusing a slot or a
+//! batch array does not release its previous owners: release those first.
+//!
+//! Every non-null opaque handle must have the correct type, originate from this
+//! loaded library instance, and keep an owned reference alive throughout a call
+//! or view read. Handles are immutable and reference counted. Each owned return
+//! or retain requires one matching release; never free them with another
+//! allocator. Borrowed views must not be mutated or used after the owner's last
+//! release. Releasing other references concurrently is allowed while a reference
+//! remains alive for each call or borrowed view. Keep the library mapped while
+//! its handles, views, native workers, or thread-local destructors can use it.
+use crate::{
+    abi::*,
+    diagnostics::Report,
+    error::{discard_panic, panic_error, Error},
+    handles::*,
+    layout::metrics,
+    scene::{PathStyle, SceneCommand, SceneContent, StrokeStyle},
+};
+use rayon::prelude::*;
+use std::{
+    mem::{align_of, size_of},
+    panic::{catch_unwind, AssertUnwindSafe},
+    ptr,
+    sync::Arc,
+};
+
+mod value;
+
+fn owned<T>(value: T) -> *mut T {
+    Arc::into_raw(Arc::new(value)).cast_mut()
+}
+
+unsafe fn required<'a, T>(value: *const T, label: &str) -> Result<&'a T, Error> {
+    check_ptr(value, label)?;
+    Ok(unsafe { &*value })
+}
+fn check_ptr<T>(value: *const T, label: &str) -> Result<(), Error> {
+    if value.is_null() || !(value as usize).is_multiple_of(align_of::<T>()) {
+        return Err(Error::invalid(format!(
+            "{label} must be a non-null aligned pointer"
+        )));
+    }
+    Ok(())
+}
+fn check_values<T>(data: *const T, len: usize, label: &str) -> Result<(), Error> {
+    if len == 0 {
+        return Ok(());
+    }
+    check_ptr(data, label)?;
+    if len > isize::MAX as usize / size_of::<T>().max(1) {
+        return Err(Error::invalid(format!("invalid {label} length")));
+    }
+    Ok(())
+}
+unsafe fn values<'a, T>(data: *const T, len: usize, label: &str) -> Result<&'a [T], Error> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+    check_values(data, len, label)?;
+    Ok(unsafe { std::slice::from_raw_parts(data, len) })
+}
+unsafe fn text<'a>(value: TypstStr, label: &str) -> Result<&'a str, Error> {
+    let bytes = unsafe { values(value.data, value.len, label)? };
+    std::str::from_utf8(bytes).map_err(|error| {
+        Error::utf8(format!(
+            "invalid UTF-8 in {label} at byte {}",
+            error.valid_up_to()
+        ))
+    })
+}
+
+unsafe fn options<T: Copy + Default>(value: *const T) -> Result<T, Error> {
+    if value.is_null() {
+        return Ok(T::default());
+    }
+    check_ptr(value, "options")?;
+    let length = unsafe { value.cast::<u32>().read() } as usize;
+    if length != size_of::<u32>() && (length < 8 || !length.is_multiple_of(align_of::<T>())) {
+        return Err(Error::invalid(
+            "options.struct_size must contain its header and end at an aligned field boundary",
+        ));
+    }
+    let mut result = T::default();
+    unsafe {
+        ptr::copy_nonoverlapping(
+            value.cast::<u8>(),
+            (&mut result as *mut T).cast::<u8>(),
+            length.min(size_of::<T>()),
+        );
+    }
+    Ok(result)
+}
+
+unsafe fn report(out: *mut *mut TypstDiagnostics, value: Report) {
+    if !out.is_null() && !value.entries.is_empty() {
+        unsafe {
+            out.write(owned(TypstDiagnostics { inner: value }));
+        }
+    }
+}
+
+unsafe fn call(
+    out: *mut *mut TypstDiagnostics,
+    action: impl FnOnce() -> Result<Report, Error>,
+) -> TypstStatus {
+    if !out.is_null() {
+        unsafe {
+            out.write(ptr::null_mut());
+        }
+    }
+    let result =
+        catch_unwind(AssertUnwindSafe(action)).unwrap_or_else(|payload| Err(panic_error(payload)));
+    match result {
+        Ok(value) => {
+            unsafe {
+                report(out, value);
+            }
+            TYPST_OK
+        }
+        Err(error) => {
+            unsafe {
+                report(out, error.report);
+            }
+            error.status
+        }
+    }
+}
+unsafe fn output<T>(out: *mut *mut T) -> Result<(), Error> {
+    if out.is_null() || !(out as usize).is_multiple_of(align_of::<*mut T>()) {
+        return Err(Error::invalid(
+            "output handle must be a non-null aligned pointer",
+        ));
+    }
+    unsafe {
+        out.write(ptr::null_mut());
+    }
+    Ok(())
+}
+unsafe fn retain<T>(value: *const T) {
+    if !value.is_null() {
+        unsafe {
+            Arc::increment_strong_count(value);
+        }
+    }
+}
+unsafe fn release<T>(value: *const T) {
+    if !value.is_null() {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| unsafe {
+            Arc::decrement_strong_count(value)
+        })) {
+            discard_panic(payload);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn typst_abi_version() -> u32 {
+    TYPST_ABI_VERSION
+}
+
+/// Returns the byte length of the first complete native content/code block.
+/// Syntax errors inside a closed block are left to the eventual evaluation.
+///
+/// # Safety
+/// `source` must be a readable view for the call and `out` a non-null writable
+/// `usize`. The optional diagnostics slot follows the module pointer contract;
+/// release any returned diagnostic with `typst_diagnostics_release`.
+#[no_mangle]
+pub unsafe extern "C" fn typst_source_block(
+    source: TypstStr,
+    out: *mut usize,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            check_ptr(out, "block length output")?;
+            out.write(0);
+            let length = crate::syntax::source_block(text(source, "Typst block")?)?;
+            out.write(length);
+            Ok(Report::default())
+        })
+    }
+}
+
+/// The returned strings are static and remain valid while the library is mapped.
+///
+/// # Safety
+/// `out` must point to aligned, writable storage for one `TypstVersionInfo`.
+/// Do not mutate the returned string views or use them after unloading the library.
+#[no_mangle]
+pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> TypstStatus {
+    if check_ptr(out, "version output").is_err() {
+        return TYPST_INVALID_ARGUMENT;
+    }
+    unsafe {
+        out.write(TypstVersionInfo::default());
+    }
+    match catch_unwind(|| TypstVersionInfo {
+        abi_major: TYPST_ABI_VERSION >> 16,
+        abi_minor: TYPST_ABI_VERSION & 0xffff,
+        capabilities: TYPST_CAP_PDF
+            | TYPST_CAP_BATCH_LAYOUT
+            | TYPST_CAP_NATIVE_SCENE
+            | TYPST_CAP_TEXT_OUTLINE
+            | TYPST_CAP_LAYOUT_BINDINGS,
+        library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
+        typst_version: TypstStr::view(typst_core::utils::version().raw()),
+    }) {
+        Ok(value) => {
+            unsafe {
+                out.write(value);
+            }
+            TYPST_OK
+        }
+        Err(payload) => {
+            discard_panic(payload);
+            TYPST_PANIC
+        }
+    }
+}
+
+/// Creates an immutable context by copying the supplied resources and inputs.
+///
+/// # Safety
+/// A non-null `config` and all nested arrays/views must follow the module pointer
+/// contract. `out` must be a non-null writable handle slot; `diagnostics` may be
+/// null or a writable handle slot. Release each returned owner with its matching
+/// `typst_context_release` or `typst_diagnostics_release` function.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_create(
+    config: *const TypstContextOptions,
+    out: *mut *mut TypstContext,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let config: TypstContextOptions = options(config)?;
+            if config.flags & !(TYPST_CONTEXT_NO_BUILTIN_FONTS | TYPST_CONTEXT_DISABLE_PLUGINS) != 0
+            {
+                return Err(Error::unsupported("unknown context flags"));
+            }
+            let fonts = values(config.fonts, config.font_count, "fonts")?
+                .iter()
+                .map(|font| Ok(values(font.data.data, font.data.len, "font bytes")?.to_vec()))
+                .collect::<Result<Vec<_>, Error>>()?;
+            let files = values(config.files, config.file_count, "files")?
+                .iter()
+                .map(|file| {
+                    Ok((
+                        text(file.path, "file path")?.to_owned(),
+                        values(file.data.data, file.data.len, "file bytes")?.to_vec(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let inputs = text(config.inputs_json, "inputs JSON")?;
+            let context = crate::context::Context::new(fonts, files, inputs, config.flags)?;
+            out.write(owned(TypstContext {
+                inner: Arc::new(context),
+            }));
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Compiles an in-memory source into an independently owned document.
+///
+/// # Safety
+/// `context` must be a live context from this library. Both source views and the
+/// non-null writable `out` slot must follow the module pointer contract.
+/// `diagnostics` is optional. Release the returned document and diagnostic owners
+/// separately; the document may outlive the context.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_compile(
+    context: *const TypstContext,
+    source: TypstStr,
+    source_name: TypstStr,
+    out: *mut *mut TypstDocument,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let context = required(context, "context")?;
+            let (document, warnings) = context
+                .inner
+                .compile(text(source, "source")?, text(source_name, "source name")?)?;
+            out.write(owned(TypstDocument {
+                inner: Arc::new(document),
+            }));
+            Ok(warnings)
+        })
+    }
+}
+
+// C views remain valid until the synchronous call, including its parallel
+// jobs, returns. Typst's Source trees and returned diagnostics own their data.
+struct Request<'a> {
+    source: &'a str,
+    source_name: &'a str,
+    setup_code: &'a str,
+    setup_source_name: &'a str,
+    bindings: typst_core::foundations::Scope,
+    flags: u32,
+    width_pt: f64,
+    height_pt: f64,
+    syntax: u32,
+    reserved: u32,
+}
+impl Request<'_> {
+    fn options(&self) -> TypstLayoutOptions {
+        TypstLayoutOptions {
+            flags: self.flags,
+            width_pt: self.width_pt,
+            height_pt: self.height_pt,
+            syntax: self.syntax,
+            reserved: self.reserved,
+            ..Default::default()
+        }
+    }
+}
+unsafe fn request(value: &TypstLayoutRequest) -> Result<Request<'_>, Error> {
+    let source_name = unsafe { text(value.source_name, "source name")? };
+    let options: TypstLayoutOptions =
+        unsafe { options(value.options) }.map_err(|error| error.with_source(source_name))?;
+    Ok(Request {
+        source: unsafe { text(value.source, "source") }
+            .map_err(|error| error.with_source(source_name))?,
+        setup_code: unsafe { text(options.setup_code, "setup code") }
+            .map_err(|error| error.with_source(source_name))?,
+        setup_source_name: unsafe { text(options.setup_source_name, "setup source name") }
+            .map_err(|error| error.with_source(source_name))?,
+        bindings: unsafe { self::value::bindings(options.bindings, options.binding_count) }
+            .map_err(|error| error.with_source(source_name))?,
+        flags: options.flags,
+        width_pt: options.width_pt,
+        height_pt: options.height_pt,
+        syntax: options.syntax,
+        reserved: options.reserved,
+        source_name,
+    })
+}
+
+/// Lays out one request into an independently owned native layout.
+///
+/// # Safety
+/// `context` must be live and `input` must point to one initialized request, with
+/// readable source/setup views and an optional valid options prefix. `out` must
+/// be a non-null writable handle slot. All pointers follow the module contract.
+/// Release returned layout and optional diagnostic owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_layout(
+    context: *const TypstContext,
+    input: *const TypstLayoutRequest,
+    out: *mut *mut TypstLayout,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let context = required(context, "context")?;
+            let input = request(required(input, "layout request")?)?;
+            let (layout, warnings) = context
+                .inner
+                .layout_with_setup(
+                    input.source,
+                    input.source_name,
+                    &input.options(),
+                    input.setup_code,
+                    input.setup_source_name,
+                    input.bindings,
+                    usize::MAX,
+                )
+                .map_err(|error| error.with_source(input.source_name))?;
+            out.write(owned(TypstLayout {
+                inner: Arc::new(layout),
+            }));
+            Ok(warnings)
+        })
+    }
+}
+
+/// Processes independent requests in parallel and publishes results in input
+/// order. Global success means all requests were processed; inspect each result
+/// status. Every result owns its layout and diagnostics, including mixed errors.
+/// A global argument error starts no work and initializes the result slots when
+/// their pointer and count are valid. All input memory is borrowed for this call.
+///
+/// # Safety
+/// `context` must be live. For nonzero `count`, `inputs` must expose that many
+/// initialized requests, including their nested views/options, and `outputs`
+/// must expose that many aligned writable result slots. Their storage and the
+/// optional diagnostic slot must be disjoint and follow the module contract.
+/// Release every populated result layout/diagnostic and the global diagnostic
+/// independently, including on failure; the caller owns the output array itself.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_layout_many(
+    context: *const TypstContext,
+    inputs: *const TypstLayoutRequest,
+    count: usize,
+    outputs: *mut TypstLayoutResult,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            check_values(outputs.cast_const(), count, "layout results")?;
+            for index in 0..count {
+                outputs.add(index).write(TypstLayoutResult::default());
+            }
+            let context = required(context, "context")?;
+            let requests = values(inputs, count, "layout requests")?
+                .iter()
+                .map(|value| request(value))
+                .collect::<Vec<_>>();
+            let outcomes = requests
+                .into_par_iter()
+                .enumerate()
+                .map(|(index, input)| {
+                    catch_unwind(AssertUnwindSafe(|| {
+                        let input = input?;
+                        context
+                            .inner
+                            .layout_with_setup(
+                                input.source,
+                                input.source_name,
+                                &input.options(),
+                                input.setup_code,
+                                input.setup_source_name,
+                                input.bindings,
+                                index,
+                            )
+                            .map_err(|error| error.with_source(input.source_name))
+                    }))
+                    .unwrap_or_else(|payload| Err(panic_error(payload)))
+                })
+                .collect::<Vec<_>>();
+            for (index, result) in outcomes.into_iter().enumerate() {
+                let result = match result {
+                    Ok((layout, report)) => TypstLayoutResult {
+                        status: TYPST_OK,
+                        reserved: 0,
+                        layout: owned(TypstLayout {
+                            inner: Arc::new(layout),
+                        }),
+                        diagnostics: if report.entries.is_empty() {
+                            ptr::null_mut()
+                        } else {
+                            owned(TypstDiagnostics {
+                                inner: report.with_request(index),
+                            })
+                        },
+                    },
+                    Err(error) => TypstLayoutResult {
+                        status: error.status,
+                        reserved: 0,
+                        layout: ptr::null_mut(),
+                        diagnostics: owned(TypstDiagnostics {
+                            inner: error.report.with_request(index),
+                        }),
+                    },
+                };
+                outputs.add(index).write(result);
+            }
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Reads the dimensions and baseline of a layout.
+///
+/// # Safety
+/// `layout` must be a live layout from this library and `out` must point to one
+/// aligned writable `TypstMetrics`, disjoint from the borrowed layout.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_metrics(
+    layout: *const TypstLayout,
+    out: *mut TypstMetrics,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "metrics output")?;
+            out.write(TypstMetrics::default());
+            let layout = required(layout, "layout")?;
+            out.write(layout.inner.metrics());
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Reads conservative bounds in frame-local, y-down points, including logical
+/// dimensions and painted overflow. Clips may make the visible extent smaller.
+/// Native text, strokes and images remain native; no outline extraction occurs.
+/// Available since ABI 1.1.
+///
+/// # Safety
+/// `layout` must be live. `out` must hold two aligned writable `TypstPoint`s,
+/// disjoint from the layout, receiving the minimum and maximum respectively.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_bounds(
+    layout: *const TypstLayout,
+    out: *mut TypstPoint,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "bounds output")?;
+            out.write(TypstPoint::default());
+            out.add(1).write(TypstPoint::default());
+            let bounds = required(layout, "layout")?.inner.bounds()?;
+            ptr::copy_nonoverlapping(bounds.as_ptr(), out, bounds.len());
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Returns the number of pages, or zero for a null document.
+///
+/// # Safety
+/// A non-null `document` must be a live document from this library, with an owned
+/// reference kept alive throughout the call.
+#[no_mangle]
+pub unsafe extern "C" fn typst_document_page_count(document: *const TypstDocument) -> usize {
+    if document.is_null() {
+        0
+    } else {
+        let document = unsafe { &*document };
+        document.inner.document.pages().len()
+    }
+}
+
+/// Reads page dimensions and baseline; out-of-range indices return an error.
+///
+/// # Safety
+/// `document` must be live and `out` must point to aligned writable storage for
+/// one `TypstMetrics`, disjoint from the document, for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn typst_document_page_metrics(
+    document: *const TypstDocument,
+    page: usize,
+    out: *mut TypstMetrics,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "metrics output")?;
+            out.write(TypstMetrics::default());
+            let document = required(document, "document")?;
+            let page = document
+                .inner
+                .document
+                .pages()
+                .get(page)
+                .ok_or_else(|| Error::range("page index is out of range"))?;
+            out.write(metrics(&page.frame));
+            Ok(Report::default())
+        })
+    }
+}
+
+unsafe fn pdf_standard<'a>(config: *const TypstPdfOptions) -> Result<Option<&'a str>, Error> {
+    let config: TypstPdfOptions = unsafe { options(config)? };
+    if config.flags != 0 {
+        return Err(Error::unsupported("unknown PDF flags"));
+    }
+    let standard = unsafe { text(config.standard, "PDF standard")? };
+    Ok((!standard.is_empty()).then_some(standard))
+}
+
+/// Exports one document page into an independently owned SVG buffer.
+///
+/// # Safety
+/// `document` must be live. `out` must be a non-null writable buffer slot, and
+/// the optional diagnostics slot must follow the module pointer contract.
+/// Release the returned buffer and diagnostic owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_document_export_svg(
+    document: *const TypstDocument,
+    page: usize,
+    out: *mut *mut TypstBuffer,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let document = required(document, "document")?;
+            let bytes = crate::export::svg(&document.inner.document, page)?;
+            out.write(owned(TypstBuffer { inner: bytes }));
+            Ok(Report::default())
+        })
+    }
+}
+/// Exports a document into an independently owned PDF buffer.
+///
+/// # Safety
+/// `document` must be live. A non-null `config`, its declared options prefix and
+/// its standard-name view must remain readable for the call. `out` and the
+/// optional diagnostic slot follow the module pointer contract. Release the
+/// returned buffer and diagnostic owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_document_export_pdf(
+    document: *const TypstDocument,
+    config: *const TypstPdfOptions,
+    out: *mut *mut TypstBuffer,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let document = required(document, "document")?;
+            let bytes = crate::export::pdf(&document.inner.document, pdf_standard(config)?)?;
+            out.write(owned(TypstBuffer { inner: bytes }));
+            Ok(Report::default())
+        })
+    }
+}
+/// Exports an independent layout into an owned SVG buffer.
+///
+/// # Safety
+/// `layout` must be live. `out` must be a non-null writable buffer slot, and the
+/// optional diagnostics slot must follow the module pointer contract. Release
+/// the returned buffer and diagnostic owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_export_svg(
+    layout: *const TypstLayout,
+    out: *mut *mut TypstBuffer,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let layout = required(layout, "layout")?;
+            let page = crate::export::page_from_frame(layout.inner.frame.clone());
+            let bytes = typst_svg::svg(&page, &typst_svg::SvgOptions::default()).into_bytes();
+            out.write(owned(TypstBuffer { inner: bytes }));
+            Ok(Report::default())
+        })
+    }
+}
+/// Exports an independent layout into an owned PDF buffer.
+///
+/// # Safety
+/// `layout` must be live. A non-null `config` and its nested standard-name view
+/// must follow the module options contract. `out` must be a non-null writable
+/// buffer slot; `diagnostics` is optional. Release both returned owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_export_pdf(
+    layout: *const TypstLayout,
+    config: *const TypstPdfOptions,
+    out: *mut *mut TypstBuffer,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let layout = required(layout, "layout")?;
+            let bytes = crate::export::pdf(
+                &crate::export::from_frame(&layout.inner.frame),
+                pdf_standard(config)?,
+            )?;
+            out.write(owned(TypstBuffer { inner: bytes }));
+            Ok(Report::default())
+        })
+    }
+}
+
+unsafe fn path<'a>(value: *const TypstPath) -> Result<&'a [TypstPathSegment], Error> {
+    let value = unsafe { required(value, "path")? };
+    unsafe { values(value.segments, value.segment_count, "path segments") }
+}
+unsafe fn style<'a>(value: *const TypstStyle) -> Result<PathStyle<'a>, Error> {
+    let value = unsafe { required(value, "path style")? };
+    if value.flags & !(TYPST_STYLE_FILL | TYPST_STYLE_STROKE) != 0 {
+        return Err(Error::unsupported("unknown path style flags"));
+    }
+    let stroke = if value.flags & TYPST_STYLE_STROKE != 0 {
+        Some(StrokeStyle {
+            color: value.stroke,
+            width_pt: value.stroke_width_pt,
+            line_cap: value.line_cap,
+            line_join: value.line_join,
+            miter_limit: value.miter_limit,
+            dashes: unsafe { values(value.dashes, value.dash_count, "stroke dashes")? },
+            dash_phase_pt: value.dash_phase_pt,
+        })
+    } else {
+        None
+    };
+    Ok(PathStyle {
+        fill: (value.flags & TYPST_STYLE_FILL != 0).then_some(value.fill),
+        fill_rule: value.fill_rule,
+        stroke,
+    })
+}
+
+/// Copies native scene commands and retains referenced layouts/nested scenes.
+///
+/// # Safety
+/// A non-null `config`, its declared prefix, items, paths, styles, dash arrays,
+/// clips and option views must follow the module pointer contract. Referenced
+/// layout/scene handles must be live and originate from this library. `out` must
+/// be a non-null writable scene slot; `diagnostics` is optional. Release both
+/// returned owners separately; the scene may outlive its input handles/views.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_create(
+    config: *const TypstSceneOptions,
+    out: *mut *mut TypstScene,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let config: TypstSceneOptions = options(config)?;
+            if config.flags != 0 {
+                return Err(Error::unsupported("unknown scene flags"));
+            }
+            let commands = values(config.items, config.item_count, "scene items")?
+                .iter()
+                .map(|item| {
+                    if item.reserved != 0 {
+                        return Err(Error::invalid("scene item reserved field must be zero"));
+                    }
+                    let content = match item.kind {
+                        TYPST_ITEM_PATH if item.layout.is_null() && item.scene.is_null() => {
+                            SceneContent::Path {
+                                segments: path(item.path)?,
+                                style: style(item.style)?,
+                            }
+                        }
+                        TYPST_ITEM_LAYOUT
+                            if item.path.is_null()
+                                && item.scene.is_null()
+                                && item.style.is_null() =>
+                        {
+                            SceneContent::Layout(
+                                required(item.layout, "item layout")?.inner.clone(),
+                            )
+                        }
+                        TYPST_ITEM_SCENE
+                            if item.path.is_null()
+                                && item.layout.is_null()
+                                && item.style.is_null() =>
+                        {
+                            SceneContent::Scene(required(item.scene, "nested scene")?.inner.clone())
+                        }
+                        _ => {
+                            return Err(Error::invalid(
+                                "scene item must select one supported content kind",
+                            ))
+                        }
+                    };
+                    let item_options: TypstSceneItemOptions = options(item.options)?;
+                    if item_options.flags & !TYPST_SCENE_ITEM_ISOLATE_TRANSFORM != 0 {
+                        return Err(Error::unsupported("unknown scene item flags"));
+                    }
+                    let tag = text(item_options.tag, "scene item tag")?;
+                    Ok(SceneCommand {
+                        content,
+                        transform: item.transform,
+                        clip: if item.clip.is_null() {
+                            None
+                        } else {
+                            Some(path(item.clip)?)
+                        },
+                        tag: (!tag.is_empty()).then(|| tag.to_owned()),
+                        isolate_transform: item_options.flags & TYPST_SCENE_ITEM_ISOLATE_TRANSFORM
+                            != 0,
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let scene = crate::scene::Scene::new(config.width_pt, config.height_pt, commands)?;
+            out.write(owned(TypstScene {
+                inner: Arc::new(scene),
+            }));
+            Ok(Report::default())
+        })
+    }
+}
+/// Reads scene dimensions and baseline.
+///
+/// # Safety
+/// `scene` must be live and `out` must point to one aligned writable
+/// `TypstMetrics`, disjoint from the scene, for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_metrics(
+    scene: *const TypstScene,
+    out: *mut TypstMetrics,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "metrics output")?;
+            out.write(TypstMetrics::default());
+            let scene = required(scene, "scene")?;
+            out.write(metrics(&scene.inner.frame));
+            Ok(Report::default())
+        })
+    }
+}
+/// Exports a scene into an independently owned SVG buffer.
+///
+/// # Safety
+/// `scene` must be live. `out` must be a non-null writable buffer slot, and the
+/// optional diagnostic slot must follow the module pointer contract. Release
+/// returned buffer and diagnostic owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_export_svg(
+    scene: *const TypstScene,
+    out: *mut *mut TypstBuffer,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let scene = required(scene, "scene")?;
+            let page = crate::export::page_from_frame(scene.inner.frame.clone());
+            let bytes = typst_svg::svg(&page, &typst_svg::SvgOptions::default()).into_bytes();
+            out.write(owned(TypstBuffer { inner: bytes }));
+            Ok(Report::default())
+        })
+    }
+}
+/// Exports a scene into an independently owned PDF buffer.
+///
+/// # Safety
+/// `scene` must be live. A non-null `config` and its nested standard-name view
+/// must follow the module options contract. `out` must be a non-null writable
+/// buffer slot; `diagnostics` is optional. Release both returned owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_export_pdf(
+    scene: *const TypstScene,
+    config: *const TypstPdfOptions,
+    out: *mut *mut TypstBuffer,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let scene = required(scene, "scene")?;
+            let bytes = crate::export::pdf(
+                &crate::export::from_frame(&scene.inner.frame),
+                pdf_standard(config)?,
+            )?;
+            out.write(owned(TypstBuffer { inner: bytes }));
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Extracts optional editable outlines into an independently owned object.
+///
+/// # Safety
+/// `layout` must be live. `out` must be a non-null writable outline slot, and the
+/// optional diagnostic slot must follow the module pointer contract. Release
+/// the returned outline and diagnostic owners separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_outline(
+    layout: *const TypstLayout,
+    out: *mut *mut TypstOutline,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let layout = required(layout, "layout")?;
+            let outline = crate::outline::extract(&layout.inner)?;
+            out.write(owned(TypstOutline { inner: outline }));
+            Ok(Report::default())
+        })
+    }
+}
+/// Borrows the outline's immutable path, segment and dash arrays.
+///
+/// # Safety
+/// `outline` must be live and `out` must point to aligned writable storage for
+/// one `TypstOutlineView`, disjoint from the outline. Keep an outline reference
+/// alive for every access to the returned views; do not mutate or free them.
+#[no_mangle]
+pub unsafe extern "C" fn typst_outline_view(
+    outline: *const TypstOutline,
+    out: *mut TypstOutlineView,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "outline output")?;
+            out.write(TypstOutlineView {
+                paths: ptr::null(),
+                path_count: 0,
+                segments: ptr::null(),
+                segment_count: 0,
+                dashes: ptr::null(),
+                dash_count: 0,
+                run_count: 0,
+            });
+            let outline = required(outline, "outline")?;
+            out.write(TypstOutlineView {
+                paths: outline.inner.paths.as_ptr(),
+                path_count: outline.inner.paths.len(),
+                segments: outline.inner.segments.as_ptr(),
+                segment_count: outline.inner.segments.len(),
+                dashes: outline.inner.dashes.as_ptr(),
+                dash_count: outline.inner.dashes.len(),
+                run_count: outline.inner.run_count,
+            });
+            Ok(Report::default())
+        })
+    }
+}
+
+/// The view borrows the buffer and remains valid until its last release.
+///
+/// # Safety
+/// A non-null `buffer` must be a live buffer from this library. Keep an owned
+/// reference alive while reading the immutable byte view; do not free its data.
+/// A null buffer returns an empty view.
+#[no_mangle]
+pub unsafe extern "C" fn typst_buffer_data(buffer: *const TypstBuffer) -> TypstBytes {
+    if buffer.is_null() {
+        TypstBytes::default()
+    } else {
+        let buffer = unsafe { &*buffer };
+        TypstBytes {
+            data: buffer.inner.as_ptr(),
+            len: buffer.inner.len(),
+        }
+    }
+}
+/// Returns the number of primary diagnostics, or zero for a null report.
+///
+/// # Safety
+/// A non-null `diagnostics` must be a live report from this library, with an
+/// owned reference kept alive throughout the call.
+#[no_mangle]
+pub unsafe extern "C" fn typst_diagnostics_count(diagnostics: *const TypstDiagnostics) -> usize {
+    if diagnostics.is_null() {
+        0
+    } else {
+        let diagnostics = unsafe { &*diagnostics };
+        diagnostics.inner.entries.len()
+    }
+}
+/// Borrows a primary diagnostic; out-of-range indices return an error.
+///
+/// # Safety
+/// `diagnostics` must be live and `out` must point to aligned writable storage
+/// for one `TypstDiagnosticView`, disjoint from the report. Returned strings
+/// remain borrowed: keep the report alive and do not mutate or free their data.
+#[no_mangle]
+pub unsafe extern "C" fn typst_diagnostics_get(
+    diagnostics: *const TypstDiagnostics,
+    index: usize,
+    out: *mut TypstDiagnosticView,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "diagnostic output")?;
+            out.write(TypstDiagnosticView::default());
+            let diagnostics = required(diagnostics, "diagnostics")?;
+            let entry = diagnostics
+                .inner
+                .entries
+                .get(index)
+                .ok_or_else(|| Error::range("diagnostic index is out of range"))?;
+            out.write(entry.view());
+            Ok(Report::default())
+        })
+    }
+}
+/// Borrows a diagnostic hint or trace note; invalid indices return an error.
+///
+/// # Safety
+/// `diagnostics` must be live and `out` must point to aligned writable storage
+/// for one `TypstDiagnosticView`, disjoint from the report. Returned strings
+/// remain borrowed: keep the report alive and do not mutate or free their data.
+#[no_mangle]
+pub unsafe extern "C" fn typst_diagnostics_get_note(
+    diagnostics: *const TypstDiagnostics,
+    index: usize,
+    note: usize,
+    out: *mut TypstDiagnosticView,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "note output")?;
+            out.write(TypstDiagnosticView::default());
+            let diagnostics = required(diagnostics, "diagnostics")?;
+            let entry = diagnostics
+                .inner
+                .entries
+                .get(index)
+                .and_then(|entry| entry.notes.get(note))
+                .ok_or_else(|| Error::range("diagnostic note index is out of range"))?;
+            out.write(entry.view());
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Evict upstream process-wide memoization entries older than max_age epochs.
+/// This does not release live layouts, scenes, fonts, documents or buffers.
+#[no_mangle]
+pub extern "C" fn typst_cache_evict(max_age: u32) -> TypstStatus {
+    match catch_unwind(|| comemo::evict(max_age as usize)) {
+        Ok(()) => TYPST_OK,
+        Err(payload) => {
+            discard_panic(payload);
+            TYPST_PANIC
+        }
+    }
+}
+
+/// Acquires one additional context reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live context from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_retain(value: *const TypstContext) {
+    unsafe { retain(value) }
+}
+/// Releases one owned context reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a context reference owned by the caller from this
+/// library. This consumes that reference; do not reuse it without another owner.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_release(value: *const TypstContext) {
+    unsafe { release(value) }
+}
+/// Acquires one additional layout reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live layout from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_retain(value: *const TypstLayout) {
+    unsafe { retain(value) }
+}
+/// Releases one owned layout reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a layout reference owned by the caller from this
+/// library. This consumes that reference; keep another owner for any live views.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_release(value: *const TypstLayout) {
+    unsafe { release(value) }
+}
+/// Acquires one additional document reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live document from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_document_retain(value: *const TypstDocument) {
+    unsafe { retain(value) }
+}
+/// Releases one owned document reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a document reference owned by the caller from this
+/// library. This consumes that reference; do not reuse it without another owner.
+#[no_mangle]
+pub unsafe extern "C" fn typst_document_release(value: *const TypstDocument) {
+    unsafe { release(value) }
+}
+/// Acquires one additional scene reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live scene from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_retain(value: *const TypstScene) {
+    unsafe { retain(value) }
+}
+/// Releases one owned scene reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a scene reference owned by the caller from this
+/// library. This consumes that reference; do not reuse it without another owner.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_release(value: *const TypstScene) {
+    unsafe { release(value) }
+}
+/// Acquires one additional outline reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live outline from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_outline_retain(value: *const TypstOutline) {
+    unsafe { retain(value) }
+}
+/// Releases one owned outline reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be an outline reference owned by the caller from this
+/// library. This consumes that reference; keep another owner for any live views.
+#[no_mangle]
+pub unsafe extern "C" fn typst_outline_release(value: *const TypstOutline) {
+    unsafe { release(value) }
+}
+/// Acquires one additional buffer reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live buffer from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_buffer_retain(value: *const TypstBuffer) {
+    unsafe { retain(value) }
+}
+/// Releases one owned buffer reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a buffer reference owned by the caller from this
+/// library. This consumes that reference; keep another owner for any live views.
+#[no_mangle]
+pub unsafe extern "C" fn typst_buffer_release(value: *const TypstBuffer) {
+    unsafe { release(value) }
+}
+/// Acquires one additional diagnostic report reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live report from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_diagnostics_retain(value: *const TypstDiagnostics) {
+    unsafe { retain(value) }
+}
+/// Releases one owned diagnostic report reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a report reference owned by the caller from this
+/// library. This consumes that reference; keep another owner for any live views.
+#[no_mangle]
+pub unsafe extern "C" fn typst_diagnostics_release(value: *const TypstDiagnostics) {
+    unsafe { release(value) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layouts_and_diagnostics_outlive_borrowed_request_text() {
+        unsafe {
+            let mut context = ptr::null_mut();
+            assert_eq!(
+                typst_context_create(ptr::null(), &mut context, ptr::null_mut()),
+                TYPST_OK
+            );
+            let results = {
+                let sources = [String::from("#title"), String::from("#missing_name")];
+                let names = [String::from("good.typ"), String::from("bad.typ")];
+                let setup = String::from("let title = [Retained Ω]");
+                let setup_name = String::from("shared-setup.typ");
+                let options = TypstLayoutOptions {
+                    setup_code: TypstStr::view(&setup),
+                    setup_source_name: TypstStr::view(&setup_name),
+                    ..Default::default()
+                };
+                let inputs = std::array::from_fn::<_, 2, _>(|index| TypstLayoutRequest {
+                    source: TypstStr::view(&sources[index]),
+                    source_name: TypstStr::view(&names[index]),
+                    options: &options,
+                });
+                let mut results = [TypstLayoutResult::default(); 2];
+                assert_eq!(
+                    typst_context_layout_many(
+                        context,
+                        inputs.as_ptr(),
+                        inputs.len(),
+                        results.as_mut_ptr(),
+                        ptr::null_mut(),
+                    ),
+                    TYPST_OK
+                );
+                results
+            };
+            typst_context_release(context);
+
+            assert_eq!(results[0].status, TYPST_OK);
+            assert_eq!(results[1].status, TYPST_COMPILE_FAILED);
+            let mut metrics = TypstMetrics::default();
+            assert_eq!(
+                typst_layout_metrics(results[0].layout, &mut metrics),
+                TYPST_OK
+            );
+            assert!(metrics.width_pt > 0.0);
+            let mut svg = ptr::null_mut();
+            assert_eq!(
+                typst_layout_export_svg(results[0].layout, &mut svg, ptr::null_mut()),
+                TYPST_OK
+            );
+            assert!((*svg).inner.starts_with(b"<svg"));
+            assert!((*results[1].diagnostics)
+                .inner
+                .entries
+                .iter()
+                .any(|entry| entry.source_name == "/bad.typ"
+                    && entry.message.contains("missing_name")
+                    && entry.request_index == 1));
+            typst_buffer_release(svg);
+            for result in results {
+                typst_layout_release(result.layout);
+                typst_diagnostics_release(result.diagnostics);
+            }
+        }
+    }
+
+    #[test]
+    fn native_scene_owns_path_clip_and_dash_inputs_after_create_returns() {
+        unsafe {
+            let (scene, before) = {
+                let mut segments = vec![
+                    TypstPathSegment {
+                        kind: TYPST_SEGMENT_MOVE,
+                        p1: TypstPoint { x: 2.0, y: 3.0 },
+                        ..Default::default()
+                    },
+                    TypstPathSegment {
+                        kind: TYPST_SEGMENT_CUBIC,
+                        p1: TypstPoint { x: 8.0, y: 1.0 },
+                        p2: TypstPoint { x: 15.0, y: 21.0 },
+                        p3: TypstPoint { x: 25.0, y: 13.0 },
+                        ..Default::default()
+                    },
+                ];
+                let mut clip_segments = vec![
+                    TypstPathSegment {
+                        kind: TYPST_SEGMENT_MOVE,
+                        ..Default::default()
+                    },
+                    TypstPathSegment {
+                        kind: TYPST_SEGMENT_LINE,
+                        p1: TypstPoint { x: 30.0, y: 0.0 },
+                        ..Default::default()
+                    },
+                    TypstPathSegment {
+                        kind: TYPST_SEGMENT_LINE,
+                        p1: TypstPoint { x: 30.0, y: 25.0 },
+                        ..Default::default()
+                    },
+                    TypstPathSegment {
+                        kind: TYPST_SEGMENT_CLOSE,
+                        ..Default::default()
+                    },
+                ];
+                let mut dashes = vec![3.0, 1.0];
+                let path = TypstPath {
+                    segments: segments.as_ptr(),
+                    segment_count: segments.len(),
+                };
+                let clip = TypstPath {
+                    segments: clip_segments.as_ptr(),
+                    segment_count: clip_segments.len(),
+                };
+                let style = TypstStyle {
+                    flags: TYPST_STYLE_STROKE,
+                    fill_rule: TYPST_FILL_NONZERO,
+                    fill: TypstColor::default(),
+                    stroke: TypstColor {
+                        r: 0.1,
+                        g: 0.2,
+                        b: 0.3,
+                        a: 1.0,
+                    },
+                    stroke_width_pt: 2.5,
+                    line_cap: TYPST_CAP_ROUND,
+                    line_join: TYPST_JOIN_BEVEL,
+                    miter_limit: 7.0,
+                    dashes: dashes.as_ptr(),
+                    dash_count: dashes.len(),
+                    dash_phase_pt: 0.5,
+                };
+                let item = TypstSceneItem {
+                    kind: TYPST_ITEM_PATH,
+                    reserved: 0,
+                    transform: TypstTransform::default(),
+                    path: &path,
+                    style: &style,
+                    layout: ptr::null(),
+                    scene: ptr::null(),
+                    clip: &clip,
+                    options: ptr::null(),
+                };
+                let options = TypstSceneOptions {
+                    width_pt: 50.0,
+                    height_pt: 30.0,
+                    items: &item,
+                    item_count: 1,
+                    ..Default::default()
+                };
+                let mut scene = ptr::null_mut();
+                assert_eq!(
+                    typst_scene_create(&options, &mut scene, ptr::null_mut()),
+                    TYPST_OK
+                );
+                let mut before = ptr::null_mut();
+                assert_eq!(
+                    typst_scene_export_svg(scene, &mut before, ptr::null_mut()),
+                    TYPST_OK
+                );
+
+                segments.fill(TypstPathSegment::default());
+                clip_segments.fill(TypstPathSegment::default());
+                dashes.fill(f64::NAN);
+                // All caller-owned arrays and input records drop at this boundary.
+                (scene, before)
+            };
+            let mut after = ptr::null_mut();
+            assert_eq!(
+                typst_scene_export_svg(scene, &mut after, ptr::null_mut()),
+                TYPST_OK
+            );
+            assert_eq!((*before).inner, (*after).inner);
+            assert!((*after).inner.starts_with(b"<svg"));
+            for expected in [b"stroke-dasharray".as_slice(), b"clip-path".as_slice()] {
+                assert!((*after)
+                    .inner
+                    .windows(expected.len())
+                    .any(|part| part == expected));
+            }
+            let mut pdf = ptr::null_mut();
+            assert_eq!(
+                typst_scene_export_pdf(scene, ptr::null(), &mut pdf, ptr::null_mut()),
+                TYPST_OK
+            );
+            assert!((*pdf).inner.starts_with(b"%PDF-"));
+            typst_buffer_release(before);
+            typst_buffer_release(after);
+            typst_buffer_release(pdf);
+            typst_scene_release(scene);
+        }
+    }
+
+    #[test]
+    fn panic_stays_inside_the_ffi_call_and_has_an_owned_diagnostic() {
+        let mut diagnostic = ptr::null_mut();
+        let status = unsafe {
+            call(&mut diagnostic, || {
+                panic!("panic payload with unicode Ω and NUL \0")
+            })
+        };
+        assert_eq!(status, TYPST_PANIC);
+        assert!(!diagnostic.is_null());
+        let owner = unsafe { &*diagnostic };
+        let entry = &owner.inner.entries[0];
+        assert!(entry.message.contains("Ω and NUL \0"));
+        unsafe {
+            typst_diagnostics_release(diagnostic);
+        }
+    }
+    #[test]
+    fn invalid_views_and_partial_options_are_rejected_before_borrowing() {
+        assert!(unsafe { values::<u64>(ptr::null(), 1, "test") }.is_err());
+        assert!(unsafe { values::<u64>(ptr::dangling(), usize::MAX, "test") }.is_err());
+        let header = [9u32, 0];
+        assert!(unsafe { options::<TypstContextOptions>(header.as_ptr().cast()) }.is_err());
+        assert!(unsafe {
+            text(
+                TypstStr {
+                    data: [0xff].as_ptr(),
+                    len: 1,
+                },
+                "test",
+            )
+        }
+        .is_err());
+    }
+}

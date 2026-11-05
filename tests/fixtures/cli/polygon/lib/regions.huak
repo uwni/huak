@@ -1,0 +1,6 @@
+import paint.{rectangle, region_difference};export base:=rectangle((0,0),10mm,10mm)
+export overlap:=rectangle((5mm,0),10mm,10mm)
+fn notch(a:path,b:path)->path
+ return region_difference(a,b,0.001mm,"nonzero")
+end
+export notch

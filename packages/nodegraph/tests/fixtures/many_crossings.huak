@@ -1,0 +1,7 @@
+// Exceeds the picture group-depth limit if successive cuts are nested.
+import "../../nodegraph.huak".*
+items := [edge(absolute((0pt, 0pt)), absolute((400pt, 0pt)), {"head": "none", "thickness": 5pt})]
+for i in 1:130 do
+    items += [edge(absolute((i*3pt, -10pt)), absolute((i*3pt, 10pt)), {"head": "none", "crossing": true, "crossing_width": 2pt})]
+end
+default diagram(items)

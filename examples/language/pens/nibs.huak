@@ -1,0 +1,62 @@
+import drawing.drawing
+import paint.{rgb, pen, pencircle, pensquare, makepen, makepath, translate, scale, rotate, rectangle, transformed, draw, fill, label, picture}
+# Five physical nibs, one unchanged Hobby centerline.
+setup_typst {
+    set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#273449"))
+}
+
+export plate := picture(180mm, 150mm)
+default plate
+paper := rgb(0.98, 0.985, 0.995)
+ink := rgb(0.13, 0.35, 0.69)
+guide := rgb(0.58, 0.65, 0.75)
+
+title := typ[
+    #text(size: 20pt, weight: 700)[Five nibs, one curve]
+]
+subtitle := typ[
+    The nib changes; the centerline and its coordinates stay the same.
+]
+
+curve := (0mm, 0mm) ~~ (20mm, 7mm) ~~ (45mm, -6mm) ~~ (80mm, 2mm)
+
+fn sample(center: path, brush: pen, caption: text, row: length) -> object
+    result := picture()
+    drawing result do
+        +label(caption, (10mm, row + 4mm))
+        +fill(makepath(brush), ink, translate((62mm, row)))
+        +draw(center, brush, translate((84mm, row)))
+        +draw(center, pen(guide, 0.17mm, "round", "round", 4, [1mm, 1mm]), translate((84mm, row)))
+    end
+    return result
+end
+
+round_caption := typ[
+    *Circle* \ 4 mm diameter
+]
+ellipse_caption := typ[
+    *Flat ellipse* \ 8 × 1.8 mm, 35°
+]
+square_caption := typ[
+    *Square* \ 4 × 4 mm
+]
+diamond_caption := typ[
+    *Rotated square* \ 4 × 4 mm, 45°
+]
+triangle_caption := typ[
+    *Convex triangle* \ 6 × 5 mm
+]
+
+flat := pencircle(8mm, ink).transformed(scale(1, 0.225)).transformed(rotate(35deg))
+diamond := pensquare(4mm, ink).transformed(rotate(45deg))
+triangle := makepen((-3mm, -1.7mm) -- (3mm, -1.7mm) -- (0mm, 3.3mm) -- cycle, ink)
+drawing plate do
+    +fill(rectangle((0mm, 0mm), 180mm, 150mm), paper)
+    +label(title, (10mm, 137mm))
+    +label(subtitle, (10mm, 130mm))
+    +sample(curve, pencircle(4mm, ink), round_caption, 111mm)
+    +sample(curve, flat, ellipse_caption, 88mm)
+    +sample(curve, pensquare(4mm, ink), square_caption, 65mm)
+    +sample(curve, diamond, diamond_caption, 42mm)
+    +sample(curve, triangle, triangle_caption, 19mm)
+end

@@ -1,0 +1,19 @@
+import paint.{point_at, width, height, assert, at}
+import math.{abs}
+import "../../nodegraph.huak".*
+import assertions.assert
+
+low := node("low", absolute((0pt, 0pt)), typ[L], {"width": 40pt, "height": 20pt, "snap": 1})
+high := node("high", absolute((0pt, 0pt)), typ[H], {"width": 80pt, "height": 20pt, "snap": 2})
+e := edge(absolute((-100pt, 0pt)), absolute((100pt, 0pt)), {"name": "e"})
+g := geometry([low, high, e])
+p := route(g, "e")
+assert(abs(point_at(p, 0).x) > 30pt-0.01pt, "higher snap priority should select the wider node")
+assert(abs(point_at(p, len(p)).x) > 30pt-0.01pt, "higher snap priority should select the wider node at the end")
+
+near := node("near", absolute((0pt, 0pt)), typ[N], {"width": 100pt, "height": 20pt, "snap": 1})
+off := node("off", absolute((0pt, 0pt)), typ[O], {"width": 120pt, "height": 20pt, "snap": false})
+g = geometry([near, off, e])
+p = route(g, "e")
+assert(abs(point_at(p, 0).x) < 60pt, "snap false must be ignored; the enabled node snaps")
+print("snap priority checks passed")

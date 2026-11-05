@@ -1,0 +1,118 @@
+{
+  "name": "huak",
+  "displayName": "Huak",
+  "description": "Huak syntax highlighting, native language tools and live SVG preview.",
+  "publisher": "huak",
+  "version": "0.2.7",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:huak",
+    "onCommand:huak.restartLanguageServer",
+    "onCommand:huak.preview"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "huak",
+        "aliases": [
+          "Huak",
+          "huak"
+        ],
+        "extensions": [
+          ".huak"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "huak",
+        "scopeName": "source.huak",
+        "path": "./syntaxes/huak.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.typst": "typst",
+          "meta.embedded.block.typst-code": "typst"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "huak.restartLanguageServer",
+        "title": "Huak: Restart Language Server"
+      },
+      {
+        "command": "huak.preview",
+        "title": "Huak: Render / Preview",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "huak.selectPreviewOutput",
+        "title": "Huak: Choose Preview Output"
+      },
+      {
+        "command": "huak.stopPreview",
+        "title": "Huak: Stop Preview"
+      }
+    ],
+    "configuration": {
+      "title": "Huak",
+      "properties": {
+        "huak.serverPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to huak-lsp. Empty finds zig-out/bin/huak-lsp in the workspace, then huak-lsp on PATH."
+        },
+        "huak.libtypstPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to the native libtypst library. Empty finds an existing workspace Debug or Release build."
+        },
+        "huak.executablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to huak. Empty finds zig-out/bin/huak in the workspace, then huak on PATH."
+        },
+        "huak.preview.parameters": {
+          "type": "object",
+          "default": {},
+          "scope": "resource",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "description": "Script parameters passed to huak watch as --param. Restart the preview after changing these values."
+        }
+      }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "huak.preview",
+          "when": "resourceLangId == huak",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "11.0.0"
+  }
+}

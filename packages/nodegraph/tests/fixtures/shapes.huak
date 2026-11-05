@@ -1,0 +1,30 @@
+import paint.{circle, width, height, assert, at}
+import math.{abs}
+import "../../nodegraph.huak".*
+import assertions.assert
+
+shapes := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
+for i in 0:len(shapes)-1 do
+    kind:string := shapes[i]
+    node_kind := node("shape", absolute((0pt, 0pt)), typ[X], {"shape": kind, "width": 40pt, "height": 24pt})
+    g := geometry([node_kind])
+    center:pair := anchor(g, "shape", "center")
+    assert(abs(center.x) < 0.001pt and abs(center.y) < 0.001pt, "shape must resolve at its center")
+end
+
+para := node("para", absolute((0pt, 0pt)), typ[X], {"shape": "parallelogram", "width": 40pt, "height": 20pt, "shape_options": {"angle": 35deg, "fit": 1}})
+g := geometry([para])
+assert(anchor(g, "para", "east").x > 20pt, "slant must widen the east anchor")
+
+up := node("up", absolute((0pt, 0pt)), typ[X], {"shape": "triangle", "width": 40pt, "height": 20pt})
+down := node("down", absolute((0pt, 0pt)), typ[X], {"shape": "triangle", "width": 40pt, "height": 20pt, "shape_options": {"dir": "bottom"}})
+g = geometry([up])
+up_north := anchor(g, "up", "north").y
+g = geometry([down])
+down_north := anchor(g, "down", "north").y
+assert(abs(up_north-down_north) > 1pt, "triangle dir must change the outline")
+
+chev := node("chev", absolute((0pt, 0pt)), typ[X], {"shape": "chevron", "width": 40pt, "height": 20pt, "shape_options": {"dir": "top", "fit": 1}})
+g = geometry([chev])
+assert(anchor(g, "chev", "north").y > 10pt, "chevron dir must point north")
+print("shape checks passed")

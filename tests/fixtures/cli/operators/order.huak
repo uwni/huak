@@ -1,0 +1,14 @@
+precedence transform
+below addition
+above path
+associativity left
+end
+mixfix _ combine _ in transform
+fn mark(n:int)->int
+print(n)
+return n
+end
+fn combine(x:int,y:int)->int
+return x*10+y
+end
+print(mark(1) combine mark(2) combine mark(3))

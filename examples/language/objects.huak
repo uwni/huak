@@ -1,0 +1,23 @@
+import paint.*
+
+export plate := picture(100mm, 60mm)
+default plate
+drawing plate do
+    content := picture(transform: translate((10mm, 10mm))); +content
+    drawing content do
+        +fill circle((10mm, 10mm), 7mm)
+        +typ[Native text] at (0mm, 24mm)
+    end
+    +copy(content)
+end
+
+content := plate.children[0]
+second := plate.children[1]
+disc := content.children[0]
+caption := content.children[1]
+assert(disc.kind == "path" and caption.kind == "text")
+assert(content.children == [disc, caption])
+object.style(disc, fill: rgb(0.2, 0.4, 0.8))
+object.transform(second, translate((45mm, 0mm)))
+object.style(second.children[0], fill: rgb(0.8, 0.3, 0.2))
+assert(disc != second.children[0])

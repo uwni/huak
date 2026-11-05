@@ -1,0 +1,61 @@
+// Actual filled regions, including pen strokes, glyphs and a shape's hole.
+// Export clipped alone to inspect transparent cuts against any background.
+import paint.*
+
+setup_typst { set text(size: 11pt) }
+cutter := picture with width 54mm height 55mm
+nib := transformed(pensquare(2.2mm), rotate(25deg))
+ink := pen(rgb(0.75, 0.14, 0.12), 1mm, "round", "round", 4, [4mm, 1.5mm], 1mm, nib)
+curve := (5mm, 10mm) ~~ (18mm, 28mm) ~~ (40mm, 10mm)
+ring := compound([
+    circle with center (38mm, 29mm) radius 8mm,
+    reverse(circle with center (38mm, 29mm) radius 4mm)
+])
+drawing cutter do
+    +draw curve with ink
+    +ring filled rgb(0.1, 0.5, 0.25, 0.7)
+    +typ[Ω $x^2 + y^2$] at (4mm, 44mm)
+end
+
+// Text becomes editable glyph curves; existing curves, pens and clips remain.
+// Region/cut computes coverage only when requested.
+export contours := picture with width 54mm height 55mm
+drawing contours do
+    +outlines(cutter)
+end
+
+source := picture with width 54mm height 55mm
+grid_pen := pen(rgb(0.1, 0.4, 0.8, 0.65), 0.4mm)
+drawing source do
+    +(rectangle with origin (0mm, 0mm) width 54mm height 55mm) filled rgb(0.25, 0.55, 0.9, 0.35)
+    for x in 2mm:5mm:52mm do
+        +draw ((x, 0mm) -- (x, 55mm)) with grid_pen
+    end
+    for y in 2mm:5mm:52mm do
+        +draw ((0mm, y) -- (54mm, y)) with grid_pen
+    end
+end
+export clipped := picture with width 54mm height 55mm
+drawing clipped do
+    +cut(source, cutter, 0.02mm)
+end
+export source, cutter
+
+export plate := picture with width 180mm height 75mm
+default plate
+drawing plate do
+    +(rectangle with origin (0mm, 0mm) width 180mm height 75mm) filled rgb(0.96, 0.88, 0.6)
+    for row in 0:10 do
+        for column in 0:35 do
+            if (row + column) % 2 == 0 then
+                +(rectangle with origin (column * 5mm, row * 5mm + 5mm) width 5mm height 5mm) filled rgb(0.84, 0.71, 0.35)
+            end
+        end
+    end
+    +cutter shifted (5mm, 5mm)
+    +contours shifted (65mm, 5mm)
+    +clipped shifted (125mm, 5mm)
+    +typ[Native paints] at (6mm, 68mm)
+    +typ[Editable vector curves] at (66mm, 68mm)
+    +typ[Transparent picture cut] at (126mm, 68mm)
+end

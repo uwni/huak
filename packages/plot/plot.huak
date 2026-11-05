@@ -1,0 +1,88 @@
+// Independent plotting package. Call forms are ordinary exported mixfix roles.
+import "plot/model.huak".{Figure,Axis,Layer,Marker,figure,axis,lines,scatter,styled,named,marked,sized,configure,insert,link_x,link_y,side,remap,on_axes,arrow,arrowed,breaks}
+import "plot/markers.huak".{marker,custom_marker}
+import "plot/render.huak".render
+import "plot/statistics.huak".{bar,hist,errorbars,band,area,boxplot,hline,vline,annotate}
+import "plot/heatmap.huak".{heatmap,colormap}
+export heatmap,colormap
+export side,remap,on_axes,arrow,arrowed,breaks
+export bar,hist,errorbars,band,area,boxplot,hline,vline,annotate
+export Figure,Axis,Layer,Marker,figure,axis,lines,scatter,styled,named,marked,sized,configure,insert,link_x,link_y,marker,custom_marker,render
+
+precedence attributes
+    below logical_or
+    associativity left
+end
+precedence insertion
+    below attributes
+end
+mixfix figure with width _ height _ in unary
+mixfix axis of _ at _ in unary
+mixfix lines x _ y _ in unary
+mixfix scatter x _ y _ in unary
+mixfix bar categories _ values _ in unary
+mixfix hist _ in unary
+mixfix heatmap _ in unary
+mixfix colormap _ in unary
+mixfix errorbars x _ y _ errors _ in unary
+mixfix band x _ lower _ upper _ in unary
+mixfix area x _ y _ in unary
+mixfix boxplot categories _ samples _ in unary
+mixfix hline _ in unary
+mixfix vline _ in unary
+mixfix annotate _ at _ text _ in unary
+mixfix marker _ in unary
+mixfix custom_marker _ in unary
+mixfix _ styled _ in attributes
+mixfix _ named _ in attributes
+mixfix _ marked _ in attributes
+mixfix _ sized _ in attributes
+mixfix _ on_axes x _ y _ in attributes
+mixfix arrow from _ to _ in unary
+mixfix _ arrowed _ in attributes
+mixfix render _ in unary
+mixfix link_x of _ axes _ in unary
+mixfix link_y of _ axes _ in unary
+
+fn set_title(target:Axis, value:text); configure(target,{"title":value}); end
+fn set_xlabel(target:Axis, value:text); configure(target,{"xlabel":value}); end
+fn set_ylabel(target:Axis, value:text); configure(target,{"ylabel":value}); end
+fn set_xscale(target:Axis, value:string); configure(target,{"xscale":value}); end
+fn set_yscale(target:Axis, value:string); configure(target,{"yscale":value}); end
+fn set_xlim(target:Axis, value:list); configure(target,{"xlim":value}); end
+fn set_ylim(target:Axis, value:list); configure(target,{"ylim":value}); end
+fn set_legend(target:Axis, value:string); configure(target,{"legend":value}); end
+fn set_colorbar(target:Axis, value:string); configure(target,{"colorbar":value}); end
+
+export expand_block plotting(target:Axis)
+    add := insert.with(target:target)
+    settings := configure.with(ax:target)
+    side := side.with(ax:target)
+    remap := remap.with(ax:target)
+    breaks := breaks.with(ax:target)
+    title := set_title.with(target:target)
+    xlabel := set_xlabel.with(target:target)
+    ylabel := set_ylabel.with(target:target)
+    xscale := set_xscale.with(target:target)
+    yscale := set_yscale.with(target:target)
+    xlim := set_xlim.with(target:target)
+    ylim := set_ylim.with(target:target)
+    legend := set_legend.with(target:target)
+    colorbar := set_colorbar.with(target:target)
+    mixfix add as + _ in insertion
+    mixfix settings _ in logical_or
+    mixfix side _ with _ in logical_or
+    mixfix remap _ ticks _ to _ in logical_or
+    mixfix breaks _ over _ gap _ in logical_or
+    mixfix title _ in logical_or
+    mixfix xlabel _ in logical_or
+    mixfix ylabel _ in logical_or
+    mixfix xscale _ in logical_or
+    mixfix yscale _ in logical_or
+    mixfix xlim _ in logical_or
+    mixfix ylim _ in logical_or
+    mixfix legend _ in logical_or
+    mixfix colorbar _ in logical_or
+    ...
+    return target
+end

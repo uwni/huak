@@ -1,0 +1,23 @@
+import assertions.assert
+precedence subtract_right
+below addition
+above path
+associativity right
+end
+precedence subtract_none
+below addition
+above path
+associativity none
+end
+mixfix _ rightsub _ in subtract_right
+mixfix _ onesub _ in subtract_none
+fn rightsub(a:int,b:int)->int
+return a-b
+end
+fn onesub(a:int,b:int)->int
+return a-b
+end
+assert(20 rightsub 5 rightsub 2==17)
+assert((20 rightsub 5) rightsub 2==13)
+assert((20 onesub 5) onesub 2==13)
+assert(20 onesub (5 onesub 2)==17)

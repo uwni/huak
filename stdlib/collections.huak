@@ -1,0 +1,43 @@
+// Primitive operations remain available in the default builtin prelude.
+export len, copy, dict_contains, dict_remove, keys
+
+export fn get(dictionary:dict, key:string, fallback:any) -> any
+    if dict_contains(dictionary, key) then return dictionary[key] end
+    return fallback
+end
+
+export fn values(dictionary:dict) -> list
+    names := keys(dictionary)
+    result := []
+    for i in 0:len(names)-1 do
+        result += [dictionary[names[i]]]
+    end
+    return result
+end
+
+// Persistent updates copy the outer dictionary and preserve nested references.
+export fn setting(dictionary:dict, key:string, value:any) -> dict
+    result := copy(dictionary)
+    result[key] = value
+    return result
+end
+
+export fn merged(first:dict, second:dict) -> dict
+    result := copy(first)
+    names := keys(second)
+    for i in 0:len(names)-1 do
+        key:string := names[i]
+        result[key] = second[key]
+    end
+    return result
+end
+
+export fn defaults(dictionary:dict, fallback:dict) -> dict
+    result := copy(dictionary)
+    names := keys(fallback)
+    for i in 0:len(names)-1 do
+        key:string := names[i]
+        if not dict_contains(dictionary, key) then result[key] = fallback[key] end
+    end
+    return result
+end

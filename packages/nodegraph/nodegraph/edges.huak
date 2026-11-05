@@ -1,0 +1,179 @@
+import math.{abs, atan2, cos, max, min, norm, pow, sin}
+import geometry.{arclength, intersection_times, point_at, samples_at_length, smooth, trimmed}; import object.{bounds}
+import assertions.assert
+import "options.huak" as opt
+import "layout.huak" as layout
+import "curves.huak" as curves
+import "model.huak" as model
+
+export struct ResolvedEdge
+    name:string
+    first:any
+    last:any
+    options:dict
+    curve:path
+    source_index:int
+    kind:string = "edge"
+end
+
+struct PendingEdge
+    description:model.EdgeDescription
+    source_index:int
+end
+
+fn snap_priority(value:any) -> float
+    if value == true then return 0 end
+    if value == false then return -1000000 end
+    return float(value)
+end
+
+fn snap_time(curve:path, target:any, from_start:bool) -> float
+    hit_times := intersection_times(curve, target.snapping)
+    selected := float(len(curve))
+    if not from_start then selected = 0 end
+    for i in 0:len(hit_times)-1 do
+        time := hit_times[i].x
+        if from_start then selected = min(selected, time) else selected = max(selected, time) end
+    end
+    return selected
+end
+
+fn snapped(curve:path, coordinate:any, objects:layout.Geometry, from_start:bool) -> float
+    endpoint:float := 0
+    if not from_start then endpoint = float(len(curve)) end
+    if coordinate.kind == "named" then
+        target := layout.find(objects, coordinate.name)
+        if target.kind == "edge" or coordinate.anchor != "center" or opt.get(target.options, "snap", true) == false then return endpoint end
+        return snap_time(curve, target, from_start)
+    end
+    // Absolute endpoints also snap to nearby nodes. Highest numeric snap
+    // priority wins; false disables a node.
+    selected := endpoint
+    best_distance := 1e300
+    best_priority := -1e300
+    found := false
+    endpoint_point := point_at(curve, endpoint)
+    for i in 0:len(objects.objects)-1 do
+        target := objects.objects[i]
+        if target.kind != "node" then continue end
+        priority := snap_priority(opt.get(target.options, "snap", true))
+        if priority <= -1000000 then continue end
+        box := bounds(target.snapping)
+        dx := max(0pt, max(box[0].x-endpoint_point.x, endpoint_point.x-box[1].x))
+        dy := max(0pt, max(box[0].y-endpoint_point.y, endpoint_point.y-box[1].y))
+        reach := max(target.size.x, target.size.y)
+        if dx*dx+dy*dy > reach*reach then continue end
+        hit_times := intersection_times(curve, target.snapping)
+        for j in 0:len(hit_times)-1 do
+            time := hit_times[j].x
+            distance := abs(time-endpoint)
+            if not found or distance < best_distance - 1e-12 or (abs(distance-best_distance) <= 1e-12 and priority > best_priority) then
+                selected = time
+                best_distance = distance
+                best_priority = priority
+                found = true
+            end
+        end
+    end
+    return selected
+end
+
+fn defocused(point:pair, coordinate:any, objects:layout.Geometry, angle:angle) -> pair
+    if coordinate.kind != "named" then return point end
+    node := layout.find(objects, coordinate.name)
+    if node.kind == "edge" or coordinate.anchor != "center" or not opt.get(node.options, "snap", true) then return point end
+    defocus:float := opt.get(node.options, "defocus", 0)
+    if defocus == 0 then return point end
+    size:pair := node.size
+    aspect:float := size.x/size.y
+    mu := pow(aspect, defocus)
+    dx := max(0pt, size.x/2*(1-1/mu))*cos(angle)
+    dy := max(0pt, size.y/2*(1-mu))*sin(angle)
+    return point+(dx, dy)
+end
+
+fn route(item:model.EdgeDescription, objects:layout.Geometry, cells:list, axes:list) -> path
+    first := layout.resolve(item.first, objects, cells, axes)
+    last := layout.resolve(item.last, objects, cells, axes)
+    direction:angle := atan2(last.y-first.y, last.x-first.x)
+    first = defocused(first, item.first, objects, direction)
+    last = defocused(last, item.last, objects, direction+180deg)
+    options:dict := item.options
+    via:list := opt.get(options, "via", [])
+    points := [first]
+    for i in 0:len(via)-1 do points += layout.resolve(via[i], objects, cells, axes) end
+    corner:string := opt.get(options, "corner", "none")
+    assert(corner == "none" or corner == "horizontal" or corner == "vertical", "corner must be none, horizontal or vertical")
+    if corner == "horizontal" then points += (last.x, first.y) end
+    if corner == "vertical" then points += (first.x, last.y) end
+    points += last
+    clean := [points[0]]
+    for i in 1:len(points)-1 do
+        if norm(points[i]-clean[len(clean)-1]) > 0pt then clean += points[i] end
+    end
+    kind:string := opt.get(options, "kind", "line")
+    assert(kind == "line" or kind == "poly" or kind == "arc" or kind == "smooth", "unknown edge kind: " + kind)
+    curve := path(first, last)
+    bend:angle := opt.get(options, "bend", 0deg)
+    if len(clean) == 1 then
+        direction:angle := opt.get(options, "loop_angle", 90deg)
+        radius:length := opt.get(options, "loop_size", 24pt)
+        curve = curves.arc(first+(cos(direction), sin(direction))*radius, radius, direction+180deg, 360deg)
+    elseif kind == "smooth" then
+        curve = smooth(clean)
+    elseif len(clean) == 2 and (kind == "arc" or bend != 0deg) then
+        curve = curves.bent(first, last, bend)
+    else
+        curve = curves.rounded_route(clean, opt.get(options, "corner_radius", 0pt))
+    end
+    if opt.has(options, "curve") then curve = opt.get(options, "curve", curve) end
+    shift:length := opt.get(options, "shift", 0pt)
+    curve = curves.parallel_route(curve, shift)
+    if opt.get(options, "snap", true) then
+        start := snapped(curve, item.first, objects, true)
+        stop := snapped(curve, item.last, objects, false)
+        assert(start < stop, "connector is fully enclosed by its nodes")
+        curve = trimmed(curve, start, stop)
+    end
+    dodge:list := opt.get(options, "dodge", [0pt, 0pt])
+    assert(len(dodge) == 2, "dodge requires two lengths")
+    total := arclength(curve)
+    assert(dodge[0] >= 0pt and dodge[1] >= 0pt and dodge[0]+dodge[1] < total, "dodge leaves no visible connector")
+    if dodge[0] > 0pt or dodge[1] > 0pt then
+        ends := samples_at_length(curve, [dodge[0], total-dodge[1]])
+        curve = trimmed(curve, ends[0][3], ends[1][3])
+    end
+    return curve
+end
+
+export fn resolve(items:list, prepared:layout.LayoutResult) -> list
+    objects := layout.Geometry(objects: copy(prepared.geometry.objects), by_name: copy(prepared.geometry.by_name), cells: prepared.cells, axes: prepared.axes)
+    cells:list := prepared.cells
+    axes:list := prepared.axes
+    result := []
+    pending := []
+    for i in 0:len(items)-1 do
+        if items[i].kind == "edge" then pending += [PendingEdge(description: items[i], source_index: i)] end
+    end
+    while len(pending) > 0 do
+        waiting := []
+        for i in 0:len(pending)-1 do
+            item:model.EdgeDescription := pending[i].description
+            complete := layout.ready(item.first, objects) and layout.ready(item.last, objects)
+            via:list := opt.get(item.options, "via", [])
+            for j in 0:len(via)-1 do complete = complete and layout.ready(via[j], objects) end
+            if complete then
+                curve := route(item, objects, cells, axes)
+                resolved := ResolvedEdge(name: item.name, first: item.first, last: item.last, options: item.options, curve: curve, source_index: pending[i].source_index)
+                result += [resolved]
+                if item.name != "" then
+                    objects.objects += [resolved]
+                    objects.by_name[item.name] = resolved
+                end
+            else waiting += [pending[i]] end
+        end
+        assert(len(waiting) < len(pending), "cyclic or unknown edge coordinate dependency")
+        pending = waiting
+    end
+    return result
+end

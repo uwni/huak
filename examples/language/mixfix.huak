@@ -1,0 +1,9 @@
+import paint.*
+
+blue := rgb with red 0.1 green 0.3 blue 0.8
+default drawing picture with width 100mm height 80mm do
+    +draw (circle with center (50mm, 40mm) radius 20mm)
+    +rectangle with origin (10mm, 10mm) width 80mm height 8mm filled blue
+    +draw ((10mm, 65mm) -- (90mm, 65mm)) with (pen with color blue width 0.5mm)
+    +typ[Mixfix drawing] at (35mm, 70mm)
+end

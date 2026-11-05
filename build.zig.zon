@@ -1,0 +1,41 @@
+.{
+    .name = .huak,
+    .version = "0.1.0",
+    .fingerprint = 0x2b6a487d1dce36c8, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .clap = .{
+            .url = "git+https://github.com/Hejsil/zig-clap#05faf3905e8548f5cc269a8836e154065e70128d",
+            .hash = "clap-0.12.0-oBajB4XpAQCF1WRKnD5KOKPsnwwT_NNdAJ7Ww3irYJac",
+        },
+        .xml = .{
+            .url = "git+https://github.com/ianprime0509/zig-xml#4beab29d68ab308af4bd12a4fc4187c24fdad0d6",
+            .hash = "xml-0.2.2-ZTbP35N4AgAN3HBgWmBp_LAQ0MIPKW17GAGMwx4DHGYK",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c?ref=2.0.2#c11030012dc325d446474d17b78c242fd1d622ec",
+            .hash = "translate_c-2.0.2-Q_BUWvBNBwBgPKQJPblip6M7AHNK_IPNPmyv4rSIQMQc",
+        },
+        .csvzero = .{
+            .url = "git+https://github.com/peymanmortazavi/csv-zero.git#6581656637a2b8566005e21291573837771ce8ab",
+            .hash = "csvzero-0.2.0-YQXXvIDIAADbjoPq7oNGPvySMe7-wlvEuSD-0Y_7VwjE",
+        },
+        .browser_wasi = .{
+            .url = "https://registry.npmjs.org/@bjorn3/browser_wasi_shim/-/browser_wasi_shim-0.4.2.tgz",
+            .hash = "N-V-__8AAHu_AQDaW0CefskWwJLhrH4auBErOcDxutWgFLBM",
+        },
+        .monaco = .{
+            .url = "https://registry.npmjs.org/modern-monaco/-/modern-monaco-0.4.2.tgz",
+            .hash = "N-V-__8AAPOcGgF-INV3kNJOKy-naWNAPAcRhrVXTJ2g5Lfr",
+        },
+        .tm_grammars = .{
+            .url = "https://registry.npmjs.org/tm-grammars/-/tm-grammars-1.32.22.tgz",
+            .hash = "N-V-__8AAKwwwwA2DIVnTqkoZPWWbQ83KfR6vtxK7sFZfNB8",
+        },
+        .tm_themes = .{
+            .url = "https://registry.npmjs.org/tm-themes/-/tm-themes-1.12.12.tgz",
+            .hash = "N-V-__8AABGtHQAb-Rh0H2QQ5Qhla4p3_PdBQjaCPzbAl8w9",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "cli", "apps", "editors/vscode/syntaxes/huak.tmLanguage.json", "stdlib", "examples", "bench", "tests", "libtypst/include", "libtypst/src", "libtypst/Cargo.toml", "libtypst/Cargo.lock" },
+}

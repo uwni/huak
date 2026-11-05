@@ -1,0 +1,16 @@
+import "../plot.huak".*
+fig := figure with width 14cm height 9cm
+ax := axis of fig at (0,0)
+point := marker "circle" sized 5pt
+xs := [0,1,2,3,4]
+model := [0,1,0.6,1.4,1.1]
+measured := [0.1,0.9,0.7,1.3,1.2]
+plotting ax do
+    title typ[Measurement and model]
+    xlabel typ[Time $t$]
+    ylabel typ[Amplitude]
+    +lines x xs y model named typ[Model]
+    +scatter x xs y measured marked point named typ[Measured]
+    legend "top-left"
+end
+default render fig

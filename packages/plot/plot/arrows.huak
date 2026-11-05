@@ -1,0 +1,45 @@
+// The shaft and heads use one native pen. Work in page coordinates so scale
+// transforms and the spacing of samples do not stretch the arrowheads.
+import assertions.assert
+import geometry.arclength
+import math.{unit,min}
+import object.{append,draw}
+
+fn head(dst:picture, points:list, index:int, step:int, size:length, ink:pen)
+    tip := points[index]
+    neighbor := index+step
+    while neighbor>=0 and neighbor<len(points) do
+        if points[neighbor]!=tip then
+            forward := unit(tip-points[neighbor])
+            base := tip-forward*size
+            wing := (-forward.y,forward.x)*(size*0.4)
+            append(dst,draw(path([base+wing,tip,base-wing]),ink))
+            return
+        end
+        neighbor = neighbor+step
+    end
+end
+
+export fn visible_ends(ends:string, first:bool, last:bool) -> string
+    if ends=="both" then
+        if first and last then return "both" end
+        if first then return "start" end
+        if last then return "end" end
+        return "none"
+    end
+    if (ends=="start" and not first) or (ends=="end" and not last) then return "none" end
+    return ends
+end
+
+export fn stroke(dst:picture, points:list, ink:pen, ends:string, size:length)
+    assert(ends=="none" or ends=="start" or ends=="end" or ends=="both","unknown arrow ends")
+    assert(size>0pt,"arrow size must be positive")
+    if len(points)<2 then return end
+    shaft := path(points)
+    append(dst,draw(shaft,ink))
+    if ends=="none" then return end
+    extent := min(size,arclength(shaft)/2)
+    if extent==0pt then return end
+    if ends=="start" or ends=="both" then head(dst,points,0,1,extent,ink) end
+    if ends=="end" or ends=="both" then head(dst,points,len(points)-1,-1,extent,ink) end
+end

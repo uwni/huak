@@ -1,0 +1,229 @@
+import paint.{rgb, rotate, apply, rectangle, circle, path, compound, transformed, bent, point_at, arclength, bounds, region, region_difference, fill, label, width, height, picture, object, append, assert, filled, at, shifted}
+import math.{abs, lerp, norm, sin, PI}
+import "../../nodegraph.huak".*
+import "../../nodegraph/options.huak" as options
+import "../../nodegraph/curves.huak" as curves
+import "../../nodegraph/layout.huak" as layout
+import "../../nodegraph/edges.huak" as edges
+import "../../nodegraph/marks.huak" as marks
+import "../../nodegraph/model.huak" as model
+import "../../nodegraph/render.huak" as render
+import assertions.assert
+
+fn near(a:pair, b:pair)
+    assert(norm(a-b) < 0.002pt, "coordinate mismatch")
+end
+
+// Defaults, persistent option updates, and no mutation of source descriptions.
+source := {"width": 40pt}
+changed := options.setting(source, "width", 60pt)
+assert(source["width"] == 40pt and changed["width"] == 60pt)
+merged_options := options.defaults(source, {"width": 90pt, "height": 20pt})
+assert(len(merged_options) == 2 and merged_options["width"] == 40pt and merged_options["height"] == 20pt)
+assert(not options.has({}, "absent"))
+
+// Cell widths are determined by measured text, then spacing is inserted.
+a := node("a", grid(-1, 0), typ[A], {"width": 40pt, "height": 20pt})
+b := node("b", grid(0, 0), typ[B], {"width": 60pt, "height": 20pt})
+g := geometry([a, b], {"spacing": (10pt, 15pt)})
+near(anchor(g, "b")-anchor(g, "a"), (60pt, 0pt))
+near(anchor(g, "a", "east")-anchor(g, "a"), (20pt, 0pt))
+near(anchor(g, "a", "north")-anchor(g, "a"), (0pt, 10pt))
+
+// Fractional cell interpolation, physical coordinates and forward references.
+c := node("c", grid(-0.5, 0), typ[], {"width": 10pt, "height": 10pt})
+d := node("d", relative(named("e"), (10pt, -20pt)), typ[])
+e_node := node("e", absolute((100pt, 50pt)), typ[])
+g = geometry([d, a, b, c, e_node])
+near(anchor(g, "c"), (anchor(g, "a")+anchor(g, "b"))/2)
+near(anchor(g, "d"), (110pt, 30pt))
+mid := node("mid", between(named("a"), named("b"), 0.25), typ[])
+polar_node := node("polar", polar(named("e"), 90deg, 10pt), typ[])
+g = geometry([a, b, e_node, mid, polar_node])
+near(anchor(g, "mid"), lerp(anchor(g, "a"), anchor(g, "b"), 0.25))
+near(anchor(g, "polar"), (100pt, 60pt))
+
+// Orthogonal axis exchange plus rotation-aware cell sizes.
+rotated := node("rotated", grid(0, 0), typ[], {"width": 40pt, "height": 10pt, "rotate": 90deg})
+next := node("next", grid(1, 0), typ[], {"width": 20pt, "height": 10pt})
+g = geometry([rotated, next], {"spacing": (10pt, 10pt)})
+near(anchor(g, "next")-anchor(g, "rotated"), (25pt, 0pt))
+g = geometry([a, b], {"axes": [(0, 1), (1, 0)], "spacing": (10pt, 10pt)})
+near(anchor(g, "b")-anchor(g, "a"), (0pt, 30pt))
+
+// Nested groups resolve even when declared before their members.
+inner := enclose("inner", ["a", "b"], typ[], {"inset": 5pt})
+outer := enclose("outer", ["inner"], typ[], {"inset": 7pt})
+g = geometry([outer, inner, a, b])
+box := bounds(layout.find(g, "inner").snapping)
+outer_box := bounds(layout.find(g, "outer").snapping)
+near(outer_box[0], box[0]-(7pt, 7pt))
+near(outer_box[1], box[1]+(7pt, 7pt))
+
+// Enclosure titles occupy a separate row in the group's local coordinates.
+// Long text expands the box, including when a smaller width was requested.
+title := typ[A long title above both members]
+for angle in [0deg, 30deg, 90deg] do
+    inner = enclose("inner", ["a", "b"], title, {"inset": 5pt, "width": 1pt, "rotate": angle})
+    outer = enclose("outer", ["inner"], typ[Outer], {"inset": 7pt})
+    g = geometry([outer, inner, a, b])
+    resolved := layout.find(g, "inner")
+    local := rotate(-angle)
+    title_center := apply(local, resolved.body_center)
+    title_low := title_center-(title.width/2, title.height/2)
+    title_high := title_center+(title.width/2, title.height/2)
+    box = bounds(transformed(resolved.outline, local))
+    assert(title_low.x >= box[0].x+5pt-0.002pt and title_high.x <= box[1].x-5pt+0.002pt, "title must fit the enclosure width")
+    assert(title_high.y <= box[1].y-5pt+0.002pt, "title must fit below the top border")
+    for name in ["a", "b"] do
+        member_box := bounds(transformed(layout.find(g, name).snapping, local))
+        assert(title_low.y >= member_box[1].y+5pt-0.002pt, "title must clear all members")
+        assert(member_box[0].x >= box[0].x+5pt-0.002pt and member_box[1].x <= box[1].x-5pt+0.002pt, "members must fit the rotated enclosure")
+        assert(member_box[0].y >= box[0].y+5pt-0.002pt)
+    end
+    parent := layout.find(g, "outer")
+    assert(parent.body_center.y-parent.body.height/2 >= bounds(resolved.snapping)[1].y+7pt-0.002pt, "nested group title must clear the child group")
+    near(layout.find(g, "a").body_center, layout.find(g, "a").center)
+end
+
+// Snapping uses actual node contours, not their bounding box.
+circle_node := node("circle", absolute((0pt, 0pt)), typ[], {"shape": "circle", "radius": 10pt})
+rect_node := node("rect", absolute((100pt, 0pt)), typ[], {"width": 20pt, "height": 20pt})
+wire := connect("circle", "rect", {"name": "wire", "marks": []})
+g = geometry([wire, circle_node, rect_node])
+p := route(g, "wire")
+near(point_at(p, 0), (10pt, 0pt))
+near(point_at(p, len(p)), (90pt, 0pt))
+near(anchor(g, "wire"), (50pt, 0pt))
+near(anchor(g, "wire", "start"), (10pt, 0pt))
+
+// Arc endpoints, custom routes, rounded polyline, loops and explicit dodge.
+arc := curves.bent((0pt, 0pt), (100pt, 0pt), 60deg)
+near(point_at(arc, 0), (0pt, 0pt))
+near(point_at(arc, len(arc)), (100pt, 0pt))
+assert(abs(arclength(arc)-100pt*(2*PI/3)/(2*sin(60deg))) < 0.02pt)
+bends := [-70deg, -15deg, 0deg, 15deg, 70deg]
+for i in 0:len(bends)-1 do
+    bend:angle := bends[i]
+    g = geometry([circle_node, rect_node, connect("circle", "rect", {"name": "arc", "bend": bend})])
+    p = route(g, "arc")
+    // Native circle is four cubics (radial error < 0.00273pt at radius 10pt);
+    // snapping retains the native intersection parameters.
+    assert(norm(point_at(p, 0)) >= 9.996pt and norm(point_at(p, 0)) <= 10.004pt)
+end
+g = geometry([circle_node, connect("circle", "circle", {"name": "loop", "loop_angle": 90deg})])
+assert(arclength(route(g, "loop")) > 50pt)
+g = geometry([circle_node, rect_node, connect("circle", "rect", {"name": "dodged", "dodge": [5pt, 10pt]})])
+p = route(g, "dodged")
+near(point_at(p, 0), (15pt, 0pt))
+near(point_at(p, len(p)), (80pt, 0pt))
+g = geometry([edge(absolute((0pt, 0pt)), absolute((100pt, 80pt)), {"name": "poly", "corner": "horizontal", "corner_radius": 5pt})])
+assert(len(route(g, "poly")) == 3)
+
+// Edges can reference later named edges without modifying prepared geometry.
+edge_a := edge(named("late"), absolute((50pt, -50pt)), {"name": "early"})
+edge_b := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"name": "late"})
+g = geometry([edge_a, edge_b])
+near(point_at(route(g, "early"), 0), (50pt, 0pt))
+prepared := layout.nodes([circle_node, rect_node, wire], {})
+before := len(prepared.geometry.objects)
+resolved := edges.resolve([circle_node, rect_node, wire], prepared)
+assert(len(prepared.geometry.objects) == before and len(prepared.geometry.by_name) == before)
+assert(not dict_contains(prepared.geometry.by_name, "wire"), "edge resolution must not change the prepared index")
+
+// Custom geometry is precomputed Huak data, not a callback or Typst parser.
+custom_outline := path([(-12pt, -8pt), (12pt, -8pt), (16pt, 0pt), (12pt, 8pt), (-12pt, 8pt)], true)
+custom := node("custom", absolute((10pt, 20pt)), typ[], {"outline": custom_outline, "outset": 2pt})
+g = geometry([custom])
+assert(anchor(g, "custom", "east").x > 27.9pt)
+custom_mark := picture()
+object.append(custom_mark, fill(circle((-3pt, 0pt), 3pt), rgb(0.2, 0.4, 0.8)))
+custom_edge := edge(absolute((0pt, 0pt)), absolute((60pt, 0pt)), {"marks": [mark("custom", 0.5, false, {"content": custom_mark, "mask": circle((-3pt, 0pt), 3pt)})]})
+custom_picture := diagram([custom_edge])
+assert(len(bounds(custom_picture)) == 2)
+// Curved filled marks retain their native cubics instead of sampled polygons.
+for i in 0:1 do
+    kind:string := ["latex", "cone"][i]
+    symbol := marks.render(mark(kind), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 7pt)
+    mark_paths:list := symbol.content.paths
+    assert(len(mark_paths) == 1 and len(mark_paths[0]) <= 4, "filled mark must retain its compact curved outline")
+    outline:path := mark_paths[0]
+    segment := i
+    midpoint := point_at(outline, segment+0.5)
+    chord := (point_at(outline, segment)+point_at(outline, segment+1))/2
+    assert(norm(midpoint-chord) > 0.001pt, "filled mark must retain its Bezier geometry")
+end
+// A reflected custom region and an ordinary counter-clockwise region overlap.
+// Their normalized mask must add coverage, never cancel it by opposite winding.
+mask := circle((-3pt, 0pt), 3pt)
+symbol := marks.render(mark("custom", 0.5, false, {"content": custom_mark, "mask": mask, "flip": true}), path((-50pt, 0pt), (50pt, 0pt)), rgb(0, 0, 0), 1pt, 7pt)
+merged := compound([symbol.mask, mask])
+covered := region_difference(mask, merged)
+assert(len(covered) == 0, "reflected masks must not cancel ordinary masks")
+wide_outline := rectangle((-50pt, -10pt), 100pt, 20pt)
+g = geometry([node("wide", grid(0, 0), typ[], {"outline": wide_outline}), node("neighbor", grid(1, 0), typ[], {"width": 20pt})], {"spacing": (10pt, 10pt)})
+near(anchor(g, "neighbor")-anchor(g, "wide"), (70pt, 0pt))
+
+// Shift, stroke copies, decorations and labels share the same native path data.
+for i in 0:2 do
+    kind:string := ["wave", "zigzag", "coil"][i]
+    decorated := curves.decorated(path((0pt, 0pt), (80pt, 0pt)), kind, 2pt, 10pt)
+    near(point_at(decorated, 0), (0pt, 0pt))
+    near(point_at(decorated, len(decorated)), (80pt, 0pt))
+end
+shifted := curves.parallel_route(path((0pt, 0pt), (80pt, 0pt)), 4pt)
+near(point_at(shifted, 0), (0pt, 4pt))
+labels := [
+    edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"label": typ[segment], "label_segment": 0, "label_pos": 0.25}),
+    edge(absolute((0pt, 30pt)), absolute((100pt, 30pt)), {"label": typ[distance], "label_distance": 30pt, "label_side": "right", "label_angle": 15deg}),
+    edge(absolute((0pt, 60pt)), absolute((100pt, 80pt)), {"label": typ[anchor], "label_tangent": true, "label_anchor": "south", "label_offset": (1pt, 2pt), "label_fill": rgb(0.9, 0.95, 1)}),
+]
+assert(len(bounds(diagram(labels))) == 2)
+
+// Automatic endpoints, matrix construction, hide and caller-owned descriptions.
+g = geometry([circle_node, edge(automatic(), automatic(), {"name": "auto"}), rect_node])
+near(point_at(route(g, "auto"), 0), (10pt, 0pt))
+rows := matrix_nodes([[typ[A], typ[B]], [typ[C]]])
+assert(len(rows) == 3 and rows[2].name == "r1c0")
+hidden := hide(a)
+assert(not options.has(a.options, "hidden") and options.get(hidden.options, "hidden", false))
+normal := diagram([a])
+invisible := diagram([hidden])
+near((normal.width, normal.height), (invisible.width, invisible.height))
+empty := diagram([])
+assert(empty.width == 12pt and empty.height == 12pt)
+
+// All public shape kinds and native stretch frames construct real outputs.
+types := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
+for i in 0:len(types)-1 do
+    kind:string := types[i]
+    shape := shape_outline(kind, (0pt, 0pt), (40pt, 20pt), 3pt)
+    assert(len(shape) > 0 and len(bounds(shape)) == 2)
+end
+types = ["brace", "bracket", "paren"]
+for i in 0:len(types)-1 do
+    kind:string := types[i]
+    glyph := stretched_glyph(kind, 40pt)
+    assert(glyph.width >= 39pt)
+end
+
+// Fixed records expose names and reject position-slot coupling. Fresh default
+// containers belong to each record; shallow copy still shares nested values.
+coordinate:model.GridCoordinate := grid(2, 3)
+assert(coordinate.kind == "grid" and coordinate.value == (2, 3))
+coordinate_copy := copy(coordinate)
+coordinate_copy.value = (4, 5)
+assert(coordinate.value == (2, 3))
+first_geometry := layout.Geometry()
+second_geometry := layout.Geometry()
+first_geometry.by_name["sample"] = a
+assert(not dict_contains(second_geometry.by_name, "sample"))
+fractional := node("fractional", absolute((0pt, 0pt)), typ[], {"layer": 1.5})
+fractional_geometry := geometry([fractional])
+assert(render.node_object(layout.find(fractional_geometry, "fractional")).layer == 1.5)
+ordered_geometry := geometry([wire, rect_node, circle_node])
+assert(ordered_geometry.objects[0].name == "wire" and ordered_geometry.objects[1].name == "rect")
+near(point_at(ordered_geometry.by_name["wire"].curve, 0), point_at(route(ordered_geometry, "wire"), 0))
+assert(not options.has(a.options, "floating") and options.get(hidden.options, "floating", true) == false)
+
+print("nodegraph regression checks passed")

@@ -1,0 +1,8 @@
+import paint.*
+p:=picture(640, 480)
+leaf:=object.append(p, fill(circle((10,10),2)))
+inserted:=append(p, copy(p))
+assert(inserted.kind=="picture" and len(inserted.children)==1)
+assert(inserted.children[0]!=leaf)
+object.remove(leaf)
+assert(len(p.children)==1 and len(inserted.children)==1)

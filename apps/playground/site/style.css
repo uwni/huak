@@ -1,0 +1,21 @@
+:root { color-scheme: light; font: 16px/1.5 system-ui,sans-serif; color: #243d39; background: #f7f8f3 }
+* { box-sizing: border-box }
+body { margin: 0 auto; max-width: 1500px; padding: clamp(18px,4vw,64px) }
+header { border-bottom: 1px solid #b6c5b9; margin-bottom: 28px; padding-bottom: 16px }
+h1 { font: 600 clamp(28px,4vw,50px)/1.15 Georgia,serif; margin: 0; letter-spacing: -.045em }
+h1 span { font-weight: 400; color: #526a60 }
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 22px }
+section { min-width: 0 }
+.bar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px }
+h2 { font-size: 16px; font-weight: 600; margin: 0 }
+.bar button, .bar a { font: inherit; font-size: 14px; border-radius: 6px; padding: 7px 16px }
+.bar button { background: #245547; border: 0; color: white; cursor: pointer }
+.bar button:disabled { opacity: .6; cursor: wait }
+.bar a { color: #245547; text-underline-offset: 3px }
+#source,.preview { width: 100%; min-height: 430px; height: 62vh; border: 1px solid #b6c5b9; border-radius: 8px }
+#source { overflow: hidden; background: white }
+#source:focus-within { outline: 2px solid #245547; outline-offset: 2px }
+.preview { display: flex; background: white; padding: 5% }
+.preview img { width: 100%; height: 100%; object-fit: contain }
+#status { font-size: 14px; white-space: pre-wrap; margin: 8px 0 }
+@media (max-width: 780px) { main { grid-template-columns: 1fr } #source,.preview { height: 42vh; min-height: 260px } }

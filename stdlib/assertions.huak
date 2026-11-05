@@ -1,0 +1,6 @@
+// Assertion policy is ordinary Huak code; panic is the VM failure primitive.
+export fn assert(condition:bool, message:string="assertion failed")
+    if not condition then
+        panic(message)
+    end
+end

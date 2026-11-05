@@ -1,0 +1,105 @@
+import drawing.drawing
+import paint.{rgb, pen, translate, rectangle, circle, region_union, region_intersection, region_difference, region_xor, offset, stroke_path, clip_region, clip_lines, draw, fill, label, picture}
+# Region operations use the pure Zig, f64 translation of Skia PathOps.
+param tolerance: length = 0.01mm
+setup_typst {
+    set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#26354b"))
+}
+
+export plate := picture(210mm, 160mm)
+default plate
+drawing plate do
+    paper := rgb(0.98, 0.985, 0.995)
+    blue := rgb(0.13, 0.35, 0.69)
+    orange := rgb(0.83, 0.32, 0.13)
+    guide := pen(rgb(0.61, 0.67, 0.76), 0.2mm, "round", "round", 4, [1mm, 1mm])
+    +fill(rectangle((0mm, 0mm), 210mm, 160mm), paper)
+    title := typ[
+    #text(size: 20pt, weight: 700)[Regions, offsets and clipping]
+]
+    subtitle := typ[
+    Native geometry in huak. Skia f64 curve operations; Typst text and export.
+]
+    +label(title, (10mm, 148mm))
+    +label(subtitle, (10mm, 140mm))
+    a := circle((-5mm, 0mm), 11mm)
+    b := circle((5mm, 0mm), 11mm)
+    regions := [region_union(a, b, tolerance), region_intersection(a, b, tolerance), region_difference(a, b, tolerance), region_xor(a, b, tolerance)]
+    union_title := typ[
+    *Union*
+]
+    intersection_title := typ[
+    *Intersection*
+]
+    difference_title := typ[
+    *Difference*
+]
+    xor_title := typ[
+    *XOR*
+]
+    region_titles := [union_title, intersection_title, difference_title, xor_title]
+    for i in 0:3 do
+        x := 27mm + i * 50mm
+        +label(region_titles[i], (x - 16mm, 124mm))
+        placement := translate((x, 104mm))
+        +fill(regions[i], blue, placement)
+        +draw(a, guide, placement)
+        +draw(b, guide, placement)
+    end
+
+    offset_title := typ[
+    *Offset + / -*
+]
+    stroke_title := typ[
+    *Stroke outline*
+]
+    region_clip_title := typ[
+    *Region clip*
+]
+    line_clip_title := typ[
+    *Line clip*
+]
+    +label(offset_title, (11mm, 75mm))
+    +label(stroke_title, (61mm, 75mm))
+    +label(region_clip_title, (111mm, 75mm))
+    +label(line_clip_title, (161mm, 75mm))
+    base := circle((0mm, 0mm), 9mm)
+    +fill(offset(base, 3mm, "round", 4, tolerance), blue, translate((27mm, 52mm)))
+    +fill(offset(base, -3mm, "round", 4, tolerance), orange, translate((27mm, 52mm)))
+    +draw(base, guide, translate((27mm, 52mm)))
+    center := (-15mm, -5mm) ~~ (-5mm, 6mm) ~~ (5mm, -5mm) ~~ (15mm, 5mm)
+    expanded := stroke_path(center, 5mm, "round", "round", 4, tolerance)
+    +fill(expanded, orange, translate((77mm, 52mm)))
+    +draw(center, guide, translate((77mm, 52mm)))
+    ring := region_difference(circle((0mm, 0mm), 13mm), circle((0mm, 0mm), 7mm), tolerance)
+    window := rectangle((-3mm, -15mm), 18mm, 30mm)
+    cut := clip_region(ring, (-3mm, -15mm), (15mm, 15mm), tolerance)
+    +fill(cut, blue, translate((127mm, 52mm)))
+    +draw(ring, guide, translate((127mm, 52mm)))
+    +draw(window, pen(orange, 0.3mm), translate((127mm, 52mm)))
+    line_window := rectangle((-10mm, -7mm), 20mm, 14mm)
+    fragments := clip_lines(center, (-10mm, -7mm), (10mm, 7mm), tolerance)
+    +draw(center, guide, translate((177mm, 52mm)))
+    +draw(fragments, pen(blue, 1.5mm, "round"), translate((177mm, 52mm)))
+    +draw(line_window, pen(orange, 0.3mm), translate((177mm, 52mm)))
+    offset_note := typ[
+    +3 mm / -3 mm
+]
+    stroke_note := typ[
+    Width = 5 mm
+]
+    clip_note := typ[
+    Inner contour kept
+]
+    line_note := typ[
+    Open fragments
+]
+    +label(offset_note, (11mm, 28mm))
+    +label(stroke_note, (61mm, 28mm))
+    +label(clip_note, (111mm, 28mm))
+    +label(line_note, (161mm, 28mm))
+    footer := typ[
+    Boolean operations retain Bézier curves. Source paths stay unchanged.
+]
+    +label(footer, (10mm, 11mm))
+end

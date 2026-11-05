@@ -1,0 +1,4 @@
+import paint.{picture};export good:=picture(640, 480)
+if false then
+pending:=picture(640, 480)
+end

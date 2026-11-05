@@ -1,0 +1,70 @@
+// One retained cubic, three convex polygon nibs. Export plate as SVG or PDF;
+// overlap and dashes are also available as independent picture exports.
+import paint.*
+
+setup_typst {
+    set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#26354b"))
+}
+
+PAPER := rgb(1, 1, 1)
+INK := rgb(0.13, 0.35, 0.68)
+TEAL := rgb(0.08, 0.49, 0.46)
+GLAZE := rgb(0.22, 0.40, 0.76, 0.45)
+GUIDE := pen(rgb(0.94, 0.97, 1), 0.2mm)
+
+// Native cubic controls stay the same in every row.
+curve := bezier((0mm, 0mm), (30mm, 28mm), (70mm, -25mm), (105mm, 2mm))
+square := pensquare(5mm, INK)
+rotated := square.transformed(rotate(35deg))
+// A 7 x 3 mm rectangle sheared horizontally by 2/3.
+sheared := makepen((-4.5mm, -1.5mm) -- (2.5mm, -1.5mm) -- (4.5mm, 1.5mm) -- (-2.5mm, 1.5mm) -- cycle, INK)
+
+fn sample(center: path, nib: pen, caption: text, row: length) -> object
+    result := picture()
+    drawing result do
+        +caption at (12mm, row + 3mm)
+        +(makepath(nib) filled INK) shifted (48mm, row)
+        +(draw center with nib) shifted (66mm, row)
+        +(draw center with GUIDE) shifted (66mm, row)
+    end
+    return result
+end
+
+// The entire self-crossing envelope is filled once, including the crossing.
+export overlap := picture with width 82mm height 42mm
+crossing := (7mm, 7mm) -- (67mm, 32mm) -- (7mm, 32mm) -- (67mm, 7mm)
+glaze_nib := pensquare(5mm, GLAZE).transformed(rotate(20deg))
+boundary := stroke_outline(crossing, glaze_nib, 0.01mm)
+drawing overlap do
+    +boundary filled GLAZE
+    +rectangle with origin (73mm, 17mm) width 5mm height 5mm filled GLAZE
+end
+
+// Dash boundaries use physical arc length; retained pieces remain cubics.
+export dashes := picture with width 76mm height 42mm
+dash_nib := pensquare(3mm).transformed(rotate(30deg))
+dash_ink := pen(TEAL, 1mm, "butt", "round", 4, [7mm, 4mm], 1mm, dash_nib)
+dash_curve := curve.transformed(scale(0.6)).transformed(translate((6mm, 21mm)))
+drawing dashes do
+    +draw dash_curve with (pen with color rgb(0.85, 0.88, 0.91) width 0.15mm)
+    +draw dash_curve with dash_ink
+end
+
+export plate := picture with width 190mm height 185mm
+default plate
+drawing plate do
+    +rectangle with origin (0mm, 0mm) width 190mm height 185mm filled PAPER
+    +typ[#text(size: 20pt, weight: 700)[Cubic pen envelopes]] at (12mm, 174mm)
+    +typ[The same centerline, with exact cubic pieces and polygon offsets.] at (12mm, 164mm)
+end
+
+drawing plate do
+    +sample(curve, square, typ[*Square*], 142mm)
+    +sample(curve, rotated, typ[*Rotated* \ 35°], 112mm)
+    +sample(curve, sheared, typ[*Sheared* \ 7 × 3 mm], 82mm)
+    +typ[*Self-overlap* \ One fill, alpha = 0.45] at (12mm, 57mm)
+    +typ[*Curved dashes* \ Physical 7 mm / 4 mm pattern] at (103mm, 57mm)
+    +overlap shifted (9mm, 14mm)
+    +dashes shifted (101mm, 14mm)
+    +typ[The crossing and the swatch have the same opacity.] at (12mm, 9mm)
+end

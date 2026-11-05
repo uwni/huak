@@ -1,0 +1,2587 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-27",
+  "host": {
+    "cpu": "Apple M2 Pro",
+    "os": "macOS 27.0.1",
+    "target_cpu": "apple_a15"
+  },
+  "mode": "ReleaseFast",
+  "strip": true,
+  "scope": "Boolean-only experiment, not complete Huak integration or rendering",
+  "dependencies": {
+    "lib2geom_commit": "c7d8378ccc109bdb2ed30f0c8407725e93ffdd9b",
+    "lib2geom_zig_hash": "N-V-__8AACnISQBl-AwtDAG82aZ5VfveEIG32OYRDNLyZNNs",
+    "skia_commit": "1c2b83b5af8f53181742af1505edd18c2418c777",
+    "clipper_tag": "Clipper2_2.0.1"
+  },
+  "corpus": {
+    "seed": null,
+    "deterministic": true,
+    "original_cases": 19,
+    "logical_equivalent_eo_cases": 16,
+    "additional_exact_coincident_eo_cases": 2,
+    "eo_exclusions": [
+      "opposite_raw_nonzero",
+      "independent_canonical",
+      "self_intersection_clip"
+    ],
+    "reason": "Overlapping independent nonzero regions and self-intersection contracts are not silently relabeled as native evenodd support. All timed operands use exactly the same EO inputs for every engine."
+  },
+  "precision": {
+    "lib2geom": "PathIntersectionGraph precision=tolerance*0.25 in raw coordinates; common-normalized precision divided by common scale",
+    "meaning": "An API precision parameter, not an asserted Hausdorff error bound"
+  },
+  "method": {
+    "timeout": "Every lib2geom correctness case was a separate process with 15s timeout. No crash or timeout observed.",
+    "timing": "Four selected shared EO cases: each independent bounded process executes six rotating backends over six trials, 200 calls per trial. Reported median averages the middle pair. Per-trial raw timings not retained.",
+    "ownership": "N-1 replacement frees are inside each loop; the final result is freed after the timer.",
+    "representations": "Clipper returns native Huak Path; candidates return C element buffers, with no final Huak Path reconstruction. Skia EO comparison uses normalized without AsWinding. All normalization/conversion is timed.",
+    "coverage": "31x29 grid, reference cubic sampled at64 subdivisions, near-boundary samples excluded, plus explicit probes. Bounded check, not proof of equality. Quad/conic outputs were not exercised."
+  },
+  "contracts": [
+    {
+      "directory": "isolated-fast-geom_raw-eo",
+      "timeout_seconds": 15,
+      "processes": [
+        {
+          "case": "cubic_unchanged",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 13.27075,
+          "log": "isolated-fast-geom_raw-eo/cubic_unchanged.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/cubic_unchanged.log",
+              "case": "cubic_unchanged-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 6,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 0
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "cubic_lens",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 12.3735,
+          "log": "isolated-fast-geom_raw-eo/cubic_lens.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/cubic_lens.log",
+              "case": "cubic_lens-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 6,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 898
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 0
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "cubic_half",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 11.272333,
+          "log": "isolated-fast-geom_raw-eo/cubic_half.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/cubic_half.log",
+              "case": "cubic_half-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 0
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "256_curved_holes",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 486.89079100000004,
+          "log": "isolated-fast-geom_raw-eo/256_curved_holes.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/256_curved_holes.log",
+              "case": "256_curved_holes-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 1541,
+              "line": 3,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 1024,
+              "grid": {
+                "mismatch": 0,
+                "count": 896
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 256
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "256_holes_expanded_budget",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 481.394833,
+          "log": "isolated-fast-geom_raw-eo/256_holes_expanded_budget.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/256_holes_expanded_budget.log",
+              "case": "256_holes_expanded_budget-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 1541,
+              "line": 3,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 1024,
+              "grid": {
+                "mismatch": 0,
+                "count": 896
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 256
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "evenodd_ring",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 12.806,
+          "log": "isolated-fast-geom_raw-eo/evenodd_ring.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/evenodd_ring.log",
+              "case": "evenodd_ring-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 12,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 8,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "large_origin_1e12",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 10.032208,
+          "log": "isolated-fast-geom_raw-eo/large_origin_1e12.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/large_origin_1e12.log",
+              "case": "large_origin_1e12-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "huge_origin_1e16",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.726040999999999,
+          "log": "isolated-fast-geom_raw-eo/huge_origin_1e16.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/huge_origin_1e16.log",
+              "case": "huge_origin_1e16-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 16,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "span_1e8_hole_1e-3",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.407,
+          "log": "isolated-fast-geom_raw-eo/span_1e8_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/span_1e8_hole_1e-3.log",
+              "case": "span_1e8_hole_1e-3-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.00001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 10,
+              "line": 6,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 0,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "span_1e6_hole_1e-3",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.559541999999999,
+          "log": "isolated-fast-geom_raw-eo/span_1e6_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/span_1e6_hole_1e-3.log",
+              "case": "span_1e6_hole_1e-3-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.0001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 10,
+              "line": 6,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 0,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "span_1e5_hole_1e-3",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.127667,
+          "log": "isolated-fast-geom_raw-eo/span_1e5_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/span_1e5_hole_1e-3.log",
+              "case": "span_1e5_hole_1e-3-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.00001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 10,
+              "line": 6,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 0,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "tiny_coordinates_1e-24",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 7.826582999999999,
+          "log": "isolated-fast-geom_raw-eo/tiny_coordinates_1e-24.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/tiny_coordinates_1e-24.log",
+              "case": "tiny_coordinates_1e-24-eo",
+              "engine": "geom_raw",
+              "status": "GeomOperationFailed",
+              "tolerance": 1e-29
+            }
+          ]
+        },
+        {
+          "case": "near_coincident_1e-4",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 11.217583000000001,
+          "log": "isolated-fast-geom_raw-eo/near_coincident_1e-4.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/near_coincident_1e-4.log",
+              "case": "near_coincident_1e-4-eo",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.00001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 8,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 6,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "tangent_circles",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 7.686125,
+          "log": "isolated-fast-geom_raw-eo/tangent_circles.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/tangent_circles.log",
+              "case": "tangent_circles-eo",
+              "engine": "geom_raw",
+              "status": "GeomOperationFailed",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "shared_edge_rectangles",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 7.714833,
+          "log": "isolated-fast-geom_raw-eo/shared_edge_rectangles.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/shared_edge_rectangles.log",
+              "case": "shared_edge_rectangles-eo",
+              "engine": "geom_raw",
+              "status": "GeomOperationFailed",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "collinear_zero_repeated",
+          "engine": "geom_raw",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.21225,
+          "log": "isolated-fast-geom_raw-eo/collinear_zero_repeated.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-eo/collinear_zero_repeated.log",
+              "case": "collinear_zero_repeated-eo",
+              "engine": "geom_raw",
+              "status": "GeomOperationFailed",
+              "tolerance": 0.001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "directory": "isolated-fast-geom_normalized-eo",
+      "timeout_seconds": 15,
+      "processes": [
+        {
+          "case": "cubic_unchanged",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 10.659708,
+          "log": "isolated-fast-geom_normalized-eo/cubic_unchanged.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/cubic_unchanged.log",
+              "case": "cubic_unchanged-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 6,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 0
+              },
+              "unchanged_control_error": 1.0658141036401503e-14
+            }
+          ]
+        },
+        {
+          "case": "cubic_lens",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 11.46575,
+          "log": "isolated-fast-geom_normalized-eo/cubic_lens.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/cubic_lens.log",
+              "case": "cubic_lens-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 6,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 898
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 0
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "cubic_half",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.963959000000001,
+          "log": "isolated-fast-geom_normalized-eo/cubic_half.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/cubic_half.log",
+              "case": "cubic_half-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 0
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "256_curved_holes",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 482.87491700000004,
+          "log": "isolated-fast-geom_normalized-eo/256_curved_holes.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/256_curved_holes.log",
+              "case": "256_curved_holes-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 1541,
+              "line": 3,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 1024,
+              "grid": {
+                "mismatch": 0,
+                "count": 896
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 256
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "256_holes_expanded_budget",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 481.962042,
+          "log": "isolated-fast-geom_normalized-eo/256_holes_expanded_budget.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/256_holes_expanded_budget.log",
+              "case": "256_holes_expanded_budget-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 1541,
+              "line": 3,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 1024,
+              "grid": {
+                "mismatch": 0,
+                "count": 896
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 256
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "evenodd_ring",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 12.752666,
+          "log": "isolated-fast-geom_normalized-eo/evenodd_ring.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/evenodd_ring.log",
+              "case": "evenodd_ring-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 12,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 8,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "large_origin_1e12",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.960208,
+          "log": "isolated-fast-geom_normalized-eo/large_origin_1e12.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/large_origin_1e12.log",
+              "case": "large_origin_1e12-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "huge_origin_1e16",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.551458,
+          "log": "isolated-fast-geom_normalized-eo/huge_origin_1e16.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/huge_origin_1e16.log",
+              "case": "huge_origin_1e16-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 16,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "span_1e8_hole_1e-3",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.589542,
+          "log": "isolated-fast-geom_normalized-eo/span_1e8_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/span_1e8_hole_1e-3.log",
+              "case": "span_1e8_hole_1e-3-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.00001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 10,
+              "line": 6,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 0,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "span_1e6_hole_1e-3",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.983792,
+          "log": "isolated-fast-geom_normalized-eo/span_1e6_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/span_1e6_hole_1e-3.log",
+              "case": "span_1e6_hole_1e-3-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.0001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 10,
+              "line": 6,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 0,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "span_1e5_hole_1e-3",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 7.903541000000001,
+          "log": "isolated-fast-geom_normalized-eo/span_1e5_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/span_1e5_hole_1e-3.log",
+              "case": "span_1e5_hole_1e-3-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.00001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 10,
+              "line": 6,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 0,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "tiny_coordinates_1e-24",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 10.527458000000001,
+          "log": "isolated-fast-geom_normalized-eo/tiny_coordinates_1e-24.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/tiny_coordinates_1e-24.log",
+              "case": "tiny_coordinates_1e-24-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 1e-29,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 7,
+              "line": 1,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 4,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "near_coincident_1e-4",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 12.175208000000001,
+          "log": "isolated-fast-geom_normalized-eo/near_coincident_1e-4.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/near_coincident_1e-4.log",
+              "case": "near_coincident_1e-4-eo",
+              "engine": "geom_normalized",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.00001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 8,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 6,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 2
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "tangent_circles",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 7.6255,
+          "log": "isolated-fast-geom_normalized-eo/tangent_circles.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/tangent_circles.log",
+              "case": "tangent_circles-eo",
+              "engine": "geom_normalized",
+              "status": "GeomOperationFailed",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "shared_edge_rectangles",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.061709,
+          "log": "isolated-fast-geom_normalized-eo/shared_edge_rectangles.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/shared_edge_rectangles.log",
+              "case": "shared_edge_rectangles-eo",
+              "engine": "geom_normalized",
+              "status": "GeomOperationFailed",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "collinear_zero_repeated",
+          "engine": "geom_normalized",
+          "corpus": "eo",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 7.686166,
+          "log": "isolated-fast-geom_normalized-eo/collinear_zero_repeated.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_normalized-eo/collinear_zero_repeated.log",
+              "case": "collinear_zero_repeated-eo",
+              "engine": "geom_normalized",
+              "status": "GeomOperationFailed",
+              "tolerance": 0.001
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "directory": "isolated-fast-geom_raw-native",
+      "timeout_seconds": 15,
+      "processes": [
+        {
+          "case": "cubic_unchanged",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.334958,
+          "log": "isolated-fast-geom_raw-native/cubic_unchanged.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/cubic_unchanged.log",
+              "case": "cubic_unchanged",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "cubic_lens",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.378584,
+          "log": "isolated-fast-geom_raw-native/cubic_lens.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/cubic_lens.log",
+              "case": "cubic_lens",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "cubic_half",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.344625,
+          "log": "isolated-fast-geom_raw-native/cubic_half.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/cubic_half.log",
+              "case": "cubic_half",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "256_curved_holes",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 10.083375,
+          "log": "isolated-fast-geom_raw-native/256_curved_holes.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/256_curved_holes.log",
+              "case": "256_curved_holes",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "256_holes_expanded_budget",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.631708,
+          "log": "isolated-fast-geom_raw-native/256_holes_expanded_budget.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/256_holes_expanded_budget.log",
+              "case": "256_holes_expanded_budget",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "opposite_raw_nonzero",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.177584000000001,
+          "log": "isolated-fast-geom_raw-native/opposite_raw_nonzero.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/opposite_raw_nonzero.log",
+              "case": "opposite_raw_nonzero",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "independent_canonical",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.288083,
+          "log": "isolated-fast-geom_raw-native/independent_canonical.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/independent_canonical.log",
+              "case": "independent_canonical",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "evenodd_ring",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 11.888667,
+          "log": "isolated-fast-geom_raw-native/evenodd_ring.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/evenodd_ring.log",
+              "case": "evenodd_ring",
+              "engine": "geom_raw",
+              "status": "ok",
+              "coverage_ok": true,
+              "tolerance": 0.001,
+              "skia_input_quant_max": null,
+              "input_guard_tol_quarter": "n/a",
+              "fill": 1,
+              "elements": 12,
+              "line": 0,
+              "quad": 0,
+              "conic": 0,
+              "cubic": 8,
+              "grid": {
+                "mismatch": 0,
+                "count": 899
+              },
+              "special": {
+                "mismatch": 0,
+                "count": 1
+              },
+              "unchanged_control_error": 0
+            }
+          ]
+        },
+        {
+          "case": "self_intersection_clip",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.151917,
+          "log": "isolated-fast-geom_raw-native/self_intersection_clip.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/self_intersection_clip.log",
+              "case": "self_intersection_clip",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "large_origin_1e12",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.048959,
+          "log": "isolated-fast-geom_raw-native/large_origin_1e12.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/large_origin_1e12.log",
+              "case": "large_origin_1e12",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "huge_origin_1e16",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.787125,
+          "log": "isolated-fast-geom_raw-native/huge_origin_1e16.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/huge_origin_1e16.log",
+              "case": "huge_origin_1e16",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 16
+            }
+          ]
+        },
+        {
+          "case": "span_1e8_hole_1e-3",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.373875,
+          "log": "isolated-fast-geom_raw-native/span_1e8_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/span_1e8_hole_1e-3.log",
+              "case": "span_1e8_hole_1e-3",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.00001
+            }
+          ]
+        },
+        {
+          "case": "span_1e6_hole_1e-3",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.349,
+          "log": "isolated-fast-geom_raw-native/span_1e6_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/span_1e6_hole_1e-3.log",
+              "case": "span_1e6_hole_1e-3",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.0001
+            }
+          ]
+        },
+        {
+          "case": "span_1e5_hole_1e-3",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.580084000000001,
+          "log": "isolated-fast-geom_raw-native/span_1e5_hole_1e-3.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/span_1e5_hole_1e-3.log",
+              "case": "span_1e5_hole_1e-3",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.00001
+            }
+          ]
+        },
+        {
+          "case": "tiny_coordinates_1e-24",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.751667,
+          "log": "isolated-fast-geom_raw-native/tiny_coordinates_1e-24.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/tiny_coordinates_1e-24.log",
+              "case": "tiny_coordinates_1e-24",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 1e-29
+            }
+          ]
+        },
+        {
+          "case": "near_coincident_1e-4",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.918375,
+          "log": "isolated-fast-geom_raw-native/near_coincident_1e-4.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/near_coincident_1e-4.log",
+              "case": "near_coincident_1e-4",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.00001
+            }
+          ]
+        },
+        {
+          "case": "tangent_circles",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 10.019834000000001,
+          "log": "isolated-fast-geom_raw-native/tangent_circles.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/tangent_circles.log",
+              "case": "tangent_circles",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "shared_edge_rectangles",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 8.88875,
+          "log": "isolated-fast-geom_raw-native/shared_edge_rectangles.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/shared_edge_rectangles.log",
+              "case": "shared_edge_rectangles",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        },
+        {
+          "case": "collinear_zero_repeated",
+          "engine": "geom_raw",
+          "corpus": "native",
+          "term": "exited with code 0",
+          "process_error": null,
+          "elapsed_ms": 9.733167,
+          "log": "isolated-fast-geom_raw-native/collinear_zero_repeated.log",
+          "records": [
+            {
+              "type": "result",
+              "source_log": "isolated-fast-geom_raw-native/collinear_zero_repeated.log",
+              "case": "collinear_zero_repeated",
+              "engine": "geom_raw",
+              "status": "UnsupportedFill",
+              "tolerance": 0.001
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "exact": [
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_same_difference-clipper.log",
+      "case": "coincident_same_difference-eo",
+      "engine": "clipper",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 0,
+      "elements": 0,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_same_difference-skia_normalized.log",
+      "case": "coincident_same_difference-eo",
+      "engine": "skia_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 9.566783063519324e-7,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 0,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_same_difference-geom_raw.log",
+      "case": "coincident_same_difference-eo",
+      "engine": "geom_raw",
+      "status": "GeomOperationFailed",
+      "tolerance": 0.001
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_same_difference-geom_normalized.log",
+      "case": "coincident_same_difference-eo",
+      "engine": "geom_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 10,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 8,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_reversed_difference-clipper.log",
+      "case": "coincident_reversed_difference-eo",
+      "engine": "clipper",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 0,
+      "elements": 0,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_reversed_difference-skia_normalized.log",
+      "case": "coincident_reversed_difference-eo",
+      "engine": "skia_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 9.566783063519324e-7,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 0,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_reversed_difference-geom_raw.log",
+      "case": "coincident_reversed_difference-eo",
+      "engine": "geom_raw",
+      "status": "GeomOperationFailed",
+      "tolerance": 0.001
+    },
+    {
+      "type": "result",
+      "source_log": "geom-exact-coincident_reversed_difference-geom_normalized.log",
+      "case": "coincident_reversed_difference-eo",
+      "engine": "geom_normalized",
+      "status": "ok",
+      "coverage_ok": false,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 584,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 1,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    }
+  ],
+  "timings": [
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "clipper",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 0,
+      "elements": 2049,
+      "line": 2047,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": null
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "skia_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.0000025599957353961145,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0.0000025599957353961145
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "skia_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.000002086162567138672,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0.000001874542324031836
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "skia_normalized_winding",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.000002086162567138672,
+      "input_guard_tol_quarter": "pass",
+      "fill": 0,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0.000001874542324031836
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "geom_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "geom_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 1.0658141036401503e-14
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "clipper",
+      "median_us": 550.7702,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "skia_raw",
+      "median_us": 5.0433,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "skia_normalized",
+      "median_us": 5.0149,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "skia_normalized_winding",
+      "median_us": 4.9794,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "geom_raw",
+      "median_us": 3.4657,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_unchanged.log",
+      "case": "cubic_unchanged-eo",
+      "engine": "geom_normalized",
+      "median_us": 3.5038,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "clipper",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 0,
+      "elements": 1481,
+      "line": 1479,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 898
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "skia_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.0000025599957353961145,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 898
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "skia_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 5.960464477539062e-7,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 898
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "skia_normalized_winding",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 5.960464477539062e-7,
+      "input_guard_tol_quarter": "pass",
+      "fill": 0,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 898
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "geom_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 898
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "geom_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 6,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 898
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "clipper",
+      "median_us": 965.6977,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "skia_raw",
+      "median_us": 24.1647,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "skia_normalized",
+      "median_us": 19.3811,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "skia_normalized_winding",
+      "median_us": 19.9351,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "geom_raw",
+      "median_us": 20.4069,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_lens.log",
+      "case": "cubic_lens-eo",
+      "engine": "geom_normalized",
+      "median_us": 21.356,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "clipper",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 0,
+      "elements": 1116,
+      "line": 1114,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "skia_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.0000025599957353961145,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 7,
+      "line": 1,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "skia_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.0000012547015266761719,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 7,
+      "line": 1,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "skia_normalized_winding",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.0000012547015266761719,
+      "input_guard_tol_quarter": "pass",
+      "fill": 0,
+      "elements": 7,
+      "line": 1,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "geom_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 7,
+      "line": 1,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "geom_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 7,
+      "line": 1,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 4,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 0
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "clipper",
+      "median_us": 530.8571,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "skia_raw",
+      "median_us": 6.8997,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "skia_normalized",
+      "median_us": 7.1099,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "skia_normalized_winding",
+      "median_us": 6.7979,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "geom_raw",
+      "median_us": 10.5448,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-cubic_half.log",
+      "case": "cubic_half-eo",
+      "engine": "geom_normalized",
+      "median_us": 10.6283,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "clipper",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 0,
+      "elements": 6146,
+      "line": 6142,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 0,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "skia_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 0.0000025599957353961145,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 12,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 8,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "skia_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 9.566783063519324e-7,
+      "input_guard_tol_quarter": "pass",
+      "fill": 1,
+      "elements": 12,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 8,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "skia_normalized_winding",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": 9.566783063519324e-7,
+      "input_guard_tol_quarter": "pass",
+      "fill": 0,
+      "elements": 12,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 8,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "geom_raw",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 12,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 8,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "result",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "geom_normalized",
+      "status": "ok",
+      "coverage_ok": true,
+      "tolerance": 0.001,
+      "skia_input_quant_max": null,
+      "input_guard_tol_quarter": "n/a",
+      "fill": 1,
+      "elements": 12,
+      "line": 0,
+      "quad": 0,
+      "conic": 0,
+      "cubic": 8,
+      "grid": {
+        "mismatch": 0,
+        "count": 899
+      },
+      "special": {
+        "mismatch": 0,
+        "count": 1
+      },
+      "unchanged_control_error": 0
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "clipper",
+      "median_us": 1653.6617,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "skia_raw",
+      "median_us": 8.6165,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "skia_normalized",
+      "median_us": 8.6612,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "skia_normalized_winding",
+      "median_us": 10.0641,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "geom_raw",
+      "median_us": 3.6353,
+      "repeats": 200,
+      "trials": 6
+    },
+    {
+      "type": "timing",
+      "source_log": "geom-shared-eo-timing-evenodd_ring.log",
+      "case": "evenodd_ring-eo",
+      "engine": "geom_normalized",
+      "median_us": 3.645,
+      "repeats": 200,
+      "trials": 6
+    }
+  ],
+  "bytes": {
+    "historical_measured_target": {
+      "geom_static_stripped_release_fast": 1503576,
+      "combined_all_libraries_runner_stripped_release_fast": 1499888
+    },
+    "final_versioned_stripped": {
+      "geom_static": 1503720,
+      "skia_static": 740840,
+      "all_library_runner": 1499872
+    }
+  },
+  "notes": [
+    "Historical target probe status3 merges invalid graph and upstream exceptions; the versioned source separates these as5 and6 without changing the Boolean call. Historical statuses are not retroactively recategorized.",
+    "Normalized same-oriented coincidence difference returned8cubic elements with sampled EO-empty coverage; this is not canonical-empty-buffer evidence.",
+    "Normalized reverse-coincident difference returned4cubics with584/899 mismatches and1/1 special-probe mismatch; expected empty.",
+    "Raw and normalized lib2geom results are retained separately; normalization rescues tiny-scale case in this corpus."
+  ],
+  "final_versioned_smoke": {
+    "lens_log": "target/pathops-versioned-build.log",
+    "install_log": "target/pathops-versioned-install.log",
+    "reverse_process": [
+      {
+        "case": "coincident_reversed_difference",
+        "engine": "all",
+        "corpus": "eo",
+        "term": "exited with code 0",
+        "process_error": null,
+        "elapsed_ms": 25.074166,
+        "log": "isolated-fast-all-eo-verify-1-coincident_reversed_difference/coincident_reversed_difference.log"
+      }
+    ],
+    "invalid_graph_log": "result case=shared_edge_rectangles-eo engine=geom_normalized status=GeomInvalidGraph tolerance=1e-3",
+    "reverse_results": [
+      "result case=coincident_reversed_difference-eo engine=clipper status=ok coverage_ok=true tolerance=1e-3 skia_input_quant_max=nan input_guard_tol_quarter=n/a fill=0 elements=0 line=0 quad=0 conic=0 cubic=0 grid=0/899 special=0/1 unchanged_control_error=0e0",
+      "result case=coincident_reversed_difference-eo engine=skia_raw status=ok coverage_ok=true tolerance=1e-3 skia_input_quant_max=2.5599957353961145e-6 input_guard_tol_quarter=pass fill=1 elements=0 line=0 quad=0 conic=0 cubic=0 grid=0/899 special=0/1 unchanged_control_error=0e0",
+      "result case=coincident_reversed_difference-eo engine=skia_normalized status=ok coverage_ok=true tolerance=1e-3 skia_input_quant_max=9.566783063519324e-7 input_guard_tol_quarter=pass fill=1 elements=0 line=0 quad=0 conic=0 cubic=0 grid=0/899 special=0/1 unchanged_control_error=0e0",
+      "result case=coincident_reversed_difference-eo engine=skia_normalized_winding status=ok coverage_ok=true tolerance=1e-3 skia_input_quant_max=9.566783063519324e-7 input_guard_tol_quarter=pass fill=0 elements=0 line=0 quad=0 conic=0 cubic=0 grid=0/899 special=0/1 unchanged_control_error=0e0",
+      "result case=coincident_reversed_difference-eo engine=geom_raw status=GeomInvalidGraph tolerance=1e-3",
+      "result case=coincident_reversed_difference-eo engine=geom_normalized status=ok coverage_ok=false tolerance=1e-3 skia_input_quant_max=nan input_guard_tol_quarter=n/a fill=1 elements=6 line=0 quad=0 conic=0 cubic=4 grid=584/899 special=1/1 unchanged_control_error=0e0"
+    ]
+  },
+  "memory": {
+    "method": "Separate /usr/bin/time -l invocations of the same final stripped all-library executable, 200 Boolean calls/engine, one trial, no reference validation or JSON export. Empty startup baseline selects no cases.",
+    "samples": [
+      {
+        "engine": "empty",
+        "maximum_resident_bytes": 9650176,
+        "source_log": "target/pathops-compare/rss-empty.log",
+        "iterations": 0
+      },
+      {
+        "engine": "clipper",
+        "maximum_resident_bytes": 9650176,
+        "source_log": "target/pathops-compare/rss-clipper.log",
+        "iterations": 200
+      },
+      {
+        "engine": "skia",
+        "maximum_resident_bytes": 9650176,
+        "source_log": "target/pathops-compare/rss-skia.log",
+        "iterations": 200
+      },
+      {
+        "engine": "lib2geom",
+        "maximum_resident_bytes": 9650176,
+        "source_log": "target/pathops-compare/rss-lib2geom.log",
+        "iterations": 200
+      }
+    ],
+    "meaning": "Whole-process high water, not allocator peak; includes common executable and startup. Baseline subtraction does not establish per-algorithm allocation."
+  },
+  "conclusion_scope": "Measurements compare only these tested candidates. No final production backend decision is established."
+}

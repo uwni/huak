@@ -1,0 +1,19 @@
+import paint.*
+
+param title = "Typed data Ω"
+param count: int = 42
+font_size := 14pt
+ink := rgb(0.15, 0.35, 0.7)
+typst_expose title, count, font_size, ink
+
+setup_typst {
+  set text(size: huak.font_size, fill: huak.ink)
+}
+
+export plate := picture with width 110mm height 50mm
+default plate
+
+drawing plate do
+    +typ[#huak.title: #huak.count] at (8mm, 32mm)
+    +draw (8mm,20mm)--(100mm, 20mm)
+end

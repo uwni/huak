@@ -1,0 +1,4 @@
+import assertions.assert
+import "lib/wrapper.huak" as wrapped
+assert(3 wrapped.multiplied 4==12)
+assert(wrapped.multiplied(3,4)==12)

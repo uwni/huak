@@ -1,0 +1,3 @@
+import drawing.drawing
+default drawing picture(45,25) do
+end

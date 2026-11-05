@@ -1,0 +1,72 @@
+import drawing.drawing
+import math.{sin, min, max, norm}
+import color.rgb
+import geometry.sample_path
+import pen.profile_outline
+import object.{draw}
+import transform.translate
+import math
+// Artistic policies composed from ordinary geometry builtins.
+// Widths passed to profile_outline are full widths, indexed by physical
+// normalized arc length on each contour. This module owns no renderer state.
+import assertions.assert
+
+fn tapered(curve:path, width:length, steps:int) -> path
+    assert(width >= 0pt, "tapered width must be nonnegative")
+    assert(steps >= 2, "tapered needs at least two intervals")
+    positions := []
+    widths := []
+    for i in 0:steps do
+        u := float(i) / steps
+        positions += u
+        if i == 0 or i == steps then
+            widths += 0pt
+        else
+            widths += width * max(0, sin(math.PI * u))
+        end
+    end
+    return profile_outline(curve, positions, widths, "round", "round")
+end
+export tapered
+
+fn hue_rgb(h:float) -> color
+    if h < 1 then
+        return rgb(1, h, 0)
+    elseif h < 2 then
+        return rgb(2 - h, 1, 0)
+    elseif h < 3 then
+        return rgb(0, 1, h - 2)
+    elseif h < 4 then
+        return rgb(0, 4 - h, 1)
+    end
+    return rgb(h - 4, 0, 1)
+end
+
+fn rainbow_color(position:float) -> color
+    return hue_rgb(5 * min(1, max(0, position)))
+end
+export rainbow_color
+
+// A piecewise-colored stroke. steps controls the approximation; this does
+// not claim to be a continuous SVG/PDF path-following gradient primitive.
+fn rainbow(curve:path, width:length, steps:int) -> object
+    assert(width >= 0pt, "rainbow width must be nonnegative")
+    assert(steps >= 2, "rainbow needs at least two samples per contour")
+    if width == 0pt then return picture() end
+    samples := sample_path(curve, steps)
+    result := picture(transform: translate((0, 0)))
+    drawing result do
+        for i in 1:len(samples) - 1 do
+            a := samples[i - 1]
+            b := samples[i]
+            if a[4] == b[4] and norm(b[1] - a[1]) > 0pt then
+                ink := rainbow_color((a[0] + b[0]) / 2)
+                +draw(path(a[1], b[1]), pen(ink, width, "round", "round"))
+            end
+        end
+
+    end
+
+    return result
+end
+export rainbow

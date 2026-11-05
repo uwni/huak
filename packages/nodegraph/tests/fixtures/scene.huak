@@ -1,0 +1,48 @@
+import paint.*
+import math.{abs, norm}
+import "../../nodegraph.huak" as nodegraph
+import "../../nodegraph.huak".{scene, geometry, anchor, place, link, group, matrix, anchor_node, route_edge, finish, grid, edge}
+import assertions.assert
+
+fn near(a:pair, b:pair)
+    assert(norm(a-b) < 0.002pt, "scene anchor mismatch")
+end
+
+// Drawing-block form: handles are ordinary local variables, never strings.
+s := scene({"spacing": (10pt, 10pt), "margin": 4pt})
+handles := []
+nodegraph.drawing s do
+    a := place typ[A] at grid(0, 0)
+    b := place typ[B] at grid(1, 0)
+    e := link a to b
+    group [a, b] containing typ[]
+    handles += [a, b, e]
+end
+assert(s.finished, "drawing end must finish the scene")
+assert(len(s.geometry.objects) == 4, "nodes, group and edge must be resolved")
+assert(len(bounds(s.picture)) == 2)
+
+// Retained handles survive the block; their local names do not.
+a := handles[0]; b := handles[1]; e := handles[2]
+assert((anchor_node(s, b)-anchor_node(s, a)).x > 0pt, "handle query after block")
+p := route_edge(s, e)
+near(point_at(p, 0), anchor_node(s, a, "east"))
+near(point_at(p, len(p)), anchor_node(s, b, "west"))
+
+m := scene()
+nodegraph.drawing m do
+    nodes := matrix [[typ[A], typ[B]], [typ[C]]]
+end
+assert(len(m.geometry.objects) == 3)
+debug_scene := scene({"debug": true})
+nodegraph.drawing debug_scene do
+    place typ[D] at grid(0, 0)
+end
+assert(len(bounds(debug_scene.picture)) == 2, "debug grid must keep content bounds")
+level_scene := scene({"debug_level": 2})
+nodegraph.drawing level_scene do
+    place typ[L] at grid(0, 0)
+end
+assert(len(bounds(level_scene.picture)) == 2, "debug level grid must render")
+default s.picture
+print("scene checks passed")

@@ -1,0 +1,30 @@
+import assertions.assert
+precedence transform
+below addition
+above path
+associativity left
+end
+assert(1 combine 2 combine 3==123)
+assert(1 combine 2+3==15)
+assert(1+2 combine 3*4==42)
+assert(-2 combine 3==-17)
+assert(not 1 combine 2==13)
+assert((1 combine 2) combine 3==combine(combine(1,2),3))
+assert(1.combine(2)==combine(1,2))
+assert([4][0] combine 2==42)
+mixfix _ combine _ in transform
+fn combine(x:int,y:int)->int
+return x*10+y
+end
+fn contextual(above:int,below:int)->int
+left:=above; right:=below; none:=left+right; associativity:=none
+return associativity
+end
+assert(contextual(2,3)==5)
+fn choose(a:any,b:any)->any;return a;end
+mixfix _ choose _ in transform
+assert("kept" choose (1,2)=="kept")
+assert((
+1 combine
+2 combine 3
+)==123)

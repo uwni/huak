@@ -1,0 +1,18 @@
+import "../plot.huak".*
+
+fig := figure with width 17cm height 11cm
+ax := axis of fig at (0,0)
+plotting ax do
+    title typ[Frequency response]
+    side "bottom" with {"label":typ[Frequency (Hz)],"scale":"log10","limits":[1,1000],"decades":[1],"format":"power10","minorticks":true,"arrow":"end"}
+    side "top" with {"label":typ[Frequency band]}
+    remap "top" ticks [1,10,100,1000] to [typ[A],typ[B],typ[C],typ[D]]
+    side "left" with {"label":typ[Gain (dB)],"limits":[-40,0],"step":10}
+    side "right" with {"label":typ[Phase (degrees)],"limits":[0,180],"step":45,"reverse":true,"arrow":"end"}
+
+    +lines x [1,10,100,1000] y [-3,-6,-16,-35] named typ[Gain]
+    +lines x [1,10,100,1000] y [8,30,95,165] on_axes x "bottom" y "right" marked (marker "diamond" sized 5pt) named typ[Phase]
+    +arrow from (5,-28) to (70,-15) styled {"pen":pen(color.rgb(0.3,0.3,0.3),1pt)}
+    legend "bottom-left"
+end
+default render fig

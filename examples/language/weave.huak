@@ -1,0 +1,43 @@
+import paint.*
+import weave
+
+setup_typst {
+    set text(font: "Libertinus Serif", size: 10pt)
+}
+
+export plate := picture with width 210mm height 100mm
+default plate
+warm := pen(rgb(0.78, 0.18, 0.12), 2.2mm, "round", "round")
+cool := pen(rgb(0.12, 0.35, 0.72), 2.2mm, "round", "round")
+green := pen(rgb(0.12, 0.48, 0.32), 2.2mm, "round", "round")
+grid := pen(rgb(0.78, 0.82, 0.86), 0.15mm)
+
+// The grid remains visible through the gaps: no background-colored cover is
+// painted over an underpass. The two collection scopes have independent IDs.
+drawing plate do
+    +rectangle with origin (0mm, 0mm) width 210mm height 100mm filled rgb(0.96, 0.97, 0.98)
+    for x in 10:10:200 do
+        +draw ((x*1mm, 30mm) -- (x*1mm, 85mm)) with grid
+    end
+    for y in 30:10:80 do
+        +draw ((10mm, y*1mm) -- (200mm, y*1mm)) with grid
+    end
+    +typ[Closed strands: alternating crossings] at (15mm, 92mm)
+    +typ[One open cubic: self crossing] at (115mm, 92mm)
+    +typ[First strand: $+1, -2$; second: $-1, +2$] at (15mm, 20mm)
+    +typ[One source path: $-1, +1$] at (115mm, 20mm)
+end
+
+left := circle with center (40mm, 58mm) radius 22mm
+right := circle with center (62mm, 58mm) radius 22mm
+weave.drawing weave.context(plate, gap:0.8mm) do
+    // Signed IDs are in each source path's traversal order. Positive is over;
+    // negative is under. Both visits to a self crossing use the same ID.
+    draw left with warm crossings [1, -2]
+    draw right with cool crossings [-1, 2]
+end
+
+curl := bezier((170mm, 80mm), (131mm, 32mm), (92mm, 32mm), (197mm, 80mm))
+weave.drawing weave.context(plate, gap:0.8mm) do
+    draw curl with green crossings [-1, 1]
+end

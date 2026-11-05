@@ -1,0 +1,5 @@
+import paint.{circle};start()
+import "lib/brushes.huak" as brushes
+fn start()->path
+return brushes.mirrored circle((5,5),2)
+end

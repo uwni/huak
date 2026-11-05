@@ -1,0 +1,7 @@
+import paint.{bounds, width, height, assert}
+import "../../nodegraph.huak".*
+import assertions.assert
+n := node("g", absolute((0pt, 0pt)), typ[Group], {"shape": "brace", "shape_options": {"dir": "bottom"}, "width": 60pt, "height": 20pt})
+p := diagram([n])
+assert(len(bounds(p)) == 2, "brace shape must render")
+print("brace shape checks passed")

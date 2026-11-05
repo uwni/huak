@@ -1,0 +1,2 @@
+import "cycle-b.huak" as b
+export x:=1

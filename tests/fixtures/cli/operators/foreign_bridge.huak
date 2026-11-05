@@ -1,0 +1,5 @@
+import "lib/disjoint.huak" as foreign
+precedence bridge
+above foreign.first
+below foreign.second
+end

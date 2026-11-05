@@ -1,0 +1,80 @@
+import geometry.{circle, rectangle, compound}
+import object.{bounds, draw, fill, filldraw, append}
+import transform.{transformed, translate, scale, rotate}
+import math.{sin, cos, max}
+import color.rgb
+import collections.get
+import assertions.assert
+import "model.huak".{Marker}
+
+export fn custom_marker(shape:path, options:dict = {}) -> Marker
+    box := bounds(shape)
+    assert(len(box) == 2, "marker path must not be empty")
+    span := max(box[1].x-box[0].x, box[1].y-box[0].y)
+    assert(span > 0pt, "marker path must have a positive extent")
+    normalized := transformed(transformed(shape, translate(-(box[0]+box[1])/2)), scale(1pt/span,1pt/span))
+    import "model.huak".styled
+    return styled(Marker(shape:normalized), options)
+end
+
+export fn marker(name:string = "circle", options:dict = {}) -> Marker
+    shape := circle((0pt,0pt),0.5pt)
+    open := false
+    if name == "circle" then
+        shape = circle((0pt,0pt),0.5pt)
+    elseif name == "square" then shape = rectangle((-0.5pt,-0.5pt),1pt,1pt)
+    elseif name == "diamond" then shape = path([(0pt,0.5pt),(0.5pt,0pt),(0pt,-0.5pt),(-0.5pt,0pt)],true)
+    elseif name == "plus" or name == "cross" then
+        shape = compound([path((-0.5pt,0pt),(0.5pt,0pt)),path((0pt,-0.5pt),(0pt,0.5pt))])
+        if name == "cross" then shape = transformed(shape,rotate(45deg)) end
+        open = true
+    elseif name == "star" then
+        points := []
+        for i in 0:9 do
+            r := 0.5pt
+            if i%2 == 1 then r = 0.2pt end
+            a := 90deg+i*36deg
+            points += [(r*cos(a),r*sin(a))]
+        end
+        shape = path(points,true)
+    else
+        assert(name == "triangle_up" or name == "triangle_down" or name == "triangle_left" or name == "triangle_right", "unknown marker: "+name)
+        shape = path([(0pt,0.5pt),(-0.5pt,-0.5pt),(0.5pt,-0.5pt)],true)
+        a := 0deg
+        if name == "triangle_down" then a = 180deg end
+        if name == "triangle_left" then a = 90deg end
+        if name == "triangle_right" then a = -90deg end
+        shape = transformed(shape,rotate(a))
+    end
+    settings := copy(options)
+    if open and not dict_contains(settings,"fill") then settings["fill"] = false end
+    return custom_marker(shape,settings)
+end
+
+// Prepare once per series, then translate this local shape for each sample.
+export fn prepare(symbol:Marker, ink:color, size:any = false) -> path
+    extent:length := get(symbol.options,"size",6pt)
+    if size != false then extent = size end
+    assert(extent > 0pt, "marker size must be positive")
+    result := transformed(symbol.shape,scale(extent/1pt,extent/1pt))
+    return transformed(result,rotate(get(symbol.options,"rotation",0deg)))
+end
+
+export fn paint(dst:picture, symbol:Marker, shape:path, position:pair, ink:color)
+    shifted := transformed(shape,translate(position))
+    interior:any := get(symbol.options,"fill",ink)
+    stroke:any := get(symbol.options,"pen",pen(ink,0.7pt))
+    if interior == false then
+        if stroke != false then append(dst,draw(shifted,stroke)) end
+    elseif stroke == false then append(dst,fill(shifted,interior))
+    else append(dst,filldraw(shifted,interior,stroke)) end
+end
+
+export fn inherited(symbol:Marker, options:dict) -> Marker
+    result := copy(symbol)
+    result.options = copy(symbol.options)
+    for key in ["fill","pen"] do
+        if not dict_contains(result.options,key) and dict_contains(options,key) then result.options[key] = options[key] end
+    end
+    return result
+end

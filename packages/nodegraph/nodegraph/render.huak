@@ -1,0 +1,303 @@
+// Paint policy. Each output object is clipped at most once against later
+// clearances, avoiding a clip nesting depth proportional to diagram size.
+import math.{abs, atan2, cos, dot, floor, max, min, norm, sin, unit}
+import object.{append, draw, fill}
+import transform.{apply, compose, rotate, transformed, translate}
+import geometry.{arclength, compound, intersection_times, offset, point_at, rectangle, region_union, sample_at_length, tangent_at, trimmed}; import object.{bounds}
+import color.rgb
+import pen.stroke_outline
+import assertions.assert
+import paint.cut
+import "options.huak" as opt
+import "shapes.huak" as shapes
+import "curves.huak" as curves
+import "marks.huak" as marks
+import "model.huak" as model
+import "layout.huak" as layout
+import "edges.huak" as edges
+
+export struct PaintedObject
+    content:object
+    clearance:path
+    layer:float
+    floating:bool
+end
+
+struct LabelPlacement
+    point:pair
+    angle:angle
+    mask:path
+end
+
+fn invisible(source:object) -> picture
+    result := picture()
+    box := bounds(source)
+    if len(box) > 0 then object.append(result, fill(rectangle(box[0], box[1].x-box[0].x, box[1].y-box[0].y), rgb(0, 0, 0, 0))) end
+    return result
+end
+
+export fn node_object(item:layout.ResolvedNode) -> PaintedObject
+    options:dict := item.options
+    result := picture()
+    center:pair := item.center
+    outline:path := item.outline
+    ink:color := opt.get(options, "stroke", rgb(0, 0, 0))
+    width:length := opt.get(options, "thickness", 0pt)
+    assert(width >= 0pt, "node thickness must be nonnegative")
+    if not opt.get(options, "hidden", false) then
+        kind:string := opt.get(options, "shape", "rect")
+        if kind == "brace" or kind == "bracket" or kind == "paren" then
+            shape_options:dict := opt.get(options, "shape_options", {})
+            side:string := opt.get(shape_options, "dir", "bottom")
+            extent:length := item.size.x
+            if side == "left" or side == "right" then extent = item.size.y end
+            glyph := shapes.stretched_glyph(kind, extent, side)
+            glyph_center:pair := center
+            if side == "bottom" then glyph_center = (center.x, center.y-item.size.y/2-glyph.height/2) end
+            if side == "top" then glyph_center = (center.x, center.y+item.size.y/2+glyph.height/2) end
+            if side == "left" then glyph_center = (center.x-item.size.x/2-glyph.width/2, center.y) end
+            if side == "right" then glyph_center = (center.x+item.size.x/2+glyph.width/2, center.y) end
+            shapes.text_center(result, glyph, glyph_center)
+        elseif kind != "none" then
+            object.append(result, fill(outline, opt.get(options, "fill", rgb(0, 0, 0, 0))))
+            extrude:list := opt.get(options, "extrude", [0pt])
+            if width > 0pt then
+                for i in 0:len(extrude)-1 do
+                    stroke_path := outline
+                    if extrude[i] != 0pt then stroke_path = offset(outline, extrude[i], "round") end
+                    if len(stroke_path) > 0 then object.append(result, draw(stroke_path, pen(ink, width))) end
+                end
+                if kind == "cylinder" then
+                    size:pair := item.size
+                    shape_options:dict := opt.get(options, "shape_options", {})
+                    tilt:angle := opt.get(shape_options, "tilt", 0deg)
+                    rim := min(size.y/8, size.x/8)
+                    if tilt != 0deg then rim = min(size.y/2, max(0.1pt, abs(size.x*sin(tilt)))) end
+                    top := shapes.ellipse_shape((0pt, size.y/2-rim), (size.x, 2*rim))
+                    top = transformed(top, compose(rotate(opt.get(options, "rotate", 0deg)), translate(center)))
+                    object.append(result, draw(top, pen(ink, width)))
+                    rings:list := opt.get(shape_options, "rings", [])
+                    for i in 0:len(rings)-1 do
+                        ring_offset:length := rings[i]
+                        ring := shapes.ellipse_shape((0pt, ring_offset), (size.x, 2*rim))
+                        ring = transformed(ring, compose(rotate(opt.get(options, "rotate", 0deg)), translate(center)))
+                        object.append(result, draw(ring, pen(ink, width)))
+                    end
+                end
+            end
+        end
+        shapes.text_center(result, item.body, item.body_center, opt.get(options, "rotate", 0deg))
+    else
+        visible := copy(item)
+        visible.options = opt.setting(options, "hidden", false)
+        painted := node_object(visible)
+        result = invisible(painted.content)
+    end
+    return PaintedObject(content: result, clearance: compound([]), layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
+end
+
+fn label_position(curve:path, body:text, options:dict) -> LabelPlacement
+    position := curves.position(curve, opt.get(options, "label_pos", 0.5))
+    if opt.has(options, "label_distance") then
+        sample := sample_at_length(curve, opt.get(options, "label_distance", 0pt))
+        sample_tangent:pair := sample[2]
+        assert(norm(sample_tangent) > 0, "route position has zero tangent")
+        position = curves.RoutePosition(point: sample[1], tangent: sample_tangent)
+    end
+    if opt.has(options, "label_segment") then
+        time := opt.get(options, "label_segment", 0)+opt.get(options, "label_pos", 0.5)
+        assert(time >= 0 and time <= len(curve), "label segment position lies outside edge")
+        position = curves.RoutePosition(point: point_at(curve, time), tangent: unit(tangent_at(curve, time)))
+    end
+    point:pair := position.point
+    tangent:pair := position.tangent
+    normal := (-tangent.y, tangent.x)
+    angle:angle := opt.get(options, "label_angle", 0deg)
+    if opt.get(options, "label_tangent", false) then angle = angle+atan2(tangent.y, tangent.x) end
+    side:string := opt.get(options, "label_side", "left")
+    assert(side == "left" or side == "right" or side == "center", "label_side must be left, right or center")
+    extent := abs(dot(normal, (cos(angle), sin(angle))))*body.width/2+abs(dot(normal, (-sin(angle), cos(angle))))*body.height/2
+    separation:length := opt.get(options, "label_sep", 4pt)
+    if side == "left" then point = point+normal*(extent+separation) end
+    if side == "right" then point = point-normal*(extent+separation) end
+    if opt.has(options, "label_anchor") then
+        anchor:string := opt.get(options, "label_anchor", "center")
+        offset := (0pt, 0pt)
+        if anchor == "east" then offset = (body.width/2, 0pt)
+        elseif anchor == "west" then offset = (-body.width/2, 0pt)
+        elseif anchor == "north" then offset = (0pt, body.height/2)
+        elseif anchor == "south" then offset = (0pt, -body.height/2)
+        elseif anchor == "north_east" or anchor == "north-east" or anchor == "ne" then offset = (body.width/2, body.height/2)
+        elseif anchor == "north_west" or anchor == "north-west" or anchor == "nw" then offset = (-body.width/2, body.height/2)
+        elseif anchor == "south_east" or anchor == "south-east" or anchor == "se" then offset = (body.width/2, -body.height/2)
+        elseif anchor == "south_west" or anchor == "south-west" or anchor == "sw" then offset = (-body.width/2, -body.height/2)
+        elseif anchor != "center" then panic("unknown label anchor: " + anchor) end
+        point = position.point
+        if side == "left" then point = point+normal*separation end
+        if side == "right" then point = point-normal*separation end
+        point = point-apply(rotate(angle), offset)
+    end
+    point = point+opt.get(options, "label_offset", (0pt, 0pt))
+    padding:length := opt.get(options, "label_padding", 2pt)
+    assert(padding >= 0pt, "label padding must be nonnegative")
+    mask := rectangle((-body.width/2-padding, -body.height/2-padding), body.width+2*padding, body.height+2*padding)
+    mask = transformed(mask, compose(rotate(angle), translate(point)))
+    return LabelPlacement(point: point, angle: angle, mask: mask)
+end
+
+// Connect at the base of a terminal mask, before entering the head. Like
+// Asymptote's drawarrow, the shaft does not continue through the head to its tip.
+fn attachment_times(curve:path, tail:path, head:path) -> pair
+    if len(tail) == 0 and len(head) == 0 then return (0, len(curve)) end
+    first := 0.0
+    last := float(len(curve))
+    hits := intersection_times(curve, tail)
+    if len(hits) > 0 then
+        first = hits[0].x
+        for i in 1:len(hits)-1 do first = max(first, hits[i].x) end
+    end
+    hits = intersection_times(curve, head)
+    if len(hits) > 0 then
+        last = hits[0].x
+        for i in 1:len(hits)-1 do last = min(last, hits[i].x) end
+    end
+    return (first, last)
+end
+
+export fn edge_object(item:edges.ResolvedEdge) -> PaintedObject
+    options:dict := item.options
+    result := picture()
+    clearance := compound([])
+    curve:path := item.curve
+    ink:color := opt.get(options, "stroke", rgb(0, 0, 0))
+    width:length := opt.get(options, "thickness", 0.6pt)
+    assert(width > 0pt, "edge thickness must be positive")
+    // Mark end offsets trim the stroke; they do not move the mark itself.
+    descriptions:list := opt.get(options, "marks", [model.mark("head")])
+    trim_start:length := 0pt
+    trim_end:length := 0pt
+    for i in 0:len(descriptions)-1 do
+        mark_options:dict := descriptions[i].options
+        if descriptions[i].position <= 0 then trim_start = opt.get(mark_options, "tail_end", 0pt)+max(0pt, opt.get(mark_options, "cap_offset", 0pt)) end
+        if descriptions[i].position >= 1 then trim_end = opt.get(mark_options, "tip_end", 0pt)+max(0pt, opt.get(mark_options, "cap_offset", 0pt)) end
+    end
+    if trim_start > 0pt or trim_end > 0pt then
+        total := arclength(curve)
+        assert(trim_start+trim_end < total, "mark trim leaves no visible edge")
+        curve = trimmed(curve, curves.distance_time(curve, trim_start), curves.distance_time(curve, total-trim_end))
+    end
+    if opt.get(options, "hidden", false) then
+        visible := copy(item)
+        visible.options = opt.setting(options, "hidden", false)
+        painted := edge_object(visible)
+        result = invisible(painted.content)
+        return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
+    end
+    extrude:list := opt.get(options, "extrude", [0pt])
+    masks := []
+    tail_masks := []
+    head_masks := []
+    decorations := picture()
+    if opt.has(options, "head") or opt.has(options, "tail") then
+        descriptions = [model.mark(opt.get(options, "tail", "none"), 0, true), model.mark(opt.get(options, "head", "head"))]
+    end
+    size:length := opt.get(options, "mark_size", 7*width)
+    for i in 0:len(descriptions)-1 do
+        symbol := marks.render(descriptions[i], curve, ink, width, size)
+        append(decorations, copy(symbol.content))
+        if len(symbol.mask) > 0 then
+            masks += symbol.mask
+            if descriptions[i].position <= 0 then tail_masks += symbol.mask end
+            if descriptions[i].position >= 1 then head_masks += symbol.mask end
+        end
+    end
+    label_mask := compound([])
+    if opt.has(options, "label") then
+        body:text := opt.get(options, "label", false)
+        placement := label_position(curve, body, options)
+        if opt.has(options, "label_fill") then object.append(decorations, fill(placement.mask, opt.get(options, "label_fill", rgb(0, 0, 0, 0)))) end
+        shapes.text_center(decorations, body, placement.point, placement.angle)
+        if opt.get(options, "label_cut", true) then
+            label_mask = placement.mask
+            masks += label_mask
+        end
+    end
+    dash:list := opt.get(options, "dash", [])
+    phase:length := opt.get(options, "phase", 0pt)
+    tail := compound(tail_masks)
+    head := compound(head_masks)
+    below := []
+    if len(label_mask) > 0 then below += label_mask end
+    crossing:bool := opt.get(options, "crossing", false)
+    gap:length := opt.get(options, "crossing_width", 5*width)
+    if crossing then assert(gap > 0pt, "crossing_width must be positive") end
+    for i in 0:len(extrude)-1 do
+        shifted := curves.parallel_route(curve, extrude[i])
+        line := curves.decorated(shifted, opt.get(options, "decoration", "none"), opt.get(options, "amplitude", 2pt), opt.get(options, "wavelength", 8pt))
+        ends := attachment_times(line, tail, head)
+        if ends.x < ends.y then
+            line_phase := phase
+            if ends.x > 0 then line_phase = line_phase+arclength(trimmed(line, 0, ends.x)) end
+            if ends.x > 0 or ends.y < len(line) then line = trimmed(line, ends.x, ends.y) end
+            object.append(result, draw(line, pen(ink, width, "butt", "round", 4, dash, line_phase)))
+            // Clearance uses the same shortened shaft and dash alignment.
+            if crossing then
+                outline := stroke_outline(line, pen(ink, gap, "round", "round", 4, dash, line_phase))
+                below += region_union(outline, compound([]))
+            end
+        end
+    end
+    if len(masks) > 0 then result = cut(result, compound(masks)) end
+    append(result, decorations)
+    if len(below) > 0 then clearance = compound(below) end
+    return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
+end
+
+fn by_layer(objects:list) -> list
+    if len(objects) <= 1 then return objects end
+    middle := int(floor(len(objects)/2))
+    left := by_layer(objects[0:middle-1])
+    right := by_layer(objects[middle:])
+    result := []
+    a := 0
+    b := 0
+    while a < len(left) and b < len(right) do
+        if left[a].layer <= right[b].layer then result += [left[a]]; a = a+1
+        else result += [right[b]]; b = b+1 end
+    end
+    result += left[a:]
+    result += right[b:]
+    return result
+end
+
+export fn compose_objects(objects:list, margin:length = 6pt) -> picture
+    assert(margin >= 0pt, "diagram margin must be nonnegative")
+    ordered := by_layer(objects)
+    has_bounds := false
+    low := (0pt, 0pt)
+    high := (0pt, 0pt)
+    for i in 0:len(ordered)-1 do
+        if not ordered[i].floating then
+            box := bounds(ordered[i].content)
+            if len(box) > 0 then
+                if not has_bounds then low = box[0]; high = box[1]; has_bounds = true
+                else
+                    low = (min(low.x, box[0].x), min(low.y, box[0].y))
+                    high = (max(high.x, box[1].x), max(high.y, box[1].y))
+                end
+            end
+        end
+    end
+    result := picture(max(1pt, high.x-low.x+2*margin), max(1pt, high.y-low.y+2*margin))
+    shift := translate((margin, margin)-low)
+    for i in 0:len(ordered)-1 do
+        source:object := ordered[i].content
+        holes := []
+        for j in i+1:len(ordered)-1 do
+            if len(ordered[j].clearance) > 0 then holes += ordered[j].clearance end
+        end
+        if len(holes) > 0 then source = cut(source, compound(holes)) end
+        append(result, copy(source), shift)
+    end
+    return result
+end

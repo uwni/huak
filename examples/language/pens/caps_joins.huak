@@ -1,0 +1,91 @@
+import drawing.drawing
+import paint.{rgb, pen, translate, rectangle, path, draw, fill, label, picture}
+# The pale guides mark the original centerline and its endpoint positions.
+export plate := picture(180mm, 180mm)
+default plate
+
+setup_typst {
+    set text(font: "Libertinus Serif", size: 11pt, fill: rgb("#26354b"))
+}
+
+ink := rgb(0.12, 0.35, 0.68)
+guide := pen(rgb(0.73, 0.78, 0.84), 0.2mm, "butt", "bevel", 4, [1mm, 1mm])
+center := pen(rgb(0.95, 0.98, 1), 0.25mm)
+drawing plate do
+    +fill(rectangle((0mm, 0mm), 180mm, 180mm), rgb(1, 1, 1))
+
+    title := typ[
+        #text(size: 20pt, weight: 700)[Caps and joins]
+    ]
+    subtitle := typ[
+        #text(size: 10pt)[One path, different stroke choices. All strokes are 8 mm wide.]
+    ]
+    +label(title, (12mm, 168mm))
+    +label(subtitle, (12mm, 160mm))
+    +draw(path((12mm, 154mm), (168mm, 154mm)), pen(rgb(0.86, 0.89, 0.92), 0.2mm))
+
+    caps_title := typ[
+        #text(weight: 700)[01  Line caps]
+    ]
+    +label(caps_title, (12mm, 146mm))
+    cap_names := ["butt", "round", "square"]
+    for i in 0:2 do
+        x := 20mm + i * 54mm
+        +draw(path((x, 115mm), (x, 133mm)), guide)
+        +draw(path((x + 30mm, 115mm), (x + 30mm, 133mm)), guide)
+        segment := path((x, 124mm), (x + 30mm, 124mm))
+        +draw(segment, pen(ink, 8mm, cap_names[i], "bevel"))
+        +draw(segment, center)
+    end
+    butt_label := typ[
+        butt
+    ]
+    round_label := typ[
+        round
+    ]
+    square_label := typ[
+        square
+    ]
+    +label(butt_label, (20mm, 138mm))
+    +label(round_label, (74mm, 138mm))
+    +label(square_label, (128mm, 138mm))
+
+    joins_title := typ[
+        #text(weight: 700)[02  Line joins]
+    ]
+    +label(joins_title, (12mm, 105mm))
+    corner := (0mm, 0mm) -- (17mm, 16mm) -- (34mm, 0mm)
+    join_names := ["bevel", "round", "miter"]
+    for i in 0:2 do
+        position := translate((18mm + i * 54mm, 75mm))
+        +draw(corner, pen(ink, 8mm, "butt", join_names[i], 8), position)
+        +draw(corner, center, position)
+    end
+    bevel_label := typ[
+        bevel
+    ]
+    miter_label := typ[
+        miter
+    ]
+    +label(bevel_label, (20mm, 64mm))
+    +label(round_label, (74mm, 64mm))
+    +label(miter_label, (128mm, 64mm))
+
+    limits_title := typ[
+        #text(weight: 700)[03  Miter limit at a sharp corner]
+    ]
+    +label(limits_title, (12mm, 53mm))
+    sharp := (0mm, 0mm) -- (5mm, 20mm) -- (10mm, 0mm)
+    +draw(sharp, pen(ink, 8mm, "butt", "miter", 2), translate((25mm, 10mm)))
+    +draw(sharp, center, translate((25mm, 10mm)))
+    +draw(sharp, pen(ink, 8mm, "butt", "miter", 8), translate((110mm, 10mm)))
+    +draw(sharp, center, translate((110mm, 10mm)))
+    low_limit := typ[
+        limit = 2
+    ]
+    high_limit := typ[
+        limit = 8
+    ]
+    +label(low_limit, (45mm, 22mm))
+    +label(high_limit, (130mm, 22mm))
+end

@@ -1,0 +1,8 @@
+import "common.huak" as common
+fn scaled(a:int,k:int)->int;return a*k;end
+mixfix _ scaled _ in common.transform
+export scaled
+fn privateop(a:int,b:int)->int;return a+b;end
+mixfix _ privateop _ in common.transform
+fn normal(a:int,b:int)->int;return a+b;end
+export normal

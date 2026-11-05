@@ -1,0 +1,44 @@
+import paint.*
+import math.{floor}
+import "../nodegraph.huak".{diagram, grid, absolute, node, edge, mark, stretched_glyph}
+
+types := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
+nodes := []
+i := 0
+for title in types do
+    typst_expose title
+    nodes += [node(title, grid(i%4, int(floor(i/4))), typ[#huak.title], {"shape": title, "thickness": 0.6pt, "fill": rgb(0.94, 0.97, 1)})]
+    i = i + 1
+end
+export shapes := diagram(nodes)
+default shapes
+
+types = ["head", "doublehead", "triplehead", "harpoon", "straight", "solid", "stealth", "latex", "cone", "circle", "square", "diamond", "bar", "doublebar", "triplebar", "cross", "bracket", "parenthesis", "hook", "hooks", "n", "n?", "n!", "1", "1?", "1!", "crowfoot"]
+items := []
+i = 0
+for title in types do
+    typst_expose title
+    a := absolute((0pt, -i*28pt))
+    b := absolute((160pt, -i*28pt))
+    items += [edge(a, b, {"marks": [mark(title)], "mark_size": 7pt, "label": typ[#huak.title], "label_pos": 0.35, "label_sep": 1pt})]
+    i = i + 1
+end
+export marks := diagram(items)
+
+items = []
+for i in 0:2 do
+    kind:string := ["wave", "zigzag", "coil"][i]
+    typst_expose kind
+    items += [edge(absolute((0pt, -i*35pt)), absolute((160pt, -i*35pt)), {"decoration": kind, "label": typ[#huak.kind], "bend": 10deg})]
+end
+items += [edge(absolute((0pt, -105pt)), absolute((160pt, -105pt)), {"extrude": [-2pt, 2pt], "label": typ[double], "head": "doublehead"})]
+items += [edge(absolute((0pt, -140pt)), absolute((160pt, -140pt)), {"dash": [4pt, 2pt], "label": typ[dashed]})]
+export decorations := diagram(items)
+
+items = []
+for i in 0:2 do
+    kind:string := ["brace", "bracket", "paren"][i]
+    glyph := stretched_glyph(kind, 90pt)
+    items += [node(kind, grid(0, i), glyph, {"shape": "none"})]
+end
+export stretched := diagram(items)

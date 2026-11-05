@@ -1,0 +1,64 @@
+// A wire crossing cuts a transparent clearance in the lower picture.
+// The independent before/after exports contain only the two colored curves.
+import paint.*
+
+lower := (10mm, 10mm) ~~ (30mm, 25mm) ~~ (55mm, 40mm)
+upper := (10mm, 40mm) ~~ (30mm, 25mm) ~~ (55mm, 10mm)
+nib := makepen(
+    (0.8mm, 0mm) -- (0.56mm, 0.56mm) -- (0mm, 0.8mm) --
+    (-0.56mm, 0.56mm) -- (-0.8mm, 0mm) -- (-0.56mm, -0.56mm) --
+    (0mm, -0.8mm) -- (0.56mm, -0.56mm) -- cycle
+)
+halo_nib := transformed(nib, scale(1.8))
+halo := envelope of upper with halo_nib
+lower_outline := stroke_outline(lower, nib)
+upper_outline := stroke_outline(upper, nib)
+blue := rgb(0.12, 0.4, 0.75)
+red := rgb(0.85, 0.22, 0.16)
+lower_picture := picture with width 65mm height 50mm
+drawing lower_picture do
+    +lower_outline filled blue
+end
+cut_lower := lower_picture cut halo
+
+fn panel(clipped: bool) -> picture
+    result := picture with width 65mm height 50mm
+    drawing result do
+        if clipped then
+            +cut_lower
+        else
+            +lower_picture
+        end
+        +upper_outline filled red
+    end
+    return result
+end
+
+grid_pen := pen(rgb(0.74, 0.63, 0.36), 0.12mm)
+grid := picture with width 65mm height 50mm
+drawing grid do
+    for x in 0mm:5mm:65mm do
+        +draw ((x, 0mm) -- (x, 50mm)) with grid_pen
+    end
+    for y in 0mm:5mm:50mm do
+        +draw ((0mm, y) -- (65mm, y)) with grid_pen
+    end
+end
+backdrop := picture with width 140mm height 60mm
+drawing backdrop do
+    +(rectangle with origin (0mm, 0mm) width 140mm height 60mm) filled rgb(0.95, 0.84, 0.5)
+    +grid
+    +grid shifted (75mm, 0mm)
+    +typ[Before] at (3mm, 55mm)
+    +typ[Picture cut with envelope] at (78mm, 55mm)
+end
+
+export before := panel(false)
+export after := panel(true)
+export plate := picture with width 140mm height 60mm
+default plate
+drawing plate do
+    +backdrop
+    +before
+    +after shifted (75mm, 0mm)
+end

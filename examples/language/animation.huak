@@ -1,0 +1,21 @@
+import drawing.drawing
+import paint.{rgb, circle, fill, label, picture, timeline, animate}
+param seconds: float = 2.4
+export pic := picture(320, 160)
+default pic
+
+pic.timeline(seconds)
+setup_typst {
+  set text(size:14pt)
+}
+caption := typ[
+  Continuous SVG $x^2+y^2$
+]
+
+drawing pic do
+    label_id := label(caption, (15, 130)); +label_id
+    ball := fill(circle((25, 65), 12), rgb(0.2, 0.4, 0.8)); +ball
+    animate(label_id, "opacity", [[0, 0.3], [0.5, 1], [1, 0.3]])
+    animate(ball, "translate", [[0, (0, 0)], [0.37, (110, 35)], [1, (250, 0)]])
+    animate(ball, "fill", [[0, rgb(0.2, 0.4, 0.8)], [1, rgb(0.85, 0.2, 0.35)]])
+end

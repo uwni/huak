@@ -1,0 +1,6 @@
+secret:=20
+export number:=secret
+fn add_secret(x:int)->int
+return x+secret
+end
+export add_secret

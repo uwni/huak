@@ -1,0 +1,45 @@
+import math.sin
+import paint.*
+
+setup_typst {
+    set text(font: "Libertinus Serif", size: 11pt)
+}
+
+export pic := picture(180mm, 150mm)
+default pic
+blue := rgb(0.1, 0.35, 0.65)
+curve := (15mm, 120mm) ~~ (50mm, 132mm) ~~ (90mm, 118mm) ~~ (160mm, 130mm)
+rainbow_curve := (15mm, 90mm) ~~ (65mm, 105mm) ~~ (110mm, 90mm) ~~ (160mm, 105mm)
+tube_curve := (75mm, 43mm) ~~ (105mm, 65mm) ~~ (135mm, 45mm) ~~ (160mm, 60mm)
+
+// User-defined policy uses exactly the same basic interfaces as the library.
+fn pulsed(curve:path, width:length) -> path
+    intervals := 100
+    positions := []
+    widths := []
+    for i in 0:intervals do
+        u := float(i) / intervals
+        positions += u
+        widths += width * (0.5 + 0.45 * sin(6 * math.PI * u))
+    end
+    return profile_outline(curve, positions, widths, "round", "round")
+end
+mixfix _ pulsed _ in path
+
+custom_curve := (15mm, 10mm) ~~ (50mm, 16mm) ~~ (105mm, 8mm) ~~ (160mm, 15mm)
+
+drawing pic do
+    +rectangle((0, 0), 180mm, 150mm) filled rgb(1, 1, 1)
+    +curve tapered 4mm filled blue
+    +typ[Width policy in a huak module] at (15mm, 140mm)
+
+    +rainbow_curve rainbow 3mm
+    +typ[Sampled rainbow stroke] at (15mm, 110mm)
+
+    +sphere 19mm shifted (35mm, 50mm)
+    +typ[Sphere hatching] at (15mm, 25mm)
+    +tube_curve tube 13mm
+    +typ[Tube hatching] at (95mm, 25mm)
+
+    +custom_curve pulsed 2mm filled blue
+end

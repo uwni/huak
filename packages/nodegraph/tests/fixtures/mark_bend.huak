@@ -1,0 +1,96 @@
+import paint.*
+import transform.bent
+import math.norm
+import assertions.assert
+import "../../nodegraph/model.huak" as model
+import "../../nodegraph/marks.huak" as marks
+import "../../nodegraph/curves.huak" as curves
+import "../../nodegraph/render.huak" as render
+import "../../nodegraph/edges.huak" as edges
+import "../../nodegraph.huak" as nodegraph
+
+guide := curves.arc((40pt, 40pt), 24pt, 0deg, 120deg)
+ink := rgb(0.2, 0.4, 0.7)
+kinds := ["head", "doublehead", "triplehead", "harpoon", "straight", "solid", "stealth", "latex", "cone"]
+for i in 0:len(kinds)-1 do
+    kind := kinds[i]
+    for position in 0.0:0.5:1.0 do
+        reversed := position == 0
+        shape := marks.render(model.mark(kind, position, reversed, {"size": 10pt}), guide, ink, 1pt, 10pt)
+        rigid := marks.render(model.mark(kind, position, reversed, {"size": 10pt, "bend": false}), guide, ink, 1pt, 10pt)
+        assert(len(region_difference(region(rigid.content), region(shape.content))) > 0, "curved arrows must differ from rigid placement")
+        if len(shape.mask) > 0 then
+            tip := curves.position(guide, position).point
+            on_tip := false
+            for j in 0:len(shape.mask) do
+                if norm(point_at(shape.mask, j)-tip) < 0.002pt then on_tip = true end
+            end
+            assert(on_tip, "arrow tip must stay on the route")
+            assert(len(region_xor(shape.mask, region(shape.content))) == 0, "mark masks must follow the actual curved ink")
+        end
+    end
+end
+// Explicitly bending a user picture uses the same operator as built-in marks.
+custom := picture()
+object.append(custom, fill(path([(0pt, 0pt), (-8pt, 3pt), (-8pt, -3pt)], true), ink))
+options := {"content": custom, "mask": region(custom), "bend": true, "flip": true, "extrude": [0pt, -3pt]}
+shape := marks.render(model.mark("head", 0, true, options), guide, ink, 1pt, 8pt)
+actual := region(shape.content)
+assert(len(region_difference(shape.mask, offset(actual, 0.002pt))) == 0 and len(region_difference(actual, offset(shape.mask, 0.002pt))) == 0, "reverse, flip and extrude masks must agree within the mapping tolerance")
+assert(len(custom.paths) == 1, "bending must not mutate the source picture")
+
+straight := path((0pt, 0pt), (100pt, 0pt))
+local := path((0pt, 0pt), (10pt, 2pt))
+mapped := bent(local, straight, 15pt)
+assert(point_at(mapped, 0) == (15pt, 0pt) and point_at(mapped, 1) == (25pt, 2pt))
+
+// Check final ink near the tip, not just the isolated arrow's geometry.
+// Match the comparison SVG's radius, sweep, head size and shaft width.
+guide = curves.arc((40pt, 40pt), 26pt, 0deg, 100deg)
+for i in 0:len(kinds)-1 do
+    for enabled in 0:1 do
+        for position in 0:1 do
+            descriptor := model.mark(kinds[i], position, position == 0, {"size": 18pt, "bend": enabled == 1})
+            glyph := marks.render(descriptor, guide, ink, 1.2pt, 18pt)
+            if len(glyph.mask) > 0 then
+                edge := edges.ResolvedEdge(name: "", first: false, last: false, options: {"marks": [descriptor], "stroke": ink, "thickness": 1.2pt}, curve: guide, source_index: 0)
+                rendered := render.edge_object(edge)
+                near_tip := circle(curves.position(guide, position).point, 1.2pt)
+                tip_ink := region_intersection(region(rendered.content), near_tip)
+                assert(len(region_difference(tip_ink, region(glyph.content))) == 0, "the final shaft must not protrude beside an arrow tip")
+                if kinds[i] == "solid" and position == 1 and enabled == 1 then
+                    untrimmed := picture()
+                    object.append(untrimmed, draw(guide, pen(ink, 1.2pt)))
+                    append(untrimmed, copy(glyph.content))
+                    old_tip := region_intersection(region(untrimmed), near_tip)
+                    assert(len(region_difference(old_tip, region(glyph.content))) > 0, "the regression must detect the original full-shaft overlap")
+                end
+            end
+        end
+    end
+end
+
+// Shortening at the tail must not restart the dash pattern further along it.
+guide = path((0pt, 0pt), (100pt, 0pt))
+edge := edges.ResolvedEdge(name: "", first: false, last: false, options: {"marks": [model.mark("solid", 0, true, {"size": 10pt})], "dash": [5pt, 3pt], "phase": 2pt}, curve: guide, source_index: 0)
+rendered := render.edge_object(edge)
+original := picture()
+object.append(original, draw(guide, pen(rgb(0, 0, 0), 0.6pt, "butt", "round", 4, [5pt, 3pt], 2pt)))
+away := rectangle((20pt, -2pt), 70pt, 4pt)
+assert(len(region_xor(region_intersection(region(rendered.content), away), region_intersection(region(original), away))) == 0, "tail attachment must preserve dash phase")
+
+// The full layout path reproduces the original latex failure. Keep the source
+// coordinate expression: rounding it to 30pt hid the failing attachment query.
+origin := (35pt, 105pt-int(3/3)*75pt)
+guide = curves.arc(origin, 26pt, 0deg, 100deg)
+descriptor := model.mark("latex", 1, false, {"size": 18pt, "fill": rgb(0, 0.3, 0.8)})
+objects := nodegraph.geometry([nodegraph.edge(nodegraph.absolute(point_at(guide, 0)), nodegraph.absolute(point_at(guide, len(guide))), {"curve": guide, "thickness": 1.2pt, "stroke": rgb(1, 0, 0), "marks": [descriptor]})])
+resolved := objects.objects[0]
+rendered = render.edge_object(resolved)
+glyph := marks.render(descriptor, resolved.curve, rgb(1, 0, 0), 1.2pt, 18pt)
+near_tip := circle(curves.position(resolved.curve, 1).point, 1.2pt)
+assert(len(region_difference(region_intersection(region(rendered.content), near_tip), region(glyph.content))) == 0, "layout must not leave a shaft at the latex tip")
+export tip_check := picture(80pt, 80pt)
+append(tip_check, copy(rendered.content))
+
+print("mark bending checks passed")

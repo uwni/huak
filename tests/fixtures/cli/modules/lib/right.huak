@@ -1,0 +1,2 @@
+import "./shared.huak" as shared
+export canvas:=shared.canvas

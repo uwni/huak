@@ -1,0 +1,72 @@
+import drawing.drawing
+import paint.{rgb, pen, pencircle, translate, scale, rotate, rectangle, path, transformed, draw, fill, label, picture}
+# Dash lengths and phase remain physical distances, including an elliptic nib.
+export plate := picture(180mm, 200mm)
+default plate
+
+setup_typst {
+    set text(font: "Libertinus Serif", size: 11pt, fill: rgb("#26354b"))
+}
+
+drawing plate do
+    ink := rgb(0.12, 0.35, 0.68)
+    accent := rgb(0.67, 0.27, 0.19)
+    +fill(rectangle((0mm, 0mm), 180mm, 200mm), rgb(1, 1, 1))
+    title := typ[
+    #text(size: 20pt, weight: 700)[Dashes and phase]
+]
+    subtitle := typ[
+    #text(size: 10pt)[Dash lengths are measured along the original centerline.]
+]
+    +label(title, (12mm, 188mm))
+    +label(subtitle, (12mm, 180mm))
+    +draw(path((12mm, 174mm), (168mm, 174mm)), pen(rgb(0.86, 0.89, 0.92), 0.2mm))
+    solid_label := typ[
+    Solid
+]
+    dash_label := typ[
+    Long dash
+]
+    dash_dot_label := typ[
+    Dash-dot
+]
+    dots_label := typ[
+    Round dots
+]
+    ellipse_label := typ[
+    Slanted nib
+]
+    +label(solid_label, (12mm, 159mm))
+    +label(dash_label, (12mm, 139mm))
+    +label(dash_dot_label, (12mm, 119mm))
+    +label(dots_label, (12mm, 99mm))
+    +label(ellipse_label, (12mm, 79mm))
+    +draw(path((54mm, 160mm), (166mm, 160mm)), pen(ink, 2mm, "butt"))
+    +draw(path((54mm, 140mm), (166mm, 140mm)), pen(ink, 2mm, "butt", "round", 4, [7mm, 3mm]))
+    +draw(path((54mm, 120mm), (166mm, 120mm)), pen(ink, 2mm, "butt", "round", 4, [7mm, 3mm, 1mm, 3mm]))
+    +draw(path((54mm, 100mm), (166mm, 100mm)), pen(ink, 2mm, "round", "round", 4, [0mm, 4mm]))
+    nib := pencircle(7mm).transformed(scale(1, 0.22)).transformed(rotate(30deg))
+    slanted := pen(accent, 1mm, "round", "round", 4, [6mm, 3mm], 0mm, nib)
+    curve := (0mm, 0mm) ~~ (25mm, 5mm) ~~ (50mm, -4mm) ~~ (80mm, 4mm) ~~ (112mm, 0mm)
+    +draw(curve, slanted, translate((54mm, 78mm)))
+    phase_title := typ[
+    #text(weight: 700)[Phase: same 8 mm / 4 mm pattern]
+]
+    +label(phase_title, (12mm, 58mm))
+    phase_zero := typ[
+    0 mm
+]
+    phase_three := typ[
+    3 mm
+]
+    phase_six := typ[
+    6 mm
+]
+    +label(phase_zero, (12mm, 43mm))
+    +label(phase_three, (12mm, 30mm))
+    +label(phase_six, (12mm, 17mm))
+    for i in 0:2 do
+        y := 44mm - i * 13mm
+        +draw(path((54mm, y), (166mm, y)), pen(ink, 2mm, "butt", "round", 4, [8mm, 4mm], i * 3mm))
+    end
+end

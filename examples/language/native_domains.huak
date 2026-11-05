@@ -1,0 +1,22 @@
+// Native domains are available without loading a source standard-library module.
+ink := color.rgb(0.15, 0.35, 0.75)
+nib := pen(ink, 0.6mm)
+curve := geometry.circle((25mm, 25mm), 10mm)
+
+system := solver()
+distance := solver.unknown(system)
+solver.equation(system, distance, 40)
+solution := solver.solve(system)
+offset := (solver.value(solution, distance) * 1mm, 0mm)
+shifted := transform.transformed(curve, transform.translate(offset))
+
+export plate := picture(90mm, 60mm)
+default plate
+object.append(plate, object.draw(curve, nib))
+object.append(plate, object.draw(shifted, pen(color.rgb(0.8, 0.2, 0.3), 0.6mm)))
+
+caption := typ[Native domains]
+position := ((plate.width - text.width(caption)) / 2, 5mm)
+object.append(plate, object.label(caption, position))
+assertion := math.abs(math.sin(math.PI / 2) - 1) < 1e-12
+if not assertion then panic("native math failed") end

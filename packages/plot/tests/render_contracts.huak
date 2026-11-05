@@ -1,0 +1,24 @@
+import "../plot.huak".*
+import color.rgb
+
+fn probe(logarithmic:bool) -> picture
+    fig := figure(200pt,200pt,{"margin":0pt})
+    ax := axis of fig at (0,0)
+    plotting ax do
+        settings {"xticks":[],"yticks":[],"labels_visible":false,"ticks_visible":false,"grid":false,"spines":[],"ylim":[0,1]}
+        if logarithmic then
+            xscale "log10"
+            xlim [1,100]
+            +lines x [0.1,1000] y [0.5,0.5] styled {"color":rgb(1,0,0),"width":2pt}
+            +scatter x [10] y [0.75] marked (marker "square" sized 12pt) styled {"color":rgb(0,0,1),"pen":false}
+        else
+            xlim [0,1]
+            +lines x [-1,2] y [0.5,0.5] styled {"color":rgb(1,0,0),"width":2pt}
+            +scatter x [0.5] y [0.75] marked (marker "square" sized 12pt) styled {"color":rgb(0,0,1),"pen":false}
+        end
+    end
+    return render fig
+end
+
+export linear := probe(false)
+export logarithmic := probe(true)
