@@ -67,12 +67,12 @@ pub const Track = struct {
             .path => |keys| {
                 try times([]const Path.Segment, keys);
                 for (keys) |key| {
-                    try path(key.value);
+                    try validatePath(key.value);
                     if (!sameTopology(keys[0].value, key.value)) return error.IncompatiblePaths;
                 }
             },
             .motion => |motion| {
-                try path(motion.path);
+                try validatePath(motion.path);
                 try scalars(motion.keys);
                 for (motion.keys) |key| if (key.value < 0 or key.value > 1) return error.InvalidMotion;
             },
@@ -129,7 +129,7 @@ fn scalars(keys: []const ScalarKey) Error!void {
     try times(f64, keys);
     for (keys) |key| if (!std.math.isFinite(key.value)) return error.NonFinite;
 }
-fn path(segments: []const Path.Segment) Error!void {
+pub fn validatePath(segments: []const Path.Segment) Error!void {
     if (segments.len == 0 or segments[0] != .move) return error.InvalidPath;
     var active = false;
     for (segments) |segment| switch (segment) {

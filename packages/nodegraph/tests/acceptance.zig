@@ -20,12 +20,16 @@ pub fn main(init: std.process.Init) !void {
         const output = try check.huak(&.{ "run", try check.fmt("tests/fixtures/{s}.huak", .{name}) }, true);
         try contains(output, "checks passed");
     }
-    try contains(try check.huak(&.{ "run", "tests/fixtures/scene.huak", "--output=target/nodegraph/acceptance/scene.svg" }, true), "scene checks passed");
+    try contains(try check.huak(&.{ "run", "tests/fixtures/scene.huak", "--output=target/nodegraph/acceptance/scene.svg", "--output=debug_grid=target/nodegraph/acceptance/debug-grid.svg" }, true), "scene checks passed");
+    const grid = try check.read(try check.path("debug-grid.svg"));
+    if (std.mem.count(u8, grid, "stroke=\"#8c9ebf\"") != 4) return error.MissingGridEdges;
+    try contains(grid, "matrix(0 1 1 0 0 0)");
     try contains(try check.huak(&.{ "run", "tests/fixtures/mark_bend.huak", "--output=tip_check=target/nodegraph/acceptance/arrow-tip.svg" }, true), "mark bending checks passed");
     _ = try check.tool(&.{ "rsvg-convert", "-w", "1000", "-o", try check.path("arrow-tip.png"), try check.path("arrow-tip.svg") });
     try number(try check.tool(&.{ "magick", try check.path("arrow-tip.png"), "-crop", "30x30+366+289", "+repage", "-background", "white", "-alpha", "remove", "-fx", "max(r-b,0)", "-format", "%[fx:mean]", "info:" }), 0);
     _ = try check.huak(&.{ "run", "examples/scene.huak", "--output=target/nodegraph/acceptance/scene-example.svg" }, true);
 
+    const before_gallery = check.exports;
     for ([_]struct { script: []const u8, names: []const []const u8 }{
         .{ .script = "examples/bending.huak", .names = &.{"comparison"} },
         .{ .script = "examples/diagrams.huak", .names = &.{ "commutative", "flowchart", "state_machine", "groups", "transparent_crossings" } },
@@ -62,6 +66,7 @@ pub fn main(init: std.process.Init) !void {
             }
         };
     }
+    const gallery_exports = check.exports - before_gallery;
     try contains(try check.tool(&.{ "pdftotext", try check.path("transparent_crossings-1.pdf"), "-" }), "Native text");
     // The fixture uses mathematical italic Unicode letters, retained as text.
     const math = try check.tool(&.{ "pdftotext", "-raw", try check.path("commutative-1.pdf"), "-" });
@@ -114,8 +119,8 @@ pub fn main(init: std.process.Init) !void {
     _ = try check.write("results.json", try std.json.Stringify.valueAlloc(a, .{
         .processes = check.processes,
         .huakIndependent = true,
-        .galleryExports = 40,
-        .additionalSvgExports = 5,
+        .galleryExports = gallery_exports,
+        .additionalSvgExports = check.exports - gallery_exports,
         .jobsByteIdentical = true,
         .baselineByteIdentical = if (check.baseline != null) @as(?bool, true) else null,
         .nativePdfText = true,
@@ -125,7 +130,7 @@ pub fn main(init: std.process.Init) !void {
         .nativeCapabilityChecks = 5,
         .capabilityProbes = 2,
     }, .{ .whitespace = .indent_2 }));
-    std.debug.print("Nodegraph: {d} Huak processes passed; 45 exports, serial/parallel equality, PDF text, alpha, arrow strokes and diagnostics verified.\n", .{check.processes});
+    std.debug.print("Nodegraph: {d} Huak processes passed; {d} exports, serial/parallel equality, PDF text, alpha, arrow strokes, debug grid and diagnostics verified.\n", .{ check.processes, check.exports });
 }
 
 const Check = struct {
@@ -135,6 +140,7 @@ const Check = struct {
     library: []const u8,
     baseline: ?[]const u8,
     processes: usize = 0,
+    exports: usize = 0,
 
     fn fmt(self: Check, comptime format: []const u8, args: anytype) ![]const u8 {
         return std.fmt.allocPrint(self.a, format, args);
@@ -168,7 +174,11 @@ const Check = struct {
         argv[args.len + 1] = "--libtypst";
         argv[args.len + 2] = self.library;
         self.processes += 1;
-        return self.process(argv, success);
+        const result = try self.process(argv, success);
+        if (success) for (args) |arg| {
+            if (std.mem.startsWith(u8, arg, "--output=") or std.mem.eql(u8, arg, "--output")) self.exports += 1;
+        };
+        return result;
     }
     fn compareBaseline(self: Check, name: []const u8, bytes: []const u8) !void {
         if (self.baseline) |base| try equal(bytes, try self.read(try std.fs.path.join(self.a, &.{ base, name })));

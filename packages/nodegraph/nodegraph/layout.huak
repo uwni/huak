@@ -116,31 +116,31 @@ fn axis_cells(items:list, axis:int, spacing:length, minimum:length, direction:pa
     end
     assert(high-low <= 4096, "elastic grid exceeds 4096 cells per axis")
     result := []
-    cursor := 0pt
-    extents := []
-    for i in 0:len(items)-1 do
-        item:any := items[i]
+    for index in low:high do
+        result += [AxisCell(index: index, center: 0pt, width: minimum)]
+    end
+    for item in items do
         if item.kind == "node" then
             coordinate:any := item.position
             if coordinate.kind == "grid" and not opt.get(item.options, "floating", false) then
-                extents += [AxisExtent(index: axis_value(coordinate.value, axis), projected: node_span(item, direction))]
+                value := axis_value(coordinate.value, axis)
+                span := node_span(item, direction)
+                left := floor(value)
+                cell:AxisCell := result[int(left)-low]
+                if value == left then
+                    cell.width = max(cell.width, span)
+                else
+                    cell.width = max(cell.width, span*(ceil(value)-value))
+                    next:AxisCell := result[int(left)-low+1]
+                    next.width = max(next.width, span*(value-left))
+                end
             end
         end
     end
-    for cell in low:high do
-        width := minimum
-        for i in 0:len(extents)-1 do
-            value:float := extents[i].index
-            projected:length := extents[i].projected
-            if value == cell then
-                width = max(width, projected)
-            elseif value > cell and value < cell+1 then
-                width = max(width, projected*(ceil(value)-value))
-            elseif value > cell-1 and value < cell then
-                width = max(width, projected*(value-floor(value)))
-            end
-        end
-        result += [AxisCell(index: cell, center: cursor+width/2, width: width)]
+    cursor := 0pt
+    for cell in result do
+        width:length := cell.width
+        cell.center = cursor+width/2
         cursor = cursor+width+spacing
     end
     return result

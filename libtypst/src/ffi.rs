@@ -909,7 +909,7 @@ pub unsafe extern "C" fn typst_outline_view(
                 segment_count: outline.inner.segments.len(),
                 dashes: outline.inner.dashes.as_ptr(),
                 dash_count: outline.inner.dashes.len(),
-                run_count: outline.inner.run_count,
+                run_count: outline.inner.run_count(),
             });
             Ok(Report::default())
         })

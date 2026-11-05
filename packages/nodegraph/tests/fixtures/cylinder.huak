@@ -2,7 +2,6 @@ import paint.bounds
 import text.{width, height}
 import assertions.assert
 import "../../nodegraph.huak".*
-import assertions.assert
 n := node("db", absolute((0pt, 0pt)), typ[DB], {"shape": "cylinder", "width": 60pt, "height": 40pt, "shape_options": {"rings": [-8pt, 8pt]}})
 p := diagram([n])
 assert(len(bounds(p)) == 2, "cylinder rings must render")

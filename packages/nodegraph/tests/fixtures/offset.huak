@@ -4,7 +4,6 @@ import assertions.assert
 import math.{abs, norm}
 import "../../nodegraph.huak".*
 import "../../nodegraph/curves.huak" as curves
-import assertions.assert
 curve := bezier((0pt, 0pt), (20pt, 40pt), (60pt, 40pt), (80pt, 0pt))
 shifted := curves.parallel_route(curve, 5pt)
 assert(len(shifted) > 0, "parallel route must produce geometry")

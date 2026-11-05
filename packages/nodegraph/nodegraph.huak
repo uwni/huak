@@ -1,5 +1,4 @@
 // Node-and-arrow diagrams expressed entirely in Huak source.
-// See docs/nodegraph.md for the upstream feature audit and current limitations.
 import geometry.{circle, compound}
 import object.draw
 import color.rgb
@@ -52,17 +51,20 @@ fn debug_grid(dst:object, resolved:layout.Geometry)
     x1:length := xs[len(xs)-1].center+xs[len(xs)-1].width/2
     y0:length := ys[0].center-ys[0].width/2
     y1:length := ys[len(ys)-1].center+ys[len(ys)-1].width/2
+    x_axis:pair := resolved.axes[0]
+    y_axis:pair := resolved.axes[1]
+    basis := transform.matrix(x_axis.x, x_axis.y, y_axis.x, y_axis.y, 0pt, 0pt)
     ink := pen(rgb(0.55, 0.62, 0.75), 0.25pt)
     for i in 0:len(xs)-1 do
         x:length := xs[i].center-xs[i].width/2
-        object.append(dst, draw(path((x, y0), (x, y1)), ink))
+        object.append(dst, draw(path((x, y0), (x, y1)), ink, basis))
     end
-    object.append(dst, draw(path((x1, y0), (x1, y1)), ink))
+    object.append(dst, draw(path((x1, y0), (x1, y1)), ink, basis))
     for i in 0:len(ys)-1 do
         y:length := ys[i].center-ys[i].width/2
-        object.append(dst, draw(path((x0, y), (x1, y)), ink))
+        object.append(dst, draw(path((x0, y), (x1, y)), ink, basis))
     end
-    object.append(dst, draw(path((x0, y1), (x1, y1)), ink))
+    object.append(dst, draw(path((x0, y1), (x1, y1)), ink, basis))
 end
 
 fn configured(items:list, options:dict) -> list
@@ -114,17 +116,14 @@ export fn geometry(items:list, options:dict = {}) -> layout.Geometry
     descriptions := configured(items, options)
     prepared := layout.nodes(descriptions, options)
     connectors := edges.resolve(descriptions, prepared)
-    result := layout.Geometry(objects: [], by_name: copy(prepared.geometry.by_name))
+    result := prepared.geometry
+    result.objects = descriptions
+    for connector in connectors do result.objects[connector.source_index] = connector end
     for i in 0:len(descriptions)-1 do
-        item:any := descriptions[i]
+        item:any := result.objects[i]
         if item.kind == "edge" then
-            for j in 0:len(connectors)-1 do
-                if connectors[j].source_index == i then
-                    result.objects += [connectors[j]]
-                    if connectors[j].name != "" then result.by_name[connectors[j].name] = connectors[j] end
-                end
-            end
-        else result.objects += [layout.find(prepared.geometry, item.name)] end
+            if item.name != "" then result.by_name[item.name] = item end
+        else result.objects[i] = layout.find(result, item.name) end
     end
     return result
 end
@@ -148,20 +147,23 @@ export fn route(objects:any, name:string) -> path
 end
 
 export fn diagram(items:list, options:dict = {}) -> picture
-    objects := geometry(items, options)
+    return render_geometry(geometry(items, options), options)
+end
+
+fn render_geometry(objects:layout.Geometry, options:dict) -> picture
     pictures := []
-    for i in 0:len(objects.objects)-1 do
-        if objects.objects[i].kind == "edge" then pictures += [render.edge_object(objects.objects[i])]
-        else pictures += [render.node_object(objects.objects[i])] end
+    for item in objects.objects do
+        if item.kind == "edge" then pictures += [render.edge_object(item)]
+        else pictures += [render.node_object(item)] end
     end
     level:int := opt.get(options, "debug_level", 0)
     if opt.get(options, "debug", false) or level >= 1 then
         debug := picture()
         debug_grid(debug, objects)
         if opt.get(options, "debug", false) or level >= 2 then
-            for i in 0:len(objects.objects)-1 do
-                if objects.objects[i].kind != "edge" then
-                    center:pair := objects.objects[i].center
+            for item in objects.objects do
+                if item.kind != "edge" then
+                    center:pair := item.center
                     object.append(debug, draw(circle(center, 2pt), pen(rgb(0.85, 0.2, 0.2), 0.5pt)))
                 end
             end
@@ -236,27 +238,7 @@ end
 export fn finish(target:Scene) -> picture
     if target.finished then return target.picture end
     target.geometry = geometry(target.items, target.options)
-    pictures := []
-    for i in 0:len(target.geometry.objects)-1 do
-        item:any := target.geometry.objects[i]
-        if item.kind == "edge" then pictures += [render.edge_object(item)]
-        else pictures += [render.node_object(item)] end
-    end
-    level:int := opt.get(target.options, "debug_level", 0)
-    if opt.get(target.options, "debug", false) or level >= 1 then
-        debug := picture()
-        debug_grid(debug, target.geometry)
-        if opt.get(target.options, "debug", false) or level >= 2 then
-            for i in 0:len(target.geometry.objects)-1 do
-                if target.geometry.objects[i].kind != "edge" then
-                    center:pair := target.geometry.objects[i].center
-                    object.append(debug, draw(circle(center, 2pt), pen(rgb(0.85, 0.2, 0.2), 0.5pt)))
-                end
-            end
-        end
-        pictures += [render.PaintedObject(content: debug, clearance: compound([]), layer: 1000000, floating: true)]
-    end
-    target.picture = render.compose_objects(pictures, opt.get(target.options, "margin", 6pt))
+    target.picture = render_geometry(target.geometry, target.options)
     target.finished = true
     return target.picture
 end

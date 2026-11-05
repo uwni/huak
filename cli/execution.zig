@@ -14,7 +14,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library
     // Reject unavailable outputs before parameter/font setup or execution.
     const selected = try scratch.alloc(*const language.bytecode.Output, options.outputs.len);
     for (options.outputs, selected) |requested, *selection| {
-        const output = outputNamed(program, requested.name) orelse {
+        const output = program.outputNamed(requested.name) orelse {
             if (std.mem.eql(u8, requested.name, "default")) {
                 return report.fail("{s}: no default output; declare 'default <picture>' or select --output NAME=FILE", .{path});
             } else {
@@ -61,9 +61,4 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library
         }
     }
     return runtime.takeOutputs(targets);
-}
-
-fn outputNamed(program: *const language.bytecode.Program, name: []const u8) ?*const language.bytecode.Output {
-    for (program.outputs) |*output| if (std.mem.eql(u8, output.name, name)) return output;
-    return null;
 }

@@ -20,7 +20,6 @@ pub struct Outline {
     pub paths: Vec<TypstOutlinedPath>,
     pub segments: Vec<TypstPathSegment>,
     pub dashes: Vec<f64>,
-    pub run_count: usize,
     run_texts: Vec<String>,
 }
 
@@ -92,6 +91,10 @@ fn from_frame(frame: &Frame) -> Result<Outline, Error> {
 }
 
 impl Outline {
+    pub fn run_count(&self) -> usize {
+        self.run_texts.len()
+    }
+
     fn style(
         &mut self,
         fill: Option<&Paint>,
@@ -196,9 +199,8 @@ impl Outline {
 
     fn text(&mut self, text: &TextItem, at: Transform) -> Result<(), Error> {
         let style = self.style(Some(&text.fill), FillRule::NonZero, text.stroke.as_ref())?;
-        let run_index = self.run_count;
+        let run_index = self.run_texts.len();
         self.run_texts.push(text.text.to_string());
-        self.run_count = self.run_texts.len();
         let run_text = self.run_texts[run_index].as_str();
         let scale = text.size.to_pt() / text.font.units_per_em();
         if !scale.is_finite() || scale <= 0.0 {
@@ -657,11 +659,11 @@ mod tests {
         let height = frame.height().to_pt();
         drop(document);
         drop(world);
-        assert!(outline.run_count > 0);
+        assert!(outline.run_count() > 0);
         let mut saw_space = false;
         for path in &outline.paths {
             if path.kind == TYPST_OUTLINE_GLYPH {
-                assert!(path.run_index < outline.run_count);
+                assert!(path.run_index < outline.run_count());
                 let bytes =
                     unsafe { std::slice::from_raw_parts(path.run_text.data, path.run_text.len) };
                 let text = std::str::from_utf8(bytes).unwrap();

@@ -40,10 +40,10 @@ nodegraph.drawing debug_scene do
     place typ[D] at grid(0, 0)
 end
 assert(len(bounds(debug_scene.picture)) == 2, "debug grid must keep content bounds")
-level_scene := scene({"debug_level": 2})
+level_scene := scene({"debug_level": 1, "axes": [(0, 1), (1, 0)]})
 nodegraph.drawing level_scene do
     place typ[L] at grid(0, 0)
 end
-assert(len(bounds(level_scene.picture)) == 2, "debug level grid must render")
+export debug_grid := level_scene.picture
 default s.picture
 print("scene checks passed")

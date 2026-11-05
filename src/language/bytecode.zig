@@ -207,6 +207,11 @@ pub const Program = struct {
     entry: u32 = 0,
     task_regions: []const TaskRegion = &.{},
 
+    pub fn outputNamed(self: *const Program, name: []const u8) ?*const Output {
+        for (self.outputs) |*output| if (std.mem.eql(u8, output.name, name)) return output;
+        return null;
+    }
+
     pub fn isEntry(self: *const Program, index: usize) bool {
         if (self.entry == index) return true;
         for (self.modules) |module| if (module.entry == index) return true;

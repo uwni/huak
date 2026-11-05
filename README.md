@@ -77,5 +77,5 @@ brush := pen(rgb(0.10,0.25,0.26), nib:pensquare(8pt), motion:turn, tolerance:0.0
 - [三叶结](examples/language/trefoil.huak)用 `ab & bc & ca` 把三段首尾相接的 Bézier 曲线拼成一条路径。
 - [Huak 标志](examples/huak-logo.huak)用 `import regions.{union, minus}` 引入区域运算，再用 `a union b` 合并字形轮廓。需要交集或对称差时，可从同一模块导入 `inter` 或 `xor`。
 - [选择性擦除](examples/language/erase.huak)对照展示点划线、异形笔尖、变宽圆笔和旋转笔尖。
-- [Plot 图集](packages/plot/docs/gallery.md)展示折线图、误差棒和热图，并附有源码。
+- Plot 提供折线图、误差棒和热图的 [SVG 图集](packages/plot/gallery/) 和[绘图脚本](packages/plot/examples/)。
 - [Nodegraph](packages/nodegraph/README.md) 用节点和箭头绘制关系图。

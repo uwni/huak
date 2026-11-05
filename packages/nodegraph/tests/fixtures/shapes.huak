@@ -3,7 +3,6 @@ import text.{width, height}
 import assertions.assert
 import math.{abs}
 import "../../nodegraph.huak".*
-import assertions.assert
 
 shapes := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
 for i in 0:len(shapes)-1 do

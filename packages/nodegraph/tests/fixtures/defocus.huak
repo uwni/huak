@@ -3,7 +3,6 @@ import text.{width, height}
 import assertions.assert
 import math.{norm}
 import "../../nodegraph.huak".*
-import assertions.assert
 
 target := node("n", absolute((0pt, 0pt)), typ[Wide], {"width": 80pt, "height": 20pt})
 wire := edge(absolute((-100pt, -100pt)), named("n"), {"name": "e"})

@@ -3,7 +3,6 @@ import assertions.assert
 import "../../nodegraph.huak".*
 import "../../nodegraph/marks.huak" as marks
 import "../../nodegraph/model.huak" as model
-import assertions.assert
 plain := marks.render(model.mark("head", 1, false, {"size": 8pt}), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 8pt)
 wide := marks.render(model.mark("head", 1, false, {"size": 8pt, "extrude": [-4pt, 0pt, 4pt]}), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 8pt)
 a := bounds(plain.content)

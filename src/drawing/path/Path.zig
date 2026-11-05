@@ -386,38 +386,52 @@ pub fn curveAt(self: Path, time: f64) PathError!CurvePosition {
 fn selectCurveAt(self: Path, time: f64) PathError!CurveSelection {
     const count = self.segmentCount();
     if (count == 0 or !std.math.isFinite(time) or time < 0 or time > @as(f64, @floatFromInt(count))) return error.InvalidParameter;
-    var current: Point = .zero;
-    var start: Point = .zero;
-    var active = false;
-    var index: usize = 0;
-    for (self.segments.items) |segment| {
-        if (segment == .move) {
-            if (!segment.move.isFinite()) return error.NonFinite;
-            current = segment.move;
-            start = current;
-            active = true;
-            continue;
-        }
-        if (!active) return error.InvalidPath;
-        if (segment == .close and exactPoint(current, start)) {
-            active = false;
-            continue;
-        }
-        const curve: Cubic = switch (segment) {
-            .line => |point| .line(current, point),
-            .cubic => |controls| .{ .p0 = current, .p1 = controls.c1, .p2 = controls.c2, .p3 = controls.end },
-            .close => .line(current, start),
-            .move => unreachable,
-        };
-        if (!curve.isFinite()) return error.NonFinite;
-        if (time < @as(f64, @floatFromInt(index + 1)) or index + 1 == count)
-            return .{ .position = .{ .curve = curve, .t = time - @as(f64, @floatFromInt(index)) }, .is_cubic = segment == .cubic };
-        current = curve.p3;
-        if (segment == .close) active = false;
-        index += 1;
-    }
-    return error.InvalidPath;
+    const index = @min(@as(usize, @intFromFloat(time)), count - 1);
+    var reader: CurveReader = .{ .segments = self.segments.items };
+    const selected = try reader.read(index);
+    return .{ .position = .{ .curve = selected.curve, .t = time - @as(f64, @floatFromInt(index)) }, .is_cubic = selected.is_cubic };
 }
+
+/// Advances in drawable-segment time. Moves and empty closing edges consume no time.
+const CurveReader = struct {
+    segments: []const Segment,
+    current: Point = .zero,
+    start: Point = .zero,
+    open: bool = false,
+
+    fn read(self: *CurveReader, skip: usize) PathError!struct { curve: Cubic, is_cubic: bool } {
+        var remaining = skip;
+        var current = self.current;
+        var start = self.start;
+        var open = self.open;
+        for (self.segments, 0..) |segment, i| {
+            if (segment == .move) {
+                if (!segment.move.isFinite()) return error.NonFinite;
+                current = segment.move;
+                start = current;
+                open = true;
+                continue;
+            }
+            if (!open) return error.InvalidPath;
+            open = segment != .close;
+            if (!open and exactPoint(current, start)) continue;
+            const curve: Cubic = switch (segment) {
+                .line => |point| .line(current, point),
+                .cubic => |c| .{ .p0 = current, .p1 = c.c1, .p2 = c.c2, .p3 = c.end },
+                .close => .line(current, start),
+                .move => unreachable,
+            };
+            if (!curve.isFinite()) return error.NonFinite;
+            current = curve.p3;
+            if (remaining == 0) {
+                self.* = .{ .segments = self.segments[i + 1 ..], .current = current, .start = start, .open = open };
+                return .{ .curve = curve, .is_cubic = segment == .cubic };
+            }
+            remaining -= 1;
+        }
+        return error.InvalidPath;
+    }
+};
 
 pub fn pointAt(self: Path, time: f64) PathError!Point {
     const selected = try self.curveAt(time);
@@ -461,10 +475,12 @@ fn collectIntersections(self: Path, comptime Result: type, allocator: std.mem.Al
     errdefer result.deinit(allocator);
     const first_count = self.segmentCount();
     const second_count = other.segmentCount();
+    var outer: CurveReader = .{ .segments = self.segments.items };
     for (0..first_count) |i| {
-        const first = (try self.curveAt(@floatFromInt(i))).curve;
+        const first = (try outer.read(0)).curve;
+        var inner: CurveReader = .{ .segments = other.segments.items };
         for (0..second_count) |j| {
-            const second = (try other.curveAt(@floatFromInt(j))).curve;
+            const second = (try inner.read(0)).curve;
             const hits = try intersectCubics(allocator, first, second, tolerance);
             defer allocator.free(hits);
             for (hits) |hit| {

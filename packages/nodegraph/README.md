@@ -7,7 +7,7 @@ huak standard library: huak neither embeds it nor registers it in `catalog`.
 - modules: `nodegraph/`
 - examples: `examples/`
 - acceptance: `zig run -OReleaseSafe tests/acceptance.zig -- ../../zig-out/bin/huak ../../libtypst/target/release/libtypst.dylib` from this directory
-- feature audit: [docs/nodegraph.md](docs/nodegraph.md)
+- [Executable examples and regression cases](tests/fixtures/)
 
 The `drawing`-block entry is a `scene` value. Save this script under `examples/`
 (the import path is relative to the script):

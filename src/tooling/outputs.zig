@@ -50,12 +50,9 @@ fn isPicture(program: *const bytecode.Program, output: bytecode.Output) bool {
 /// A default is a snapshot. It shares a named binding's final value only when
 /// a direct global read created it and that binding cannot subsequently change.
 fn defaultSource(program: *const bytecode.Program) ?u32 {
-    var target: ?u32 = null;
-    for (program.outputs) |output| if (isDefault(output.name) and isPicture(program, output)) {
-        target = output.global;
-        break;
-    };
-    const destination = target orelse return null;
+    const output = program.outputNamed("default") orelse return null;
+    if (!isPicture(program, output.*)) return null;
+    const destination = output.global;
     const code = program.functions[program.entry].code;
     var store: ?usize = null;
     for (code, 0..) |instruction, index| if (instruction.op == .store_global and instruction.a == destination) {

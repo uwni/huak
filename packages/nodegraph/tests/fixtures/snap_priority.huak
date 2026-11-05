@@ -4,7 +4,6 @@ import text.{width, height}
 import assertions.assert
 import math.{abs}
 import "../../nodegraph.huak".*
-import assertions.assert
 
 low := node("low", absolute((0pt, 0pt)), typ[L], {"width": 40pt, "height": 20pt, "snap": 1})
 high := node("high", absolute((0pt, 0pt)), typ[H], {"width": 80pt, "height": 20pt, "snap": 2})

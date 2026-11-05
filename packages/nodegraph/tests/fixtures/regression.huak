@@ -13,7 +13,6 @@ import "../../nodegraph/edges.huak" as edges
 import "../../nodegraph/marks.huak" as marks
 import "../../nodegraph/model.huak" as model
 import "../../nodegraph/render.huak" as render
-import assertions.assert
 
 fn near(a:pair, b:pair)
     assert(norm(a-b) < 0.002pt, "coordinate mismatch")
@@ -36,6 +35,9 @@ near(anchor(g, "a", "east")-anchor(g, "a"), (20pt, 0pt))
 near(anchor(g, "a", "north")-anchor(g, "a"), (0pt, 10pt))
 
 // Fractional cell interpolation, physical coordinates and forward references.
+g = geometry([node("fractional", grid(-1.75, 0), typ[], {"width": 40pt, "height": 10pt})], {"spacing": (0pt, 0pt), "cell_size": (12pt, 0pt)})
+assert(g.cells[0][0].width == 30pt and g.cells[0][1].width == 12pt)
+near(anchor(g, "fractional"), (20.25pt, -5pt))
 c := node("c", grid(-0.5, 0), typ[], {"width": 10pt, "height": 10pt})
 d := node("d", relative(named("e"), (10pt, -20pt)), typ[])
 e_node := node("e", absolute((100pt, 50pt)), typ[])

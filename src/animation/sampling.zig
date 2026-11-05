@@ -47,11 +47,7 @@ pub fn samplePaths(allocator: std.mem.Allocator, context: anytype, comptime eval
             var result = try evaluate(self.allocator, self.context, time);
             errdefer result.deinit();
             self.evaluations += 1;
-            const keys = [_]animation.PathKey{
-                .{ .time = 0, .value = result.segments.items },
-                .{ .time = 1, .value = result.segments.items },
-            };
-            try (animation.Animation{ .duration_seconds = 1, .tracks = &.{.{ .target = 1, .property = .{ .path = &keys } }} }).validate();
+            try animation.validatePath(result.segments.items);
             return result;
         }
         fn append(self: *Self, time: f64, segments: []const Path.Segment) !void {
@@ -103,7 +99,8 @@ fn pointError(a: g.Point, b: g.Point, actual: g.Point, fraction: f64) !f64 {
     return result;
 }
 fn deviation(left: []const Path.Segment, right: []const Path.Segment, actual: []const Path.Segment, fraction: f64) !f64 {
-    if (!animation.sameTopology(left, actual) or !animation.sameTopology(left, right)) return error.IncompatiblePaths;
+    // refine checks the interval endpoints once, before evaluating its samples.
+    if (!animation.sameTopology(left, actual)) return error.IncompatiblePaths;
     var result: f64 = 0;
     for (left, right, actual) |a, b, value| {
         const current = switch (a) {

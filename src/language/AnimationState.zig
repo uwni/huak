@@ -91,7 +91,7 @@ fn add(self: *AnimationState, index: u32, property: core.Property, easing: core.
     // Reuse the native validator for all timing, ranges, path grammar and
     // morph topology. Check the new track against already retained tracks
     // without revalidating their geometry on every declaration.
-    try (core.Animation{ .duration_seconds = 1, .tracks = &.{track} }).validate();
+    try track.validateProperties();
     var previous_tracks = self.iterator();
     while (previous_tracks.next()) |previous| {
         if (previous.target == track.target and std.meta.activeTag(previous.property) == std.meta.activeTag(track.property)) return error.ConflictingTracks;
