@@ -1,6 +1,6 @@
 import drawing.drawing
 import paint.{label, picture}
-import "shapes.huak" as shapes
+import "lib/shapes.huak" as shapes
 
 export pic := picture(300, 120)
 default pic

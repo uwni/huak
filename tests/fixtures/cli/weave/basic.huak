@@ -71,7 +71,7 @@ ty := sqrt(3)*tx
 ta := bezier(t0, t0+(26.4pt, 0pt), t1+(tx, -ty), t1)
 tb := bezier(t1, t1+(-tx, ty), t2+(tx, ty), t2)
 tc := bezier(t2, t2+(-tx, -ty), t0+(-26.4pt, 0pt), t0)
-trefoil_curve := closed(joined(joined(ta, tb), tc))
+trefoil_curve := closed(ta & tb & tc)
 assert(len(path_crossings([trefoil_curve])) == 3, "ordinary trefoil nodes must not be crossings")
 export trefoil := picture(100pt, 100pt)
 translucent := pen(rgb(0.8, 0.1, 0.1, 0.5), 6pt, "round", "round")

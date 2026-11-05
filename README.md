@@ -41,19 +41,19 @@ zig-out/bin/huak run circle.huak --output circle.svg --output circle.pdf
 
 ## 本地 Playground
 
-要在浏览器里编辑示例并下载 SVG，可用 Rustup 添加 Wasm 目标，再用 Ruby 启动本地服务器。
+本地构建 Playground 需要 Rust 的 Wasm 目标。
 
 ```sh
 rustup target add wasm32-wasip1
 zig build playground
-ruby -run -e httpd zig-out/playground -b 127.0.0.1 -p 8000
 ```
 
-打开 [本地 Playground](http://127.0.0.1:8000/) 即可编辑。
+将静态 HTTP 服务器的根目录设为 `zig-out/playground/`，在浏览器打开服务地址。从 **Examples** 下拉列表选择示例即可编辑并渲染，选回 **Scratchpad** 可继续编辑原稿。构建时会自动收录 `examples/` 下的 `.huak` 脚本，`lib/` 子目录里的模块供示例导入。
 
 ## 更多示例
 
 - [绘图脚本](examples/language/)涵盖平滑曲线、笔触和路径交织。
+- [三叶结](examples/language/trefoil.huak)用 `ab & bc & ca` 把三段首尾相接的 Bézier 曲线拼成一条路径。
 - [选择性擦除](examples/language/erase.huak)对照展示点划线、异形笔尖和变宽曲线。用 `erase sweep from [curve, band] with brush` 沿路径擦除，已有闭合笔迹时可写 `erase footprint from [curve, band]`。
 - [Plot 图集](packages/plot/docs/gallery.md)展示折线图、误差棒和热图，并附有源码。
 - [Nodegraph](packages/nodegraph/README.md) 用节点和箭头绘制关系图。

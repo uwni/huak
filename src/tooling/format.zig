@@ -197,7 +197,7 @@ const Indentation = struct {
         // unlike multiplication it does not require a following operand.
         if (kind == .star and previous == .dot) return false;
         return switch (kind orelse return false) {
-            .assign, .declare, .plus_assign, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal, .plus, .minus, .star, .slash, .percent, .caret, .straight_join, .smooth_join, .kw_and, .kw_or, .comma => true,
+            .assign, .declare, .plus_assign, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal, .plus, .minus, .star, .slash, .percent, .caret, .ampersand, .straight_join, .smooth_join, .kw_and, .kw_or, .comma => true,
             else => false,
         };
     }

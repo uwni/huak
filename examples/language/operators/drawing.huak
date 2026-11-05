@@ -1,6 +1,6 @@
 import paint.{rgb, pen, bounds, draw, label, picture}
 import assertions.assert
-import "transforms.huak" as transforms
+import "lib/transforms.huak" as transforms
 
 base := (0, 0) ~~ (20, 35) ~~ (45, 10) ~~ (65, 40)
 curve := base transforms.scaled 2 transforms.shifted (30, 30)

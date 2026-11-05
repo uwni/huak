@@ -10,6 +10,12 @@ import object.{draw, fill, filldraw, label, append, bounds, outlines, region, sn
 import object.transform as transform_object
 import text.{width, height, baseline}
 import animation.{timeline, animate, motion}
+precedence concatenation
+    below path
+    above comparison
+    associativity left
+end
+mixfix _ joined as & _ in concatenation
 export rgb, pen, pencircle, pensquare, makepen, makepath, penoffset, stroke_outline, envelope, translate
 export scale, rotate, compose, apply, rectangle, circle, path, compound, subpaths, smooth, bezier
 export closed, intersection_times, sample_at_length, sample_at_fraction, samples_at_length

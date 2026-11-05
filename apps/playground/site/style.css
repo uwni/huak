@@ -6,11 +6,13 @@ h1 { font: 600 clamp(28px,4vw,50px)/1.15 Georgia,serif; margin: 0; letter-spacin
 h1 span { font-weight: 400; color: #526a60 }
 main { display: grid; grid-template-columns: 1fr 1fr; gap: 22px }
 section { min-width: 0 }
-.bar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px }
+.bar { min-height: 48px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 8px }
 h2 { font-size: 16px; font-weight: 600; margin: 0 }
 .bar button, .bar a { font: inherit; font-size: 14px; border-radius: 6px; padding: 7px 16px }
 .bar button { background: #245547; border: 0; color: white; cursor: pointer }
 .bar button:disabled { opacity: .6; cursor: wait }
+.bar label { margin-left: auto; font-size: 14px }
+#example { font: inherit; font-size: 14px; max-width: 100%; min-width: 0 }
 .bar a { color: #245547; text-underline-offset: 3px }
 #source,.preview { width: 100%; min-height: 430px; height: 62vh; border: 1px solid #b6c5b9; border-radius: 8px }
 #source { overflow: hidden; background: white }

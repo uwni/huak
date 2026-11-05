@@ -110,7 +110,7 @@ test "standard mixfix defaults preserve native calls bytecode work and repeated 
         \\plate:=picture(60mm,40mm)
         \\object.append(plate, object.draw(circle((40mm,20mm),10mm), pen(blue,0.5mm)))
         \\object.append(plate, object.fill(rectangle((2mm,2mm),20mm,3mm), blue))
-        \\curve:=(2mm,10mm)~~(10mm,14mm)~~(20mm,10mm)
+        \\curve:=joined(joined((1mm,10mm)--(2mm,10mm),(2mm,10mm)~~(10mm,14mm)~~(20mm,10mm)),(20mm,10mm)--(21mm,10mm))
         \\object.append(plate, object.fill(tapered(curve,1mm), blue))
         \\plate.append(copy(rainbow(curve,0.5mm)), translate((0mm,8mm)))
         \\plate.append(copy(tube(curve,2mm)), translate((0mm,16mm)))
@@ -121,7 +121,7 @@ test "standard mixfix defaults preserve native calls bytecode work and repeated 
         \\plate:=picture with width 60mm height 40mm
         \\object.append(plate, object.draw((circle with center (40mm,20mm) radius 10mm), (pen with color blue width 0.5mm)))
         \\object.append(plate, object.fill((rectangle with origin (2mm,2mm) width 20mm height 3mm), blue))
-        \\curve:=(2mm,10mm)~~(10mm,14mm)~~(20mm,10mm)
+        \\curve:=(1mm,10mm)--(2mm,10mm) & (2mm,10mm)~~(10mm,14mm)~~(20mm,10mm) & (20mm,10mm)--(21mm,10mm)
         \\object.append(plate, object.fill((tapered along curve width 1mm), blue))
         \\plate.append(copy((rainbow along curve width 0.5mm)), translate((0mm,8mm)))
         \\plate.append(copy((tube along curve diameter 2mm)), translate((0mm,16mm)))

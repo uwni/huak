@@ -105,12 +105,18 @@ fn addPlayground(b: *std.Build) void {
     const check = b.addSystemCommand(&.{"wasmtime"});
     check.addArtifactArg(tests);
     b.step("test-playground", "Test SVG and diagnostics through the Wasm entry points").dependOn(&check.step);
-    app.root_module.export_symbol_names = &.{ "huak_input", "huak_render", "huak_result", "huak_result_len" };
+    app.root_module.export_symbol_names = &.{ "huak_input", "huak_set_files", "huak_render", "huak_result", "huak_result_len" };
     app.wasi_exec_model = .reactor;
     app.stack_size = 8 * 1024 * 1024;
     step.dependOn(&b.addInstallFile(app.getEmittedBin(), "playground/huak.wasm").step);
     step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("apps/playground/site"), .install_dir = .prefix, .install_subdir = "playground" }).step);
     installPlaygroundEditor(b, step);
+    const catalog = b.addRunArtifact(b.addExecutable(.{ .name = "playground-catalog", .root_module = module(b, b.graph.host, .ReleaseSafe, "apps/playground/catalog.zig", &.{}) }));
+    const sources = b.addWriteFiles().addCopyDirectory(b.path("examples"), "examples", .{ .include_extensions = &.{ ".huak", ".csv", ".json" } });
+    catalog.addDirectoryArg2(sources, .{});
+    const index = catalog.addOutputFileArg2("examples.json", .{});
+    tests.root_module.addAnonymousImport("example-catalog", .{ .root_source_file = index });
+    step.dependOn(&b.addInstallFile(index, "playground/examples.json").step);
 }
 
 fn installPlaygroundEditor(b: *std.Build, step: *std.Build.Step) void {

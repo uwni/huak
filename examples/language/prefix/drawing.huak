@@ -1,7 +1,7 @@
 import drawing.drawing
 import paint.{draw, fill}
 import paint.{circle, label, picture}
-import "brushes.huak" as brushes
+import "lib/brushes.huak" as brushes
 
 export sketch := picture(240, 140)
 export detail := picture(80, 80)

@@ -28,6 +28,7 @@ pub const Kind = enum {
     slash,
     percent,
     caret,
+    ampersand,
     assign,
     declare,
     arrow,
@@ -74,7 +75,7 @@ pub const Token = struct { kind: Kind, span: source_info.Span };
 
 pub fn isOperator(kind: Kind) bool {
     return switch (kind) {
-        .plus, .minus, .star, .slash, .percent, .caret, .arrow, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal, .straight_join, .smooth_join => true,
+        .plus, .minus, .star, .slash, .percent, .caret, .ampersand, .arrow, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal, .straight_join, .smooth_join => true,
         else => false,
     };
 }
@@ -146,6 +147,7 @@ pub fn next(self: *Lexer) error{LanguageError}!Token {
             ';' => return self.token(.semicolon, start),
             '+' => return self.token(if (self.take('=')) .plus_assign else .plus, start),
             '-' => return self.token(if (self.take('>')) .arrow else if (self.take('-')) .straight_join else .minus, start),
+            '&' => return self.token(.ampersand, start),
             '*' => return self.token(.star, start),
             '%' => return self.token(.percent, start),
             '^' => return self.token(.caret, start),
