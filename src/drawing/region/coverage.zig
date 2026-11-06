@@ -181,12 +181,12 @@ const Builder = struct {
         if (state.clip) |clip| if (clip.segments.items.len == 0) return;
         var fill: ?Path = null;
         defer if (fill) |*value| value.deinit();
-        if (styled.style.fill) |color| if (color.a != 0) {
+        if (styled.style.hasInk(.fill)) {
             fill = try self.region(styled.path, transform, if (styled.style.fill_rule == .evenodd) .evenodd else .nonzero);
-        };
+        }
         var outline: ?Path = null;
         defer if (outline) |*value| value.deinit();
-        if (styled.style.pen) |paint| if (paint.color.a != 0 and (paint.needsGeometry() or paint.width != 0)) {
+        if (styled.style.pen) |paint| if (styled.style.hasInk(.stroke) and (paint.needsGeometry() or paint.width != 0)) {
             outline = try self.stroke(styled.path, paint, transform);
         };
         if (fill == null and outline == null) return;

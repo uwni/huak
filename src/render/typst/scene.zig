@@ -5,6 +5,7 @@ const typst = @import("libtypst");
 const c = typst.c;
 const g = @import("../../drawing/geometry.zig");
 const DisplayList = @import("../../drawing/DisplayList.zig");
+const Gradient = @import("../../drawing/style.zig").Gradient;
 const Path = @import("../../drawing/path/Path.zig");
 const pens = @import("../../drawing/pen/root.zig");
 const physical = @import("pen.zig");
@@ -40,11 +41,11 @@ pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: 
                     stroke_index += 1;
                     continue;
                 };
-                try builder.paint(try builder.path(draw.path), try builder.style(draw.style), draw.transform, id);
+                try builder.paint(try builder.path(draw.path), try builder.style(draw.style), draw.style.gradient, draw.transform, id);
             },
             .label => |*label| {
                 if (label.reference >= labels.len) return error.InvalidFrameReference;
-                var raw = try builder.item(label.transform, null, id);
+                var raw = try builder.item(label.transform, null, id, null);
                 raw.kind = c.TYPST_ITEM_LAYOUT;
                 raw.layout = try labels[label.reference].nativeLayout(library);
                 try builder.append(raw);
@@ -53,7 +54,7 @@ pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: 
     }
     if (builder.levels.items.len != 1) return error.UnbalancedGroup;
     const child = try builder.childScene(builder.levels.items[0].items.items);
-    var root_item = try builder.item(.{ .d = -1, .e = 0 - options.origin.x, .f = size.y + options.origin.y }, null, if (options.object_ids != null) std.math.maxInt(u64) else 0);
+    var root_item = try builder.item(.{ .d = -1, .e = 0 - options.origin.x, .f = size.y + options.origin.y }, null, if (options.object_ids != null) std.math.maxInt(u64) else 0, null);
     root_item.kind = c.TYPST_ITEM_SCENE;
     root_item.scene = child;
     const root = try builder.scene(&.{root_item});
@@ -177,7 +178,7 @@ const Builder = struct {
             const draw = &command.path;
             const pen = if (draw.style.pen) |*value| value else continue;
             if (!pen.needsGeometry()) continue;
-            var stroke = (try physical.resolve(self.arena.child_allocator, try picture.range(draw.path), pen, options)) orelse {
+            var stroke = (try physical.resolve(self.arena.child_allocator, try picture.range(draw.path), draw.style, options)) orelse {
                 try strokes.append(memory, null);
                 continue;
             };
@@ -204,14 +205,14 @@ const Builder = struct {
         if (self.levels.items.len <= 1) return error.UnbalancedGroup;
         const level = self.levels.pop().?;
         const child_ = try self.childScene(level.items.items);
-        var raw = try self.item(level.transform, level.clip, level.id);
+        var raw = try self.item(level.transform, level.clip, level.id, null);
         raw.kind = c.TYPST_ITEM_SCENE;
         raw.scene = child_;
         try self.append(raw);
     }
 
-    fn paint(self: *Builder, path_: *const c.TypstPath, style_: *const c.TypstStyle, transform: g.Transform, id: u64) !void {
-        var raw = try self.item(transform, null, id);
+    fn paint(self: *Builder, path_: *const c.TypstPath, style_: *const c.TypstStyle, gradient: ?*const Gradient, transform: g.Transform, id: u64) !void {
+        var raw = try self.item(transform, null, id, gradient);
         raw.kind = c.TYPST_ITEM_PATH;
         raw.path = path_;
         raw.style = style_;
@@ -223,9 +224,14 @@ const Builder = struct {
         if (grouped) try self.group(draw.transform, null, id);
         const placement: g.Transform = if (grouped) .{} else draw.transform;
         const child_id = if (grouped) 0 else id;
-        if (draw.style.fill) |fill| try self.paint(try self.path(draw.path), try self.style(&.{ .fill = fill, .fill_rule = draw.style.fill_rule }), placement, 0);
+        if (draw.style.fill) |fill| try self.paint(try self.path(draw.path), try self.style(&.{ .fill = fill, .fill_rule = draw.style.fill_rule }), draw.style.gradientFor(.fill), placement, 0);
         if (stroke) |value| {
-            try self.paint(value.path, value.style, if (value.transform) |transform| transform.then(placement) else placement, child_id);
+            var footprint_paint: ?Gradient = null;
+            if (draw.style.gradientFor(.stroke)) |paint_| {
+                footprint_paint = paint_.*;
+                footprint_paint.?.kind = .linear_fill;
+            }
+            try self.paint(value.path, value.style, if (footprint_paint) |*fill| fill else null, if (value.transform) |transform| transform.then(placement) else placement, child_id);
         } else if (child_id != 0) {
             try self.group(placement, null, child_id);
             try self.endScope();
@@ -268,17 +274,35 @@ const Builder = struct {
         return result;
     }
 
-    fn item(self: *Builder, transform: g.Transform, clip: ?DisplayList.PathRef, id: u64) !c.TypstSceneItem {
+    fn item(self: *Builder, transform: g.Transform, clip: ?DisplayList.PathRef, id: u64, gradient: ?*const Gradient) !c.TypstSceneItem {
         var result = std.mem.zeroes(c.TypstSceneItem);
         result.transform = nativeTransform(transform);
         if (clip) |range| result.clip = try self.path(range);
+        if (id == 0 and gradient == null) return result;
+        const memory = self.arena.allocator();
+        const options = try memory.create(c.TypstSceneItemOptions);
+        options.* = std.mem.zeroes(c.TypstSceneItemOptions);
+        options.struct_size = @sizeOf(c.TypstSceneItemOptions);
         if (id != 0) {
-            const memory = self.arena.allocator();
             const tag = try std.fmt.allocPrint(memory, "libtypst-object-{d}", .{id});
-            const options = try memory.create(c.TypstSceneItemOptions);
-            options.* = .{ .struct_size = @sizeOf(c.TypstSceneItemOptions), .flags = c.TYPST_SCENE_ITEM_ISOLATE_TRANSFORM, .tag = .{ .data = tag.ptr, .len = tag.len } };
-            result.options = options;
+            options.flags = c.TYPST_SCENE_ITEM_ISOLATE_TRANSFORM;
+            options.tag = .{ .data = tag.ptr, .len = tag.len };
         }
+        if (gradient) |paint_| {
+            const colors = try memory.alloc(c.TypstColor, paint_.colors.len);
+            for (paint_.colors, colors) |value, *dest| dest.* = nativeColor(value);
+            const native = try memory.create(c.TypstGradient);
+            native.* = .{
+                .kind = if (paint_.kind == .radial_fill) c.TYPST_GRADIENT_RADIAL else c.TYPST_GRADIENT_LINEAR,
+                .reserved = 0,
+                .start = .{ .x = paint_.start.x, .y = paint_.start.y },
+                .end = .{ .x = paint_.end.x, .y = paint_.end.y },
+                .colors = colors.ptr,
+                .count = colors.len,
+            };
+            if (paint_.kind == .linear_stroke) options.stroke_gradient = native else options.fill_gradient = native;
+        }
+        result.options = options;
         return result;
     }
 
@@ -372,7 +396,7 @@ test "mixed nib and ordinary paths convert only referenced intervals" {
             defer builder.arena.deinit();
             const strokes = try builder.prepareStrokes(&picture, .{});
             try t.expectEqual(@as(usize, 1), strokes.len);
-            var resolved = (try physical.resolve(t.allocator, source[0..2], &pen, .{})).?;
+            var resolved = (try physical.resolve(t.allocator, source[0..2], draw.style, .{})).?;
             defer resolved.deinit();
             const stroke = strokes[0].?;
             for (resolved.path.segments.items, stroke.path.segments[0..stroke.path.segment_count]) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);

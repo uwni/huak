@@ -72,6 +72,11 @@ pub const Type = enum(u32) {
     pub fn fieldType(self: Type, field: []const u8) ?Type {
         const Field = struct { owner: Type, name: []const u8, kind: Type };
         const fields = [_]Field{
+            .{ .owner = .path, .name = "linear_axis", .kind = .any },
+            .{ .owner = .color, .name = "r", .kind = .number },
+            .{ .owner = .color, .name = "g", .kind = .number },
+            .{ .owner = .color, .name = "b", .kind = .number },
+            .{ .owner = .color, .name = "a", .kind = .number },
             .{ .owner = .shape, .name = "kind", .kind = .string },
             .{ .owner = .shape, .name = "arguments", .kind = .list },
             .{ .owner = .vec2, .name = "x", .kind = .scalar },

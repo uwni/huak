@@ -1,4 +1,4 @@
-#include "result.hxx"
+#include "lighting.hxx"
 #include <BOPTools_AlgoTools3D.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
@@ -46,8 +46,10 @@ const std::vector<Hit> &Surfaces::along(const gp_Lin &ray,
     if (!probe.IsDone())
       throw std::runtime_error("surface visibility query failed");
     for (int k = 1; k <= probe.NbPnt(); ++k)
-      hits.push_back({probe.Pnt(k).XYZ().Dot(toward_eye.XYZ()), i,
-                      faces[i].FindIndex(probe.Face(k)) - 1});
+      hits.push_back({probe.Pnt(k).XYZ().Dot(toward_eye.XYZ()),
+                      i,
+                      faces[i].FindIndex(probe.Face(k)) - 1,
+                      {probe.UParameter(k), probe.VParameter(k)}});
   }
   std::sort(hits.begin(), hits.end(),
             [](const Hit &a, const Hit &b) { return a.depth > b.depth; });
@@ -102,7 +104,7 @@ void projectFaces(Result &out, Surfaces &surfaces,
                   const std::vector<TopoDS_Shape> &shapes,
                   const std::vector<TopoDS_Edge> &cell_boundaries,
                   const HLRAlgo_Projector &projector, const gp_Dir &toward_eye,
-                  double tolerance) {
+                  const HuakLight *light, double tolerance) {
   TopTools_ListOfShape tools;
   Bnd_Box bounds;
   auto boundary = [&](const TopoDS_Edge &edge) {
@@ -129,6 +131,9 @@ void projectFaces(Result &out, Surfaces &surfaces,
       boundary(projected(edge, projector, tolerance));
     }
   }
+  std::optional<Lighting> lighting;
+  if (light)
+    lighting.emplace(*light, surfaces, projector, toward_eye, tolerance, tools);
   if (bounds.IsVoid() || tools.IsEmpty())
     return;
 
@@ -148,7 +153,15 @@ void projectFaces(Result &out, Surfaces &surfaces,
   BRep_Builder builder;
   Handle(IntTools_Context) context = new IntTools_Context();
   // Merge neighboring cells only where the same sheet has the same rank.
-  std::map<std::tuple<size_t, size_t, int>, TopoDS_Compound> groups;
+  struct Regions {
+    TopoDS_Compound body, spot;
+  };
+  std::map<std::tuple<size_t, size_t, int>, Regions> groups;
+  auto add = [&](TopoDS_Compound &group, const TopoDS_Face &cell) {
+    if (group.IsNull())
+      builder.MakeCompound(group);
+    builder.Add(group, cell);
+  };
   for (TopExp_Explorer cells(split.Shape(), TopAbs_FACE); cells.More();
        cells.Next()) {
     auto cell = TopoDS::Face(cells.Current());
@@ -161,15 +174,21 @@ void projectFaces(Result &out, Surfaces &surfaces,
     for (size_t covering = 0; covering < hits.size(); ++covering) {
       const auto &hit = hits[covering];
       auto &group = groups[{covering, hit.source, hit.face}];
-      if (group.IsNull())
-        builder.MakeCompound(group);
-      builder.Add(group, cell);
+      add(group.body, cell);
+      if (lighting &&
+          lighting->collectSpotCell(
+              hit, TopoDS::Face(surfaces.faces[hit.source](hit.face + 1)),
+              cell))
+        add(group.spot, cell);
     }
   }
-  for (auto &[owner, cells] : groups) {
+  if (lighting)
+    lighting->fitSpots(out);
+  auto write = [&](const TopoDS_Compound &cells) {
+    if (cells.IsNull())
+      return;
     ShapeUpgrade_UnifySameDomain merge(cells, true, true);
     merge.Build();
-    const auto face_start = out.commands.size();
     for (TopExp_Explorer it(merge.Shape(), TopAbs_FACE); it.More(); it.Next()) {
       auto cell = TopoDS::Face(it.Current());
       cell.Orientation(TopAbs_FORWARD);
@@ -187,9 +206,20 @@ void projectFaces(Result &out, Surfaces &surfaces,
         }
       }
     }
+  };
+  const FaceLight unlit{};
+  for (const auto &[owner, regions] : groups) {
     const auto &[covering, source, face] = owner;
-    out.faces.push_back({source, static_cast<size_t>(face), face_start,
-                         out.commands.size() - face_start, covering});
+    const auto start = out.commands.size();
+    write(regions.body);
+    const auto end = out.commands.size();
+    write(regions.spot);
+    const auto &paint = lighting ? lighting->face(source, face) : unlit;
+    const auto spot = paint.flat_glint ? start : end;
+    out.faces.push_back({source, static_cast<size_t>(face), start, end - start,
+                         covering, spot, out.commands.size() - spot,
+                         paint.start, paint.count, paint.center, paint.radius,
+                         paint.diffuse, paint.facing});
   }
 }
 } // namespace huak::space

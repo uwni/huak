@@ -126,6 +126,11 @@ pub fn validateMetrics(metrics: Metrics) Error!void {
 }
 pub fn validateStyle(style_value: *const Style) Error!void {
     if (style_value.fill == null and style_value.pen == null) return error.InvalidStyle;
+    if (style_value.gradient) |paint| {
+        if ((if (paint.kind == .linear_stroke) style_value.pen == null else style_value.fill == null) or
+            !paint.start.isFinite() or !paint.end.isFinite() or paint.start.eql(paint.end) or paint.colors.len < 2) return error.InvalidStyle;
+        for (paint.colors) |color| if (!color.valid()) return error.InvalidColor;
+    }
     if (style_value.fill) |fill| if (!fill.valid()) return error.InvalidColor;
     if (style_value.pen) |*pen| {
         if (!pen.color.valid()) return error.InvalidColor;

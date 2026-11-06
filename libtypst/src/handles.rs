@@ -1,17 +1,16 @@
-//! Immutable opaque objects. No native Rust layout is part of the C ABI.
-use std::sync::Arc;
+//! The C handle owns one strong reference to the whole opaque object.
 
 pub struct TypstContext {
-    pub(crate) inner: Arc<crate::context::Context>,
+    pub(crate) inner: crate::context::Context,
 }
 pub struct TypstLayout {
-    pub(crate) inner: Arc<crate::layout::Layout>,
+    pub(crate) inner: crate::layout::Layout,
 }
 pub struct TypstDocument {
-    pub(crate) inner: Arc<crate::document::Document>,
+    pub(crate) inner: crate::document::Document,
 }
 pub struct TypstScene {
-    pub(crate) inner: Arc<crate::scene::Scene>,
+    pub(crate) inner: crate::scene::Scene,
 }
 pub struct TypstOutline {
     pub(crate) inner: crate::outline::Outline,

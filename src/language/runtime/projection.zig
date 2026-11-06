@@ -158,6 +158,7 @@ const Graph = struct {
 
 fn projectedPath(rt: *Runtime, commands: []const c.HuakPathCommand) !Value {
     var path = Path.init(rt.mem());
+    try path.segments.ensureTotalCapacityPrecise(path.allocator, commands.len);
     for (commands) |command| switch (command.op) {
         c.HUAK_MOVE => try path.moveTo(point(command.p[0])),
         c.HUAK_LINE => try path.lineTo(point(command.p[0])),
@@ -184,9 +185,18 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
     const tolerance = try Runtime.lengthPoints(args[4]);
     if (focus < 0 or tolerance <= 0) return error.InvalidProjection;
     if (args[5] != .boolean) return error.TypeMismatch;
+    const spot = if (args.len > 7 and args[7] != .omitted) try Runtime.angular(args[7]) else 0;
+    if (!(spot >= 0 and spot < std.math.pi / 2.0)) return error.InvalidHighlightAngle;
+    var light: ?c.HuakLight = null;
+    if (args.len > 6 and args[6] != .omitted and !(args[6] == .boolean and !args[6].boolean)) {
+        const d = try coordinates(args[6], true);
+        const scale = @max(@abs(d[0]), @abs(d[1]), @abs(d[2]));
+        if (scale == 0) return error.InvalidLightDirection;
+        light = .{ .direction = .{ d[0] / scale, d[1] / scale, d[2] / scale }, .spot_angle = spot };
+    } else if (spot != 0) return error.HighlightRequiresLight;
     var work: c.HuakLinework = undefined;
     var message: [512]u8 = @splat(0);
-    switch (c.huak_space_project(graph.nodes.items.ptr, graph.nodes.items.len, roots.ptr, roots.len, try Runtime.angular(args[1]), try Runtime.angular(args[2]), focus, tolerance, @intFromBool(args[5].boolean), &work, &message, message.len)) {
+    switch (c.huak_space_project(graph.nodes.items.ptr, graph.nodes.items.len, roots.ptr, roots.len, try Runtime.angular(args[1]), try Runtime.angular(args[2]), focus, tolerance, @intFromBool(args[5].boolean), if (light) |*l| l else null, &work, &message, message.len)) {
         0 => {},
         2 => return error.OutOfMemory,
         else => {
@@ -217,7 +227,18 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
         const face = work.faces[i];
         const path = try projectedPath(rt, work.commands[face.start..][0..face.count]);
         layer_count = @max(layer_count, face.covering + 1);
-        row.* = types.listView(try output.dupe(Value, &.{ path, .{ .int = @intCast(face.source) }, .{ .int = @intCast(face.face) }, .{ .int = @intCast(face.covering) } }));
+        const spot_path: Value = if (face.spot_count == 0)
+            .{ .boolean = false }
+        else if (face.spot_start == face.start and face.spot_count == face.count)
+            path
+        else
+            try projectedPath(rt, work.commands[face.spot_start..][0..face.spot_count]);
+        const lobes = try output.alloc(Value, face.lobe_count);
+        for (lobes, 0..) |*lobe, index| {
+            const ellipse = work.lobes[face.lobe_start + index];
+            lobe.* = types.listView(try output.dupe(Value, &.{ .{ .vec2 = types.Vec2.fromPoint(point(ellipse.center)) }, .{ .vec2 = .{ .x = ellipse.u.x, .y = ellipse.u.y } }, .{ .vec2 = .{ .x = ellipse.v.x, .y = ellipse.v.y } } }));
+        }
+        row.* = types.listView(try output.dupe(Value, &.{ path, .{ .int = @intCast(face.source) }, .{ .int = @intCast(face.face) }, .{ .int = @intCast(face.covering) }, .{ .vec2 = types.Vec2.fromPoint(point(face.center)) }, .{ .quantity = types.units.fromPoints(face.radius) }, .{ .number = face.diffuse }, spot_path, types.listView(lobes), .{ .number = face.facing } }));
     }
     return types.listView(try output.dupe(Value, &.{ types.listView(result), types.listView(faces), .{ .int = if (args[5].boolean) @intCast(layer_count) else 0 } }));
 }

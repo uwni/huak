@@ -28,6 +28,7 @@ pub fn viewport(picture: *const DisplayList, size: ?g.Point, frames: []const typ
 }
 
 pub const motionFootprint = @import("typst/pen.zig").motionFootprint;
+pub const strokeFootprint = @import("typst/pen.zig").strokeFootprint;
 
 pub const Format = enum { svg, pdf };
 

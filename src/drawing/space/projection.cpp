@@ -107,11 +107,14 @@ extern "C" int huak_space_project(const HuakModelShape *input,
                                   size_t count, double azimuth,
                                   double elevation, double focus,
                                   double tolerance, int include_faces,
-                                  HuakLinework *output, char *error,
-                                  size_t capacity) {
+                                  const HuakLight *light, HuakLinework *output,
+                                  char *error, size_t capacity) {
   using namespace huak::space;
   *output = {};
   try {
+    if (light && (focus != 0 || !include_faces))
+      throw std::domain_error(
+          "directional shading requires orthographic face projection");
     auto result = std::make_unique<Result>();
     const gp_Dir direction(cos(elevation) * cos(azimuth),
                            cos(elevation) * sin(azimuth), sin(elevation));
@@ -160,10 +163,14 @@ extern "C" int huak_space_project(const HuakModelShape *input,
               include_faces ? &cell_boundaries : nullptr);
     if (include_faces)
       projectFaces(*result, surfaces, shapes, cell_boundaries, projector,
-                   direction, tolerance);
-    *output = {result->commands.data(), result->lines.data(),
-               result->lines.size(),    result->faces.data(),
-               result->faces.size(),    result.get()};
+                   direction, light, tolerance);
+    *output = {result->commands.data(),
+               result->lines.data(),
+               result->lines.size(),
+               result->faces.data(),
+               result->faces.size(),
+               result->lobes.data(),
+               result.get()};
     result.release();
     return 0;
   } catch (const std::bad_alloc &) {

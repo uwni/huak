@@ -26,7 +26,14 @@ test "independent elliptical polygonal and singular pens render through the nati
     try picture.filldraw(square, .{ .r = 0.2, .g = 0.4 }, .{ .nib = nib.nib, .color = .{ .b = 1 }, .cap = .round, .join = .round }, .{});
     try picture.draw(line, .{ .nib = .{ .ellipse = .{ .a = 0, .d = 6 } }, .color = .{ .r = 1 }, .cap = .round, .join = .round }, g.Transform.translation(0, 35));
     try picture.draw(line, .{ .nib = .{ .ellipse = ellipse }, .dash = &.{ 10, 5 }, .dash_phase = -2, .cap = .round, .join = .round }, g.Transform.translation(0, 55));
-    const ids = [_]u64{ 10, 20, 30, 40 };
+    // The centre of the square keeps its solid fill. The nib's footprint
+    // receives the gradient, in the coordinates of the original path.
+    try picture.addPath(square, .{
+        .fill = .{ .g = 1 },
+        .pen = .{ .nib = .{ .ellipse = ellipse } },
+        .gradient = &.{ .kind = .linear_stroke, .start = .zero, .end = .{ .x = 40, .y = 10 }, .colors = &.{ .black, .{ .r = 1 } } },
+    }, .{});
+    const ids = [_]u64{ 10, 20, 30, 40, 50 };
     var document = try backend.submit(t.allocator, &library, &picture, 120, 110, .{ .object_ids = &ids });
     defer document.deinit();
     var svg = try document.exportSvg(0);
@@ -39,6 +46,8 @@ test "independent elliptical polygonal and singular pens render through the nati
     try t.expect(std.mem.indexOf(u8, svg.bytes(), "stroke-width=\"1\"") != null);
     try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#0000ff\"") != null);
     try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#ff0000\"") != null);
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "fill=\"#00ff00\""));
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "fill=\"url("));
     var pdf = try document.exportPdf();
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));

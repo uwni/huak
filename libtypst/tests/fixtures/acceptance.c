@@ -427,7 +427,11 @@ static TypstScene *create_scene(TypstLayout const *layout) {
         .miter_limit = 4,
         .dashes = dashes, .dash_count = 2, .dash_phase_pt = 1
     };
-    TypstSceneItem child_item = { .kind = TYPST_ITEM_PATH, .transform = {0}, .path = &path, .style = &style };
+    TypstColor stops[] = { style.stroke, style.fill };
+    TypstGradient fill = { .kind = TYPST_GRADIENT_RADIAL, .start = {40,30}, .end = {65,30}, .colors = stops, .count = 2 };
+    TypstGradient stroke = { .kind = TYPST_GRADIENT_LINEAR, .start = {5,5}, .end = {90,5}, .colors = stops, .count = 2 };
+    TypstSceneItemOptions paints = { .struct_size = sizeof paints, .fill_gradient = &fill, .stroke_gradient = &stroke };
+    TypstSceneItem child_item = { .kind = TYPST_ITEM_PATH, .transform = {0}, .path = &path, .style = &style, .options = &paints };
     child_item.transform = identity();
     TypstSceneOptions child_options = { .struct_size = sizeof child_options, .width_pt = 120, .height_pt = 80,
                                         .items = &child_item, .item_count = 1 };
@@ -451,9 +455,10 @@ static TypstScene *create_scene(TypstLayout const *layout) {
                                   .items = items, .item_count = 2 };
     TypstScene *scene = NULL;
     CHECK(api.scene_create(&options, &scene, &diagnostics));
-    api.scene_release(child); /* Parent must retain its nested scene. */
+    api.scene_release(child); /* Parent independently owns the nested frame. */
     memset(segments, 0, sizeof segments); /* Input geometry/style are only borrowed during creation. */
     memset(dashes, 0, sizeof dashes);
+    memset(stops, 0, sizeof stops);
     api.scene_retain(scene);
     api.scene_release(scene);
     TypstMetrics metrics = {0};
@@ -536,6 +541,8 @@ int main(int argc, char **argv) {
     CHECK(api.scene_export_svg(scene, &buffer, &diagnostics));
     require(contains(api.buffer_data(buffer), "clip"), "native clipping reaches SVG output");
     require(contains(api.buffer_data(buffer), "stroke-dasharray"), "native dashes reach SVG output");
+    require(contains(api.buffer_data(buffer), "<radialGradient") && contains(api.buffer_data(buffer), "<linearGradient"),
+            "independent fill and stroke paints survive the source scope");
     save_buffer(argv[2], "native-scene.svg", buffer, "<svg");
     CHECK(api.scene_export_pdf(scene, NULL, &buffer, &diagnostics));
     api.scene_release(scene);

@@ -436,6 +436,57 @@ test "contour ranges distinguish CLOSE from an open return to the start" {
     }, ranges);
 }
 
+/// A spatial linear gradient equals an arc-length gradient on a single
+/// straight contour traversed in one direction. Retracing it breaks equality.
+pub fn linearAxis(self: Path) ?[2]Point {
+    const segments = self.segments.items;
+    if (segments.len < 2 or segments[0] != .move) return null;
+    const first = segments[0].move;
+    const last = switch (segments[segments.len - 1]) {
+        .line => |p| p,
+        .cubic => |c| c.end,
+        else => return null,
+    };
+    if (first.eql(last)) return null;
+    const dx = @as(f128, last.x) - first.x;
+    const dy = @as(f128, last.y) - first.y;
+    const horizontal = @abs(dx) >= @abs(dy);
+    const sign: f128 = if ((if (horizontal) dx else dy) > 0) 1 else -1;
+    var previous: f128 = if (horizontal) first.x else first.y;
+    for (segments[1..]) |segment| {
+        const control: [3]Point = switch (segment) {
+            .line => |p| @splat(p),
+            .cubic => |c| .{ c.c1, c.c2, c.end },
+            else => return null,
+        };
+        var delta: [3]f128 = undefined;
+        for (control, &delta) |p, *d| {
+            if (dx * (@as(f128, p.y) - first.y) != dy * (@as(f128, p.x) - first.x)) return null;
+            const coordinate: f128 = if (horizontal) p.x else p.y;
+            d.* = (coordinate - previous) * sign;
+            previous = coordinate;
+        }
+        // The derivative is a quadratic in Bernstein form. Its middle
+        // coefficient may be negative even when the whole curve is monotone.
+        if (delta[0] < 0 or delta[2] < 0 or
+            (delta[1] < 0 and delta[1] * delta[1] > delta[0] * delta[2])) return null;
+    }
+    return .{ first, last };
+}
+
+test "a straight cubic admits an arc-length gradient exactly while its direction is monotone" {
+    var curve = Path.init(std.testing.allocator);
+    defer curve.deinit();
+    try curve.moveTo(.zero);
+    try curve.cubicTo(.{ .x = 3, .y = 3 }, .{ .x = 2, .y = 2 }, .{ .x = 5, .y = 5 });
+    try std.testing.expectEqual(Point{ .x = 5, .y = 5 }, curve.linearAxis().?[1]);
+    try curve.lineTo(.{ .x = 4, .y = 4 });
+    try std.testing.expect(curve.linearAxis() == null);
+    curve.segments.items.len = 2;
+    curve.segments.items[1].cubic.c2 = .{ .x = -4, .y = -4 };
+    try std.testing.expect(curve.linearAxis() == null);
+}
+
 pub fn segmentCount(self: Path) usize {
     var count: usize = 0;
     var current: Point = .zero;

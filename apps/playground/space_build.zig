@@ -2,10 +2,11 @@
 //! it was built against. The drawing adapter is shared with the desktop.
 const std = @import("std");
 
-pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath) void {
+pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath, sources: []const []const u8) void {
     const sdk = root.path(b, "wasi-sdk");
     const syslib = sdk.path(b, "share/wasi-sysroot/lib/wasm32-wasip1");
-    for ([_][]const u8{ "model", "projection", "curves", "visibility" }) |part| {
+    for (sources) |file| {
+        const part = std.fs.path.stem(file);
         const cc = std.Build.Step.Run.create(b, b.fmt("compile OCCT WASI {s}", .{part}));
         cc.addFileArg(sdk.path(b, "bin/clang++"));
         cc.addArgs(&.{ "--target=wasm32-wasip1", "-std=c++17", "-Os", "-Wno-deprecated-declarations", "-fwasm-exceptions", "-mllvm", "-wasm-use-legacy-eh=false", "-mllvm", "-wasm-enable-sjlj" });
@@ -15,8 +16,9 @@ pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath) 
         cc.addArg("-isystem");
         cc.addDirectoryArg2(root.path(b, "occt-headers-wasm"), .{});
         cc.addArg("-c");
-        cc.addFileArg(b.path(b.fmt("src/drawing/space/{s}.cpp", .{part})));
+        cc.addFileArg(b.path("src/drawing/space").path(b, file));
         cc.addFileInput(b.path("src/drawing/space/result.hxx"));
+        cc.addFileInput(b.path("src/drawing/space/lighting.hxx"));
         cc.addFileInput(b.path("src/drawing/space/projection.h"));
         cc.addArg("-o");
         kernel.addObjectFile(cc.addOutputFileArg2(b.fmt("{s}.o", .{part}), .{}));

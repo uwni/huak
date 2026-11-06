@@ -67,7 +67,16 @@ typedef struct {
   ptrdiff_t other_source;
 } HuakProjectedLine;
 typedef struct {
+  double direction[3], spot_angle;
+} HuakLight;
+typedef struct {
+  HuakXY center, u, v;
+} HuakSpot;
+typedef struct {
   size_t source, face, start, count, covering;
+  size_t spot_start, spot_count, lobe_start, lobe_count;
+  HuakXY center;
+  double radius, diffuse, facing;
 } HuakProjectedFace;
 typedef struct {
   const HuakPathCommand *commands;
@@ -75,6 +84,7 @@ typedef struct {
   size_t count;
   const HuakProjectedFace *faces;
   size_t face_count;
+  const HuakSpot *lobes;
   void *owner;
 } HuakLinework;
 #ifdef __cplusplus
@@ -85,8 +95,8 @@ extern "C" {
 int huak_space_project(const HuakModelShape *, size_t node_count,
                        const size_t *roots, size_t count, double azimuth,
                        double elevation, double focus, double tolerance,
-                       int include_faces, HuakLinework *, char *error,
-                       size_t capacity);
+                       int include_faces, const HuakLight *, HuakLinework *,
+                       char *error, size_t capacity);
 void huak_space_release(HuakLinework *);
 #ifdef __cplusplus
 }

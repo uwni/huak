@@ -46,29 +46,41 @@ pub fn motionFootprint(allocator: std.mem.Allocator, center: Path, pen: *const D
     return path;
 }
 
-pub fn resolve(allocator: std.mem.Allocator, segments: []const Path.Segment, pen: *const DisplayList.Pen, options: pens.StrokeOptions) !?Stroke {
+pub fn resolve(allocator: std.mem.Allocator, segments: []const Path.Segment, style: *const DisplayList.Style, options: pens.StrokeOptions) !?Stroke {
     var center = Path.init(allocator);
     center.segments.items = @constCast(segments);
     center.segments.capacity = segments.len;
-    if (pen.motion) |motion| {
-        var settings = options;
-        settings.tolerance = motion.tolerance;
-        var outline = try motionFootprint(allocator, center, pen, settings);
-        if (outline.segments.items.len != 0) return .{ .path = outline, .style = .{ .fill = pen.color } };
-        outline.deinit();
-        return null;
-    }
+    const pen = &style.pen.?;
+    var settings = options;
+    if (pen.motion) |motion| settings.tolerance = motion.tolerance;
+    var stroke = try buildStroke(allocator, allocator, center, pen, settings, if (style.gradientFor(.stroke) != null) .outline else .native);
+    if (stroke.path.segments.items.len != 0 or stroke.style.pen != null) return stroke;
+    stroke.deinit();
+    return null;
+}
+
+pub fn strokeFootprint(allocator: std.mem.Allocator, scratch: std.mem.Allocator, curve: Path, pen: *const DisplayList.Pen, tolerance: ?f64) !Path {
+    var settings: pens.StrokeOptions = .{};
+    if (pen.motion) |motion| settings.tolerance = motion.tolerance;
+    if (tolerance) |value| settings.tolerance = value;
+    return (try buildStroke(allocator, scratch, curve, pen, settings, .outline)).path;
+}
+
+fn buildStroke(allocator: std.mem.Allocator, scratch: std.mem.Allocator, source: Path, pen: *const DisplayList.Pen, options: pens.StrokeOptions, representation: enum { native, outline }) !Stroke {
+    if (pen.motion != null) return .{ .path = try motionFootprint(allocator, source, pen, options), .style = .{ .fill = pen.color } };
+    var geometry = options;
+    geometry.cap = pen.cap;
+    geometry.join = pen.join;
+    geometry.miter_limit = pen.miter_limit;
     var dashed: ?Path = null;
     defer if (dashed) |*value| value.deinit();
-    if (pen.dash.len != 0) {
-        dashed = try pens.dashed(allocator, center, pen.dash, pen.dash_phase, options);
-        center = dashed.?;
-    }
-    const nib = pen.nib.?;
-    const normalized = nib.normalizePath(allocator, center) catch |err| switch (err) {
+    if (pen.dash.len != 0) dashed = try pens.dashed(scratch, source, pen.dash, pen.dash_phase, geometry);
+    const center = dashed orelse source;
+    const nib = try pen.fixedNib();
+    const normalized = if (representation == .native) nib.normalizePath(allocator, center) catch |err| switch (err) {
         error.NonFinite => null,
         else => return err,
-    };
+    } else null;
     if (normalized) |path| {
         var native_pen = pen.*;
         native_pen.nib = null;
@@ -77,22 +89,13 @@ pub fn resolve(allocator: std.mem.Allocator, segments: []const Path.Segment, pen
         native_pen.dash_phase = 0;
         return .{ .path = path, .style = .{ .pen = native_pen }, .transform = nib.ellipse };
     }
-    var geometry = options;
-    geometry.cap = pen.cap;
-    geometry.join = pen.join;
-    geometry.miter_limit = pen.miter_limit;
-    var outline = try pens.strokeOutline(allocator, nib, center, geometry);
-    if (outline.segments.items.len == 0) {
-        outline.deinit();
-        return null;
-    }
-    return .{ .path = outline, .style = .{ .fill = pen.color } };
+    return .{ .path = try pens.strokeOutline(allocator, nib, center, geometry), .style = .{ .fill = pen.color } };
 }
 
 test "ellipse normalization preserves centerline and physical nib offset" {
     const original = [_]Path.Segment{ .{ .move = .{ .x = 16, .y = 20 } }, .{ .line = .{ .x = 80, .y = 20 } } };
     const pen: DisplayList.Pen = .{ .nib = .{ .ellipse = .{ .a = 8, .d = 2, .e = 3, .f = 4 } }, .cap = .round, .join = .round };
-    var stroke = (try resolve(std.testing.allocator, &original, &pen, .{})).?;
+    var stroke = (try resolve(std.testing.allocator, &original, &.{ .pen = pen }, .{})).?;
     defer stroke.deinit();
     try std.testing.expectEqual(@as(f64, 1), stroke.style.pen.?.width);
     const transform = stroke.transform.?.then(g.Transform.translation(10, 30));
@@ -105,7 +108,7 @@ test "polygon nib cap styles reach the computed stroke outline" {
     const vertices = [_]g.Point{ .{ .x = -2, .y = -1 }, .{ .x = 2, .y = -1 }, .{ .x = 2, .y = 1 }, .{ .x = -2, .y = 1 } };
     for ([_]DisplayList.Cap{ .butt, .square }, [_]f64{ -2, -6 }) |cap, expected_min| {
         const pen: DisplayList.Pen = .{ .nib = .{ .polygon = &vertices }, .cap = cap, .join = .bevel };
-        var stroke = (try resolve(std.testing.allocator, &segments, &pen, .{})).?;
+        var stroke = (try resolve(std.testing.allocator, &segments, &.{ .pen = pen }, .{})).?;
         defer stroke.deinit();
         try std.testing.expect(stroke.style.fill != null);
         var minimum: f64 = std.math.inf(f64);
@@ -125,9 +128,9 @@ fn exerciseNibGeometry(allocator: std.mem.Allocator) !void {
     for ([_]pens.Nib{ pens.Nib.square(), .{ .ellipse = .{ .a = 4, .d = 2 } } }) |nib| {
         for ([_][]const f64{ &.{}, &.{ 4, 2 } }) |dash| {
             const pen: DisplayList.Pen = .{ .nib = nib, .cap = .round, .join = .round, .dash = dash, .dash_phase = 1 };
-            var first = (try resolve(allocator, &source, &pen, .{})).?;
+            var first = (try resolve(allocator, &source, &.{ .pen = pen }, .{})).?;
             defer first.deinit();
-            var second = (try resolve(allocator, &source, &pen, .{})).?;
+            var second = (try resolve(allocator, &source, &.{ .pen = pen }, .{})).?;
             defer second.deinit();
             try std.testing.expect(first.path.segments.items.len != 0);
             try std.testing.expect(first.path.segments.items.ptr != second.path.segments.items.ptr);

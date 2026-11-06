@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65537
+#define TYPST_ABI_VERSION 65538
 
 #define TYPST_CAP_PDF 1
 
@@ -128,6 +128,10 @@
 #define TYPST_OUTLINE_END_CLIP 3
 
 #define TYPST_SCENE_ITEM_ISOLATE_TRANSFORM 1
+
+#define TYPST_GRADIENT_LINEAR 0
+
+#define TYPST_GRADIENT_RADIAL 1
 
 typedef struct TypstBuffer TypstBuffer;
 
@@ -331,6 +335,24 @@ typedef struct TypstStyle {
   double dash_phase_pt;
 } TypstStyle;
 
+typedef struct TypstGradient {
+  /**
+   * TYPST_GRADIENT_LINEAR or TYPST_GRADIENT_RADIAL.
+   */
+  uint32_t kind;
+  uint32_t reserved;
+  /**
+   * Endpoints of the linear ramp or center and rim of the radial ramp, in local points.
+   */
+  struct TypstPoint start;
+  struct TypstPoint end;
+  /**
+   * Equally spaced color stops, including both endpoints.
+   */
+  const struct TypstColor *colors;
+  size_t count;
+} TypstGradient;
+
 typedef struct TypstSceneItemOptions {
   uint32_t struct_size;
   uint32_t flags;
@@ -338,6 +360,11 @@ typedef struct TypstSceneItemOptions {
    * Optional metadata label retained in native SVG output.
    */
   struct TypstStr tag;
+  /**
+   * Optional paints on a filled or stroked path. Borrowed for scene creation.
+   */
+  const struct TypstGradient *fill_gradient;
+  const struct TypstGradient *stroke_gradient;
 } TypstSceneItemOptions;
 
 /**

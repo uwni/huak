@@ -1,5 +1,5 @@
 const std = @import("std");
-const space_contracts = [_][]const u8{ "visibility", "modeling" };
+const space_contracts = @import("tests/fixtures/space/contracts.zig");
 const Translator = @import("translate_c").Translator;
 const Import = std.Build.Module.Import;
 const Configuration = struct { target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, library: std.Build.LazyPath, use_llvm: ?bool, occt: ?[]const u8 };
@@ -84,11 +84,12 @@ fn configureSpace(b: *std.Build, kernel: *std.Build.Module, target: std.Build.Re
     if (prefix_option) |prefix| {
         const header: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("src/drawing/space/projection.h"), .target = target, .optimize = optimize });
         kernel.addImport("space_c", header.mod);
+        const sources = &.{ "model.cpp", "projection.cpp", "visibility.cpp", "lighting.cpp", "curves.cpp" };
         if (target.result.os.tag == .wasi)
-            return @import("apps/playground/space_build.zig").link(b, kernel, b.graph.cwdRelativePath(prefix));
+            return @import("apps/playground/space_build.zig").link(b, kernel, b.graph.cwdRelativePath(prefix), sources);
         kernel.addSystemIncludePath(b.graph.cwdRelativePath(b.pathJoin(&.{ prefix, "include", "opencascade" })));
         kernel.addLibraryPath(b.graph.cwdRelativePath(b.pathJoin(&.{ prefix, "lib" })));
-        kernel.addCSourceFiles(.{ .root = b.path("src/drawing/space"), .files = &.{ "model.cpp", "projection.cpp", "visibility.cpp", "curves.cpp" }, .flags = &.{"-std=c++17"} });
+        kernel.addCSourceFiles(.{ .root = b.path("src/drawing/space"), .files = sources, .flags = &.{"-std=c++17"} });
         kernel.link_libcpp = true;
         for ([_][]const u8{ "TKOffset", "TKBO", "TKShHealing", "TKHLR", "TKPrim", "TKTopAlgo", "TKBRep", "TKGeomAlgo", "TKGeomBase", "TKG3d", "TKG2d", "TKMath", "TKernel" }) |lib| kernel.linkSystemLibrary(lib, .{});
     } else {
@@ -140,7 +141,7 @@ fn addPlayground(b: *std.Build) void {
     const index = catalog.addOutputFileArg2("examples.json", .{});
     if (occt != null) catalog.addArg("--space");
     tests.root_module.addAnonymousImport("example-catalog", .{ .root_source_file = index });
-    for (space_contracts) |name| tests.root_module.addAnonymousImport(name, .{ .root_source_file = b.path(b.fmt("tests/fixtures/space/{s}.huak", .{name})) });
+    tests.root_module.addAnonymousImport("space_contracts", .{ .root_source_file = b.path("tests/fixtures/space/contracts.zig") });
     if (occt != null) step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/drawing/space/licenses"), .install_dir = .prefix, .install_subdir = "playground/licenses/occt" }).step);
     step.dependOn(&b.addInstallFile(index, "playground/examples.json").step);
 }
@@ -314,7 +315,7 @@ fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, scenes: 
     if (config.occt != null) {
         const space = b.step("test-space", "Test modeling and projected visibility in SVG and PDF");
         all_tests.dependOn(space);
-        for (space_contracts) |name| {
+        for (space_contracts.names) |name| {
             const projection = b.addRunArtifact(cli);
             projection.addArg("run");
             projection.addFileArg(b.path(b.fmt("tests/fixtures/space/{s}.huak", .{name})));

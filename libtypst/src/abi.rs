@@ -7,7 +7,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0001;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0002;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -331,11 +331,29 @@ pub struct TypstSceneItem {
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct TypstGradient {
+    /// TYPST_GRADIENT_LINEAR or TYPST_GRADIENT_RADIAL.
+    pub kind: u32,
+    pub reserved: u32,
+    /// Endpoints of the linear ramp or center and rim of the radial ramp, in local points.
+    pub start: TypstPoint,
+    pub end: TypstPoint,
+    /// Equally spaced color stops, including both endpoints.
+    pub colors: *const TypstColor,
+    pub count: usize,
+}
+pub const TYPST_GRADIENT_LINEAR: u32 = 0;
+pub const TYPST_GRADIENT_RADIAL: u32 = 1;
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct TypstSceneItemOptions {
     pub struct_size: u32,
     pub flags: u32,
     /// Optional metadata label retained in native SVG output.
     pub tag: TypstStr,
+    /// Optional paints on a filled or stroked path. Borrowed for scene creation.
+    pub fill_gradient: *const TypstGradient,
+    pub stroke_gradient: *const TypstGradient,
 }
 impl Default for TypstSceneItemOptions {
     fn default() -> Self {
@@ -343,6 +361,8 @@ impl Default for TypstSceneItemOptions {
             struct_size: std::mem::size_of::<Self>() as u32,
             flags: 0,
             tag: TypstStr::default(),
+            fill_gradient: std::ptr::null(),
+            stroke_gradient: std::ptr::null(),
         }
     }
 }

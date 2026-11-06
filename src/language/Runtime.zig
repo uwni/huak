@@ -582,6 +582,13 @@ fn field(ctx: ?*anyopaque, allocator: std.mem.Allocator, object: Value, name: []
         const node = try self.model(object);
         if (std.mem.eql(u8, name, "kind")) return .{ .string = @tagName(node.kind) };
         if (std.mem.eql(u8, name, "arguments")) return types.listView(node.arguments);
+    } else if (object.valueType() == .path and std.mem.eql(u8, name, "linear_axis")) {
+        const axis = (try self.path(object)).linearAxis() orelse return .{ .boolean = false };
+        return types.listView(try allocator.dupe(Value, &.{ .{ .vec2 = types.Vec2.fromPoint(axis[0]) }, .{ .vec2 = types.Vec2.fromPoint(axis[1]) } }));
+    } else if (object.valueType() == .color) {
+        const rgba = try self.color(object);
+        inline for (.{ "r", "g", "b", "a" }) |channel|
+            if (std.mem.eql(u8, name, channel)) return .{ .number = @field(rgba, channel) };
     } else if (object.valueType() == .text) {
         const metrics = (try self.textValue(object)).metrics;
         if (std.mem.eql(u8, name, "width")) return lengthResult(metrics.width);
@@ -731,6 +738,7 @@ fn pathObject(self: *Runtime, curve: *const Path, style: *const DisplayList.Styl
     const owner = try self.objectStorage(curve.segments.items.len);
     return .{ .object = .{ .owner = owner, .index = try owner.scene.addPath(null, curve, style, transform) } };
 }
+
 fn labelObject(self: *Runtime, reference: u32, position: g.Point, transform: g.Transform) !Value {
     const owner = try self.objectStorage(0);
     return .{ .object = .{ .owner = owner, .index = try owner.scene.label(null, reference, self.texts.items[reference].metrics, position, transform) } };
@@ -780,8 +788,14 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                     const command = try instance.owner.scene.getNode(instance.index);
                     if (command.* != .path) return error.ExpectedPathObject;
                     var style = command.path.style.*;
-                    if (hasArgument(args, 1)) style.fill = if (args[1] == .boolean and !args[1].boolean) null else try self.color(args[1]);
-                    if (hasArgument(args, 2)) style.pen = if (args[2] == .boolean and !args[2].boolean) null else try self.penValue(args[2]);
+                    if (hasArgument(args, 1)) {
+                        style.fill = if (args[1] == .boolean and !args[1].boolean) null else try self.color(args[1]);
+                        style.gradient = style.gradientFor(.stroke);
+                    }
+                    if (hasArgument(args, 2)) {
+                        style.pen = if (args[2] == .boolean and !args[2].boolean) null else try self.penValue(args[2]);
+                        style.gradient = style.gradientFor(.fill);
+                    }
                     if (style.pen) |stroke| if (stroke.needsGeometry()) try checkStrokeAncestors(instance);
                     try instance.owner.scene.setStyle(instance.index, &style);
                 },
@@ -943,7 +957,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (hasArgument(args, 7)) {
                 // The source contributes only immutable nib geometry;
                 // this constructor independently specifies all paint state.
-                value.nib = try effectiveNib(try self.penValue(args[7]));
+                value.nib = try (try self.penValue(args[7])).fixedNib();
             }
             const legacy = hasArgument(args, 8);
             if (legacy or hasArgument(args, 9)) {
@@ -980,37 +994,25 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const retained = try pen_geometry.makePen(own, try self.path(args[0]));
             return self.store(DisplayList.Pen, &self.pens, .{ .nib = retained.nib, .color = if (hasArgument(args, 1)) try self.color(args[1]) else .black, .cap = .round, .join = .round }, .pen);
         },
-        .makepath => return self.pathResult(try (try effectiveNib(try self.penValue(args[0]))).makePath(own)),
-        .penoffset => return .{ .vec2 = types.Vec2.fromPoint(try (try effectiveNib(try self.penValue(args[0]))).offset(try point(args[1]))) },
+        .makepath, .penoffset => {
+            const nib = try (try self.penValue(args[0])).fixedNib();
+            if (id == .makepath) return self.pathResult(try nib.makePath(own));
+            return .{ .vec2 = types.Vec2.fromPoint(try nib.offset(try point(args[1]))) };
+        },
         .envelope => {
             const brush = try self.penValue(args[1]);
             var config: pen_geometry.EnvelopeOptions = .{ .cap = brush.cap, .join = brush.join, .miter_limit = brush.miter_limit };
             if (hasArgument(args, 2)) config.tolerance = try lengthPoints(args[2]);
-            const result = pen_geometry.envelope(own, try effectiveNib(brush), try self.path(args[0]), config) catch |err| {
+            const result = pen_geometry.envelope(own, try brush.fixedNib(), try self.path(args[0]), config) catch |err| {
                 if (err == error.EllipticalPen) self.native_message = "envelope requires a polygonal pen; use pensquare or makepen";
                 return err;
             };
             return self.pathResult(result);
         },
         .stroke_outline => {
-            var options: pen_geometry.StrokeOptions = .{};
-            if (hasArgument(args, 2)) options.tolerance = try lengthPoints(args[2]);
+            const tolerance = if (hasArgument(args, 2)) try lengthPoints(args[2]) else null;
             const brush = try self.penValue(args[1]);
-            if (brush.motion) |motion| {
-                if (!hasArgument(args, 2)) options.tolerance = motion.tolerance;
-                return self.pathResult(try renderer.motionFootprint(own, try self.path(args[0]), &brush, options));
-            }
-            options.cap = brush.cap;
-            options.join = brush.join;
-            options.miter_limit = brush.miter_limit;
-            var center = try self.path(args[0]);
-            var dashed: ?Path = null;
-            defer if (dashed) |*result| result.deinit();
-            if (brush.dash.len != 0) {
-                dashed = try pen_geometry.dashed(own, center, brush.dash, brush.dash_phase, options);
-                center = dashed.?;
-            }
-            return self.pathResult(try pen_geometry.strokeOutline(own, try effectiveNib(brush), center, options));
+            return self.pathResult(try renderer.strokeFootprint(own, self.gpa, try self.path(args[0]), &brush, tolerance));
         },
         .translate => {
             if (args[0] == .vec3) {
@@ -1117,7 +1119,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const transform = try self.transformValue(args[1]);
             if (args[0].valueType() == .pen) {
                 var value = try self.penValue(args[0]);
-                const retained = try (try effectiveNib(value)).transformed(own, transform);
+                const retained = try (try value.fixedNib()).transformed(own, transform);
                 value.nib = retained.nib;
                 return self.store(DisplayList.Pen, &self.pens, value, .pen);
             }
@@ -1315,6 +1317,37 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return .unit;
         },
         .append => return self.place(args[0], args[1], if (hasArgument(args, 2)) try self.transformValue(args[2]) else null),
+        .radial_fill => {
+            const curve = try self.path(args[0]);
+            const start = try point(args[1]);
+            const radius = try lengthPoints(args[2]);
+            if (radius <= 0) return error.InvalidRadius;
+            const colors = [_]DisplayList.Color{ try self.color(args[3]), try self.color(args[4]) };
+            return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &.{ .kind = .radial_fill, .start = start, .end = .{ .x = start.x + radius, .y = start.y }, .colors = &colors } }, .{});
+        },
+        .linear_fill, .linear_stroke => {
+            const curve = try self.path(args[0]);
+            const start = try point(args[1]);
+            const end = try point(args[2]);
+            const values = types.sequence(args[3]) orelse return error.TypeMismatch;
+            if (values.len < 2) return error.InvalidStyle;
+            const colors = try self.gpa.alloc(DisplayList.Color, values.len);
+            defer self.gpa.free(colors);
+            for (values, colors) |value, *dest| dest.* = try self.color(value);
+            var gradient: @import("../drawing/style.zig").Gradient = .{ .kind = .linear_fill, .start = start, .end = end, .colors = colors };
+            if (id == .linear_stroke) {
+                var brush = try self.penValue(args[4]);
+                if (!brush.needsGeometry()) {
+                    gradient.kind = .linear_stroke;
+                    brush.color = colors[0];
+                    return self.pathObject(&curve, &.{ .pen = brush, .gradient = &gradient }, .{});
+                }
+                var outline_ = try renderer.strokeFootprint(self.gpa, self.gpa, curve, &brush, null);
+                defer outline_.deinit();
+                return self.pathObject(&outline_, &.{ .fill = colors[0], .gradient = &gradient }, .{});
+            }
+            return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &gradient }, .{});
+        },
         .draw, .fill, .filldraw, .label => {
             return switch (id) {
                 .draw, .fill, .filldraw => result: {
@@ -1595,13 +1628,6 @@ fn readMotion(a: std.mem.Allocator, input: Value, legacy: bool, tolerance: f64) 
     motion.* = .{ .tracks = tracks, .keys = keys.items, .tolerance = tolerance };
     try motion.validate();
     return motion;
-}
-
-fn effectiveNib(value: DisplayList.Pen) !pen_geometry.Nib {
-    if (value.motion != null) return error.MotionHasNoFixedNib;
-    if (value.nib) |nib| return nib;
-    if (!std.math.isFinite(value.width) or value.width < 0) return error.InvalidPen;
-    return .{ .ellipse = .scaling(value.width, value.width) };
 }
 
 fn handle(kind: Type, id: usize) Value {

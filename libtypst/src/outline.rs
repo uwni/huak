@@ -692,6 +692,8 @@ mod tests {
                     segments: &outline.segments[path.segment_offset..][..path.segment_count],
                     style: PathStyle {
                         fill: (path.flags & TYPST_STYLE_FILL != 0).then_some(path.fill),
+                        fill_gradient: None,
+                        stroke_gradient: None,
                         fill_rule: path.fill_rule,
                         stroke: (path.flags & TYPST_STYLE_STROKE != 0).then(|| StrokeStyle {
                             color: path.stroke,

@@ -144,8 +144,9 @@ test "all published examples render through the worker interface" {
         try std.testing.expect(huak_render(0));
         const elapsed = start.durationTo(std.Io.Clock.awake.now(std.testing.io));
         std.debug.print("first torus script to SVG: {d} ms\n", .{elapsed.toMilliseconds()});
-        inline for (.{ "visibility", "modeling" }) |name| {
-            const contract = @embedFile(name);
+        const contracts = @import("space_contracts");
+        inline for (contracts.names) |name| {
+            const contract = contracts.source(name);
             @memcpy(huak_input(contract.len).?[0..contract.len], contract);
             if (!huak_render(0)) {
                 std.debug.print("{s}: {s}\n", .{ name, result() });

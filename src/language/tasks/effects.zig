@@ -510,7 +510,7 @@ const Analysis = struct {
             // calls through aliases and helpers. It cannot be replayed by workers.
             .seed, .random, .randint, .randn => self.safe = false,
             .picture => result.fresh_owner = true,
-            .object, .draw, .fill, .filldraw, .label => {
+            .object, .draw, .fill, .linear_fill, .linear_stroke, .radial_fill, .filldraw, .label => {
                 result.fresh_owner = true;
                 if (id == .label or (id == .object and arguments.len != 0 and (arguments[0].kind == .text or arguments[0].kind == .any))) self.uses_typst = true;
             },

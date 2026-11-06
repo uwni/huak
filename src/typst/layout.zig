@@ -186,17 +186,21 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
     errdefer outcome.deinit();
     if (failure_index) |index| {
         const result = &results[index];
-        const text = try diagnostics.format(library, result.diagnostics, &sources(requests[index]));
-        defer a.free(text);
         const failure = if (binding.status(result.status)) |_| error.InvalidResult else |err| err;
-        const message = if (text.len == 0) @errorName(failure) else text;
+        const message = message: {
+            const text = try diagnostics.format(library, result.diagnostics, &sources(requests[index]));
+            if (text.len != 0) break :message text;
+            a.free(text);
+            break :message try a.dupe(u8, @errorName(failure));
+        };
+        errdefer a.free(message);
         try library.setError(message);
         outcome.failure = failure;
         outcome.diagnostic = .{
             .request_index = index,
             .library = library,
             .native = result.diagnostics,
-            .message = try api.Buffer.copy(library, message),
+            .message = .{ .library = library, .host = message },
         };
         result.diagnostics = null;
         if (failure == error.TypstPanic or index == 0) return outcome;

@@ -1,0 +1,12 @@
+import space as s
+import paint.*
+
+ring := transformed(s.torus(21pt,8pt),translate((-36pt,0,0)))
+ball := transformed(s.sphere(18pt),translate((12pt,0,5pt)))
+brick := transformed(s.box(20pt,20pt,28pt),translate((28pt,-7pt,-10pt)))
+view := s.project([ring,ball,brick],s.orthographic(-80deg,36deg),light:(-1,-2,3),spot:24deg)
+inks := [rgb(0.83,0.43,0.20),rgb(0.16,0.61,0.58),rgb(0.56,0.65,0.75)]
+
+default drawing picture() do
+    for face in view.visible_faces do +s.shaded(face,inks[face.source]) end
+end

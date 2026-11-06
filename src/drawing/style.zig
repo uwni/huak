@@ -39,6 +39,13 @@ pub const Pen = struct {
         return self.nib != null or self.motion != null;
     }
 
+    pub fn fixedNib(self: *const Pen) !Nib {
+        if (self.motion != null) return error.MotionHasNoFixedNib;
+        if (self.nib) |nib| return nib;
+        if (!std.math.isFinite(self.width) or self.width < 0) return error.InvalidPen;
+        return .{ .ellipse = .scaling(self.width, self.width) };
+    }
+
     /// Replace borrowed arrays with owned copies. Failure leaves this value
     /// unchanged; release successful copies with freeData or their arena.
     pub fn cloneData(self: *Pen, allocator: std.mem.Allocator) !void {
@@ -59,10 +66,32 @@ pub const Pen = struct {
         if (self.nib) |nib| if (nib == .polygon) allocator.free(nib.polygon);
     }
 };
+pub const Gradient = struct {
+    kind: enum { radial_fill, linear_fill, linear_stroke },
+    start: g.Point,
+    end: g.Point,
+    colors: []const Color,
+};
+
 pub const Style = struct {
+    gradient: ?*const Gradient = null,
     fill: ?Color = null,
     pen: ?Pen = null,
     fill_rule: FillRule = .nonzero,
+
+    pub const Component = enum { fill, stroke };
+    pub fn gradientFor(self: *const Style, component: Component) ?*const Gradient {
+        const paint = self.gradient orelse return null;
+        return if ((paint.kind == .linear_stroke) == (component == .stroke)) paint else null;
+    }
+
+    pub fn hasInk(self: *const Style, component: Component) bool {
+        if (self.gradientFor(component)) |paint| {
+            for (paint.colors) |color| if (color.a > 0) return true;
+            return false;
+        }
+        return if (component == .fill) (self.fill != null and self.fill.?.a > 0) else (self.pen != null and self.pen.?.color.a > 0);
+    }
 };
 
 /// Commands retain references to styles interned by value. Shared entries are immutable; replacing
@@ -190,20 +219,37 @@ pub const Pool = struct {
 
     fn copyData(self: *Pool, result: *Style, value: *const Style) !void {
         result.* = value.*;
+        if (result.gradient) |paint| {
+            const owned = try self.allocator.create(Gradient);
+            errdefer self.allocator.destroy(owned);
+            owned.* = paint.*;
+            owned.colors = try self.allocator.dupe(Color, paint.colors);
+            result.gradient = owned;
+        }
+        errdefer self.freeGradient(result);
         if (result.pen) |*pen| try pen.cloneData(self.allocator);
         self.data_bytes += dataSize(result);
     }
 
     fn freeData(self: *Pool, value: *const Style) void {
         self.data_bytes -= dataSize(value);
+        self.freeGradient(value);
         if (value.pen) |*pen| pen.freeData(self.allocator);
     }
 
+    fn freeGradient(self: *Pool, value: *const Style) void {
+        if (value.gradient) |paint| {
+            self.allocator.free(paint.colors);
+            self.allocator.destroy(paint);
+        }
+    }
+
     fn dataSize(value: *const Style) usize {
-        const pen = value.pen orelse return 0;
+        const paint_bytes = if (value.gradient) |paint| @sizeOf(Gradient) + paint.colors.len * @sizeOf(Color) else 0;
+        const pen = value.pen orelse return paint_bytes;
         const vertices = if (pen.nib) |nib| (if (nib == .polygon) nib.polygon.len else 0) else 0;
         const profile_bytes = if (pen.motion) |p| @sizeOf(Motion) + p.tracks.len * @sizeOf(Motion.Track) + p.keys.len * @sizeOf(Motion.Key) else 0;
-        return profile_bytes + pen.dash.len * @sizeOf(f64) + vertices * @sizeOf(g.Point);
+        return paint_bytes + profile_bytes + pen.dash.len * @sizeOf(f64) + vertices * @sizeOf(g.Point);
     }
 };
 
@@ -215,6 +261,12 @@ const ValueContext = struct {
         // The discrete style header is the seed; hash only the active payloads.
         var h: u64 = (@as(u64, @backingInt(value.fill_rule)) << 2) |
             (@as(u64, @intFromBool(value.pen != null)) << 1) | @intFromBool(value.fill != null);
+        if (value.gradient) |paint| {
+            h = hashBytes(h, &.{@backingInt(paint.kind)});
+            h = hashBytes(h, bits(&paint.start));
+            h = hashBytes(h, bits(&paint.end));
+            h = hashBytes(h, bits(paint.colors));
+        }
         if (value.fill) |*fill| h = hashBytes(h, bits(fill));
         if (value.pen) |*pen| {
             h = hashBytes(h, bits(&pen.color));
@@ -234,6 +286,12 @@ const ValueContext = struct {
     }
 
     pub fn eql(_: ValueContext, a: *const Style, b: *const Style) bool {
+        if ((a.gradient != null) != (b.gradient != null)) return false;
+        if (a.gradient) |paint| {
+            const other = b.gradient.?;
+            if (paint.kind != other.kind or !std.mem.eql(u8, bits(&paint.start), bits(&other.start)) or
+                !std.mem.eql(u8, bits(&paint.end), bits(&other.end)) or !std.mem.eql(u8, bits(paint.colors), bits(other.colors))) return false;
+        }
         if (a.fill_rule != b.fill_rule or (a.fill != null) != (b.fill != null) or (a.pen != null) != (b.pen != null)) return false;
         if (a.fill) |*fill| if (!std.mem.eql(u8, bits(fill), bits(&b.fill.?))) return false;
         if (a.pen) |*pen| {
@@ -277,7 +335,8 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     defer pool.deinit();
     var dash = [_]f64{ 1, 2 };
     var vertices = [_]g.Point{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 } };
-    var style: Style = .{ .fill = .black, .pen = .{ .dash = &dash, .nib = .{ .polygon = &vertices } } };
+    var colors = [_]Color{ .black, .{ .r = 1 } };
+    var style: Style = .{ .fill = .black, .gradient = &.{ .kind = .radial_fill, .start = .zero, .end = .{ .x = 1, .y = 0 }, .colors = &colors }, .pen = .{ .dash = &dash, .nib = .{ .polygon = &vertices } } };
     const saved = try pool.intern(&style);
     try std.testing.expect(saved == try pool.intern(&style));
     var other = Pool.init(allocator);
@@ -288,6 +347,8 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     try std.testing.expect(saved == try pool.intern(independent));
     dash[0] = 3;
     vertices[0].x = -1;
+    colors[0].r = 0.5;
+    try std.testing.expectEqual(Color.black, saved.gradient.?.colors[0]);
     try std.testing.expectEqual(@as(f64, 1), saved.pen.?.dash[0]);
     try std.testing.expectEqual(@as(f64, 0), saved.pen.?.nib.?.polygon[0].x);
     try std.testing.expect(saved != try pool.intern(&style));

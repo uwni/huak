@@ -15,6 +15,7 @@ struct Result {
   std::vector<HuakPathCommand> commands;
   std::vector<HuakProjectedLine> lines;
   std::vector<HuakProjectedFace> faces;
+  std::vector<HuakSpot> lobes;
 };
 void writeEdge(Result &, const TopoDS_Edge &, double tolerance,
                bool move = true);
@@ -31,6 +32,7 @@ struct Hit {
   double depth;
   size_t source;
   int face;
+  gp_Pnt2d uv;
 };
 // Each shape's face intersector is loaded once per projection. The scratch
 // hit list is ordered front to back and reused for both face cells and edges.
@@ -50,5 +52,5 @@ void intersectShapes(const std::vector<TopoDS_Shape> &, const Surfaces &,
 void projectFaces(Result &, Surfaces &, const std::vector<TopoDS_Shape> &,
                   const std::vector<TopoDS_Edge> &cell_boundaries,
                   const HLRAlgo_Projector &, const gp_Dir &toward_eye,
-                  double tolerance);
+                  const HuakLight *, double tolerance);
 } // namespace huak::space

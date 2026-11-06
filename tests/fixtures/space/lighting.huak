@@ -1,0 +1,30 @@
+import space as s
+import paint.*
+import math.{abs, sin, norm}
+import assertions.assert
+
+top := s.orthographic(-90deg,90deg)
+ball := s.sphere(10pt)
+light := (0,0,1)
+full := s.project([ball],top,light:light,spot:30deg)
+front := full.visible_faces[0]
+assert(len(front.lobes) == 1 and front.highlight != false)
+assert(full.layers[0].faces[0].highlight == false,"rear sheet has no glint")
+b := bounds(front.highlight)
+assert(norm(b[0]-(-5pt,-5pt)) < 0.02pt and norm(b[1]-(5pt,5pt)) < 0.02pt,"sphere contour has radius R sin(angle)")
+assert(s.project([ball],top,light:light).visible_faces[0].highlight == false)
+assert(s.project([ball],top,light:(0,0,-1),spot:30deg).visible_faces[0].highlight == false)
+
+plate := s.face(rectangle((0pt,-12pt),12pt,24pt),s.Plane(origin:(0,0,12pt)))
+covered := s.project([ball,plate],top,light:light,spot:30deg)
+for f in covered.visible_faces do
+    if f.source == 0 then
+        assert(bounds(f.highlight)[1].x < 0.02pt,"foreground plate cuts the glint")
+        assert(norm(f.lobes[0][0]-front.lobes[0][0]) < 0.02pt,"occlusion preserves the gradient center")
+    else
+        assert(f.highlight == f.region,"a fully lit planar face uses its visible boundary")
+    end
+end
+default drawing picture() do
+    for f in covered.visible_faces do +s.shaded(f,rgb(0.2,0.6,0.55)) end
+end

@@ -1,14 +1,16 @@
 //! Immutable native scenes. Typst owns drawing, clipping, and frame semantics.
-use crate::{abi::*, error::Error, layout::Layout};
+use crate::{abi::*, error::Error};
 use std::sync::Arc;
 use typst_core::{
-    foundations::Label,
-    layout::{Abs, Frame, FrameItem, FrameKind, GroupItem, Point, Ratio, Size, Transform},
+    foundations::{Label, Smart},
+    layout::{
+        Abs, Angle, Axes, Frame, FrameItem, FrameKind, GroupItem, Point, Ratio, Size, Transform,
+    },
     syntax::Span,
     utils::PicoStr,
     visualize::{
-        Color, Curve, CurveItem, DashPattern, FillRule, FixedStroke, Geometry, LineCap, LineJoin,
-        Paint, Rgb, Shape,
+        Color, Curve, CurveItem, DashPattern, FillRule, FixedStroke, Geometry, Gradient, LineCap,
+        LineJoin, LinearGradient, Paint, ProcessColorSpace, RadialGradient, RelativeTo, Rgb, Shape,
     },
 };
 
@@ -21,21 +23,22 @@ pub enum SceneContent<'a> {
         segments: &'a [TypstPathSegment],
         style: PathStyle<'a>,
     },
-    Layout(Arc<Layout>),
-    Scene(Arc<Scene>),
+    Frame(&'a Frame),
 }
 
 pub struct SceneCommand<'a> {
     pub content: SceneContent<'a>,
     pub transform: TypstTransform,
     pub clip: Option<&'a [TypstPathSegment]>,
-    pub tag: Option<String>,
+    pub tag: Option<&'a str>,
     pub isolate_transform: bool,
 }
 
 #[derive(Default)]
 pub struct PathStyle<'a> {
     pub fill: Option<TypstColor>,
+    pub fill_gradient: Option<(Paint, GradientFrame)>,
+    pub stroke_gradient: Option<(Paint, GradientFrame)>,
     pub fill_rule: u32,
     pub stroke: Option<StrokeStyle<'a>>,
 }
@@ -63,25 +66,13 @@ impl Scene {
         }
         let size = Size::new(Abs::pt(width_pt), Abs::pt(height_pt));
         let mut frame = Frame::hard(size);
-        let mut items = Vec::with_capacity(commands.len());
         for command in commands {
             let transform = transform(command.transform)?;
             let clip = command.clip.map(curve).transpose()?;
             let mut child = match command.content {
-                SceneContent::Path { segments, style } => {
-                    let shape = Shape {
-                        geometry: Geometry::Curve(curve(segments)?),
-                        fill: style.fill.map(color).transpose()?.map(Paint::Solid),
-                        fill_rule: fill_rule(style.fill_rule)?,
-                        stroke: style.stroke.map(stroke).transpose()?,
-                    };
-                    let mut child = Frame::soft(size);
-                    child.push(Point::zero(), FrameItem::Shape(shape, Span::detached()));
-                    child
-                }
-                // Native Frame clones already own every item and its resources.
-                SceneContent::Layout(layout) => layout.frame.clone(),
-                SceneContent::Scene(scene) => scene.frame.clone(),
+                SceneContent::Path { segments, style } => style.frame(segments, size)?,
+                // Typst frames share their immutable item storage.
+                SceneContent::Frame(frame) => frame.clone(),
             };
             if command.isolate_transform {
                 child.set_kind(FrameKind::Hard);
@@ -92,15 +83,146 @@ impl Scene {
             group.label = command
                 .tag
                 .map(|tag| {
-                    Label::new(PicoStr::intern(&tag))
+                    Label::new(PicoStr::intern(tag))
                         .ok_or_else(|| Error::invalid("scene item tag cannot be empty"))
                 })
                 .transpose()?;
-            items.push((Point::zero(), FrameItem::Group(group)));
+            frame.push(Point::zero(), FrameItem::Group(group));
         }
-        frame.push_multiple(items);
         Ok(Self { frame })
     }
+}
+
+impl PathStyle<'_> {
+    fn frame(self, segments: &[TypstPathSegment], size: Size) -> Result<Frame, Error> {
+        let mut shape = Shape {
+            geometry: Geometry::Curve(curve(segments)?),
+            fill: self.fill.map(color).transpose()?.map(Paint::Solid),
+            fill_rule: fill_rule(self.fill_rule)?,
+            stroke: self.stroke.map(stroke).transpose()?,
+        };
+        let mut child = Frame::soft(size);
+        let mut placement = None;
+        if let Some((paint, bounds)) = self.fill_gradient {
+            if shape.fill.is_none() {
+                return Err(Error::invalid("gradient fill requires a filled path"));
+            }
+            shape.fill = Some(paint);
+            placement = Some(bounds);
+        }
+        if let Some((paint, bounds)) = self.stroke_gradient {
+            shape
+                .stroke
+                .as_mut()
+                .ok_or_else(|| Error::invalid("gradient stroke requires a stroked path"))?
+                .paint = paint;
+            // Typst uses one parent coordinate frame for both paints.
+            if let Some(fill) = placement.filter(|fill| *fill != bounds) {
+                let base = Shape {
+                    geometry: shape.geometry.clone(),
+                    fill: shape.fill.take(),
+                    fill_rule: shape.fill_rule,
+                    stroke: None,
+                };
+                fill.push(&mut child, base);
+            }
+            placement = Some(bounds);
+        }
+        if let Some(bounds) = placement {
+            bounds.push(&mut child, shape);
+        } else {
+            child.push(Point::zero(), FrameItem::Shape(shape, Span::detached()));
+        }
+        Ok(child)
+    }
+}
+
+#[derive(PartialEq)]
+pub struct GradientFrame {
+    origin: Point,
+    size: Size,
+}
+
+impl GradientFrame {
+    fn push(self, child: &mut Frame, shape: Shape) {
+        let mut frame = Frame::hard(self.size);
+        frame.push(-self.origin, FrameItem::Shape(shape, Span::detached()));
+        child.push_frame(self.origin, frame);
+    }
+}
+
+pub(crate) fn gradient(
+    g: &TypstGradient,
+    colors: &[TypstColor],
+) -> Result<(Paint, GradientFrame), Error> {
+    if colors.len() < 2 {
+        return Err(Error::invalid("a gradient needs at least two colors"));
+    }
+    let stops = colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| Ok((color(*c)?, Ratio::new(i as f64 / (colors.len() - 1) as f64))))
+        .collect::<Result<Vec<_>, Error>>()?;
+    let dx = g.end.x - g.start.x;
+    let dy = g.end.y - g.start.y;
+    let radius = dx.hypot(dy);
+    if radius <= 0.0 || !radius.is_finite() {
+        return Err(Error::invalid(
+            "gradient endpoints must be finite and distinct",
+        ));
+    }
+    let space = ProcessColorSpace::Srgb.into();
+    let relative = Smart::Custom(RelativeTo::Parent);
+    let (paint, side, cx, cy) = match g.kind {
+        TYPST_GRADIENT_LINEAR => {
+            let angle = Angle::rad(dy.atan2(dx));
+            let side = radius / ((dx / radius).abs() + (dy / radius).abs());
+            (
+                Gradient::Linear(Arc::new(LinearGradient {
+                    stops,
+                    angle,
+                    space,
+                    relative,
+                    anti_alias: true,
+                })),
+                side,
+                g.start.x + dx / 2.0,
+                g.start.y + dy / 2.0,
+            )
+        }
+        TYPST_GRADIENT_RADIAL => {
+            let center = Axes::splat(Ratio::new(0.5));
+            (
+                Gradient::Radial(Arc::new(RadialGradient {
+                    stops,
+                    center,
+                    radius: Ratio::new(0.5),
+                    focal_center: center,
+                    focal_radius: Ratio::zero(),
+                    space,
+                    relative,
+                    anti_alias: true,
+                })),
+                2.0 * radius,
+                g.start.x,
+                g.start.y,
+            )
+        }
+        _ => return Err(Error::unsupported("unknown gradient kind")),
+    };
+    if !side.is_finite() {
+        return Err(Error::invalid("gradient extent exceeds coordinate range"));
+    }
+    Ok((
+        Paint::Gradient(paint),
+        GradientFrame {
+            origin: point(TypstPoint {
+                x: cx - side / 2.0,
+                y: cy - side / 2.0,
+            })?,
+            size: Size::splat(Abs::pt(side)),
+        },
+    ))
 }
 
 pub(crate) fn transform(value: TypstTransform) -> Result<Transform, Error> {
@@ -267,6 +389,8 @@ mod tests {
                         segments: &line(),
                         style: PathStyle {
                             fill: None,
+                            fill_gradient: None,
+                            stroke_gradient: None,
                             fill_rule: TYPST_FILL_EVENODD,
                             stroke: Some(StrokeStyle {
                                 color: TypstColor {
@@ -297,18 +421,19 @@ mod tests {
             80.0,
             50.0,
             vec![SceneCommand {
-                content: SceneContent::Scene(child),
+                content: SceneContent::Frame(&child.frame),
                 transform: TypstTransform {
                     xx: 2.0,
                     dy: 11.0,
                     ..Default::default()
                 },
                 clip: Some(&line()),
-                tag: Some("stable-scene-item".into()),
+                tag: Some("stable-scene-item"),
                 isolate_transform: true,
             }],
         )
         .unwrap();
+        drop(child);
         assert!(weak.upgrade().is_none());
         let (_, FrameItem::Group(group)) = parent.frame.items().next().unwrap() else {
             panic!("expected native group")
@@ -338,7 +463,7 @@ mod tests {
                 150.0,
                 60.0,
                 vec![SceneCommand {
-                    content: SceneContent::Layout(layout),
+                    content: SceneContent::Frame(&layout.frame),
                     transform: TypstTransform::default(),
                     clip: None,
                     tag: None,
@@ -347,13 +472,14 @@ mod tests {
             )
             .unwrap(),
         );
+        drop(layout);
         assert!(weak_layout.upgrade().is_none());
         let weak_scene = Arc::downgrade(&child);
         let parent = Scene::new(
             180.0,
             80.0,
             vec![SceneCommand {
-                content: SceneContent::Scene(child),
+                content: SceneContent::Frame(&child.frame),
                 transform: TypstTransform::default(),
                 clip: None,
                 tag: None,
@@ -361,6 +487,7 @@ mod tests {
             }],
         )
         .unwrap();
+        drop(child);
         assert!(weak_scene.upgrade().is_none());
         drop(context);
 

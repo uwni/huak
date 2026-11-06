@@ -53,6 +53,15 @@ in the same visibility calculation. Source and face indices start at zero.
   linework alone. The drawing tolerance controls the conversion of projected
   curves to cubic paths. OCCT uses its own intersection tolerances.
 
+For textbook shading under orthographic projection, pass a direction towards
+the light source, for example `light:(-1,-2,3)`, and paint each visible face
+with `s.shaded(face,ink)`. Set `spot:24deg` to add a gleam. Its boundary
+is where the surface normal makes that angle with the light/view half-vector
+(Stroila, Eisemann and Hart, *Clip Art Rendering of Smooth Isosurfaces*,
+Eq. 13). OCCT traces this contour on the face. Huak fits an ellipse to each
+connected projected highlight for the radial color falloff and clips it to
+the visible highlight boundary. See the [highlight example](../../../examples/space/highlight.huak).
+
 ### Choosing a line style
 
 Each entry in `result.lines` has a 2D `curve`, a `kind` and a separate
@@ -107,7 +116,7 @@ zig build playground test-playground -Dwasm-occt=/path/to/toolkit --prefix targe
 ```
 
 This produces one Wasm module, using the same drawing adapter as the desktop. The check
-runs the modeling and visibility tests and renders the 3D examples through the Playground
+runs the modeling, visibility and lighting tests and renders the 3D examples through the Playground
 entry point. This build requires WebAssembly exception handling.
 
 The Wasm module statically incorporates OCCT and OCCTSwift modifications. For redistribution

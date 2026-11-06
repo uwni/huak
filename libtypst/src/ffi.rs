@@ -268,9 +268,7 @@ pub unsafe extern "C" fn typst_context_create(
                 .collect::<Result<Vec<_>, Error>>()?;
             let inputs = text(config.inputs_json, "inputs JSON")?;
             let context = crate::context::Context::new(fonts, files, inputs, config.flags)?;
-            out.write(owned(TypstContext {
-                inner: Arc::new(context),
-            }));
+            out.write(owned(TypstContext { inner: context }));
             Ok(Report::default())
         })
     }
@@ -298,9 +296,7 @@ pub unsafe extern "C" fn typst_context_compile(
             let (document, warnings) = context
                 .inner
                 .compile(text(source, "source")?, text(source_name, "source name")?)?;
-            out.write(owned(TypstDocument {
-                inner: Arc::new(document),
-            }));
+            out.write(owned(TypstDocument { inner: document }));
             Ok(warnings)
         })
     }
@@ -385,9 +381,7 @@ pub unsafe extern "C" fn typst_context_layout(
                     usize::MAX,
                 )
                 .map_err(|error| error.with_source(input.source_name))?;
-            out.write(owned(TypstLayout {
-                inner: Arc::new(layout),
-            }));
+            out.write(owned(TypstLayout { inner: layout }));
             Ok(warnings)
         })
     }
@@ -452,9 +446,7 @@ pub unsafe extern "C" fn typst_context_layout_many(
                     Ok((layout, report)) => TypstLayoutResult {
                         status: TYPST_OK,
                         reserved: 0,
-                        layout: owned(TypstLayout {
-                            inner: Arc::new(layout),
-                        }),
+                        layout: owned(TypstLayout { inner: layout }),
                         diagnostics: if report.entries.is_empty() {
                             ptr::null_mut()
                         } else {
@@ -699,6 +691,8 @@ unsafe fn style<'a>(value: *const TypstStyle) -> Result<PathStyle<'a>, Error> {
     Ok(PathStyle {
         fill: (value.flags & TYPST_STYLE_FILL != 0).then_some(value.fill),
         fill_rule: value.fill_rule,
+        fill_gradient: None,
+        stroke_gradient: None,
         stroke,
     })
 }
@@ -730,11 +724,37 @@ pub unsafe extern "C" fn typst_scene_create(
                     if item.reserved != 0 {
                         return Err(Error::invalid("scene item reserved field must be zero"));
                     }
+                    let item_options: TypstSceneItemOptions = options(item.options)?;
+                    if (!item_options.fill_gradient.is_null()
+                        || !item_options.stroke_gradient.is_null())
+                        && item.kind != TYPST_ITEM_PATH
+                    {
+                        return Err(Error::invalid("gradient paint requires a path"));
+                    }
                     let content = match item.kind {
                         TYPST_ITEM_PATH if item.layout.is_null() && item.scene.is_null() => {
+                            let mut style = style(item.style)?;
+                            let gradient = |view: *const TypstGradient| {
+                                if view.is_null() {
+                                    return Ok(None);
+                                }
+                                let g = required(view, "gradient")?;
+                                if g.reserved != 0 {
+                                    return Err(Error::invalid(
+                                        "gradient reserved field must be zero",
+                                    ));
+                                }
+                                crate::scene::gradient(
+                                    g,
+                                    values(g.colors, g.count, "gradient colors")?,
+                                )
+                                .map(Some)
+                            };
+                            style.fill_gradient = gradient(item_options.fill_gradient)?;
+                            style.stroke_gradient = gradient(item_options.stroke_gradient)?;
                             SceneContent::Path {
                                 segments: path(item.path)?,
-                                style: style(item.style)?,
+                                style,
                             }
                         }
                         TYPST_ITEM_LAYOUT
@@ -742,16 +762,14 @@ pub unsafe extern "C" fn typst_scene_create(
                                 && item.scene.is_null()
                                 && item.style.is_null() =>
                         {
-                            SceneContent::Layout(
-                                required(item.layout, "item layout")?.inner.clone(),
-                            )
+                            SceneContent::Frame(&required(item.layout, "item layout")?.inner.frame)
                         }
                         TYPST_ITEM_SCENE
                             if item.path.is_null()
                                 && item.layout.is_null()
                                 && item.style.is_null() =>
                         {
-                            SceneContent::Scene(required(item.scene, "nested scene")?.inner.clone())
+                            SceneContent::Frame(&required(item.scene, "nested scene")?.inner.frame)
                         }
                         _ => {
                             return Err(Error::invalid(
@@ -759,7 +777,6 @@ pub unsafe extern "C" fn typst_scene_create(
                             ))
                         }
                     };
-                    let item_options: TypstSceneItemOptions = options(item.options)?;
                     if item_options.flags & !TYPST_SCENE_ITEM_ISOLATE_TRANSFORM != 0 {
                         return Err(Error::unsupported("unknown scene item flags"));
                     }
@@ -772,16 +789,14 @@ pub unsafe extern "C" fn typst_scene_create(
                         } else {
                             Some(path(item.clip)?)
                         },
-                        tag: (!tag.is_empty()).then(|| tag.to_owned()),
+                        tag: (!tag.is_empty()).then_some(tag),
                         isolate_transform: item_options.flags & TYPST_SCENE_ITEM_ISOLATE_TRANSFORM
                             != 0,
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
             let scene = crate::scene::Scene::new(config.width_pt, config.height_pt, commands)?;
-            out.write(owned(TypstScene {
-                inner: Arc::new(scene),
-            }));
+            out.write(owned(TypstScene { inner: scene }));
             Ok(Report::default())
         })
     }
