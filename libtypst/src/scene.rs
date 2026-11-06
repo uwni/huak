@@ -1,17 +1,23 @@
 //! Immutable native scenes. Typst owns drawing, clipping, and frame semantics.
 use crate::{abi::*, error::Error};
+use comemo::Track;
 use std::sync::Arc;
 use typst_core::{
-    foundations::{Label, Smart},
+    engine::{Engine, Route, Sink, Traced},
+    foundations::{Bytes, Derived, Label, Packed, Smart, StyleChain},
+    introspection::EmptyIntrospector,
     layout::{
         Abs, Angle, Axes, Frame, FrameItem, FrameKind, GroupItem, Point, Ratio, Size, Transform,
     },
-    syntax::Span,
-    utils::PicoStr,
+    loading::{DataSource, LoadSource, Loaded},
+    syntax::{Span, Spanned},
+    utils::{PicoStr, Protected},
     visualize::{
-        Color, Curve, CurveItem, DashPattern, FillRule, FixedStroke, Geometry, Gradient, LineCap,
-        LineJoin, LinearGradient, Paint, ProcessColorSpace, RadialGradient, RelativeTo, Rgb, Shape,
+        Color, Curve, CurveItem, DashPattern, FillRule, FixedStroke, Geometry, Gradient, ImageElem,
+        ImageFormat, ImageKind, LineCap, LineJoin, LinearGradient, Paint, ProcessColorSpace,
+        RadialGradient, RelativeTo, Rgb, Shape, VectorFormat,
     },
+    World,
 };
 
 pub struct Scene {
@@ -54,6 +60,60 @@ pub struct StrokeStyle<'a> {
 }
 
 impl Scene {
+    /// Import one native PDF page. Typst owns parsing and final PDF embedding.
+    pub(crate) fn from_pdf(
+        context: &crate::context::Context,
+        data: &[u8],
+        page: usize,
+    ) -> Result<(Self, crate::diagnostics::Report), Error> {
+        let page = page
+            .checked_add(1)
+            .and_then(std::num::NonZeroUsize::new)
+            .ok_or_else(|| Error::range("PDF page index is out of range"))?;
+        let data = Bytes::new(data.to_vec());
+        let element = Packed::new(
+            ImageElem::new(Derived::new(
+                DataSource::Bytes(data.clone()),
+                Loaded::new(Spanned::new(LoadSource::Bytes, Span::detached()), data),
+            ))
+            .with_page(page)
+            .with_format(Smart::Custom(ImageFormat::Vector(VectorFormat::Pdf))),
+        );
+        let world = context.world("", "image.pdf")?;
+        let library = world.library();
+        let traced = Traced::default();
+        let introspector = EmptyIntrospector;
+        let mut sink = Sink::new();
+        let image = element
+            .decode(
+                &mut Engine {
+                    world: (&world as &dyn World).track(),
+                    library,
+                    introspector: Protected::new(introspector.track()),
+                    traced: traced.track(),
+                    sink: sink.track_mut(),
+                    route: Route::default(),
+                },
+                StyleChain::new(&library.styles),
+            )
+            .map_err(|errors| {
+                Error::compile(crate::diagnostics::Report::from_native(&world, &errors, 0))
+            })?;
+        let ImageKind::Pdf(pdf) = image.kind() else {
+            unreachable!()
+        };
+        let size = Size::new(Abs::pt(pdf.width().into()), Abs::pt(pdf.height().into()));
+        let mut frame = Frame::soft(size);
+        frame.push(
+            Point::zero(),
+            FrameItem::Image(image, size, Span::detached()),
+        );
+        Ok((
+            Self { frame },
+            crate::diagnostics::Report::from_native(&world, &sink.warnings(), 0),
+        ))
+    }
+
     pub fn new(
         width_pt: f64,
         height_pt: f64,
@@ -362,6 +422,28 @@ fn stroke(value: StrokeStyle<'_>) -> Result<FixedStroke, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_import_uses_native_decoding_and_owns_its_page() {
+        let context =
+            crate::context::Context::new(vec![], vec![], "", TYPST_CONTEXT_NO_BUILTIN_FONTS)
+                .unwrap();
+        let frame = Frame::hard(Size::new(Abs::pt(50.0), Abs::pt(30.0)));
+        let bytes = crate::export::pdf(&crate::export::from_frame(&frame), None).unwrap();
+        assert!(Scene::from_pdf(&context, b"not a PDF", 0).is_err());
+        assert!(Scene::from_pdf(&context, &bytes, 1).is_err());
+        assert!(Scene::from_pdf(&context, &bytes, usize::MAX).is_err());
+        let (scene, _) = Scene::from_pdf(&context, &bytes, 0).unwrap();
+        assert_eq!(scene.frame.size(), frame.size());
+        drop(bytes);
+        drop(context);
+        let document = crate::export::from_frame(&scene.frame);
+        assert!(crate::export::pdf(&document, None)
+            .unwrap()
+            .starts_with(b"%PDF-"));
+        // Upstream explicitly rejects imported PDF pages for these standards.
+        assert!(crate::export::pdf(&document, Some("a-2b")).is_err());
+    }
 
     fn line() -> Vec<TypstPathSegment> {
         vec![

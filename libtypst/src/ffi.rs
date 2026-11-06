@@ -215,7 +215,8 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_BATCH_LAYOUT
             | TYPST_CAP_NATIVE_SCENE
             | TYPST_CAP_TEXT_OUTLINE
-            | TYPST_CAP_LAYOUT_BINDINGS,
+            | TYPST_CAP_LAYOUT_BINDINGS
+            | TYPST_CAP_PDF_IMPORT,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),
     }) {
@@ -695,6 +696,35 @@ unsafe fn style<'a>(value: *const TypstStyle) -> Result<PathStyle<'a>, Error> {
         stroke_gradient: None,
         stroke,
     })
+}
+
+/// Imports a zero-based PDF page into a reusable native scene, at its natural
+/// page dimensions in points. Copies the input bytes; the scene can outlive them.
+/// PDF output uses Typst's native PDF embedding, including its format restrictions.
+///
+/// # Safety
+/// `context` is borrowed for this call. `data` follows the module pointer contract. `out` must be a writable scene
+/// slot; `diagnostics` is optional. Release the scene and diagnostics separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_from_pdf(
+    context: *const TypstContext,
+    data: TypstBytes,
+    page: usize,
+    out: *mut *mut TypstScene,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let (inner, report) = crate::scene::Scene::from_pdf(
+                &required(context, "context")?.inner,
+                values(data.data, data.len, "PDF data")?,
+                page,
+            )?;
+            out.write(owned(TypstScene { inner }));
+            Ok(report)
+        })
+    }
 }
 
 /// Copies native scene commands and retains referenced layouts/nested scenes.

@@ -66,11 +66,68 @@ pub const Pen = struct {
         if (self.nib) |nib| if (nib == .polygon) allocator.free(nib.polygon);
     }
 };
-pub const Gradient = struct {
-    kind: enum { radial_fill, linear_fill, linear_stroke },
-    start: g.Point,
-    end: g.Point,
-    colors: []const Color,
+pub const Gradient = union(enum) {
+    radial_fill: Ramp,
+    linear_fill: Ramp,
+    linear_stroke: Ramp,
+    mesh_fill: Mesh,
+
+    pub const Ramp = struct { start: g.Point, end: g.Point, colors: []const Color };
+    pub const Mesh = struct {
+        vertices: []const Vertex,
+        triangles: []const [3]u32,
+        pub const Vertex = extern struct {
+            x: f64,
+            y: f64,
+            r: f64,
+            g: f64,
+            b: f64,
+            a: f64 = 1,
+            pub fn color(self: Vertex) Color {
+                return .{ .r = self.r, .g = self.g, .b = self.b, .a = self.a };
+            }
+        };
+    };
+
+    pub fn clone(self: Gradient, allocator: std.mem.Allocator) !Gradient {
+        switch (self) {
+            .mesh_fill => |mesh| {
+                const vertices = try allocator.dupe(Mesh.Vertex, mesh.vertices);
+                errdefer allocator.free(vertices);
+                return .{ .mesh_fill = .{ .vertices = vertices, .triangles = try allocator.dupe([3]u32, mesh.triangles) } };
+            },
+            inline else => |ramp, tag| return @unionInit(Gradient, @tagName(tag), Ramp{ .start = ramp.start, .end = ramp.end, .colors = try allocator.dupe(Color, ramp.colors) }),
+        }
+    }
+
+    pub fn deinit(self: Gradient, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .mesh_fill => |mesh| {
+                allocator.free(mesh.vertices);
+                allocator.free(mesh.triangles);
+            },
+            inline else => |ramp| allocator.free(ramp.colors),
+        }
+    }
+
+    pub fn dataSize(self: Gradient) usize {
+        return switch (self) {
+            .mesh_fill => |mesh| mesh.vertices.len * @sizeOf(Mesh.Vertex) + mesh.triangles.len * @sizeOf([3]u32),
+            inline else => |ramp| ramp.colors.len * @sizeOf(Color),
+        };
+    }
+
+    pub fn hasInk(self: Gradient) bool {
+        switch (self) {
+            .mesh_fill => |mesh| {
+                for (mesh.vertices) |vertex| if (vertex.a > 0) return true;
+            },
+            inline else => |ramp| {
+                for (ramp.colors) |color| if (color.a > 0) return true;
+            },
+        }
+        return false;
+    }
 };
 
 pub const Style = struct {
@@ -82,13 +139,12 @@ pub const Style = struct {
     pub const Component = enum { fill, stroke };
     pub fn gradientFor(self: *const Style, component: Component) ?*const Gradient {
         const paint = self.gradient orelse return null;
-        return if ((paint.kind == .linear_stroke) == (component == .stroke)) paint else null;
+        return if ((paint.* == .linear_stroke) == (component == .stroke)) paint else null;
     }
 
     pub fn hasInk(self: *const Style, component: Component) bool {
         if (self.gradientFor(component)) |paint| {
-            for (paint.colors) |color| if (color.a > 0) return true;
-            return false;
+            return paint.hasInk();
         }
         return if (component == .fill) (self.fill != null and self.fill.?.a > 0) else (self.pen != null and self.pen.?.color.a > 0);
     }
@@ -222,8 +278,7 @@ pub const Pool = struct {
         if (result.gradient) |paint| {
             const owned = try self.allocator.create(Gradient);
             errdefer self.allocator.destroy(owned);
-            owned.* = paint.*;
-            owned.colors = try self.allocator.dupe(Color, paint.colors);
+            owned.* = try paint.clone(self.allocator);
             result.gradient = owned;
         }
         errdefer self.freeGradient(result);
@@ -239,13 +294,13 @@ pub const Pool = struct {
 
     fn freeGradient(self: *Pool, value: *const Style) void {
         if (value.gradient) |paint| {
-            self.allocator.free(paint.colors);
+            paint.deinit(self.allocator);
             self.allocator.destroy(paint);
         }
     }
 
     fn dataSize(value: *const Style) usize {
-        const paint_bytes = if (value.gradient) |paint| @sizeOf(Gradient) + paint.colors.len * @sizeOf(Color) else 0;
+        const paint_bytes = if (value.gradient) |paint| @sizeOf(Gradient) + paint.dataSize() else 0;
         const pen = value.pen orelse return paint_bytes;
         const vertices = if (pen.nib) |nib| (if (nib == .polygon) nib.polygon.len else 0) else 0;
         const profile_bytes = if (pen.motion) |p| @sizeOf(Motion) + p.tracks.len * @sizeOf(Motion.Track) + p.keys.len * @sizeOf(Motion.Key) else 0;
@@ -262,10 +317,18 @@ const ValueContext = struct {
         var h: u64 = (@as(u64, @backingInt(value.fill_rule)) << 2) |
             (@as(u64, @intFromBool(value.pen != null)) << 1) | @intFromBool(value.fill != null);
         if (value.gradient) |paint| {
-            h = hashBytes(h, &.{@backingInt(paint.kind)});
-            h = hashBytes(h, bits(&paint.start));
-            h = hashBytes(h, bits(&paint.end));
-            h = hashBytes(h, bits(paint.colors));
+            h = hashBytes(h, &.{@backingInt(std.meta.activeTag(paint.*))});
+            switch (paint.*) {
+                .mesh_fill => |mesh| {
+                    h = hashBytes(h, bits(mesh.vertices));
+                    h = hashBytes(h, bits(mesh.triangles));
+                },
+                inline else => |ramp| {
+                    h = hashBytes(h, bits(&ramp.start));
+                    h = hashBytes(h, bits(&ramp.end));
+                    h = hashBytes(h, bits(ramp.colors));
+                },
+            }
         }
         if (value.fill) |*fill| h = hashBytes(h, bits(fill));
         if (value.pen) |*pen| {
@@ -289,8 +352,14 @@ const ValueContext = struct {
         if ((a.gradient != null) != (b.gradient != null)) return false;
         if (a.gradient) |paint| {
             const other = b.gradient.?;
-            if (paint.kind != other.kind or !std.mem.eql(u8, bits(&paint.start), bits(&other.start)) or
-                !std.mem.eql(u8, bits(&paint.end), bits(&other.end)) or !std.mem.eql(u8, bits(paint.colors), bits(other.colors))) return false;
+            if (std.meta.activeTag(paint.*) != std.meta.activeTag(other.*)) return false;
+            switch (paint.*) {
+                .mesh_fill => |mesh| if (!std.mem.eql(u8, bits(mesh.vertices), bits(other.mesh_fill.vertices)) or !std.mem.eql(u8, bits(mesh.triangles), bits(other.mesh_fill.triangles))) return false,
+                inline else => |ramp, tag| {
+                    const next = @field(other.*, @tagName(tag));
+                    if (!std.mem.eql(u8, bits(&ramp.start), bits(&next.start)) or !std.mem.eql(u8, bits(&ramp.end), bits(&next.end)) or !std.mem.eql(u8, bits(ramp.colors), bits(next.colors))) return false;
+                },
+            }
         }
         if (a.fill_rule != b.fill_rule or (a.fill != null) != (b.fill != null) or (a.pen != null) != (b.pen != null)) return false;
         if (a.fill) |*fill| if (!std.mem.eql(u8, bits(fill), bits(&b.fill.?))) return false;
@@ -336,7 +405,7 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     var dash = [_]f64{ 1, 2 };
     var vertices = [_]g.Point{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 } };
     var colors = [_]Color{ .black, .{ .r = 1 } };
-    var style: Style = .{ .fill = .black, .gradient = &.{ .kind = .radial_fill, .start = .zero, .end = .{ .x = 1, .y = 0 }, .colors = &colors }, .pen = .{ .dash = &dash, .nib = .{ .polygon = &vertices } } };
+    var style: Style = .{ .fill = .black, .gradient = &.{ .radial_fill = .{ .start = .zero, .end = .{ .x = 1, .y = 0 }, .colors = &colors } }, .pen = .{ .dash = &dash, .nib = .{ .polygon = &vertices } } };
     const saved = try pool.intern(&style);
     try std.testing.expect(saved == try pool.intern(&style));
     var other = Pool.init(allocator);
@@ -348,7 +417,7 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     dash[0] = 3;
     vertices[0].x = -1;
     colors[0].r = 0.5;
-    try std.testing.expectEqual(Color.black, saved.gradient.?.colors[0]);
+    try std.testing.expectEqual(Color.black, saved.gradient.?.radial_fill.colors[0]);
     try std.testing.expectEqual(@as(f64, 1), saved.pen.?.dash[0]);
     try std.testing.expectEqual(@as(f64, 0), saved.pen.?.nib.?.polygon[0].x);
     try std.testing.expect(saved != try pool.intern(&style));
@@ -371,6 +440,21 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     keys[1].value = 8;
     try std.testing.expect(first_profile != try pool.intern(&pressure));
     try std.testing.expectEqual(@as(f64, 14), first_profile.pen.?.motion.?.keys[1].value);
+
+    var mesh_vertices = [_]Gradient.Mesh.Vertex{
+        .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0 },
+        .{ .x = 1, .y = 0, .r = 0, .g = 1, .b = 0 },
+        .{ .x = 0, .y = 1, .r = 0, .g = 0, .b = 1 },
+    };
+    var triangles = [_][3]u32{.{ 0, 1, 2 }};
+    const mesh_style: Style = .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &mesh_vertices, .triangles = &triangles } } };
+    const mesh = try pool.intern(&mesh_style);
+    try std.testing.expect(mesh == try pool.intern(&mesh_style));
+    mesh_vertices[0].r = 0;
+    triangles[0][2] = 1;
+    try std.testing.expectEqual(@as(f64, 1), mesh.gradient.?.mesh_fill.vertices[0].r);
+    try std.testing.expectEqual(@as(u32, 2), mesh.gradient.?.mesh_fill.triangles[0][2]);
+    try std.testing.expect(mesh != try pool.intern(&mesh_style));
 }
 
 test "immutable styles share equal values own slices and preserve float bits across OOM" {

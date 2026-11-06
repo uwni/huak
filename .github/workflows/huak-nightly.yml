@@ -27,6 +27,8 @@ jobs:
           - { runner: ubuntu-24.04, platform: linux-x86_64, library: libtypst.so }
           - { runner: macos-15, platform: macos-arm64, library: libtypst.dylib }
     runs-on: ${{ matrix.runner }}
+    env:
+      RUSTUP_TOOLCHAIN: "1.92.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,8 +36,11 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: "0.17.1"
+      - name: Install Rust for the PDF mesh encoder
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Build and test the desktop tools
         run: |
+          cargo test --locked --manifest-path src/render/pdf/Cargo.toml --target-dir target/pdf-mesh
           zig build install test-backend test-cli-options \
             -Doptimize=ReleaseSafe -Dcpu=baseline -Druntime-libtypst=${{ matrix.library }}
           zig-out/bin/huak --help

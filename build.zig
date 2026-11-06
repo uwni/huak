@@ -73,6 +73,7 @@ fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const standard_library: Import = .{ .name = "huak_std", .module = b.createModule(.{ .root_source_file = b.path("stdlib/catalog.zig"), .target = target, .optimize = optimize }) };
     const engine = engineModule(b, public, "huak", .{ .root_source_file = b.path("src/huak.zig"), .target = target, .optimize = optimize, .imports = &.{ native, .{ .name = "xml_parser", .module = xml }, standard_library, csv } });
     configureSpace(b, engine.module, target, optimize, occt);
+    @import("src/render/pdf/build.zig").link(b, engine.module, target, optimize);
     return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml };
 }
 
@@ -341,6 +342,7 @@ fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, scenes: 
     tools_tests.dependOn(&tool_units.step);
     all_tests.dependOn(&tool_units.step);
     _ = program(b, config, .{ .name = "animation-references", .source = "tests/animation/references.zig", .step = "verify-animation", .description = "Generate native animation reference fixtures", .imports = &.{ libraries.native, libraries.huak, scenes.animation, libraries.options } });
+    _ = program(b, config, .{ .name = "mesh-reference", .source = "tests/mesh_reference.zig", .step = "verify-mesh", .description = "Replay a numerical lighting mesh fixture through the native PDF backend", .imports = &.{ libraries.native, libraries.huak, libraries.options } });
 }
 
 fn program(b: *std.Build, config: Configuration, spec: Program) *std.Build.Step.Compile {

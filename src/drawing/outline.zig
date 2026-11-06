@@ -33,7 +33,10 @@ const Budget = struct {
         for (segments) |segment| try self.consume(if (segment == .cubic) 3 else 1);
     }
     fn style(self: *Budget, value: DisplayList.Style) !void {
-        if (value.gradient) |paint| try self.consume(paint.colors.len);
+        if (value.gradient) |paint| try self.consume(switch (paint.*) {
+            .mesh_fill => |mesh| mesh.vertices.len + mesh.triangles.len,
+            inline else => |ramp| ramp.colors.len,
+        });
         if (value.pen) |pen| {
             try self.consume(pen.dash.len);
             if (pen.motion) |p| try self.consume(p.keys.len);

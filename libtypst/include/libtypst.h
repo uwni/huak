@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65538
+#define TYPST_ABI_VERSION 65539
 
 #define TYPST_CAP_PDF 1
 
@@ -23,6 +23,11 @@
  * Per-request lexical bindings in content layout options.
  */
 #define TYPST_CAP_LAYOUT_BINDINGS 16
+
+/**
+ * Import a PDF page as a retained native scene.
+ */
+#define TYPST_CAP_PDF_IMPORT 32
 
 #define TYPST_VALUE_NONE 0
 
@@ -650,6 +655,21 @@ TypstStatus typst_layout_export_pdf(const struct TypstLayout *layout,
                                     const struct TypstPdfOptions *config,
                                     struct TypstBuffer **out,
                                     struct TypstDiagnostics **diagnostics);
+
+/**
+ * Imports a zero-based PDF page into a reusable native scene, at its natural
+ * page dimensions in points. Copies the input bytes; the scene can outlive them.
+ * PDF output uses Typst's native PDF embedding, including its format restrictions.
+ *
+ * # Safety
+ * `context` is borrowed for this call. `data` follows the module pointer contract. `out` must be a writable scene
+ * slot; `diagnostics` is optional. Release the scene and diagnostics separately.
+ */
+TypstStatus typst_scene_from_pdf(const struct TypstContext *context,
+                                 struct TypstBytes data,
+                                 size_t page,
+                                 struct TypstScene **out,
+                                 struct TypstDiagnostics **diagnostics);
 
 /**
  * Copies native scene commands and retains referenced layouts/nested scenes.

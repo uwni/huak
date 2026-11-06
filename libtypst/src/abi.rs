@@ -7,13 +7,15 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0002;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0003;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
 pub const TYPST_CAP_TEXT_OUTLINE: u64 = 8;
 /// Per-request lexical bindings in content layout options.
 pub const TYPST_CAP_LAYOUT_BINDINGS: u64 = 16;
+/// Import a PDF page as a retained native scene.
+pub const TYPST_CAP_PDF_IMPORT: u64 = 32;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;

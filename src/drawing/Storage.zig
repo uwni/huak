@@ -127,9 +127,23 @@ pub fn validateMetrics(metrics: Metrics) Error!void {
 pub fn validateStyle(style_value: *const Style) Error!void {
     if (style_value.fill == null and style_value.pen == null) return error.InvalidStyle;
     if (style_value.gradient) |paint| {
-        if ((if (paint.kind == .linear_stroke) style_value.pen == null else style_value.fill == null) or
-            !paint.start.isFinite() or !paint.end.isFinite() or paint.start.eql(paint.end) or paint.colors.len < 2) return error.InvalidStyle;
-        for (paint.colors) |color| if (!color.valid()) return error.InvalidColor;
+        if (if (paint.* == .linear_stroke) style_value.pen == null else style_value.fill == null) return error.InvalidStyle;
+        switch (paint.*) {
+            .mesh_fill => |mesh| {
+                if (mesh.vertices.len < 3 or mesh.triangles.len == 0) return error.InvalidStyle;
+                for (mesh.vertices) |vertex| {
+                    if (!std.math.isFinite(vertex.x) or !std.math.isFinite(vertex.y)) return error.NonFinite;
+                    if (!vertex.color().valid()) return error.InvalidColor;
+                }
+                for (mesh.triangles) |triangle| for (triangle) |index| {
+                    if (index >= mesh.vertices.len) return error.InvalidStyle;
+                };
+            },
+            inline else => |ramp| {
+                if (!ramp.start.isFinite() or !ramp.end.isFinite() or ramp.start.eql(ramp.end) or ramp.colors.len < 2) return error.InvalidStyle;
+                for (ramp.colors) |color| if (!color.valid()) return error.InvalidColor;
+            },
+        }
     }
     if (style_value.fill) |fill| if (!fill.valid()) return error.InvalidColor;
     if (style_value.pen) |*pen| {

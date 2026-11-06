@@ -9,6 +9,7 @@ const Gradient = @import("../../drawing/style.zig").Gradient;
 const Path = @import("../../drawing/path/Path.zig");
 const pens = @import("../../drawing/pen/root.zig");
 const physical = @import("pen.zig");
+const mesh_pdf = @import("../pdf/mesh.zig");
 
 pub const Options = struct {
     origin: g.Point = .zero,
@@ -17,10 +18,11 @@ pub const Options = struct {
     /// huak's mathematical root group when animation IDs are present.
     object_ids: ?[]const u64 = null,
     pen_geometry: pens.StrokeOptions = .{},
+    pdf_mesh: bool = false,
 };
 
 pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, size: c.TypstPoint, options: Options) !typst.Document {
-    var builder: Builder = .{ .arena = .init(allocator), .library = library, .size = size };
+    var builder: Builder = .{ .arena = .init(allocator), .library = library, .size = size, .pdf_mesh = options.pdf_mesh };
     defer builder.deinit();
     const memory = builder.arena.allocator();
     // Resolve all physical pens before native submission, preserving geometry
@@ -164,9 +166,12 @@ const Builder = struct {
     segments: NativeSegments = undefined,
     children: std.ArrayList(*c.TypstScene) = .empty,
     levels: std.ArrayList(Level) = .empty,
+    pdf_mesh: bool = false,
+    image_context: ?typst.Engine = null,
 
     fn deinit(self: *Builder) void {
         for (self.children.items) |child| self.library.functions.scene_release(child);
+        if (self.image_context) |*engine| engine.deinit();
         self.arena.deinit();
     }
 
@@ -212,6 +217,36 @@ const Builder = struct {
     }
 
     fn paint(self: *Builder, path_: *const c.TypstPath, style_: *const c.TypstStyle, gradient: ?*const Gradient, transform: g.Transform, id: u64) !void {
+        if (gradient) |value| if (value.* == .mesh_fill) {
+            if (!self.pdf_mesh) return error.MeshRequiresPdf;
+            const encoded = try mesh_pdf.encode(self.arena.child_allocator, value.mesh_fill, path_, style_.fill_rule == c.TYPST_FILL_EVENODD);
+            defer mesh_pdf.release(encoded.buffer);
+            if (self.image_context == null) self.image_context = try typst.Engine.init(self.library, .{});
+            var image: ?*c.TypstScene = null;
+            var diagnostics: ?*c.TypstDiagnostics = null;
+            defer self.library.functions.diagnostics_release(diagnostics);
+            const status = self.library.functions.scene_from_pdf(self.image_context.?.handle, .{ .data = encoded.buffer.data, .len = encoded.buffer.len }, 0, &image, &diagnostics);
+            try self.library.check(status, diagnostics);
+            const scene_ = image orelse return error.InvalidResult;
+            self.children.append(self.arena.allocator(), scene_) catch |err| {
+                self.library.functions.scene_release(scene_);
+                return err;
+            };
+            const box = encoded.bounds;
+            // Imported PDF images use downward y; mesh coordinates use upward y.
+            const placement = g.Transform{ .a = box.max.x - box.min.x, .d = box.min.y - box.max.y, .e = box.min.x, .f = box.max.y };
+            var item_ = try self.item(placement.then(transform), null, id, null);
+            item_.kind = c.TYPST_ITEM_SCENE;
+            item_.scene = scene_;
+            try self.append(item_);
+            if (style_.flags & c.TYPST_STYLE_STROKE != 0) {
+                const stroke = try self.arena.allocator().create(c.TypstStyle);
+                stroke.* = style_.*;
+                stroke.flags &= ~@as(u32, c.TYPST_STYLE_FILL);
+                try self.paint(path_, stroke, null, transform, 0);
+            }
+            return;
+        };
         var raw = try self.item(transform, null, id, gradient);
         raw.kind = c.TYPST_ITEM_PATH;
         raw.path = path_;
@@ -228,8 +263,7 @@ const Builder = struct {
         if (stroke) |value| {
             var footprint_paint: ?Gradient = null;
             if (draw.style.gradientFor(.stroke)) |paint_| {
-                footprint_paint = paint_.*;
-                footprint_paint.?.kind = .linear_fill;
+                footprint_paint = .{ .linear_fill = paint_.linear_stroke };
             }
             try self.paint(value.path, value.style, if (footprint_paint) |*fill| fill else null, if (value.transform) |transform| transform.then(placement) else placement, child_id);
         } else if (child_id != 0) {
@@ -289,18 +323,22 @@ const Builder = struct {
             options.tag = .{ .data = tag.ptr, .len = tag.len };
         }
         if (gradient) |paint_| {
-            const colors = try memory.alloc(c.TypstColor, paint_.colors.len);
-            for (paint_.colors, colors) |value, *dest| dest.* = nativeColor(value);
+            const ramp = switch (paint_.*) {
+                .mesh_fill => return error.MeshRequiresPdf,
+                inline else => |value| value,
+            };
+            const colors = try memory.alloc(c.TypstColor, ramp.colors.len);
+            for (ramp.colors, colors) |value, *dest| dest.* = nativeColor(value);
             const native = try memory.create(c.TypstGradient);
             native.* = .{
-                .kind = if (paint_.kind == .radial_fill) c.TYPST_GRADIENT_RADIAL else c.TYPST_GRADIENT_LINEAR,
+                .kind = if (paint_.* == .radial_fill) c.TYPST_GRADIENT_RADIAL else c.TYPST_GRADIENT_LINEAR,
                 .reserved = 0,
-                .start = .{ .x = paint_.start.x, .y = paint_.start.y },
-                .end = .{ .x = paint_.end.x, .y = paint_.end.y },
+                .start = .{ .x = ramp.start.x, .y = ramp.start.y },
+                .end = .{ .x = ramp.end.x, .y = ramp.end.y },
                 .colors = colors.ptr,
                 .count = colors.len,
             };
-            if (paint_.kind == .linear_stroke) options.stroke_gradient = native else options.fill_gradient = native;
+            if (paint_.* == .linear_stroke) options.stroke_gradient = native else options.fill_gradient = native;
         }
         result.options = options;
         return result;

@@ -6,6 +6,95 @@ const backend = @import("huak").backend;
 const DisplayList = @import("huak").core.DisplayList;
 const options = @import("test_options");
 
+test "mesh PDFs keep curved clips holes alpha order and live text without changing ordinary export" {
+    const core = @import("huak").core;
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var picture = DisplayList.init(t.allocator);
+    defer picture.deinit();
+    var box = try demo.rectangle(t.allocator, .zero, 100, 100);
+    defer box.deinit();
+    try picture.fill(box, .{ .b = 1 }, .{});
+    var plain = try backend.submit(t.allocator, &library, &picture, 100, 100, .{});
+    defer plain.deinit();
+    var normal_pdf = try plain.exportPdf();
+    defer normal_pdf.deinit();
+    var enabled = try backend.submit(t.allocator, &library, &picture, 100, 100, .{ .pdf_mesh = true });
+    defer enabled.deinit();
+    var unchanged = try enabled.exportPdf();
+    defer unchanged.deinit();
+    try t.expectEqualSlices(u8, normal_pdf.bytes(), unchanged.bytes());
+    try t.expect(library.default_context == null);
+
+    var engine = try library.createEngine();
+    defer engine.deinit();
+    var metrics: [1]typst.Metrics = undefined;
+    var text = try engine.layoutContent(&.{.{ .source = "Native mesh $x^2$", .syntax = .markup }}, &metrics, null);
+    defer text.deinit();
+    var boundary = try demo.rectangle(t.allocator, .zero, 60, 60);
+    defer boundary.deinit();
+    // Same winding as the outer boundary: only even-odd clipping leaves a hole.
+    try boundary.moveTo(.{ .x = 20, .y = 20 });
+    try boundary.lineTo(.{ .x = 40, .y = 20 });
+    try boundary.lineTo(.{ .x = 40, .y = 40 });
+    try boundary.lineTo(.{ .x = 20, .y = 40 });
+    try boundary.close();
+    var outer_clip = core.Path.init(t.allocator);
+    defer outer_clip.deinit();
+    try outer_clip.moveTo(.{ .x = 5, .y = 5 });
+    try outer_clip.lineTo(.{ .x = 75, .y = 5 });
+    try outer_clip.cubicTo(.{ .x = 75, .y = 75 }, .{ .x = 5, .y = 75 }, .{ .x = 5, .y = 5 });
+    try outer_clip.close();
+    try picture.beginScope(.{}, outer_clip);
+    try picture.addPath(boundary, .{ .fill = .black, .fill_rule = .evenodd, .gradient = &.{ .mesh_fill = .{
+        .vertices = &.{
+            .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0, .a = 0.5 },
+            .{ .x = 60, .y = 0, .r = 1, .g = 0, .b = 0, .a = 0.5 },
+            .{ .x = 60, .y = 60, .r = 1, .g = 0, .b = 0, .a = 0.5 },
+            .{ .x = 0, .y = 60, .r = 1, .g = 0, .b = 0, .a = 0.5 },
+        },
+        .triangles = &.{ .{ 0, 1, 2 }, .{ 0, 2, 3 } },
+    } } }, .{ .e = 10, .f = 10 });
+    try picture.endScope();
+    var foreground = try demo.rectangle(t.allocator, .{ .x = 12, .y = 12 }, 6, 6);
+    defer foreground.deinit();
+    try picture.fill(foreground, .{ .g = 1 }, .{});
+    try picture.labelAtBaseline(0, demo.metrics(metrics[0]), .{ .x = 4, .y = 85 }, .{});
+    const frames = [_]typst.FrameRef{try text.frame(0)};
+    var document = try backend.submit(t.allocator, &library, &picture, 100, 100, .{ .frames = &frames, .pdf_mesh = true });
+    defer document.deinit();
+    text.deinit();
+    engine.deinit();
+    var pdf = try document.exportPdf();
+    defer pdf.deinit();
+    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 4") != null);
+    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/Subtype /Image") == null);
+    const words = try @import("support/pdf.zig").text(pdf.bytes(), .{});
+    defer t.allocator.free(words);
+    try t.expect(std.mem.indexOf(u8, words, "Native mesh") != null);
+    try t.expect(std.mem.indexOf(u8, words, "𝑥") != null);
+    try t.expect(std.mem.indexOf(u8, words, "2") != null);
+    var temporary = t.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(t.io, .{ .sub_path = "mesh.pdf", .data = pdf.bytes() });
+    const raster = try std.process.run(t.allocator, t.io, .{ .argv = &.{ "pdftoppm", "-r", "72", "-singlefile", "mesh.pdf" }, .cwd = .{ .dir = temporary.dir } });
+    defer t.allocator.free(raster.stdout);
+    defer t.allocator.free(raster.stderr);
+    try t.expect(raster.term.success());
+    const header = "P6\n100 100\n255\n";
+    try t.expect(std.mem.startsWith(u8, raster.stdout, header));
+    const pixels = raster.stdout[header.len..];
+    for ([_]struct { x: usize, y: usize, rgb: [3]u8 }{
+        .{ .x = 15, .y = 15, .rgb = .{ 0, 255, 0 } }, // later native path is above mesh
+        .{ .x = 25, .y = 20, .rgb = .{ 128, 0, 127 } }, // mesh alpha over earlier native path
+        .{ .x = 35, .y = 35, .rgb = .{ 0, 0, 255 } }, // hole exposes earlier path
+        .{ .x = 65, .y = 60, .rgb = .{ 0, 0, 255 } }, // outside curved outer clip
+    }) |sample| {
+        const offset = ((99 - sample.y) * 100 + sample.x) * 3;
+        for (sample.rgb, pixels[offset..][0..3]) |expected, actual| try t.expect(@abs(@as(i32, actual) - expected) <= 2);
+    }
+}
+
 test "independent elliptical polygonal and singular pens render through the native backend" {
     const g = @import("huak").core.geometry;
     const Path = @import("huak").core.Path;
@@ -31,7 +120,7 @@ test "independent elliptical polygonal and singular pens render through the nati
     try picture.addPath(square, .{
         .fill = .{ .g = 1 },
         .pen = .{ .nib = .{ .ellipse = ellipse } },
-        .gradient = &.{ .kind = .linear_stroke, .start = .zero, .end = .{ .x = 40, .y = 10 }, .colors = &.{ .black, .{ .r = 1 } } },
+        .gradient = &.{ .linear_stroke = .{ .start = .zero, .end = .{ .x = 40, .y = 10 }, .colors = &.{ .black, .{ .r = 1 } } } },
     }, .{});
     const ids = [_]u64{ 10, 20, 30, 40, 50 };
     var document = try backend.submit(t.allocator, &library, &picture, 120, 110, .{ .object_ids = &ids });

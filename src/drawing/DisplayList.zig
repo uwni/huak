@@ -12,6 +12,7 @@ pub const Join = Storage.Join;
 pub const FillRule = Storage.FillRule;
 pub const Pen = Storage.Pen;
 pub const Style = Storage.Style;
+pub const Gradient = @import("style.zig").Gradient;
 pub const Metrics = Storage.Metrics;
 pub const PathRef = Storage.PathRef;
 pub const Geometry = Storage.Geometry;

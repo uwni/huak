@@ -1323,7 +1323,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const radius = try lengthPoints(args[2]);
             if (radius <= 0) return error.InvalidRadius;
             const colors = [_]DisplayList.Color{ try self.color(args[3]), try self.color(args[4]) };
-            return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &.{ .kind = .radial_fill, .start = start, .end = .{ .x = start.x + radius, .y = start.y }, .colors = &colors } }, .{});
+            return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &.{ .radial_fill = .{ .start = start, .end = .{ .x = start.x + radius, .y = start.y }, .colors = &colors } } }, .{});
         },
         .linear_fill, .linear_stroke => {
             const curve = try self.path(args[0]);
@@ -1334,13 +1334,13 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const colors = try self.gpa.alloc(DisplayList.Color, values.len);
             defer self.gpa.free(colors);
             for (values, colors) |value, *dest| dest.* = try self.color(value);
-            var gradient: @import("../drawing/style.zig").Gradient = .{ .kind = .linear_fill, .start = start, .end = end, .colors = colors };
+            const ramp: @import("../drawing/style.zig").Gradient.Ramp = .{ .start = start, .end = end, .colors = colors };
+            const gradient: @import("../drawing/style.zig").Gradient = .{ .linear_fill = ramp };
             if (id == .linear_stroke) {
                 var brush = try self.penValue(args[4]);
                 if (!brush.needsGeometry()) {
-                    gradient.kind = .linear_stroke;
                     brush.color = colors[0];
-                    return self.pathObject(&curve, &.{ .pen = brush, .gradient = &gradient }, .{});
+                    return self.pathObject(&curve, &.{ .pen = brush, .gradient = &.{ .linear_stroke = ramp } }, .{});
                 }
                 var outline_ = try renderer.strokeFootprint(self.gpa, self.gpa, curve, &brush, null);
                 defer outline_.deinit();

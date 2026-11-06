@@ -77,6 +77,7 @@ pub const Scene = struct {
             .origin = self.origin,
             .frames = self.frames,
             .object_ids = self.object_ids,
+            .pdf_mesh = format == .pdf,
         }) catch |err| {
             diagnostic.* = library.lastError() catch null;
             return err;

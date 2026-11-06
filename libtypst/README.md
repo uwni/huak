@@ -20,7 +20,7 @@ The `headers` tool uses cbindgen to generate `include/libtypst.h` from ordinary 
 
 ## API surface
 
-`typst_abi_version()` returns the C contract version; `typst_version_info()` also reports capabilities and the library/upstream versions. The current ABI is 1.2, encoded as `0x00010002`, compatible with existing 1.0 and 1.1 hosts. Public names use `typst_`, `Typst…` and `TYPST_…`.
+`typst_abi_version()` returns the C contract version; `typst_version_info()` also reports capabilities and the library/upstream versions. The current ABI is 1.3, encoded as `0x00010003`, compatible with existing 1.0–1.2 hosts. Public names use `typst_`, `Typst…` and `TYPST_…`.
 
 - `TypstContext` owns immutable font, standard-library, memory-file and input resources. Custom input bytes are copied during creation. Built-in fonts are reused; independent jobs share their context resources. Native plugins remain available by default; callers may explicitly disable them with `TYPST_CONTEXT_DISABLE_PLUGINS`.
 - `typst_context_compile` compiles an in-memory document. `typst_context_layout` and `typst_context_layout_many` evaluate markup, code or mathematics and return retained layouts with dimensions and baselines. Versioned layout options specify regions and optional setup code. Setup and body keep separate source names and byte ranges while upstream Typst evaluates their shared scope.
@@ -29,6 +29,7 @@ The `headers` tool uses cbindgen to generate `include/libtypst.h` from ordinary 
 - Documents, layouts and scenes export SVG/PDF. PDF preserves normal text and embedded fonts; SVG follows upstream outline export.
 - `typst_layout_outline` explicitly extracts editable glyph and shape geometry in bulk. Its snapshot includes transforms, styles, dashes and shaped-text metadata; it does not change the original selectable layout.
 - ABI 1.2 adds optional local-coordinate linear and radial paints to `TypstSceneItemOptions`. Fill and stroke can use independent gradients. Color stops and option views are borrowed until `typst_scene_create` returns.
+- ABI 1.3 adds `typst_scene_from_pdf(context, bytes, page, ...)`: import a zero-based PDF page as a retained scene using Typst's native image decoder. The input bytes are copied, and the result can outlive both the input and context. Existing scene transforms, clipping and ordering apply to this graphic. Upstream PDF version and PDF/A/PDF/UA import restrictions still apply.
 - `typst_layout_bounds` (ABI 1.1) returns conservative frame-local bounds including logical dimensions and painted overflow. It reuses native text, shape and image extents, including color glyphs and transforms, without outlining content. Clips may make the visible extent smaller.
 - `typst_source_block` uses Typst syntax parsing to find a complete leading content/code block. `typst_cache_evict` forwards upstream memoization cleanup for the whole library, not one context.
 
