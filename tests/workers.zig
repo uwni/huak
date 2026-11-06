@@ -1218,7 +1218,13 @@ test "workers publish detached object subtrees and retain text through dependent
         \\    root:=picture()
         \\    group:=object.append(root, picture(transform: translate((x,0pt))))
         \\    object.append(group, fill(rectangle((0pt,0pt),12pt,12pt), rgb(0.2,0.5,0.8)))
-        \\    object.append(group, label(typ[Worker object], (0pt,25pt)))
+        \\    title:=typ[Worker object]
+        \\    subtitle:=typ[Shared layout owner]
+        \\    object.append(group, label(subtitle, (0pt,35pt)))
+        \\    object.append(group, label(title, (0pt,25pt)))
+        \\    for i in 0:2 do
+        \\        object.append(group, label(typ[Independent layout owner], (0pt,40pt+i*10pt)))
+        \\    end
         \\    unused:=object.append(root, label(typ[Discarded object], (0pt,50pt)))
         \\    object.remove(unused)
         \\    object.remove(group)

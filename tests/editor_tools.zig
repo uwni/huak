@@ -270,9 +270,13 @@ test "language server applies sequential ranged changes to the evolving document
     try t.expectEqualStrings("XaYcdef\n", session.documents.get(uri).?.text);
     try t.expectEqual(@as(i64, 2), session.documents.get(uri).?.version);
     const invalid = tooling.position.Range{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 99 } };
-    try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didChange", .params = .{ .textDocument = .{ .uri = uri, .version = 3 }, .contentChanges = .{.{ .range = invalid, .text = "Z" }} } }, .{}), &output.writer);
+    try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didChange", .params = .{ .textDocument = .{ .uri = uri, .version = 3 }, .contentChanges = .{ .{ .range = first, .text = "😀" }, .{ .range = invalid, .text = "Z" } } } }, .{}), &output.writer);
     try t.expectEqualStrings("XaYcdef\n", session.documents.get(uri).?.text);
     try t.expectEqual(@as(i64, 2), session.documents.get(uri).?.version);
+    const astral = tooling.position.Range{ .start = .{ .line = 0, .character = 1 }, .end = .{ .line = 0, .character = 3 } };
+    try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didChange", .params = .{ .textDocument = .{ .uri = uri, .version = 4 }, .contentChanges = .{ .{ .text = "a😀b\n" }, .{ .range = astral, .text = "中" } } } }, .{}), &output.writer);
+    try t.expectEqualStrings("a中b\n", session.documents.get(uri).?.text);
+    try t.expectEqual(@as(i64, 4), session.documents.get(uri).?.version);
 }
 
 test "language server shares mixfix metadata across unsaved imports formatting and picture discovery" {

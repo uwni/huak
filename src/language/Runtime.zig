@@ -1639,7 +1639,7 @@ fn checkedIndex(v: Value, kind: Type, count: usize) !usize {
     return v.handle.index;
 }
 
-fn numeric(v: Value) !f64 {
+pub fn numeric(v: Value) !f64 {
     return switch (v) {
         .int => |x| @floatFromInt(x),
         .number => |x| x,

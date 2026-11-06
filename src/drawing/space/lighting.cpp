@@ -1,7 +1,6 @@
 #include "lighting.hxx"
 #include <Adaptor2d_Curve2d.hxx>
 #include <BRepAdaptor_Surface.hxx>
-#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTopAdaptor_MapOfShapeTool.hxx>
@@ -15,26 +14,27 @@
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <algorithm>
 #include <cmath>
 #include <gp_Pln.hxx>
 #include <stdexcept>
 namespace huak::space {
 // A draft contour is the locus of a constant angle between the surface
 // normal and a fixed direction. OCCT trims it against the actual face.
-static void projectSpotBoundary(const TopoDS_Face &face, gp_Dir half,
+static void projectContour(const TopoDS_Face &face, gp_Dir direction,
                                 double width,
                                 const HLRAlgo_Projector &projector,
                                 double tolerance,
                                 TopTools_ListOfShape &boundaries) {
   if (face.Orientation() == TopAbs_REVERSED)
-    half.Reverse();
+    direction.Reverse();
   Contap_Contour contour;
-  contour.Init(gp_Vec(half), width - M_PI / 2);
+  contour.Init(gp_Vec(direction), width - M_PI / 2);
   HLRTopoBRep_Data data;
   BRepTopAdaptor_MapOfShapeTool tools;
   HLRTopoBRep_DSFiller::Insert(face, contour, data, tools, 0);
   if (!contour.IsDone())
-    throw std::runtime_error("cannot trace highlight contour");
+    throw std::runtime_error("cannot trace lighting contour");
   auto append = [&](const TopoDS_Edge &edge) {
     auto curve = projected(edge, projector, tolerance);
     if (!curve.IsNull())
@@ -54,15 +54,13 @@ static void projectSpotBoundary(const TopoDS_Face &face, gp_Dir half,
 
 Lighting::Lighting(const HuakLight &light, const Surfaces &surfaces,
                    const HLRAlgo_Projector &projector, const gp_Dir &toward_eye,
-                   double tolerance, TopTools_ListOfShape &boundaries) {
-  const auto &d = light.direction;
-  const gp_Dir sun(d[0], d[1], d[2]);
-  const gp_Vec bisector = gp_Vec(sun) + gp_Vec(toward_eye);
+                   double tolerance, TopTools_ListOfShape &boundaries)
+    : light_(light), sun_(light.direction[0], light.direction[1], light.direction[2]),
+      eye_(toward_eye) {
+  const gp_Vec bisector = gp_Vec(sun_) + gp_Vec(toward_eye);
   if (light.spot_angle > 0 && bisector.Magnitude() > Precision::Angular())
     half.emplace(bisector);
   cutoff = std::cos(light.spot_angle);
-  gp_Vec screen(sun);
-  projector.Transform(screen);
   faces_.reserve(surfaces.faces.size());
   for (const auto &faces : surfaces.faces) {
     auto &rows = faces_.emplace_back(faces.Extent());
@@ -70,47 +68,38 @@ Lighting::Lighting(const HuakLight &light, const Surfaces &surfaces,
       auto &paint = rows[i - 1];
       const auto &face = TopoDS::Face(faces(i));
       BRepAdaptor_Surface surface(face);
-      if (surface.GetType() == GeomAbs_Plane) {
-        gp_Dir normal = surface.Plane().Axis().Direction();
-        if (face.Orientation() == TopAbs_REVERSED)
-          normal.Reverse();
-        paint.diffuse = std::max(0., normal.Dot(sun));
-        paint.flat_glint = half && normal.Dot(*half) >= cutoff;
+      paint.planar = surface.GetType() == GeomAbs_Plane;
+      if (paint.planar)
         continue;
-      }
-      Bnd_Box box;
-      BRepBndLib::AddOptimal(
-          face.Moved(TopLoc_Location(projector.Transformation())), box, false,
-          false);
-      const auto lo = box.CornerMin(), hi = box.CornerMax();
-      const double w = hi.X() - lo.X(), h = hi.Y() - lo.Y();
-      paint.center = {lo.X() + w * (.5 + .36 * screen.X()),
-                      lo.Y() + h * (.5 + .36 * screen.Y())};
-      paint.radius = .75 * std::max(w, h);
-      paint.facing = screen.Z();
+      for (size_t level = 0; level < light.isophote_count; ++level)
+        projectContour(face, sun_, std::acos(light.isophotes[level]), projector,
+                       tolerance, boundaries);
       if (half)
-        projectSpotBoundary(face, *half, light.spot_angle, projector, tolerance,
+        projectContour(face, *half, light.spot_angle, projector, tolerance,
                             boundaries);
     }
   }
 }
-bool Lighting::collectSpotCell(const Hit &hit, const TopoDS_Face &face,
-                               const TopoDS_Face &cell) {
-  if (!half)
-    return false;
+Lighting::Sample Lighting::classify(const Hit &hit, const TopoDS_Face &face,
+                                    const TopoDS_Face &cell) {
   auto &paint = faces_[hit.source][hit.face];
-  if (paint.diffuse >= 0)
-    return false; // A planar gleam uses the face boundary directly.
   gp_Dir normal;
   if (GeomLib::NormEstim(BRep_Tool::Surface(face), hit.uv,
                          Precision::Confusion(), normal) >= 2)
-    throw std::runtime_error("undefined surface normal at highlight sample");
+    throw std::runtime_error("undefined surface normal at lighting sample");
   if (face.Orientation() == TopAbs_REVERSED)
     normal.Reverse();
-  if (normal.Dot(*half) < cutoff)
-    return false;
-  paint.lit_cells.Add(cell);
-  return true;
+  const double facing = normal.Dot(sun_);
+  const bool gleam = half && facing > 0 && normal.Dot(eye_) > 0 &&
+                     normal.Dot(*half) >= cutoff;
+  if (gleam && !paint.planar)
+    paint.lit_cells.Add(cell);
+  if (paint.planar || facing <= 0)
+    return {std::max(0., facing), gleam};
+  const auto begin = light_.isophotes, end = begin + light_.isophote_count;
+  const auto next = std::upper_bound(begin, end, facing);
+  const double low = *(next - 1), high = next == end ? 1. : *next;
+  return {(low + high) / 2, gleam};
 }
 void Lighting::fitSpots(Result &out) {
   BRep_Builder builder;

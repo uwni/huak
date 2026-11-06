@@ -86,7 +86,7 @@ const registry = .{
     .erfc = .{ .namespace = .math, .args = .{ .value = n }, .minimum = 1, .result = n },
     .vec2 = .{ .namespace = null, .implicit = true, .args = .{ .x = s, .y = s }, .minimum = 2, .result = p },
     .vec3 = .{ .namespace = null, .implicit = true, .args = .{ .x = s, .y = s, .z = s }, .minimum = 3, .result = .vec3 },
-    .project_scene = .{ .namespace = .projection, .args = .{ .shapes = .list, .azimuth = angle, .elevation = angle, .focus = length, .tolerance = length, .faces = .boolean, .light = a, .spot = angle }, .minimum = 6, .result = .list },
+    .project_scene = .{ .namespace = .projection, .args = .{ .shapes = .list, .azimuth = angle, .elevation = angle, .focus = length, .tolerance = length, .faces = .boolean, .light = a, .spot = angle, .isophotes = .list }, .minimum = 9, .result = .list },
     .model_shape = .{ .namespace = .projection, .args = .{ .kind = .string, .arguments = .list }, .minimum = 2, .result = .shape },
     .dot = .{ .namespace = .math, .args = .{ .a = .vector, .b = .vector }, .minimum = 2, .result = s },
     .norm = .{ .namespace = .math, .args = .{ .value = .vector }, .minimum = 1, .result = s },

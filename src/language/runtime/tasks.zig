@@ -4,7 +4,6 @@ const std = @import("std");
 const typst = @import("libtypst");
 const Runtime = @import("../Runtime.zig");
 const types = @import("../types.zig");
-const DisplayList = @import("../../drawing/DisplayList.zig");
 const Scene = @import("../../drawing/Scene.zig");
 
 pub const Borrowed = struct {
@@ -83,9 +82,6 @@ pub fn fork(parent: *Runtime) !Runtime {
     return child;
 }
 
-const LayoutMove = struct { source: *typst.Layout, target: *typst.Layout };
-const FrameMove = struct { target: typst.FrameRef, metrics: DisplayList.Metrics };
-
 /// A newly created static scene can escape as a picture or object. Geometry and
 /// styles move intact, preserving object handles. Layout owner structs
 /// are recreated in the parent; animation identity stays on the serial path.
@@ -111,8 +107,8 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
     defer temporary.deinit();
     const scratch = temporary.allocator();
     var references: std.AutoHashMapUnmanaged(u32, u32) = .empty;
-    var layouts: std.ArrayList(LayoutMove) = .empty;
-    var frames: std.ArrayList(FrameMove) = .empty;
+    var layouts: std.AutoArrayHashMapUnmanaged(*const typst.Layout, ?*typst.Layout) = .empty;
+    var frame_count: usize = 0;
 
     // The storage owner moves intact, including detached objects. Parentage
     // does not determine whether a text reference still needs its layout.
@@ -134,30 +130,62 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
         if (reference >= child.texts.items.len) return error.InvalidFrameReference;
         const text = child.texts.items[reference];
         if (text.layout != frame.layout or text.frame != frame.index) return error.InvalidFrameReference;
-        const destination = std.math.add(usize, parent.frames.items.len, frames.items.len) catch return error.TooManyLabels;
+        const destination = std.math.add(usize, parent.frames.items.len, frame_count) catch return error.TooManyLabels;
         if (destination > std.math.maxInt(u32)) return error.TooManyLabels;
-        const owner = try retainLayout(parent, child, borrowed.layouts, frame.layout, &layouts, scratch);
+        try layouts.put(scratch, frame.layout, null);
         try references.put(scratch, reference, @intCast(destination));
-        try frames.append(scratch, .{ .target = .{ .layout = owner, .index = frame.index }, .metrics = text.metrics });
+        frame_count += 1;
     };
 
     if (owners.count() > std.math.maxInt(u32) - parent.scene_values.items.len) return error.TooManyObjects;
     const own = parent.arena.allocator();
+    var moved: usize = 0;
+    var resolved: usize = 0;
+    // Resolve the requested layout owners in one pass. Geometry-only results
+    // have no layouts to resolve and retain no typography index.
+    if (layouts.count() != 0) {
+        for (child.layouts.items, 0..) |source_layout, layout_index| {
+            const target = layouts.getPtr(source_layout) orelse continue;
+            if (layout_index < borrowed.layouts) {
+                target.* = source_layout;
+            } else {
+                if (source_layout.handle == null) return error.InvalidFrameReference;
+                const destination = try own.create(typst.Layout);
+                destination.* = .{ .library = parent.library, .handle = null };
+                target.* = destination;
+                moved += 1;
+            }
+            resolved += 1;
+            if (resolved == layouts.count()) break;
+        }
+    }
+    if (resolved != layouts.count()) return error.InvalidFrameReference;
     try parent.scene_values.ensureUnusedCapacity(own, owners.count());
-    try parent.layouts.ensureUnusedCapacity(own, layouts.items.len);
-    try parent.frames.ensureUnusedCapacity(own, frames.items.len);
-    try parent.texts.ensureUnusedCapacity(own, frames.items.len);
+    try parent.layouts.ensureUnusedCapacity(own, moved);
+    try parent.frames.ensureUnusedCapacity(own, frame_count);
+    try parent.texts.ensureUnusedCapacity(own, frame_count);
 
     // No failures after this commit. Other child layouts and scratch objects
     // remain child-owned and are released by its immediately following deinit.
-    for (layouts.items) |move| {
-        move.target.* = move.source.*;
-        move.source.handle = null;
-        parent.layouts.appendAssumeCapacity(move.target);
+    for (layouts.keys(), layouts.values()) |source_layout, destination| {
+        const target = destination.?;
+        if (source_layout == target) continue;
+        target.* = source_layout.*;
+        @constCast(source_layout).handle = null;
+        parent.layouts.appendAssumeCapacity(target);
     }
-    for (frames.items) |move| {
-        parent.frames.appendAssumeCapacity(move.target);
-        parent.texts.appendAssumeCapacity(.{ .layout = @constCast(move.target.layout), .frame = move.target.index, .metrics = move.metrics });
+    // The reference map already records each destination slot. Copy directly
+    // from the child instead of staging a second array of frames and metrics.
+    parent.frames.items.len += frame_count;
+    parent.texts.items.len += frame_count;
+    var iterator = references.iterator();
+    while (iterator.next()) |entry| {
+        const reference = entry.key_ptr.*;
+        if (reference < borrowed.frames) continue;
+        const text = child.texts.items[reference];
+        const layout = layouts.get(text.layout).?.?;
+        parent.frames.items[entry.value_ptr.*] = .{ .layout = layout, .index = text.frame };
+        parent.texts.items[entry.value_ptr.*] = .{ .layout = layout, .frame = text.frame, .metrics = text.metrics };
     }
     for (owners.keys()) |scene| {
         const owner = Runtime.SceneOwner.fromScene(scene);
@@ -169,20 +197,6 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
     }
     child.task_borrow.?.adopted = owners;
     return value;
-}
-
-fn retainLayout(parent: *Runtime, child: *Runtime, borrowed_layouts: usize, source: *const typst.Layout, moves: *std.ArrayList(LayoutMove), scratch: std.mem.Allocator) !*typst.Layout {
-    for (child.layouts.items[0..borrowed_layouts]) |owner| if (owner == source) return owner;
-    for (moves.items) |move| if (move.source == source) return move.target;
-    for (child.layouts.items[borrowed_layouts..]) |owner| {
-        if (owner != source) continue;
-        if (owner.handle == null) return error.InvalidFrameReference;
-        const target = try parent.arena.allocator().create(typst.Layout);
-        target.* = .{ .library = parent.library, .handle = null };
-        try moves.append(scratch, .{ .source = owner, .target = target });
-        return target;
-    }
-    return error.InvalidFrameReference;
 }
 
 fn invoke(owner: *Runtime, id: @import("../builtin.zig").Id, arguments: []const types.Value) !types.Value {

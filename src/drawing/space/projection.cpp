@@ -170,6 +170,7 @@ extern "C" int huak_space_project(const HuakModelShape *input,
                result->faces.data(),
                result->faces.size(),
                result->lobes.data(),
+               result->shades.data(),
                result.get()};
     result.release();
     return 0;

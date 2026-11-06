@@ -68,15 +68,20 @@ typedef struct {
 } HuakProjectedLine;
 typedef struct {
   double direction[3], spot_angle;
+  const double *isophotes;
+  size_t isophote_count;
 } HuakLight;
 typedef struct {
   HuakXY center, u, v;
 } HuakSpot;
 typedef struct {
+  size_t start, count;
+  double diffuse;
+} HuakShade;
+typedef struct {
   size_t source, face, start, count, covering;
   size_t spot_start, spot_count, lobe_start, lobe_count;
-  HuakXY center;
-  double radius, diffuse, facing;
+  size_t shade_start, shade_count;
 } HuakProjectedFace;
 typedef struct {
   const HuakPathCommand *commands;
@@ -85,6 +90,7 @@ typedef struct {
   const HuakProjectedFace *faces;
   size_t face_count;
   const HuakSpot *lobes;
+  const HuakShade *shades;
   void *owner;
 } HuakLinework;
 #ifdef __cplusplus

@@ -4,7 +4,7 @@ pub const Frontend = @import("tooling/Frontend.zig");
 pub const format = @import("tooling/format.zig");
 pub const lsp = @import("tooling/lsp.zig");
 pub const position = @import("tooling/position.zig");
-pub const text_edit = @import("tooling/text_edit.zig");
+pub const TextEdit = @import("tooling/TextEdit.zig");
 pub const diagnostics = @import("tooling/diagnostics.zig");
 pub const inlay_hints = @import("tooling/inlay_hints.zig");
 pub const outputs = @import("tooling/outputs.zig");
@@ -13,7 +13,7 @@ pub const semantic_tokens = @import("tooling/semantic_tokens.zig");
 
 test {
     _ = format;
-    _ = text_edit;
+    _ = TextEdit;
     _ = lsp;
     _ = position;
     _ = diagnostics;

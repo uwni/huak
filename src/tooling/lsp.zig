@@ -5,7 +5,7 @@ const Frontend = @import("Frontend.zig");
 const formatting = @import("format.zig");
 const inlay = @import("inlay_hints.zig");
 const locations = @import("position.zig");
-const text_edit = @import("text_edit.zig");
+const TextEdit = @import("TextEdit.zig");
 const bundles = @import("diagnostics.zig");
 const output_choices = @import("outputs.zig");
 const definitions = @import("definition.zig");
@@ -286,13 +286,10 @@ pub const Session = struct {
             const changes = field(params, "contentChanges") orelse return error.InvalidParams;
             if (changes != .array) return error.InvalidParams;
             {
-                // Apply changes to a borrowed snapshot until the first edit.
-                // A full-document change then needs one copy of the replacement
-                // rather than copying the old text and the replacement again.
-                var text: []u8 = document.text;
-                var owned = false;
-                defer if (owned) allocator.free(text);
+                var edit: TextEdit = .{ .source = document.text };
+                defer edit.deinit(allocator);
                 for (changes.array.items) |change| {
+                    const text = edit.bytes();
                     const replacement = string(field(change, "text")) orelse return error.InvalidParams;
                     var start: usize = 0;
                     var end = text.len;
@@ -301,18 +298,14 @@ pub const Session = struct {
                         end = locations.offset(text, try position(field(range, "end") orelse return error.InvalidParams)) orelse return error.InvalidParams;
                         if (start > end) return error.InvalidParams;
                     }
-                    const changed = text_edit.replace(allocator, text, start, end, replacement) catch |err| switch (err) {
+                    edit.replace(allocator, start, end, replacement) catch |err| switch (err) {
                         error.InvalidRange => return error.InvalidParams,
                         else => return err,
                     };
-                    if (owned) allocator.free(text);
-                    text = changed;
-                    owned = true;
                 }
-                if (owned) {
+                if (try edit.take(allocator)) |text| {
                     allocator.free(document.text);
                     document.text = text;
-                    owned = false;
                 }
                 document.version = version;
             }

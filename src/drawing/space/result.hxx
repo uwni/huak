@@ -16,6 +16,7 @@ struct Result {
   std::vector<HuakProjectedLine> lines;
   std::vector<HuakProjectedFace> faces;
   std::vector<HuakSpot> lobes;
+  std::vector<HuakShade> shades;
 };
 void writeEdge(Result &, const TopoDS_Edge &, double tolerance,
                bool move = true);

@@ -88,16 +88,18 @@ export struct Line
     other_source:int = -1
 end
 
+export struct Shade
+    region:path
+    diffuse:float
+end
+
 export struct VisibleFace
     region:path
     source:int
     face:int
-    light_center:vec2 = (0pt,0pt)
-    light_radius:length = 0pt
-    diffuse:float = -1
+    shades:list = []
     highlight:any = false
     lobes:list = []
-    light_facing:float = 0
 end
 
 export struct Layer
@@ -118,7 +120,7 @@ export fn silhouette(projection:Projection) -> path
     return region(compound(paths))
 end
 
-// Colors are art-directed. The highlight mask alone is the Blinn contour.
+// Palette choice is independent of the geometric light and gleam boundaries.
 fn tone(ink:color, level:float) -> color
     if level < 0 then return rgb(ink.r*(1+level),ink.g*(1+level),ink.b*(1+level),ink.a) end
     return rgb(ink.r+(1-ink.r)*level,ink.g+(1-ink.g)*level,ink.b+(1-ink.b)*level,ink.a)
@@ -126,16 +128,15 @@ end
 
 export fn shaded(face:VisibleFace, ink:color) -> picture
     result := picture()
-    if face.diffuse >= 0 then
-        level := -0.42 + 0.78*face.diffuse
-        if face.highlight != false then level = 0.70 end
-        append(result,fill(face.region,tone(ink,level)))
-        return result
+    assert(len(face.shades) > 0, "shaded needs a projection with a directional light")
+    for shade in face.shades do
+        append(result,fill(shade.region,tone(ink,-0.58+0.91*shade.diffuse)))
     end
-    assert(face.light_radius > 0pt, "shaded needs a projection with a directional light")
-    lit := -0.58 + 0.91*(1+face.light_facing)/2
-    append(result,radial_fill(face.region,face.light_center,face.light_radius,tone(ink,lit),tone(ink,-0.58)))
     if face.highlight != false then
+        if len(face.lobes) == 0 then
+            append(result,fill(face.highlight,tone(ink,0.70)))
+            return result
+        end
         spots := picture()
         disk := circle((0pt,0pt),1pt)
         for ellipse in face.lobes do
@@ -150,9 +151,9 @@ export fn shaded(face:VisibleFace, ink:color) -> picture
     return result
 end
 
-export fn project(shapes:list, view:Camera, tolerance:length=0.01pt, faces:bool=true, light:any=false, spot:angle=0deg) -> Projection
+export fn project(shapes:list, view:Camera, tolerance:length=0.01pt, faces:bool=true, light:any=false, spot:angle=0deg, isophotes:list=[0,0.25,0.5,0.75]) -> Projection
     lines := []
-    result := project_scene(shapes, view.azimuth, view.elevation, view.focus, tolerance, faces, light, spot)
+    result := project_scene(shapes, view.azimuth, view.elevation, view.focus, tolerance, faces, light, spot, isophotes)
     layers := []
     count:int := result[2]
     for i in 0:count-1 do layers += [Layer()] end
@@ -162,7 +163,9 @@ export fn project(shapes:list, view:Camera, tolerance:length=0.01pt, faces:bool=
         if faces then layers[count-1-row[3]].lines += [line] end
     end
     for row in result[1] do
-        layers[count-1-row[3]].faces += [VisibleFace(row[0], row[1], row[2], row[4], row[5], row[6], row[7], row[8], row[9])]
+        shades := []
+        for band in row[4] do shades += [Shade(band[0],band[1])] end
+        layers[count-1-row[3]].faces += [VisibleFace(row[0], row[1], row[2], shades, row[5], row[6])]
     end
     front := []
     if count > 0 then front = layers[count-1].faces end

@@ -155,6 +155,7 @@ void projectFaces(Result &out, Surfaces &surfaces,
   // Merge neighboring cells only where the same sheet has the same rank.
   struct Regions {
     TopoDS_Compound body, spot;
+    std::map<double, TopoDS_Compound> shades;
   };
   std::map<std::tuple<size_t, size_t, int>, Regions> groups;
   auto add = [&](TopoDS_Compound &group, const TopoDS_Face &cell) {
@@ -175,11 +176,13 @@ void projectFaces(Result &out, Surfaces &surfaces,
       const auto &hit = hits[covering];
       auto &group = groups[{covering, hit.source, hit.face}];
       add(group.body, cell);
-      if (lighting &&
-          lighting->collectSpotCell(
-              hit, TopoDS::Face(surfaces.faces[hit.source](hit.face + 1)),
-              cell))
-        add(group.spot, cell);
+      if (lighting) {
+        const auto sample = lighting->classify(
+            hit, TopoDS::Face(surfaces.faces[hit.source](hit.face + 1)), cell);
+        add(group.shades[sample.diffuse], cell);
+        if (sample.gleam)
+          add(group.spot, cell);
+      }
     }
   }
   if (lighting)
@@ -213,13 +216,27 @@ void projectFaces(Result &out, Surfaces &surfaces,
     const auto start = out.commands.size();
     write(regions.body);
     const auto end = out.commands.size();
-    write(regions.spot);
     const auto &paint = lighting ? lighting->face(source, face) : unlit;
-    const auto spot = paint.flat_glint ? start : end;
+    // A plane has one normal, so a gleam covers its entire visible region.
+    const bool full_spot = paint.planar && !regions.spot.IsNull();
+    if (!full_spot)
+      write(regions.spot);
+    const auto spot_start = full_spot ? start : end;
+    const auto spot_count = out.commands.size() - spot_start;
+    const auto shade_start = out.shades.size();
+    for (const auto &[diffuse, cells] : regions.shades) {
+      if (regions.shades.size() == 1) {
+        out.shades.push_back({start, end - start, diffuse});
+        continue;
+      }
+      const auto first = out.commands.size();
+      write(cells);
+      out.shades.push_back({first, out.commands.size() - first, diffuse});
+    }
     out.faces.push_back({source, static_cast<size_t>(face), start, end - start,
-                         covering, spot, out.commands.size() - spot,
-                         paint.start, paint.count, paint.center, paint.radius,
-                         paint.diffuse, paint.facing});
+                         covering, spot_start, spot_count,
+                         paint.start, paint.count, shade_start,
+                         out.shades.size() - shade_start});
   }
 }
 } // namespace huak::space

@@ -12,7 +12,7 @@ const Path = huak.core.Path;
 const DisplayList = huak.core.DisplayList;
 const g = huak.core.geometry;
 const options = @import("host_options");
-const text_edit = huak.tooling.text_edit;
+const TextEdit = huak.tooling.TextEdit;
 
 fn microseconds(start: std.Io.Timestamp, end: std.Io.Timestamp) f64 {
     return @as(f64, @floatFromInt(start.durationTo(end).toNanoseconds())) / 1000.0;
@@ -35,6 +35,7 @@ pub fn main(init: std.process.Init) !void {
     try outlineCase(init, &engine);
     try outlineTextCase(init, &engine);
     try textEditCase(init);
+    try adoptionCase(init, &library);
 }
 
 const layout_sources = [_][]const u8{
@@ -345,8 +346,9 @@ fn textEditCase(init: std.process.Init) !void {
     }) |case| {
         const legacy = try legacyEdits(init.gpa, original, case.full, case.count);
         defer init.gpa.free(legacy);
-        const borrowed = try borrowedEdits(init.gpa, original, case.full, case.count);
-        defer init.gpa.free(borrowed);
+        var counted = std.testing.FailingAllocator.init(init.gpa, .{});
+        const borrowed = try borrowedEdits(counted.allocator(), original, case.full, case.count);
+        defer counted.allocator().free(borrowed);
         if (!std.mem.eql(u8, legacy, borrowed)) return error.NonEquivalentResult;
         var legacy_time: i96 = 0;
         var borrowed_time: i96 = 0;
@@ -379,8 +381,8 @@ fn textEditCase(init: std.process.Init) !void {
         const divisor = 1000.0 * @as(f64, @floatFromInt(2 * case.rounds));
         std.debug.print(
             "case=text_edit_{s} bytes={d} edits={d} rounds={d}\n" ++
-                "legacy_dupe_and_concat_us_per_round={d:.3}\nborrowed_splice_us_per_round={d:.3}\n",
-            .{ case.name, size, case.count, case.rounds, @as(f64, @floatFromInt(legacy_time)) / divisor, @as(f64, @floatFromInt(borrowed_time)) / divisor },
+                "legacy_dupe_and_concat_us_per_round={d:.3}\nborrowed_splice_us_per_round={d:.3}\nallocations={d} allocated_bytes={d}\n",
+            .{ case.name, size, case.count, case.rounds, @as(f64, @floatFromInt(legacy_time)) / divisor, @as(f64, @floatFromInt(borrowed_time)) / divisor, counted.allocations, counted.allocated_bytes },
         );
     }
 }
@@ -400,16 +402,71 @@ fn legacyEdits(allocator: std.mem.Allocator, original: []const u8, full: bool, c
 }
 
 fn borrowedEdits(allocator: std.mem.Allocator, original: []const u8, full: bool, count: usize) ![]u8 {
-    var text: []const u8 = original;
-    var owned: ?[]u8 = null;
-    errdefer if (owned) |value| allocator.free(value);
+    var edit: TextEdit = .{ .source = original };
+    defer edit.deinit(allocator);
     for (0..count) |index| {
+        const text = edit.bytes();
         const start = if (full) 0 else (index * 7919) % text.len;
         const end = if (full) text.len else @min(start + 3, text.len);
-        const changed = try text_edit.replace(allocator, text, start, end, if (full) original else "XY");
-        if (owned) |value| allocator.free(value);
-        text = changed;
-        owned = changed;
+        try edit.replace(allocator, start, end, if (full) original else "XY");
     }
-    return owned orelse allocator.dupe(u8, text);
+    return (try edit.take(allocator)) orelse allocator.dupe(u8, original);
+}
+
+// Measure the coordinator handoff separately from layout and export. All text
+// owners are real native layouts; the child dies before the result is rendered.
+fn adoptionCase(init: std.process.Init, library: *typst.Library) !void {
+    const l = huak.language;
+    const rounds = 8;
+    for ([_]struct { created: usize, retained: usize, copies: usize = 1 }{
+        .{ .created = 0, .retained = 0 },
+        .{ .created = 1, .retained = 1 },
+        .{ .created = 64, .retained = 64 },
+        .{ .created = 1024, .retained = 1024 },
+        .{ .created = 4096, .retained = 4096 },
+        .{ .created = 1, .retained = 1, .copies = 4096 },
+        .{ .created = 4096, .retained = 1 },
+    }) |case| {
+        var elapsed: i96 = 0;
+        var allocated: usize = 0;
+        var digest: [32]u8 = undefined;
+        for (0..rounds) |round| {
+            var counted = std.testing.FailingAllocator.init(init.gpa, .{});
+            const a = counted.allocator();
+            var parent = try l.Runtime.init(a, a, library, .{});
+            defer parent.deinit();
+            _ = try parent.host().typeset(a, .{ .source = "[Borrowed caption]" });
+            var child = try parent.forkTask();
+            var alive = true;
+            defer if (alive) child.deinit();
+            const host = child.host();
+            const result = try host.callBuiltin(a, .picture, &.{ .{ .number = 100 }, .{ .number = 100 } }, null);
+            for (0..case.created) |index| {
+                const text = try host.typeset(a, .{ .source = "[Worker text $x^2$]" });
+                if (index >= case.retained) continue;
+                for (0..case.copies) |copy| {
+                    const label = index * case.copies + copy;
+                    const object = try host.callBuiltin(a, .label, &.{ text, .{ .vec2 = .{ .x = @floatFromInt(label % 64), .y = @floatFromInt(label / 64) } } }, null);
+                    _ = try host.callBuiltin(a, .append, &.{ result, object }, null);
+                }
+            }
+            const before = counted.allocated_bytes;
+            const start = std.Io.Clock.awake.now(init.io);
+            const adopted = try parent.adoptTask(&child, result);
+            const end = std.Io.Clock.awake.now(init.io);
+            elapsed += start.durationTo(end).toNanoseconds();
+            allocated += counted.allocated_bytes - before;
+            child.deinit();
+            alive = false;
+            if (parent.layouts.items.len != case.retained + 1) return error.IncorrectLayoutCount;
+            var svg = try parent.render(adopted, .svg);
+            defer svg.deinit();
+            var actual: [32]u8 = undefined;
+            std.crypto.hash.Blake3.hash(svg.bytes(), &actual, .{});
+            if (round == 0) digest = actual else if (!std.mem.eql(u8, &digest, &actual)) return error.NonEquivalentResult;
+        }
+        std.debug.print("case=task_adoption created={d} retained={d} copies={d} rounds={d} us={d:.3} allocated_bytes={d} svg_hash={x}\n", .{
+            case.created, case.retained, case.copies, rounds, @as(f64, @floatFromInt(elapsed)) / (rounds * 1000), allocated / rounds, digest,
+        });
+    }
 }
