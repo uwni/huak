@@ -1,9 +1,9 @@
 {
   "name": "huak",
   "displayName": "Huak",
-  "description": "Huak syntax highlighting, native language tools and live SVG preview.",
+  "description": "Huak language tools, live SVG preview and SVG/PDF export.",
   "publisher": "huak",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "license": "UNLICENSED",
   "engines": {
@@ -58,6 +58,11 @@
         "icon": "$(preview)"
       },
       {
+        "command": "huak.exportPicture",
+        "title": "Huak: Export Picture…",
+        "icon": "$(export)"
+      },
+      {
         "command": "huak.selectPreviewOutput",
         "title": "Huak: Choose Preview Output"
       },
@@ -98,7 +103,7 @@
               "boolean"
             ]
           },
-          "description": "Script parameters passed to huak watch as --param. Restart the preview after changing these values."
+          "description": "Script parameters for preview and export. Restart an open preview to apply changes."
         }
       }
     },
@@ -108,6 +113,11 @@
           "command": "huak.preview",
           "when": "resourceLangId == huak",
           "group": "navigation"
+        },
+        {
+          "command": "huak.exportPicture",
+          "when": "resourceLangId == huak",
+          "group": "navigation@2"
         }
       ]
     }

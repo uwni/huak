@@ -3,14 +3,15 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveExecutable } = require('./server');
 const { WatchProcess } = require('./watch');
 const { previewHtml } = require('./preview-html');
-const { pictureLabel, pictureChoices } = require('./outputs');
+const { pictureLabel, selectPicture } = require('./outputs');
+const { rendererFor, exportPicture } = require('./render');
 
 class Preview {
-    constructor(languageClient) {
+    constructor(languageClient, extensionUri) {
         this.languageClient = languageClient;
+        this.media = vscode.Uri.joinPath(extensionUri, 'media');
         this.output = vscode.window.createOutputChannel('Huak Preview');
         this.transition = Promise.resolve();
         this.cancellation = new vscode.CancellationTokenSource();
@@ -21,34 +22,26 @@ class Preview {
         return this.transition;
     }
 
+    target(resource, name, choose) {
+        const source = resource || vscode.window.activeTextEditor?.document.uri || this.session?.uri;
+        return selectPicture(source, this.languageClient, { name, choose, token: this.cancellation.token });
+    }
+
+    async export(resource, name) {
+        if (!resource && !vscode.window.activeTextEditor && this.session) name ??= this.session.name;
+        const target = await this.target(resource, name, true);
+        if (!target || this.disposed) return;
+        const renderer = this.session?.uri.toString() === target.uri.toString() && this.session.name === target.picture.name
+            ? this.session.renderer : rendererFor(target.uri);
+        return exportPicture(target, renderer, this.cancellation.token);
+    }
+
     open(resource, requestedName, choose = false) {
         return this.enqueue(async () => {
             if (this.disposed) return;
-            if (requestedName !== undefined && typeof requestedName !== 'string') throw new TypeError('The picture export name must be a string.');
-            let uri = typeof resource === 'string' ? vscode.Uri.parse(resource) : resource?.scheme ? resource : vscode.window.activeTextEditor?.document.uri || this.session?.uri;
-            if (!uri || !['file', 'untitled'].includes(uri.scheme)) throw new Error('Open or save a Huak file before rendering.');
-            let document = await vscode.workspace.openTextDocument(uri);
-            if (document.languageId !== 'huak') throw new Error('The selected document is not a Huak file.');
-            if (document.isUntitled) {
-                await vscode.window.showTextDocument(document);
-                await vscode.commands.executeCommand('workbench.action.files.saveAs');
-                document = vscode.window.activeTextEditor?.document;
-                if (!document || document.isUntitled || document.languageId !== 'huak') return;
-                uri = document.uri;
-            } else if (document.isDirty && !await document.save()) return;
-            const client = await this.languageClient();
-            const response = await client.sendRequest('huak/outputs', { textDocument: { uri: uri.toString() } }, this.cancellation.token);
-            const outputs = response.outputs;
-            if (!outputs.length) throw new Error('This file has no picture outputs to preview.');
-            let selected = requestedName && outputs.find(item => item.name === requestedName);
-            if (requestedName && !selected) throw new Error(`Picture output '${requestedName}' is unavailable.`);
-            if (!selected) selected = outputs.length === 1 ? outputs[0] : !choose ? outputs.find(item => item.default) : undefined;
-            if (!selected) {
-                const items = pictureChoices(outputs);
-                selected = (await vscode.window.showQuickPick(items, { title: 'Choose Huak picture', placeHolder: 'Select a picture to preview' }, this.cancellation.token))?.value;
-                if (!selected) return;
-            }
-            if (this.disposed) return;
+            const target = await this.target(resource, requestedName, choose);
+            if (!target || this.disposed) return;
+            const { uri, picture: selected } = target;
             const previous = this.session;
             const reuse = previous && previous.uri.toString() === uri.toString() && previous.name === selected.name;
             if (reuse) {
@@ -56,27 +49,30 @@ class Preview {
                 await this.stopSession(previous);
             } else await this.clearSession();
             const directory = reuse ? previous.directory : await fs.mkdtemp(path.join(os.tmpdir(), 'huak-preview-'));
-            const session = this.session = { uri, name: selected.name, label: pictureLabel(selected), directory, outputPath: path.join(directory, 'render.svg'), revision: reuse && previous.revision ? previous.revision + 1 : 0, status: 'Starting render…', error: '', processing: Promise.resolve(), lastStderr: '' };
+            const renderer = rendererFor(uri);
+            const session = this.session = { uri, name: selected.name, label: pictureLabel(selected), renderer, directory, outputPath: path.join(directory, 'render.svg'), revision: reuse ? previous.revision : 0, status: 'Starting render…', error: '', processing: Promise.resolve(), lastStderr: '' };
             const panel = this.panel || vscode.window.createWebviewPanel('huak.preview', 'Huak Preview', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, {});
             if (!this.panel) {
                 this.panel = panel;
+                panel.webview.onDidReceiveMessage(message => {
+                    if (message === 'ready' && this.panel === panel && this.session) this.update(this.session);
+                });
                 panel.onDidDispose(() => {
                     const closing = this.session;
                     if (this.panel === panel) this.panel = undefined;
                     this.enqueue(() => this.session === closing ? this.clearSession() : undefined).catch(error => this.output.appendLine(error.message));
                 });
             }
-            panel.webview.options = { enableScripts: false, enableCommandUris: ['huak.preview', 'huak.stopPreview', 'huak.selectPreviewOutput'], localResourceRoots: [vscode.Uri.file(directory)] };
+            panel.webview.options = { enableScripts: true, enableCommandUris: ['huak.preview', 'huak.stopPreview', 'huak.selectPreviewOutput', 'huak.exportPicture'], localResourceRoots: [vscode.Uri.file(directory), this.media] };
             panel.title = `Huak Preview: ${session.label}`;
+            if (!reuse || !panel.webview.html) {
+                const script = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.media, 'preview.js'));
+                panel.webview.html = previewHtml(panel.webview.cspSource, script.toString(), { title: `${path.basename(uri.fsPath)} · ${session.label}`, source: uri.toString(), name: session.name });
+            }
             panel.reveal(vscode.ViewColumn.Beside, true);
             this.update(session);
-            const folder = vscode.workspace.getWorkspaceFolder(uri) || vscode.workspace.workspaceFolders?.[0];
-            const settings = vscode.workspace.getConfiguration('huak', uri);
-            const executable = resolveExecutable(folder?.uri.fsPath, { executablePath: settings.get('executablePath'), libtypstPath: settings.get('libtypstPath') });
-            const parameters = settings.get('preview.parameters', {});
-            const args = ['watch', uri.fsPath, '--json', '--output', `${selected.name}=${session.outputPath}`, ...executable.args];
-            for (const [name, value] of Object.entries(parameters)) args.push(`--param=${name}=${value}`);
-            const watch = session.watch = new WatchProcess(executable.command, args, executable.options);
+            const args = ['watch', '--json', ...renderer.args, '--output', `${selected.name}=${session.outputPath}`];
+            const watch = session.watch = new WatchProcess(renderer.command, args, renderer.options);
             watch.on('event', event => {
                 session.processing = session.processing.then(() => this.event(session, event)).catch(error => this.fail(session, error.message));
             });
@@ -124,7 +120,7 @@ class Preview {
         if (!this.panel || this.session !== session || session.closed) return;
         const webview = this.panel.webview;
         const image = session.revision ? webview.asWebviewUri(vscode.Uri.file(session.outputPath)).with({ query: `revision=${session.revision}` }).toString() : undefined;
-        webview.html = previewHtml(webview.cspSource, { title: `${path.basename(session.uri.fsPath)} · ${session.label}`, source: session.uri.toString(), name: session.name, status: session.status, error: session.error, image });
+        void webview.postMessage({ image, status: session.status, error: session.error });
     }
 
     async stopSession(session) {

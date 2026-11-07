@@ -32,7 +32,7 @@ async function activate(context) {
         if (!client) throw new Error('The Huak language server is unavailable.');
         return client;
     }
-    preview = new Preview(languageClient);
+    preview = new Preview(languageClient, context.extensionUri);
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('huak-stdlib', {
         async provideTextDocumentContent(uri, token) {
             const server = await languageClient();
@@ -47,6 +47,7 @@ async function activate(context) {
     }
     // editor/title supplies an editor context after the URI; webview links supply a name.
     command('huak.preview', (uri, name) => preview.open(uri, typeof name === 'string' ? name : undefined));
+    command('huak.exportPicture', (uri, name) => preview.export(uri, typeof name === 'string' ? name : undefined));
     command('huak.selectPreviewOutput', uri => preview.open(uri, undefined, true));
     command('huak.stopPreview', () => preview.stop());
     context.subscriptions.push(vscode.commands.registerCommand('huak.restartLanguageServer', restart));

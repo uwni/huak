@@ -32,6 +32,10 @@ Use the preview button in a Huak editor's title bar, or **Huak: Render / Preview
 
 The preview displays the exported SVG as an image, including native SVG animation. Native watch publishes complete output files atomically and retains the last successful file on a failed build; the extension displays that file directly. Failed builds show their error while retaining that image. **Huak: Stop Preview** stops rendering and retains the image; closing the preview stops its process and removes temporary files. Restart keeps the selected picture and its last successful image. Restart the preview after changing renderer paths or parameters. Preview uses the CLI's structured JSONL events and LSP output discovery; it does not parse Huak source or watch files itself.
 
+Use **−**, **+** or **Ctrl/Cmd + scroll** to zoom. The zoom menu offers **Fit to view** and magnifications from **25%** to **800%**. At **100%** the SVG uses its intrinsic size. Saved edits keep the current zoom.
+
+Choose **Export…** in the preview or **Huak: Export Picture…** in the editor and select **SVG** or **PDF**. The preview exports the selected picture with its render settings. From the editor you can choose among multiple pictures. For `diagram.huak`, the default picture saves beside the source as `diagram.svg` or `diagram.pdf`; a named picture such as `detail` saves as `diagram.detail.svg` or `diagram.detail.pdf`. The extension saves edits before rendering and asks before replacing an existing file.
+
 `typst_expose title, count` exposes selected Huak data to the local `huak` namespace in Typst. Its declaration names support ordinary Go to Definition, while Typst source stays opaque to Huak tooling. The native compiler validates the selected bindings; the extension does not mirror that logic.
 
 Embedded `typ[…]` and `setup_typst {…}` highlighting reuses the Typst grammar supplied by Tinymist when installed. It does not parse or evaluate Typst independently.
@@ -39,21 +43,12 @@ Embedded `typ[…]` and `setup_typst {…}` highlighting reuses the Typst gramma
 ## Installation and native verification
 
 ```sh
-code --install-extension huak-0.2.7.vsix
+code --install-extension huak-0.2.8.vsix
 # From the Huak repository:
 zig build test-tools
 ```
 
 Configure the three Huak executable/library paths through VS Code settings.
-Only extension runtime JavaScript is retained. Node-based development,
-packaging, settings scripts and test drivers have been removed. The existing
-VSIX predates the output protocol change. The local `dist/extension.js` has been
-updated with the same protocol fields as the runtime source, without Node;
-a new VSIX has not been packaged. The locally installed extension runtime was
-synchronized on 2026-11-04 to use `huak/outputs`; reload the VS Code window after
-updating that runtime. Restarting only the language server does not reload
-extension JavaScript. Reinstalling the old VSIX restores the incompatible
-`huak/exports` request. `zig build test-tools` tests the native LSP
-and formatter, not the VS Code extension host or TextMate grammar.
+Run **Developer: Reload Window** after updating the extension. `zig build test-tools` exercises the native language server and formatter.
 
 `huak/outputs` returns entries such as `{ "name": "default", "label": "chart", "default": true }`. `label` is display text; `name` always supplies the CLI selector, including webview restart commands. Older servers without `label` remain usable. If a later assignment changes a named binding, or the server cannot prove the alias, the default snapshot and named picture remain separate choices; the client never merges them by their names.
