@@ -42,7 +42,7 @@ end
 
 `chip_size` 或 `density` 设为 0 可单独关闭崩口。需要“小而密”可试 `chip_size: 0.15, density: 2.5`，需要细净的刀口可将密度减至 0.4。调用方通过 `math.seed` 设置种子，固定种子、参数和调用顺序即可复现同一印迹。
 
-[煢鴉梓行示例](examples/qiongyazixing.huak) 的印文与边框共用笔宽、崩口及双侧波动参数。`rim_radius` 控制框角中线的圆弧半径，默认 2.6 pt。`cap_roundness` 单独控制笔端。
+[煢鴉梓行示例](examples/qiongyazixing.huak) 的印面为 23 mm，长度一律以 mm 计，印文与边框共用笔宽、崩口及双侧波动参数。印文由分组裁剪限制在框线以内，贴到边框的笔画照常与边框连成一体；整字宽高、字位或笔宽怎么调，字都不会越过边框。`rim_radius` 控制框角中线的圆弧半径，默认 1.15 mm。`cap_roundness` 单独控制笔端。
 
 [字形部件](examples/qiongyazixing_parts.huak) 保存十个部件各自的中心线。示例中先用 `place` 缩放、定位部件，再用 `compound` 组字。例如把牙部的放置写为 `place(parts.tooth, (-7.2475pt, 0pt), sx: 1.04)`，即可围绕接底框的竖脚加宽牙部 4%。整字宽高另由 `qiong`、`ya`、`zi`、`xing` 的 `_width`、`_height` 参数控制，1 对应部件组字后的原始尺寸。例如 `--param ya_height=0.98` 可从底框起把鴉的字高收短 2%。所有变形完成后才按 `stroke_width` 走刀。
 

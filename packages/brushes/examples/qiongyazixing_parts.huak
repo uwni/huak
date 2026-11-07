@@ -1,28 +1,24 @@
-// 各部件以自己的定位點為原點，x 向右、y 向上。輸出皆為未描邊的刀路。
+// 各部件以自己的定位點為原點，x 向右、y 向上。長度一律以 mm 計，輸出皆為未描邊的刀路。
 import paint.*
 import geometry.compound
 import math.{min, norm, unit}
 
-fn in_points(p:vec2) -> vec2
-    return p * 1pt
-end
-
-fn seal_curve(a:vec2,b:vec2,c:vec2,d:vec2) -> path
-    return bezier(in_points(a),in_points(b),in_points(c),in_points(d))
+fn seal_curve(a:vec2, b:vec2, c:vec2, d:vec2) -> path
+    return bezier(a, b, c, d)
 end
 
 // Straight runs meet at a short quadratic shoulder. The setback is limited
 // by both runs so that a short hook keeps its full length.
-fn folded(points:list, setback:length = 1pt) -> path
-    first := in_points(points[0])
-    last := in_points(points[len(points)-1])
+fn folded(points:list, setback:length = 0.23mm) -> path
+    first := points[0]
+    last := points[len(points)-1]
     result := first -- last
     if len(points) == 2 then return result end
     tip := first
     for i in 1:len(points)-2 do
-        corner := in_points(points[i])
-        incoming := corner - in_points(points[i-1])
-        outgoing := in_points(points[i+1]) - corner
+        corner := points[i]
+        incoming := corner - points[i-1]
+        outgoing := points[i+1] - corner
         r := min(setback, 0.4 * min(norm(incoming), norm(outgoing)))
         a := corner - unit(incoming) * r
         b := corner + unit(outgoing) * r
@@ -36,105 +32,101 @@ end
 
 // 煢。兩火各以中豎頂端定位，冖以弧頂定位，卂以豎腳定位。
 export fire_left := compound([
-    folded([(-8.2,-0.61),(-8.1,-5.66)]),
-    folded([(0,0),(0,-6.26),(-8,-11.48)], 1.5pt),
-    seal_curve((0,-6.26),(1.2,-8.7),(4.5,-10.55),(7.5,-11.13)),
-    folded([(7.3,-0.52),(7.4,-5.39)])
+    folded([(-1.886mm, -0.14mm), (-1.863mm, -1.302mm)]),
+    folded([(0mm, 0mm), (0mm, -1.44mm), (-1.84mm, -2.64mm)], 0.345mm),
+    seal_curve((0mm, -1.44mm), (0.276mm, -2.001mm), (1.035mm, -2.427mm), (1.725mm, -2.56mm)),
+    folded([(1.679mm, -0.12mm), (1.702mm, -1.24mm)])
 ])
 
 export fire_right := compound([
-    folded([(-7.6,-0.52),(-7.7,-5.48)]),
-    folded([(0,0),(0,-6.26),(-7.7,-11.22)], 1.4pt),
-    seal_curve((0,-6.26),(1.45,-8.8),(5.8,-10.9),(8.8,-11.22)),
-    folded([(8.3,-0.43),(8.3,-5.48)])
+    folded([(-1.748mm, -0.12mm), (-1.771mm, -1.26mm)]),
+    folded([(0mm, 0mm), (0mm, -1.44mm), (-1.771mm, -2.581mm)], 0.322mm),
+    seal_curve((0mm, -1.44mm), (0.334mm, -2.024mm), (1.334mm, -2.507mm), (2.024mm, -2.581mm)),
+    folded([(1.909mm, -0.099mm), (1.909mm, -1.26mm)])
 ])
 
 // 冖依參照圖中線取形，弧頂偏左，右肩略低。
 export cover := (
-    (in_points((-13.86,-19.56)) -- in_points((-13.76,-6.58)))
-    & seal_curve((-13.76,-6.58),(-13.78,-5.64),(-13.95,-4.94),(-13.88,-4.23))
-    & seal_curve((-13.88,-4.23),(-13.81,-2.75),(-12.98,-2),(-11.76,-1.65))
-    & seal_curve((-11.76,-1.65),(-8.99,-0.52),(-4.47,0.02),(0,0))
-    & seal_curve((0,0),(3.64,0),(9.47,-0.59),(14.11,-0.71))
-    & seal_curve((14.11,-0.71),(16.46,-0.78),(19.04,-1.22),(20.93,-1.95))
-    & seal_curve((20.93,-1.95),(23.11,-2.52),(24.64,-3.06),(24.64,-5.08))
-    & (in_points((24.64,-5.08)) -- in_points((24.74,-19.86)))
+    ((-3.188mm, -4.499mm) -- (-3.165mm, -1.513mm))
+    & seal_curve((-3.165mm, -1.513mm), (-3.169mm, -1.297mm), (-3.208mm, -1.136mm), (-3.192mm, -0.973mm))
+    & seal_curve((-3.192mm, -0.973mm), (-3.176mm, -0.633mm), (-2.985mm, -0.46mm), (-2.705mm, -0.38mm))
+    & seal_curve((-2.705mm, -0.38mm), (-2.068mm, -0.12mm), (-1.028mm, 0.005mm), (0mm, 0mm))
+    & seal_curve((0mm, 0mm), (0.837mm, 0mm), (2.178mm, -0.136mm), (3.245mm, -0.163mm))
+    & seal_curve((3.245mm, -0.163mm), (3.786mm, -0.179mm), (4.379mm, -0.281mm), (4.814mm, -0.449mm))
+    & seal_curve((4.814mm, -0.449mm), (5.315mm, -0.58mm), (5.667mm, -0.704mm), (5.667mm, -1.168mm))
+    & ((5.667mm, -1.168mm) -- (5.69mm, -4.568mm))
 )
 
 export xun := compound([
-    folded([(0,0),(0.1,5.17),(-3.9,8.93),(-3.9,14.85),
-            (8.6,14.85),(8.6,11.61),(5.6,10.54),(5.7,8.93),(12.1,8.93)], 1.1pt),
-    folded([(-10.2,4.66),(14.9,4.86)])
+    folded([(0mm, 0mm), (0.023mm, 1.189mm), (-0.897mm, 2.054mm), (-0.897mm, 3.216mm),
+        (1.178mm, 3.216mm), (1.878mm, 2.67mm),], 0.253mm),
+    folded([(-2.346mm, 1.072mm), (3.427mm, 1.118mm)])
 ])
 
 // 鴉。牙、鳥各自以接底框的豎腳定位。座標是參照印上的像素位移，向上為正。
-// 原圖兩腳在 (415,553)、(449,553)，同一比例換算為印面長度。
-fn crow_curve(a:vec2,b:vec2,c:vec2,d:vec2) -> path
-    unit_size := 0.223pt
-    return bezier(a*unit_size,b*unit_size,c*unit_size,d*unit_size)
-end
+// 原印像素位移按 0.0513mm/像素換算；原圖兩腳在 (415,553)、(449,553)。
 
 export tooth := compound([
-    crow_curve((-43,223),(-40,214),(-37,207),(-37,198))
-        & crow_curve((-37,198),(-38,175),(-41,152),(-40,133))
-        & crow_curve((-40,133),(-40,123),(-35,122),(-25,124))
-        & crow_curve((-25,124),(-15,125),(-7,126),(1,126)),
-    crow_curve((-37,198),(-23,199),(-4,203),(10,201)),
-    crow_curve((-40,159),(-27,162),(-14,162),(-5,161))
-        & crow_curve((-5,161),(2,161),(4,159),(4,151))
-        & crow_curve((4,151),(4,130),(0,112),(0,91))
-        & crow_curve((0,91),(-1,57),(0,20),(0,0)),
-    crow_curve((0,92),(-16,93),(-31,91),(-37,73))
-        & crow_curve((-37,73),(-42,56),(-46,36),(-48,19))
+    seal_curve((-2.206mm, 11.44mm), (-2.052mm, 10.978mm), (-1.898mm, 10.619mm), (-1.898mm, 10.157mm))
+    & seal_curve((-1.898mm, 10.157mm), (-1.949mm, 8.977mm), (-2.103mm, 7.798mm), (-2.052mm, 6.823mm))
+    & seal_curve((-2.052mm, 6.823mm), (-2.052mm, 6.31mm), (-1.795mm, 6.259mm), (-1.282mm, 6.361mm))
+    & seal_curve((-1.282mm, 6.361mm), (-0.769mm, 6.412mm), (-0.359mm, 6.464mm), (0.051mm, 6.464mm)),
+    seal_curve((-1.898mm, 10.157mm), (-1.18mm, 10.209mm), (-0.205mm, 10.414mm), (0.513mm, 10.311mm)),
+    seal_curve((-2.052mm, 8.157mm), (-1.385mm, 8.311mm), (-0.718mm, 8.311mm), (-0.257mm, 8.259mm))
+    & seal_curve((-0.257mm, 8.259mm), (0.103mm, 8.259mm), (0.205mm, 8.157mm), (0.205mm, 7.746mm))
+    & seal_curve((0.205mm, 7.746mm), (0.205mm, 6.669mm), (0mm, 5.746mm), (0mm, 4.668mm))
+    & seal_curve((0mm, 4.668mm), (-0.051mm, 2.924mm), (0mm, 1.026mm), (0mm, 0mm)),
+    seal_curve((0mm, 4.72mm), (-0.821mm, 4.771mm), (-1.59mm, 4.668mm), (-1.898mm, 3.745mm))
+    & seal_curve((-1.898mm, 3.745mm), (-2.155mm, 2.873mm), (-2.36mm, 1.847mm), (-2.462mm, 0.975mm))
 ])
 
 export bird := compound([
-    crow_curve((35,227),(37,221),(39,213),(39,206)),
-    crow_curve((-15,174),(-4,193),(15,200),(36,206))
-        & crow_curve((36,206),(51,208),(68,204),(71,192))
-        & crow_curve((71,192),(75,179),(64,173),(52,173))
-        & crow_curve((52,173),(35,172),(19,171),(12,157))
-        & crow_curve((12,157),(5,145),(2,122),(1,93))
-        & crow_curve((1,93),(-1,63),(0,26),(0,0)),
-    crow_curve((0,159),(25,158),(59,147),(79,143)),
-    crow_curve((44,150),(44,119),(43,76),(42,49)),
-    crow_curve((5,128),(25,127),(56,116),(79,112)),
-    crow_curve((1,93),(23,92),(59,82),(79,78)),
-    crow_curve((1,56),(23,54),(59,45),(80,42))
+    seal_curve((1.795mm, 11.645mm), (1.898mm, 11.337mm), (2.001mm, 10.927mm), (2.001mm, 10.568mm)),
+    seal_curve((-0.769mm, 8.926mm), (-0.205mm, 9.901mm), (0.769mm, 10.26mm), (1.847mm, 10.568mm))
+    & seal_curve((1.847mm, 10.568mm), (2.616mm, 10.67mm), (3.488mm, 10.465mm), (3.642mm, 9.85mm))
+    & seal_curve((3.642mm, 9.85mm), (3.847mm, 9.183mm), (3.283mm, 8.875mm), (2.668mm, 8.875mm))
+    & seal_curve((2.668mm, 8.875mm), (1.795mm, 8.824mm), (0.975mm, 8.772mm), (0.616mm, 8.054mm))
+    & seal_curve((0.616mm, 8.054mm), (0.257mm, 7.438mm), (0.103mm, 6.259mm), (0.051mm, 4.771mm))
+    & seal_curve((0.051mm, 4.771mm), (-0.051mm, 3.232mm), (0mm, 1.334mm), (0mm, 0mm)),
+    seal_curve((1mm, 8.157mm), (1.282mm, 8.105mm), (3.027mm, 7.541mm), (4.053mm, 7.336mm)),
+    seal_curve((2.257mm, 7.695mm), (2.257mm, 6.105mm), (2.206mm, 3.899mm), (2.155mm, 2.514mm)),
+    seal_curve((0.257mm, 6.566mm), (1.282mm, 6.515mm), (2.873mm, 5.951mm), (4.053mm, 5.746mm)),
+    seal_curve((0.051mm, 4.771mm), (1.18mm, 4.72mm), (3.027mm, 4.207mm), (4.053mm, 4.001mm)),
+    seal_curve((0.051mm, 2.873mm), (1.18mm, 2.77mm), (3.027mm, 2.308mm), (4.104mm, 2.155mm))
 ])
 
 // 梓。依吳讓之「張文梓印」左下字轉寫為朱文，木以頂框接點定位。
 // 《中國篆刻叢刊・吳讓之》卷二頁47。印面 https://www.sohu.com/a/736651152_121124388
 export wood := compound([
-    seal_curve((0,0),(-0.45,-15),(0.5,-32),(-0.15,-50.2)),
-    seal_curve((-7.25,-4.7),(-7,-16),(-8.8,-22),(-0.05,-24)),
-    seal_curve((6.6,-5.25),(6.7,-16.8),(8.25,-21.45),(-0.05,-24)),
-    seal_curve((-0.05,-24),(-7.6,-26.5),(-6.55,-35.5),(-7.3,-48.7)),
-    seal_curve((-0.05,-24),(7.15,-26.15),(6.5,-36),(6.8,-49.8))
+    seal_curve((0mm, 1mm), (-0.104mm, -3.45mm), (0.115mm, -7.36mm), (-0.035mm, -11.546mm)),
+    seal_curve((-1.667mm, -1.081mm), (-1.61mm, -3.68mm), (-2.024mm, -5.06mm), (-0.012mm, -5.52mm)),
+    seal_curve((1.518mm, -1.208mm), (1.541mm, -3.864mm), (1.898mm, -4.934mm), (-0.012mm, -5.52mm)),
+    seal_curve((-0.012mm, -5.52mm), (-1.748mm, -6.095mm), (-1.506mm, -8.165mm), (-1.679mm, -11.201mm)),
+    seal_curve((-0.012mm, -5.52mm), (1.645mm, -6.014mm), (1.495mm, -8.28mm), (1.564mm, -11.454mm))
 ])
 
 export xin := compound([
-    seal_curve((-9.3,-0.5),(-4,0.35),(4.5,0.3),(9.2,0)),
-    seal_curve((-9.45,-7.55),(-4.8,-7.1),(5.9,-7.05),(10,-7.2)),
-    seal_curve((-4.05,-7.45),(-4.1,-16.8),(-4.4,-21.5),(0.35,-24.1))
-        & seal_curve((0.35,-24.1),(4.8,-21.35),(4.2,-15.5),(4.4,-7.15)),
-    seal_curve((-9.6,-15.2),(-9.6,-25.6),(-8,-30.5),(0.35,-31.9))
-        & seal_curve((0.35,-31.9),(8.75,-30.3),(10.05,-23.4),(9.85,-14.6)),
-    seal_curve((0.35,-24.1),(0.1,-32.5),(0.6,-38.6),(0.25,-45.35)),
-    seal_curve((-9.3,-40.35),(-3.6,-39.75),(5.65,-40.05),(9.75,-39.4))
+    seal_curve((-2.139mm, -0.115mm), (-0.92mm, 0.081mm), (1.035mm, 0.069mm), (2.116mm, 0mm)),
+    seal_curve((-2.173mm, -1.736mm), (-1.104mm, -1.633mm), (1.357mm, -1.621mm), (2.3mm, -1.656mm)),
+    seal_curve((-0.931mm, -1.714mm), (-0.943mm, -3.864mm), (-1.012mm, -4.945mm), (0.081mm, -5.543mm))
+    & seal_curve((0.081mm, -5.543mm), (1.104mm, -4.911mm), (0.966mm, -3.565mm), (1.012mm, -1.645mm)),
+    seal_curve((-2.208mm, -3.496mm), (-2.208mm, -5.888mm), (-1.84mm, -7.015mm), (0.081mm, -7.337mm))
+    & seal_curve((0.081mm, -7.337mm), (2.013mm, -6.969mm), (2.312mm, -5.382mm), (2.265mm, -3.358mm)),
+    seal_curve((0.081mm, -5.543mm), (0.023mm, -7.475mm), (0.138mm, -8.878mm), (0.058mm, -10.431mm)),
+    seal_curve((-2.139mm, -9.28mm), (-0.828mm, -9.143mm), (1.3mm, -9.211mm), (2.243mm, -9.062mm))
 ])
 
 // 行。上肩取漢印相背的兩旁，下腳依本印章法向左右分出。
 export step_left := compound([
-    seal_curve((-13.85,31.2),(-8.1,30.5),(-2.05,30.05),(0.15,33.1)),
-    seal_curve((-13.35,25.6),(-8.9,26.15),(-0.15,27.6),(0,23.25))
-        & seal_curve((0,23.25),(-0.1,16.5),(0.4,11.2),(-3.25,7.2))
-        & seal_curve((-3.25,7.2),(-7.4,2.65),(-14.2,1.15),(-18.8,0.1))
+    seal_curve((-3.186mm, 6.5mm), (-1.863mm, 6.515mm), (-0.471mm, 6.412mm), (0.035mm, 7.400mm)),
+    seal_curve((-3.071mm, 5.008mm), (-2.047mm, 5.264mm), (-0.035mm, 5.048mm), (0mm, 4.548mm))
+    & seal_curve((0mm, 4.548mm), (-0.023mm, 3.795mm), (0.092mm, 2.576mm), (-0.748mm, 1.656mm))
+    & seal_curve((-0.748mm, 1.656mm), (-1.702mm, 0.61mm), (-3.266mm, 0.265mm), (-4.324mm, 0.023mm))
 ])
 
 export step_right := compound([
-    seal_curve((-0.4,32.65),(1.1,29.45),(7.2,30.3),(13.85,30.1)),
-    seal_curve((14,25.1),(9.7,25.65),(1.25,26.7),(0.3,23.35))
-        & seal_curve((0.3,23.35),(-0.6,20.17),(-0.55,11.3),(2.55,6.9))
-        & seal_curve((2.55,6.9),(5.25,3.07),(10.2,1.2),(14.1,0.45))
+    seal_curve((-0.092mm, 7.4mm), (0.253mm, 6.274mm), (1.656mm, 6.469mm), (3.186mm, 6.423mm)),
+    seal_curve((3.22mm, 5.073mm), (2.231mm, 5.199mm), (0.288mm, 5.141mm), (0.069mm, 4.571mm))
+    & seal_curve((0.069mm, 4.571mm), (-0.138mm, 4.639mm), (-0.127mm, 2.599mm), (0.587mm, 1.587mm))
+    & seal_curve((0.587mm, 1.587mm), (1.208mm, 0.706mm), (2.346mm, 0.276mm), (3.243mm, 0.104mm))
 ])

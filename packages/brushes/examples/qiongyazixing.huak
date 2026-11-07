@@ -1,34 +1,36 @@
 // 煢鴉梓行 · 漢繆篆朱文。右列煢鴉，左列梓行。
 // 煢、行參照羅福頤《漢印文字徵》，梓參照吳讓之「張文梓印」，鴉依所附朱印摹寫。
 // https://w9.ihp.sinica.edu.tw/wenwu/posts/288
+// 印面 23mm（2.3cm），長度一律以 mm 計。
 import paint.*
-import geometry.{arc, compound, point_at, region_intersection}
+import geometry.{arc, compound, point_at}
 import transform.compose
 import math.seed
 import "qiongyazixing_parts.huak" as parts
 import assertions.assert
 import "../brushes.huak".seal_knife
 
+width := 23mm
 param random_seed:int = 271
-param stroke_width:length = 2pt
-param cap_roundness:float = 0.8
-param rim_radius:length = 2.6pt
-param chip_size:float = 0.46
-param density:float = 1.35
+stroke_width := 0.05 * width
+param cap_roundness:float = 0.7
+param rim_radius:length = 0.9mm
+param chip_size:float = 0.75
+param density:float = 1.3
 param corner_scale:float = 1
-param wander:float = 0.6
+param wander:float = 0.4
 // Empty uses the measured zhuwen spectrum; each custom row is [lo, hi, rms−, rms+, ρ].
 spectrum := []
 
 // 整字的寬、高倍率以部件組字後的尺寸為 1，先變形刀路，再運用同一筆寬。
-param qiong_width:float = 0.95
-param qiong_height:float = 1.05
-param ya_width:float = 1.01
-param ya_height:float = 0.95
+param qiong_width:float = 0.9
+param qiong_height:float = 1.08
+param ya_width:float = 1.0
+param ya_height:float = 0.93
 param zi_width:float = 1
 param zi_height:float = 0.9
 param xing_width:float = 1
-param xing_height:float = 1.15
+param xing_height:float = 1.2
 
 // 以部件自己的原點縮放，再將該原點放到指定位置。
 fn place(guide:path, origin:vec2, sx:float = 1, sy:float = 1) -> path
@@ -37,11 +39,12 @@ fn place(guide:path, origin:vec2, sx:float = 1, sy:float = 1) -> path
 end
 
 fn frame(radius:length) -> path
-    lo := 2.6pt
-    hi := 97.4pt
-    assert(radius >= 0pt and radius <= (hi-lo)/2, "rim_radius must fit the frame")
-    if radius == 0pt then return rectangle((lo, lo), hi-lo, hi-lo) end
-    if radius == (hi-lo)/2 then return circle((50pt, 50pt), radius) end
+    lo := 0mm
+    hi := 23mm
+    center := (lo+hi)/2
+    assert(radius >= 0mm and radius <= (hi-lo)/2, "rim_radius must fit the frame")
+    if radius == 0mm then return rectangle((lo, lo), hi-lo, hi-lo) end
+    if radius == (hi-lo)/2 then return circle((center, center), radius) end
     corners := [arc((hi-radius, lo+radius), radius, -90deg, 90deg),
         arc((hi-radius, hi-radius), radius, 0deg, 90deg),
         arc((lo+radius, hi-radius), radius, 90deg, 90deg),
@@ -56,41 +59,41 @@ end
 
 // 煢：取「榮」的雙火與冖（《漢印文字徵》六卷四葉），下配「訊」右旁的卂（三卷四葉）。
 qiong := compound([
-    place(parts.fire_left, (-10.5pt, 0pt)),
-    place(parts.fire_right, (10.6pt, 0pt)),
-    place(parts.cover, (-5.14pt, -15.12pt)),
-    place(parts.xun, (-1.7pt, -34.88pt))
+    place(parts.fire_left, (0.6mm -2.415mm, 0.25mm)),
+    place(parts.fire_right, (0.6mm + 2.438mm, 0.25mm)),
+    place(parts.cover, (0.6mm-1.182mm, -3.578mm)),
+    place(parts.xun, (0.6mm-0.391mm, -8.322mm))
 ])
 
 // 鴉：兩豎以底框為共同基線，牙與鳥的間距取自原印。
 ya := compound([
-    place(parts.tooth, (-7.2475pt, 0pt)),
-    place(parts.bird, (0.3345pt, 0pt))
+    place(parts.tooth, (0.1mm-1.667mm, -0.1mm)),
+    place(parts.bird, (0.4mm, -0.1mm))
 ])
 
 // 梓：取「張文梓印」的束腰木旁與兩層弧形辛旁。木的原點即接框處。
 zi := compound([
-    parts.wood,
-    place(parts.xin, (21.55pt, -5.05pt))
+    place(parts.wood, (-0mm, -0.25mm)),
+    place(parts.xin, (5mm, -1.3mm))
 ])
 
 // 行：上部參照《漢印文字徵》二卷十八葉，下部兩腳向外舒展。
 xing := compound([
-    place(parts.step_left, (-4.9pt, 0pt)),
-    place(parts.step_right, (5pt, 0pt))
+    place(parts.step_left, (-1.127mm, -0.25mm)),
+    place(parts.step_right, (1.15mm, -0.2mm))
 ])
 
 rim := frame(rim_radius)
 guides := [
-    place(ya, (73.75pt, 2.6pt), ya_width, ya_height),
-    place(qiong, (72.5pt, 93.1pt), qiong_width, qiong_height),
-    place(zi, (14.5pt, 97.4pt), zi_width, zi_height),
-    place(xing, (26.3pt, 7.63pt), xing_width, xing_height)
+    place(ya, (16.963mm, 0.598mm), ya_width, ya_height),
+    place(qiong, (16.675mm, 21.413mm), qiong_width, qiong_height),
+    place(zi, (3.335mm, 22.402mm), zi_width, zi_height),
+    place(xing, (6.049mm, 1.755mm), xing_width, xing_height)
 ]
 
 seed(random_seed)
 ink := rgb(217/255, 33/255, 33/255)
-export seal := picture(100pt, 100pt)
+export seal := picture()
 default seal
 fn carve(guide:path) -> path
     return seal_knife(guide, stroke_width, "zhuwen", chip_size, density,
@@ -99,7 +102,13 @@ end
 
 drawing seal do
     +carve(rim) filled ink
-    for guide in guides do
-        +region_intersection(carve(guide), rim) filled ink
+    // 四字收在同一個裁剪分組：框線以外的刀路一律裁掉，
+    // 貼到框上的字照常與邊框連成一氣。
+    strokes := picture(clip: rim)
+    drawing strokes do
+        for guide in guides do
+            +carve(guide) filled ink
+        end
     end
+    +strokes
 end
