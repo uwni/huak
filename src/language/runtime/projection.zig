@@ -170,10 +170,10 @@ fn projectedPath(rt: *Runtime, commands: []const c.HuakPathCommand) !Value {
 }
 
 pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Value {
-    if (!@hasDecl(c, "huak_space_project")) {
-        rt.native_message = "3D projection requires an OCCT-enabled build (-Docct on desktop or -Dwasm-occt for the Playground)";
+    const backend = rt.backends.projection orelse {
+        rt.native_message = "3D projection is unavailable: no compatible OCCT projection backend is loaded";
         return error.ProjectionUnavailable;
-    }
+    };
     var arena = std.heap.ArenaAllocator.init(rt.gpa);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -204,7 +204,7 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
     } else if (spot != 0) return error.HighlightRequiresLight;
     var work: c.HuakLinework = undefined;
     var message: [512]u8 = @splat(0);
-    switch (c.huak_space_project(graph.nodes.items.ptr, graph.nodes.items.len, roots.ptr, roots.len, try Runtime.angular(args[1]), try Runtime.angular(args[2]), focus, tolerance, @intFromBool(args[5].boolean), if (light) |*l| l else null, &work, &message, message.len)) {
+    switch (backend.project.?(graph.nodes.items.ptr, graph.nodes.items.len, roots.ptr, roots.len, try Runtime.angular(args[1]), try Runtime.angular(args[2]), focus, tolerance, @intFromBool(args[5].boolean), if (light) |*l| l else null, &work, &message, message.len)) {
         0 => {},
         2 => return error.OutOfMemory,
         else => {
@@ -212,7 +212,7 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
             return error.ProjectionFailed;
         },
     }
-    defer c.huak_space_release(&work);
+    defer backend.release.?(&work);
     var layer_count: usize = 0;
     const result = try output.alloc(Value, work.count);
     for (result, 0..) |*row, i| {

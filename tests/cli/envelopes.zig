@@ -2,7 +2,7 @@
 const std = @import("std");
 const t = std.testing;
 const h = @import("harness.zig");
-pub const process_count = 8;
+pub const process_count = 11;
 
 pub fn run(ctx: *h.Harness) !void {
     const script = try ctx.script("envelopes/main",
@@ -62,4 +62,26 @@ pub fn run(ctx: *h.Harness) !void {
     try h.contains((try ctx.command("check", angle, &.{}, false)).stderr, "length");
     const tolerance = try ctx.script("envelopes/tolerance", "import paint.envelope;import pen.pensquare;curve:=(0,0)--(20,0)\nedge:=envelope(curve,pensquare(4pt),0pt)\n");
     try h.contains((try ctx.command("run", tolerance, &.{}, false)).stderr, "InvalidTolerance");
+    const gradient = try ctx.script("envelopes/gradient",
+        \\import paint.*; import pen.pensquare; import std.pen_motion.*; import assertions.assert
+        \\param tolerance:length = 0.01pt
+        \\motion := moving() do return scaling x (1 + t) y (1 + t) end
+        \\stops := [rgb(0,0,0),rgb(1,0,0)]
+        \\brush := pen(stops[0],nib:pensquare(1pt),motion:motion,tolerance:tolerance)
+        \\curve := (100pt,6pt)--(110pt,6pt)
+        \\item := object.linear_stroke(curve,(100pt,6pt),(110pt,6pt),stops,brush)
+        \\assert(bounds(item) == bounds(object.draw(curve,brush)))
+        \\default drawing picture(120pt,12pt) do +copy(item) end
+        \\export fitted := drawing picture() do +item end
+        \\assert(fitted.width == 11.5pt)
+        \\assert(fitted.height == 2pt)
+    );
+    const fine = "--param=tolerance=0.0000001pt";
+    _ = try ctx.command("run", gradient, &.{fine}, true);
+    try h.contains((try ctx.command("run", gradient, &.{ fine, "--output=fine.svg" }, false)).stderr, "OutputPrecisionRange");
+    try ctx.absent("fine.svg");
+    _ = try ctx.command("run", gradient, &.{ "--output=gradient.svg", "--output=gradient.pdf", "--output=fitted=fitted.svg" }, true);
+    try h.contains(try ctx.read("gradient.svg"), "<linearGradient");
+    try h.contains(try ctx.read("gradient.pdf"), "/ShadingType");
+    try (try ctx.svg("fitted.svg")).viewBox("0 0 11.5 2");
 }

@@ -10,6 +10,17 @@ pub const SourceParser = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
+    /// Borrow a host that implements sourceBlock(input). The host must outlive parsing.
+    pub fn init(provider: anytype) SourceParser {
+        const Adapter = struct {
+            fn parse(context: *anyopaque, input: []const u8) anyerror!usize {
+                const host: @TypeOf(provider) = @ptrCast(@alignCast(context));
+                return host.sourceBlock(input);
+            }
+        };
+        return .{ .ptr = provider, .vtable = &.{ .block = Adapter.parse } };
+    }
+
     pub inline fn block(self: SourceParser, input: []const u8) anyerror!usize {
         return self.vtable.block(self.ptr, input);
     }
@@ -36,7 +47,8 @@ pub const MixfixLookup = struct {
 };
 
 pub const Options = struct {
-    source_parser: ?SourceParser = null,
+    /// An omitted provider or a failed host initialization matters only at an embedded block.
+    source_parser: anyerror!?SourceParser = null,
     mixfix: ?MixfixLookup = null,
     blocks: ?BlockLookup = null,
 };
@@ -198,7 +210,7 @@ fn statement(self: *Parser) anyerror!*ast.Stmt {
                             try bindings.append(binding);
                             if (!try self.accept(.comma) or self.current.kind == .rbrace) break;
                         }
-                        finish = (try self.expect(.rbrace, "expected '}}' after selected imports")).span;
+                        finish = (try self.expect(.rbrace, "expected '}' after selected imports")).span;
                     } else {
                         const name = self.current;
                         if (name.kind != .identifier) return self.fail(name.span, "expected an exported member name", .{});
@@ -653,7 +665,7 @@ fn prefix(self: *Parser) anyerror!*ast.Expr {
                 if (!try self.accept(.comma)) break;
                 if (self.current.kind == .rbrace) break;
             };
-            const finish = try self.expect(.rbrace, "expected '}}' after dictionary");
+            const finish = try self.expect(.rbrace, "expected '}' after dictionary");
             return self.createExpr(.join(token.span, finish.span), .{ .dict = try entries.toOwnedSlice() });
         },
         .kw_block => {
@@ -950,12 +962,19 @@ fn typstBlock(self: *Parser, opening: u8) anyerror!struct { span: source.Span, c
     if (beginning == self.lexer.source.len or self.lexer.source[beginning] != opening) {
         return self.fail(start, "expected '{c}' after {s}", .{ opening, self.text(self.current) });
     }
-    const provider = self.options.source_parser orelse return self.fail(start, "embedded Typst requires a native source-block provider", .{});
+    const configured = self.options.source_parser catch |err| {
+        const failure = self.fail(start, "cannot parse Typst block: {s}", .{@errorName(err)});
+        self.diagnostic.*.?.cause = .{ .unavailable_source_parser = err };
+        return if (err == error.OutOfMemory) err else failure;
+    };
+    const provider = configured orelse return self.fail(start, "embedded Typst requires a native source-block provider", .{});
     const remaining = self.lexer.source[beginning..];
     const known = if (self.headers) |*headers| headers.sourceBlockLength(self.lexer.source, beginning) else null;
     const length = known orelse provider.block(remaining) catch |err| {
         if (err == error.OutOfMemory) return err;
-        return self.fail(start, "cannot parse Typst block: {s}", .{@errorName(err)});
+        const failure = self.fail(start, "cannot parse Typst block: {s}", .{@errorName(err)});
+        self.diagnostic.*.?.cause = .{ .source_block = err };
+        return failure;
     };
     const closing: u8 = if (opening == '[') ']' else '}';
     if (length < 2 or length > remaining.len or remaining[length - 1] != closing) {
@@ -965,7 +984,7 @@ fn typstBlock(self: *Parser, opening: u8) anyerror!struct { span: source.Span, c
     if (self.source_block_sink) |sink| try sink.append(self.allocator, .{ .start = beginning, .end = finish });
     self.lexer.pos = finish;
     self.current = try self.lexer.next();
-    return .{ .span = .{ .start = start.start, .end = finish }, .code = self.lexer.source[beginning + 1 .. finish - 1] };
+    return .{ .span = .{ .start = start.start, .end = finish }, .code = self.lexer.source[beginning..finish] };
 }
 
 fn parseAnnotation(self: *Parser) !ast.Annotation {
@@ -1004,7 +1023,7 @@ fn importNamespace(self: *Parser, path: []const u8, span: source.Span) ![]const 
         return self.fail(span, "import filename needs an explicit namespace alias with 'as'", .{});
     return name;
 }
-fn controlDelimiter(self: *Parser, kind: Lexer.Kind, comptime message: []const u8) !void {
+fn controlDelimiter(self: *Parser, kind: Lexer.Kind, message: []const u8) !void {
     while (self.current.kind == .newline) try self.advance();
     _ = try self.expect(kind, message);
 }
@@ -1023,8 +1042,8 @@ fn accept(self: *Parser, kind: Lexer.Kind) !bool {
     try self.advance();
     return true;
 }
-fn expect(self: *Parser, kind: Lexer.Kind, comptime message: []const u8) !Lexer.Token {
-    if (self.current.kind != kind) return self.fail(self.current.span, message, .{});
+noinline fn expect(self: *Parser, kind: Lexer.Kind, message: []const u8) !Lexer.Token {
+    if (self.current.kind != kind) return self.fail(self.current.span, "{s}", .{message});
     const token = self.current;
     try self.advance();
     return token;
@@ -1033,7 +1052,7 @@ fn text(self: *const Parser, token: Lexer.Token) []const u8 {
     return self.lexer.source[token.span.start..token.span.end];
 }
 fn fail(self: *Parser, span: source.Span, comptime format: []const u8, args: anytype) error{LanguageError} {
-    self.diagnostic.* = source.Diagnostic.init(span, format, args);
+    _ = source.Diagnostic.set(self.diagnostic, span, format, args);
     return error.LanguageError;
 }
 fn createStmt(self: *Parser, span: source.Span, value: @FieldType(ast.Stmt, "value")) !*ast.Stmt {
@@ -1843,7 +1862,7 @@ test "native Typst ellipses remain opaque inside variadic functions" {
     const script = try parser.parse();
     const declaration = script.statements[0].value.function;
     try std.testing.expect(declaration.params[0].variadic);
-    try std.testing.expectEqualStrings("#f(..args) ... end", declaration.body[0].value.return_value.?.value.typst);
+    try std.testing.expectEqualStrings("[#f(..args) ... end]", declaration.body[0].value.return_value.?.value.typst);
     try std.testing.expect(script.statements[1].value.imported.form == .all);
     const headers = try scanHeaders(arena.allocator(), input, options, &diagnostic);
     try std.testing.expectEqual(@as(usize, 1), headers.imports.len);
@@ -2354,13 +2373,13 @@ test "native Typst blocks preserve their source and resume host expressions" {
     const script = try parser.parse();
     try std.testing.expectEqual(@as(usize, 2), script.statements.len);
     try std.testing.expectEqualStrings("typst", script.statements[0].value.assignment.name);
-    try std.testing.expectEqualStrings("Hello", script.statements[1].value.assignment.value.value.typst);
+    try std.testing.expectEqualStrings("[Hello]", script.statements[1].value.assignment.value.value.typst);
     parser = try Parser.init(arena.allocator(), "setup_typst {let x=2}; value:=measure(typ [Hello],2)", options, &diagnostic);
     const inline_script = try parser.parse();
-    try std.testing.expectEqualStrings("let x=2", inline_script.statements[0].value.setup_typst);
+    try std.testing.expectEqualStrings("{let x=2}", inline_script.statements[0].value.setup_typst);
     const call = inline_script.statements[1].value.assignment.value.value.call;
     try std.testing.expectEqual(@as(usize, 2), call.args.len);
-    try std.testing.expectEqualStrings("Hello", call.args[0].value.typst);
+    try std.testing.expectEqualStrings("[Hello]", call.args[0].value.typst);
     parser = try Parser.init(arena.allocator(), "value:=typst\nHello\nend\n", options, &diagnostic);
     try std.testing.expectError(error.LanguageError, parser.parse());
     for ([_][]const u8{ "value=typ\nHello\nend\n", "value=typ;\nend\n", "value=typ{Hello}", "setup_typst[let x=2]" }) |input| {
@@ -2782,7 +2801,7 @@ test "record headers ignore fields and opaque Typst while retaining their contai
     try std.testing.expectEqual(@as(usize, 0), headers.typst_exposures.len);
     var frontend = try Parser.init(arena.allocator(), input, options, &diagnostic);
     const script = try frontend.parse();
-    try std.testing.expectEqualStrings("end struct Bogus import fake typst_expose field", script.statements[0].value.structure.fields[1].default.?.value.typst);
+    try std.testing.expectEqualStrings("[end struct Bogus import fake typst_expose field]", script.statements[0].value.structure.fields[1].default.?.value.typst);
 }
 
 test "scope lookup preserves empty equal-start nested sibling and outside boundaries" {
@@ -2942,8 +2961,8 @@ fn opaqueBlockAllocationExercise(allocator: std.mem.Allocator) !void {
     const script = try parser.parse();
     try std.testing.expectEqual(OpaqueBlockFixture.blocks.len, fixture.calls);
     try std.testing.expectEqual(OpaqueBlockFixture.blocks.len, parser.headers.?.source_blocks.len);
-    try std.testing.expectEqualStrings("Default [nested]", script.statements[1].value.function.params[0].default.?.value.typst);
-    try std.testing.expectEqualStrings("Record /* ] end */ [nested]", script.statements[2].value.structure.fields[0].default.?.value.typst);
+    try std.testing.expectEqualStrings("[Default [nested]]", script.statements[1].value.function.params[0].default.?.value.typst);
+    try std.testing.expectEqualStrings("[Record /* ] end */ [nested]]", script.statements[2].value.structure.fields[0].default.?.value.typst);
     for (parser.headers.?.source_blocks, 0..) |block, index| {
         try std.testing.expectEqualStrings(OpaqueBlockFixture.blocks[index], OpaqueBlockFixture.input[block.start..block.end]);
         if (index != 0) try std.testing.expect(parser.headers.?.source_blocks[index - 1].end <= block.start);
@@ -3010,7 +3029,12 @@ test "native block fallback preserves provider diagnostics and allocation failur
         var parser = try Parser.init(arena.allocator(), copied, fixture.options(), &diagnostic);
         parser.headers = headers;
         try std.testing.expectError(if (failure == error.OutOfMemory) error.OutOfMemory else error.LanguageError, parser.parse());
-        if (failure != error.OutOfMemory) try std.testing.expectEqualStrings("cannot parse Typst block: NativeBlockFailure", diagnostic.?.text());
+        if (failure == error.OutOfMemory) {
+            try std.testing.expect(diagnostic == null);
+        } else {
+            try std.testing.expectEqualStrings("cannot parse Typst block: NativeBlockFailure", diagnostic.?.text());
+            try std.testing.expectEqual(failure, diagnostic.?.cause.?.source_block);
+        }
         try std.testing.expectEqual(OpaqueBlockFixture.blocks.len + 1, fixture.calls);
     }
 }

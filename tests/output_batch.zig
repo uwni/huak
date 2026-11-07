@@ -29,15 +29,10 @@ const script =
     \\object.append(second, object.label(private, (5,65)))
 ;
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 fn compile(allocator: std.mem.Allocator, library: *typst.Library) !language.bytecode.Program {
     var diagnostic: ?language.compiler.Diagnostic = null;
     return language.compiler.compile(allocator, script, "output-batch.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
     }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("compiler: {s}\n", .{detail.text()});
         return err;
@@ -82,6 +77,12 @@ test "object storage rolls over before growth and isolates oversized geometry" {
     defer library.deinit();
     var diagnostic: ?language.compiler.Diagnostic = null;
     var program = try language.compiler.compile(t.allocator,
+        \\prefix := []
+        \\for i in 0:600 do prefix += (i,0) end
+        \\plain := object.draw(path(prefix))
+        \\knots := []
+        \\for i in 0:256 do knots += (i,i%7) end
+        \\framed := object.draw(geometry.smooth(knots))
         \\curve := geometry.circle((0,0), 5)
         \\for i in 1:500 do
         \\    item := object.fill(curve)
@@ -100,6 +101,7 @@ test "object storage rolls over before growth and isolates oversized geometry" {
     defer machine.deinit();
     try execute(&machine);
     try t.expect(runtime.scene_values.items.len > 2);
+    try t.expect(machine.getGlobal("plain").?.object.owner != machine.getGlobal("framed").?.object.owner);
     for (runtime.scene_values.items) |owner| {
         // Large individual paths are allowed, but must not retain unrelated
         // objects in the same page. Normal pages keep the existing 64 KiB bound.
@@ -205,7 +207,7 @@ test "frame compaction preserves paint order across map growth and shared layout
     var expected = result: {
         var view = try owner.view(t.allocator, 0);
         defer view.deinit();
-        const render_scene: huak.render.Scene = .{ .picture = &view.snapshot.picture, .width = 200, .height = 600, .frames = &frames };
+        const render_scene: huak.render.Scene = .{ .picture = &view.snapshot.picture, .size = .{ .x = 200, .y = 600 }, .frames = &frames };
         break :result try render_scene.render(t.allocator, &library, .svg, &diagnostic);
     };
     defer expected.deinit();

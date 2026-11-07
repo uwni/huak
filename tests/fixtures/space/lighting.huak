@@ -1,6 +1,7 @@
 import space as s
 import paint.*
-import math.{abs, sin, norm}
+import math.{PI, abs, sin, norm}
+import geometry.arclength
 import assertions.assert
 
 top := s.orthographic(-90deg,90deg)
@@ -24,6 +25,17 @@ for f in covered.visible_faces do
     else
         assert(f.highlight == f.region,"a fully lit planar face uses its visible boundary")
     end
+end
+// Isophotes touch the apparent contour. Inserting both as internal edges used
+// to construct a face containing only holes and fail before either exporter.
+levels := []
+for i in 0:15 do levels += [float(i)/16] end
+dense := s.project([transformed(s.sphere(18pt),translate((12pt,0,5pt)))],s.orthographic(-80deg,36deg),light:(-1,-2,3),spot:24deg,isophotes:levels)
+assert(len(dense.layers) == 2 and len(dense.visible_faces) == 1)
+assert(len(dense.visible_faces[0].shades) == 17,"all sixteen bands and the unlit region survive")
+for layer in dense.layers do
+    assert(len(layer.faces) == 1)
+    assert(abs(arclength(layer.faces[0].region)-36pt*PI) < 0.03pt,"lighting preserves both complete sphere sheets")
 end
 default drawing picture() do
     for f in covered.visible_faces do +s.shaded(f,rgb(0.2,0.6,0.55)) end

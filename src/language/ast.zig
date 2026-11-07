@@ -66,6 +66,7 @@ pub const Expr = struct {
         index: struct { object: *Expr, index: *Expr },
         slice: struct { object: *Expr, range: Range },
         member: struct { object: *Expr, name: []const u8 },
+        /// Original content block, including its brackets, borrowed from module source.
         typst: []const u8,
         block: []const *Stmt,
         expansion: struct { name: OperatorName, definition: *Stmt, module: u32, args: []const *Expr, argument_names: []const ?[]const u8, body: []const *Stmt, scope: u32 },
@@ -105,6 +106,7 @@ pub const Stmt = struct {
         return_value: ?*Expr,
         exported: struct { names: []const ExportName, value: ?*Expr },
         default_output: *Expr,
+        /// Original code block, including its braces, borrowed from module source.
         setup_typst: []const u8,
         typst_expose: []const ExportName,
         imported: struct { path: []const u8, bare: bool = false, namespace_path: []const []const u8 = &.{}, form: ImportForm },

@@ -1,0 +1,232 @@
+import assertions.assert
+import geometry.{circle, compound, rectangle, region_difference, region_intersection, region_union, region_xor, subpaths}
+import math.seed
+import object.bounds
+import "../brushes.huak".{seal_edge, seal_knife}
+
+// Check the actual untextured boundary against the normal at each endpoint.
+fn has_flat_cap(shape:path, point:vec2, tangent:vec2, width:length) -> bool
+    t := math.unit(tangent)
+    offset := (-t.y,t.x)*width/2
+    for c in geometry.measure(shape).curves do
+        if math.norm(c[0]-(point-offset)) < 0.002pt and math.norm(c[3]-(point+offset)) < 0.002pt then return true end
+        if math.norm(c[3]-(point-offset)) < 0.002pt and math.norm(c[0]-(point+offset)) < 0.002pt then return true end
+    end
+    return false
+end
+
+oblique := geometry.bezier((0pt,0pt),(8pt,6pt),(14pt,13pt),(20pt,5pt))
+flat := seal_knife(oblique,4pt,"zhuwen",density: 0,corner_scale: 0,cap: "butt")
+assert(has_flat_cap(flat,(0pt,0pt),(8,6),4pt), "entry face follows the initial normal")
+assert(has_flat_cap(flat,(20pt,5pt),(6,-8),4pt), "exit face follows the final normal")
+zero_round := seal_knife(oblique,4pt,"zhuwen",density: 0,corner_scale: 0,cap_roundness: 0)
+assert(len(region_xor(flat,zero_round)) == 0, "zero cap rounding gives the butt footprint")
+partial := seal_knife(path((0pt,0pt),(16pt,12pt)),4pt,"zhuwen",density: 0,corner_scale: 0,cap_roundness: 0.5)
+for end_sample in [[(0pt,0pt),(-0.8,-0.6)],[(16pt,12pt),(0.8,0.6)]] do
+    tip := end_sample[0]
+    out := end_sample[1]
+    normal := (-out.y,out.x)
+    for side in [-1,1] do
+        flat_end := tip+normal*(side*0.8pt)
+        assert(len(region_difference(circle(flat_end+out*0.97pt,0.01pt),partial)) == 0, "flat middle reaches the cap radius")
+        assert(len(region_intersection(circle(flat_end+out*1.03pt,0.01pt),partial)) == 0, "flat middle stops at the cap radius")
+        assert(len(region_intersection(circle(tip+normal*(side*1.8pt)+out*0.9pt,0.01pt),partial)) == 0, "round off both corners")
+    end
+end
+square := seal_knife(oblique,4pt,"baiwen",chip_size: 0,corner_scale: 0,cap: "square")
+assert(has_flat_cap(square,(-1.6pt,-1.2pt),(8,6),4pt), "square entry extends half a width")
+assert(has_flat_cap(square,(21.2pt,3.4pt),(6,-8),4pt), "square exit extends along the final tangent")
+
+// A closed guide has no caps. The flat blade turns at the closing seam too.
+rim := rectangle((2.6pt,2.6pt),94.8pt,94.8pt)
+plain_rim := seal_knife(rim,2.2pt,"zhuwen",chip_size: 0,corner_scale: 0,cap: "butt")
+assert(len(subpaths(plain_rim)) == 2, "a rotating blade leaves the frame open inside")
+assert(len(region_difference(circle((2.2pt,2.2pt),0.1pt),plain_rim)) == 0, "cover the outer turn at the seam")
+
+fn smooth_stroke(curve:path, width:length) -> path
+    return seal_knife(curve, width, "zhuwen", chip_size: 0, corner_scale: 0)
+end
+
+line := path((0pt, 0pt), (75pt, 0pt))
+base := smooth_stroke(line, 8pt)
+round_box := bounds(base)
+assert(math.norm(round_box[0]-(-4pt,-4pt)) < 0.001pt and math.norm(round_box[1]-(79pt,4pt)) < 0.001pt, "round caps extend by the radius")
+seed(1701)
+red := seal_knife(line, 8pt, "zhuwen")
+seed(1701)
+white := seal_knife(line, 8pt, "baiwen")
+assert(len(region_difference(red, base)) == 0, "zhuwen chips must go inward")
+assert(len(region_difference(base, red)) > 0, "zhuwen must lose ink")
+assert(len(region_difference(base, white)) == 0, "baiwen must retain the entire smooth incision")
+assert(len(region_difference(white, base)) > 0, "baiwen chips must go outward")
+assert(len(region_difference(smooth_stroke(line, 3pt), red)) == 0, "keep a solid core through both caps")
+assert(len(subpaths(red)) == 1 and len(subpaths(white)) == 1, "no detached speckles or pinholes")
+
+// Check actual Boolean output on the straight upper edge, excluding the caps.
+// The three width bands below are measured in the drawing, after cuts can merge.
+for chips in [region_difference(base, red), region_difference(white, base)] do
+    small := 0
+    medium := 0
+    large := 0
+    for piece in subpaths(chips) do
+        box := bounds(piece)
+        if box[0].x <= 0pt or box[1].x >= 75pt or box[0].y <= 0pt then continue end
+        size := box[1].x - box[0].x
+        if size < 0.8pt then small = small + 1
+        elseif size < 1.6pt then medium = medium + 1
+        else large = large + 1 end
+    end
+    assert(small > medium and medium > large and large > 0, "retain fine, intermediate and occasional large marks")
+    for i in 0:17 do
+        window := rectangle((1pt + i*4pt, 2pt), 4pt, 4pt)
+        assert(len(region_intersection(chips, window)) > 0, "retain rim texture between larger cuts")
+    end
+end
+
+seed(1701)
+repeat := seal_knife(line, 8pt, "zhuwen")
+assert(len(region_xor(red, repeat)) == 0, "same seed reproduces a stroke")
+seed(1702)
+different := seal_knife(line, 8pt, "zhuwen")
+assert(len(region_xor(red, different)) > 0, "changing the seed changes the chipped edge")
+seed(1701)
+fine := seal_knife(line, 8pt, "zhuwen", chip_size: 0.10)
+assert(len(region_xor(red, fine)) > 0, "size can change with density held fixed")
+assert(len(region_difference(smooth_stroke(line, 7pt), fine)) == 0, "fine chips stay close to the edge")
+seed(1701)
+sparse := seal_knife(line, 8pt, "zhuwen", density: 0.25)
+assert(len(region_xor(red, sparse)) > 0, "density can change with size held fixed")
+assert(len(region_xor(base, seal_knife(line, 8pt, "zhuwen", chip_size: 0))) == 0)
+assert(len(region_xor(base, seal_knife(line, 8pt, "baiwen", density: 0))) == 0)
+assert(len(seal_knife(compound([]), 3pt, "zhuwen")) == 0)
+
+// Both sides of a closed brush stroke are exposed stone. Preserve the
+// counter and the gap to a separate, intersecting pair of strokes.
+loop := rectangle((0pt, 0pt), 28pt, 28pt)
+cross := compound([path((40pt, 10pt), (60pt, 10pt)), path((50pt, 0pt), (50pt, 20pt))])
+curves := compound([loop, cross])
+nominal := smooth_stroke(curves, 4pt)
+seed(83)
+relief := seal_knife(curves, 4pt, "zhuwen")
+seed(83)
+groove := seal_knife(curves, 4pt, "baiwen")
+assert(len(subpaths(relief)) == 3 and len(subpaths(groove)) == 3, "preserve the counter and separate strokes")
+assert(len(region_difference(smooth_stroke(curves, 1pt), relief)) == 0, "solid joins and crossing")
+assert(len(region_intersection(groove, circle((14pt, 14pt), 8pt))) == 0, "keep the counter open")
+inner := rectangle((1pt, 1pt), 26pt, 26pt)
+assert(len(region_intersection(inner, region_difference(nominal, relief))) > 0, "chip the inner rim of zhuwen")
+assert(len(region_intersection(inner, region_difference(groove, nominal))) > 0, "expand baiwen into the counter")
+
+// A baiwen mark cuts a transparent opening in the inked face.
+face := rectangle((-12pt, -12pt), 100pt, 24pt)
+impression := region_difference(face, white)
+assert(len(region_intersection(impression, smooth_stroke(line, 6pt))) == 0)
+assert(len(region_xor(region_union(impression, white), face)) == 0)
+
+// This bend doubles back on a scale comparable to the largest chip.
+// An unchecked cut used to trap tiny ink islands at its inside turn.
+curled := geometry.bezier((20pt, 5pt), (24pt, -20pt), (32pt, 35pt), (48pt, 4pt))
+islands := compound([circle((0pt, 0pt), 7pt), curled, path((60pt, 1pt), (60pt, 1pt))])
+for mode in ["zhuwen", "baiwen"] do
+    seed(30)
+    textured := seal_knife(islands, 4pt, mode, 0.75, 2.5)
+    assert(len(subpaths(textured)) == 4, "preserve separate strokes, a dot and an open counter on tight bends")
+    assert(len(region_difference(smooth_stroke(islands, 0.5pt), textured)) == 0)
+end
+
+// A custom silhouette retains its counter with either empirical source.
+outer := rectangle((0pt, 0pt), 32pt, 32pt)
+counter := rectangle((4pt, 4pt), 24pt, 24pt)
+letter := region_difference(outer, counter)
+for mix in [0.0, 1.0] do
+    seed(24)
+    positive_base := seal_edge(letter, 4pt, "zhuwen", chip_size: 0)
+    seed(24)
+    positive := seal_edge(letter, 4pt, "zhuwen", imprint_mix: mix)
+    assert(len(region_difference(positive, positive_base)) == 0 and len(region_difference(positive_base, positive)) > 0)
+    seed(24)
+    negative_base := seal_edge(letter, 4pt, "baiwen", chip_size: 0)
+    seed(24)
+    negative := seal_edge(letter, 4pt, "baiwen", imprint_mix: mix)
+    assert(len(region_difference(negative_base, negative)) == 0 and len(region_difference(negative, negative_base)) > 0)
+    assert(len(subpaths(positive)) == 2 and len(subpaths(negative)) == 2)
+end
+
+seed(7)
+default_paper := seal_knife(line, 8pt, "zhuwen", imprint_mix: 1)
+seed(7)
+identified_stone := seal_knife(line, 8pt, "zhuwen", imprint_mix: 1, imprint_source: "qingtian")
+assert(len(region_xor(default_paper, identified_stone)) == 0, "only material-identified prints by default")
+seed(7)
+album := seal_knife(line, 8pt, "zhuwen", imprint_mix: 1, imprint_source: "album")
+assert(len(region_xor(default_paper, album)) > 0 and len(region_difference(album, base)) == 0)
+
+// With chipping disabled, convex corners lose area and concave corners gain it.
+for mode in ["zhuwen","baiwen"] do
+    loss := false
+    gain := false
+    for s in 10:14 do
+        seed(s)
+        corners := seal_edge(letter, 4pt, mode, density: 0)
+        loss = loss or len(region_difference(letter,corners)) > 0
+        gain = gain or len(region_difference(corners,letter)) > 0
+        assert(len(subpaths(corners)) == 2)
+        seed(s)
+        assert(len(region_xor(corners,seal_edge(letter,4pt,mode,density: 0))) == 0)
+    end
+    assert(loss and gain, "sample both sides of a counter")
+end
+assert(len(region_xor(letter,seal_edge(letter,4pt,"zhuwen",density: 0,corner_scale: 0))) == 0)
+loop_base := smooth_stroke(loop,4pt)
+cut_outer := false
+filled_inner := false
+for s in 12:16 do
+    seed(s)
+    chamfered := seal_knife(loop,4pt,"zhuwen",chip_size: 0,corner_scale: 3)
+    cut_outer = cut_outer or len(region_difference(loop_base,chamfered)) > 0
+    filled_inner = filled_inner or len(region_difference(chamfered,loop_base)) > 0
+end
+assert(cut_outer and filled_inner, "both sides of a centerline stroke support bevels")
+circle_face := circle((10pt,10pt),6pt)
+assert(len(region_xor(circle_face,seal_edge(circle_face,3pt,"zhuwen",density: 0))) == 0, "smooth curves have no tips to bevel")
+seed(42)
+wavy := seal_knife(line,8pt,"zhuwen",density: 0,wander: 1)
+seed(42)
+assert(len(region_xor(wavy,seal_knife(line,8pt,"zhuwen",density: 0,wander: 1))) == 0)
+seed(43)
+assert(len(region_xor(wavy,seal_knife(line,8pt,"zhuwen",density: 0,wander: 1))) > 0)
+assert(len(region_difference(wavy,base)) > 0 and len(region_difference(base,wavy)) > 0)
+assert(len(subpaths(wavy)) == 1 and len(subpaths(seal_edge(letter,4pt,"baiwen",density: 0,wander: 1))) == 2)
+
+// A one-sided spectrum changes thickness while the opposite straight edge
+// and the endpoints stay in place. Exclude wavelengths too long for a side.
+bar := rectangle((0pt,0pt),80pt,8pt)
+one_side := [[2,3,0.12,0,0]]
+seed(16)
+variable := seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: one_side)
+change := region_xor(bar,variable)
+assert(len(change) > 0)
+assert(len(region_intersection(change,rectangle((-1pt,4pt),82pt,12pt))) == 0)
+assert(len(region_xor(bar,seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 0,spectrum: one_side))) == 0)
+assert(len(region_xor(bar,seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: [[8,10,0.5,0.5,1]]))) == 0)
+seed(16)
+other_side := seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: [[2,3,0,0.12,0]])
+assert(len(region_xor(other_side,bar)) > 0 and len(region_intersection(region_xor(other_side,bar),rectangle((-1pt,-8pt),82pt,12pt))) == 0)
+
+// The whole smooth loop admits two periods even when neither half does.
+seed(63)
+ring_wave := seal_edge(circle_face,3pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: [[5,5.5,0.08,0.08,0]])
+assert(len(subpaths(ring_wave)) == 1 and len(region_difference(circle_face,ring_wave)) > 0 and len(region_difference(ring_wave,circle_face)) > 0)
+assert(len(region_difference(circle((10pt,10pt),5pt),ring_wave)) == 0)
+
+// Curved open strokes have the same two independently adjustable edges.
+bow := geometry.bezier((0pt,0pt),(20pt,14pt),(40pt,-8pt),(60pt,4pt))
+original := seal_knife(bow,4pt,"zhuwen",density: 0,corner_scale: 0,cap: "butt")
+seed(16)
+curved := seal_knife(bow,4pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: one_side,cap: "butt")
+delta := region_xor(original,curved)
+center := geometry.point_at(bow,0.5)
+dir := math.unit(geometry.tangent_at(bow,0.5))
+left := (-dir.y,dir.x)*2pt
+assert(len(region_intersection(delta,circle(center-left,1pt))) > 0, "the selected curved edge wanders")
+assert(len(region_intersection(delta,circle(center+left,1pt))) == 0, "the other curved edge follows the design")

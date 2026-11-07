@@ -1,6 +1,7 @@
 //! Huak owners and diagnostics for the stable native typography API.
 const std = @import("std");
 const binding = @import("typst_binding");
+const SharedLibrary = @import("shared_library");
 const host_types = @import("types.zig");
 const diagnostic = @import("diagnostic.zig");
 pub const c = binding.c;
@@ -18,6 +19,11 @@ pub const Layout = @import("layout.zig").Layout;
 pub const BatchResult = @import("layout.zig").BatchResult;
 pub const FrameRef = @import("layout.zig").FrameRef;
 const a = binding.allocator;
+
+// Typst workers may retain native TLS until process exit. Keep a single
+// loader reference per actual image, including when opened under other names.
+var resident: std.AutoHashMapUnmanaged(usize, SharedLibrary) = .empty;
+var resident_mutex: std.Io.Mutex = .init;
 
 /// Independently owned, including across subsequent or concurrent jobs.
 pub const Diagnostic = struct {
@@ -39,6 +45,8 @@ pub const Diagnostic = struct {
 pub const Library = struct {
     functions: binding.Functions,
     version: u32 = abi_version,
+    image_path: ?[:0]const u8 = null,
+    capabilities: ?u64 = null,
     resources_mutex: std.Io.Mutex = .init,
     default_context: ?*c.TypstContext = null,
     diagnostic_mutex: std.Io.Mutex = .init,
@@ -52,12 +60,28 @@ pub const Library = struct {
     }
 
     pub fn open(path: []const u8) Error!Library {
-        if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidLibraryPath;
-        var dynamic = std.DynLib.open(path) catch return error.LibraryNotFound;
+        var dynamic = try SharedLibrary.open(path);
         errdefer dynamic.close();
-        const functions = try binding.load(&dynamic);
-        // Native worker TLS can outlive Library. Keep the mapping resident.
-        return .{ .functions = functions, .version = functions.abi_version() };
+        var info: c.TypstVersionInfo = undefined;
+        const functions = try binding.bind(&dynamic, &info);
+        const image_path = SharedLibrary.imagePath(functions.abi_version) orelse return error.InvalidResult;
+        std.Io.Threaded.mutexLockUncancelable(&resident_mutex);
+        const installed = resident.getOrPut(a, @intFromPtr(dynamic.handle)) catch |err| {
+            std.Io.Threaded.mutexUnlock(&resident_mutex);
+            return err;
+        };
+        if (!installed.found_existing) installed.value_ptr.* = dynamic;
+        std.Io.Threaded.mutexUnlock(&resident_mutex);
+        if (installed.found_existing) dynamic.close();
+        return .{ .functions = functions, .version = (@as(u32, info.abi_major) << 16) | info.abi_minor, .image_path = image_path, .capabilities = info.capabilities };
+    }
+
+    pub fn supports(self: *Library, feature: u64) Error!bool {
+        if (self.capabilities) |bits| return bits & feature == feature;
+        // Statically linked hosts construct the function table at comptime.
+        var info: c.TypstVersionInfo = undefined;
+        try self.check(self.functions.version_info(&info), null);
+        return info.capabilities & feature == feature;
     }
     pub fn deinit(self: *Library) void {
         self.functions.context_release(self.default_context);

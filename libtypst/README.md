@@ -8,6 +8,10 @@ The implementation uses public Typst 0.15.1 APIs without modifying upstream sour
 
 ## Build and verify
 
+From the repository root, `zig build libtypst` installs the dynamic library in
+`zig-out/lib/` and its header in `zig-out/include/`. The default `zig build install`
+includes both. Add `-Doptimize=ReleaseSafe` to select Cargo's release profile.
+
 Run in this package directory with Rust 1.92 or later:
 
 ```sh

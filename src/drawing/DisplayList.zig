@@ -29,7 +29,7 @@ pub const max_scope_depth = 126;
 const DisplayList = @This();
 
 storage: Storage,
-sources: std.ArrayList([]const Path.Segment) = .empty,
+sources: std.ArrayList(Storage.Bank) = .empty,
 commands: std.ArrayList(Command) = .empty,
 scope_depth: usize = 0,
 maximum_depth: usize = 0,
@@ -149,7 +149,7 @@ fn copyCommands(self: *DisplayList, other: *const DisplayList, transform: ?g.Tra
     const offset = self.storage.segments.items.len;
     const previous_commands = self.commands.items.len;
     errdefer {
-        self.storage.segments.items.len = offset;
+        self.storage.truncateGeometry(offset);
         self.truncateCommands(previous_commands);
     }
     if (transform) |value| self.commands.appendAssumeCapacity(.{ .push = .{ .transform = value, .clip = null } });
@@ -171,7 +171,7 @@ pub fn truncateCommands(self: *DisplayList, count: usize) void {
 /// before copying; source and destination may share the segment allocation.
 pub fn copyCommand(self: *DisplayList, other: *const DisplayList, command: Command) Error!Command {
     return switch (command) {
-        .path => |item| .{ .path = try self.storage.copyPath(other.geometry(), item) },
+        .path => |item| .{ .path = try self.storage.copyPath(other.geometry(), item, .independent) },
         .push => |scope| .{ .push = self.storage.copyScope(other.geometry(), scope) },
         else => command,
     };
@@ -190,6 +190,12 @@ pub fn bounds(self: *const DisplayList) Error!?g.BBox {
 /// The borrowed provider implements `resolveBounds(reference) !BBox`; null
 /// uses logical metrics. Its concrete type is preserved through traversal.
 pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
+    return self.measuredBounds(labels, null);
+}
+
+/// A stroke provider can measure the realized physical pen in the current
+/// coordinate system. Clipping and label placement use the same traversal.
+pub fn measuredBounds(self: *const DisplayList, labels: anytype, strokes: anytype) anyerror!?g.BBox {
     if (self.scope_depth != 0) return error.UnbalancedGroups;
     var stack: [max_scope_depth]State = undefined;
     var depth: usize = 0;
@@ -205,7 +211,7 @@ pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
                 state.transform = group.transform.then(state.transform);
                 if (!state.transform.isFinite()) return error.NonFinite;
                 if (group.clip) |clip| {
-                    const clip_box = try segmentBounds(try self.range(clip), state.transform);
+                    const clip_box = try Path.paintedBounds(try self.range(clip), state.transform);
                     state.clip = state.clip.intersect(if (clip_box) |b| .{ .box = b } else .empty);
                 }
             },
@@ -214,45 +220,16 @@ pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
                 depth -= 1;
                 state = stack[depth];
             },
-            .path => |*p| {
+            .path => |*p| bounds: {
                 const transform = p.transform.then(state.transform);
                 if (!transform.isFinite()) return error.NonFinite;
-                box = try segmentBounds(try self.range(p.path), transform);
-                if (p.style.pen) |pen| if (box) |b| {
-                    if (pen.motion) |motion| {
-                        const nib = pen.nib orelse @import("pen/nib.zig").Nib{ .ellipse = .scaling(pen.width, pen.width) };
-                        const extent = try @import("pen/sweep.zig").radius(nib);
-                        const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
-                        const padding = extent * motion.bounds().scale * norm;
-                        if (!std.math.isFinite(padding)) return error.NonFinite;
-                        box = b.expanded(padding);
-                    } else if (pen.nib) |nib| {
-                        const nib_box = nib.bounds() catch return error.InvalidPen;
-                        var linear = transform;
-                        linear.e = 0;
-                        linear.f = 0;
-                        var offset = nib_box.transformed(linear);
-                        if (nib == .ellipse and (pen.join == .miter or pen.cap == .square)) {
-                            const combined = nib.ellipse.then(linear);
-                            const norm = std.math.hypot(std.math.hypot(combined.a, combined.b), std.math.hypot(combined.c, combined.d));
-                            const radius = norm * (if (pen.join == .miter) pen.miter_limit else @as(f64, 1));
-                            if (!std.math.isFinite(radius)) return error.NonFinite;
-                            const center: g.Point = .{ .x = combined.e, .y = combined.f };
-                            offset = .{ .min = center.sub(.{ .x = radius, .y = radius }), .max = center.add(.{ .x = radius, .y = radius }) };
-                        } else if (nib == .polygon and (pen.join == .miter or pen.cap == .square)) {
-                            const diameter = offset.max.sub(offset.min).norm();
-                            const extension = diameter * (if (pen.join == .miter) pen.miter_limit else @as(f64, 1));
-                            if (!std.math.isFinite(extension)) return error.NonFinite;
-                            offset = offset.expanded(extension);
-                        }
-                        box = .{ .min = b.min.add(offset.min), .max = b.max.add(offset.max) };
-                    } else {
-                        const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
-                        const radius = pen.width * norm * (if (pen.join == .miter) pen.miter_limit else if (pen.cap == .square) @as(f64, 1) else @as(f64, 0.5));
-                        if (!std.math.isFinite(radius)) return error.NonFinite;
-                        box = b.expanded(radius);
-                    }
-                };
+                if (comptime @TypeOf(strokes) != @TypeOf(null)) {
+                    if (p.style.pen) |*pen| if (pen.needsGeometry()) {
+                        box = try strokes.visitStroke(try self.geometry().view(self.storage.allocator, p.path), p.style, transform);
+                        break :bounds;
+                    };
+                }
+                box = try pathBounds(try self.range(p.path), p.style.pen, transform);
             },
             .label => |label| {
                 const transform = label.transform.then(state.transform);
@@ -275,7 +252,7 @@ pub fn boundsWith(self: *const DisplayList, labels: anytype) anyerror!?g.BBox {
 }
 /// Borrowed command geometry, valid until the picture is mutated.
 pub fn geometry(self: *const DisplayList) Geometry {
-    return .{ .primary = self.storage.segments.items, .sources = self.sources.items };
+    return .{ .primary = self.storage.bank(), .sources = self.sources.items };
 }
 
 pub fn range(self: *const DisplayList, reference: PathRef) Error![]const Path.Segment {
@@ -296,38 +273,44 @@ const Clip = union(enum) {
 };
 const State = struct { transform: g.Transform = .{}, clip: Clip = .unbounded };
 
-fn segmentBounds(segments: []const Path.Segment, transform: g.Transform) Error!?g.BBox {
-    var current: g.Point = .zero;
-    var start: g.Point = .zero;
-    var result: ?g.BBox = null;
-    for (segments) |segment| {
-        const box: g.BBox = switch (segment) {
-            .move => |p| {
-                current = p;
-                start = p;
-                continue;
-            },
-            .line => |p| blk: {
-                const b = g.BBox.fromPoints(transform.apply(current), transform.apply(p));
-                current = p;
-                break :blk b;
-            },
-            .cubic => |c| blk: {
-                const cubic = (g.Cubic{ .p0 = current, .p1 = c.c1, .p2 = c.c2, .p3 = c.end }).transformed(transform);
-                if (!cubic.isFinite()) return error.NonFinite;
-                current = c.end;
-                break :blk cubic.bounds();
-            },
-            .close => blk: {
-                const b = g.BBox.fromPoints(transform.apply(current), transform.apply(start));
-                current = start;
-                break :blk b;
-            },
-        };
-        if (!box.min.isFinite() or !box.max.isFinite()) return error.NonFinite;
-        result = if (result) |r| r.unite(box) else box;
-    }
-    return result;
+pub fn pathBounds(segments: []const Path.Segment, stroke: ?Pen, transform: g.Transform) Error!?g.BBox {
+    var box = try Path.paintedBounds(segments, transform);
+    if (stroke) |pen| if (box) |b| {
+        if (pen.motion) |motion| {
+            const nib = pen.nib orelse @import("pen/nib.zig").Nib{ .ellipse = .scaling(pen.width, pen.width) };
+            const extent = @import("pen/sweep.zig").radius(nib) catch return error.InvalidPen;
+            const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
+            const padding = extent * motion.bounds().scale * norm;
+            if (!std.math.isFinite(padding)) return error.NonFinite;
+            box = b.expanded(padding);
+        } else if (pen.nib) |nib| {
+            const nib_box = nib.bounds() catch return error.InvalidPen;
+            var linear = transform;
+            linear.e = 0;
+            linear.f = 0;
+            var offset = nib_box.transformed(linear);
+            if (nib == .ellipse and (pen.join == .miter or pen.cap == .square)) {
+                const combined = nib.ellipse.then(linear);
+                const norm = std.math.hypot(std.math.hypot(combined.a, combined.b), std.math.hypot(combined.c, combined.d));
+                const radius = norm * (if (pen.join == .miter) pen.miter_limit else @as(f64, 1));
+                if (!std.math.isFinite(radius)) return error.NonFinite;
+                const center: g.Point = .{ .x = combined.e, .y = combined.f };
+                offset = .{ .min = center.sub(.{ .x = radius, .y = radius }), .max = center.add(.{ .x = radius, .y = radius }) };
+            } else if (nib == .polygon and (pen.join == .miter or pen.cap == .square)) {
+                const diameter = offset.max.sub(offset.min).norm();
+                const extension = diameter * (if (pen.join == .miter) pen.miter_limit else @as(f64, 1));
+                if (!std.math.isFinite(extension)) return error.NonFinite;
+                offset = offset.expanded(extension);
+            }
+            box = .{ .min = b.min.add(offset.min), .max = b.max.add(offset.max) };
+        } else {
+            const norm = std.math.hypot(std.math.hypot(transform.a, transform.b), std.math.hypot(transform.c, transform.d));
+            const radius = pen.width * norm * (if (pen.join == .miter) pen.miter_limit else if (pen.cap == .square) @as(f64, 1) else @as(f64, 0.5));
+            if (!std.math.isFinite(radius)) return error.NonFinite;
+            box = b.expanded(radius);
+        }
+    };
+    return box;
 }
 
 fn rectangle(allocator: std.mem.Allocator, min: g.Point, max: g.Point) !Path {
@@ -613,7 +596,7 @@ test "borrowed geometry remains separate until an explicit picture copy" {
     defer owner.deinit();
     var view = DisplayList.init(a);
     defer view.deinit();
-    try view.sources.append(a, owner.segments.items);
+    try view.sources.append(a, .{ .segments = owner.segments.items });
     const reference: PathRef = .{ .first = 0, .count = owner.segments.items.len, .source = 1 };
     try view.commands.append(a, .{ .path = .{ .path = reference, .style = &.{ .fill = .black }, .transform = .{} } });
     try std.testing.expectEqual(owner.segments.items.ptr, (try view.range(reference)).ptr);
@@ -636,7 +619,7 @@ test "append rejects borrowed subranges of its own allocation before mutation" {
     try destination.fill(path, .black, .{});
     var view = DisplayList.init(a);
     defer view.deinit();
-    try view.sources.append(a, destination.storage.segments.items[1..]);
+    try view.sources.append(a, .{ .segments = destination.storage.segments.items[1..] });
     try view.commands.append(a, .{ .path = .{
         .path = .{ .first = 0, .count = 1, .source = 1 },
         .style = &.{ .fill = .black },

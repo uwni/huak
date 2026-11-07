@@ -221,8 +221,8 @@ fn token(self: *const Lexer, kind: Kind, start: usize) Token {
 fn skipComment(self: *Lexer) void {
     while (self.pos < self.source.len and self.source[self.pos] != '\n') self.pos += 1;
 }
-fn fail(self: *Lexer, start: usize, comptime message: []const u8) error{LanguageError} {
-    self.diagnostic.* = source_info.Diagnostic.init(.{ .start = start, .end = self.pos }, message, .{});
+fn fail(self: *Lexer, start: usize, message: []const u8) error{LanguageError} {
+    _ = source_info.Diagnostic.set(self.diagnostic, .{ .start = start, .end = self.pos }, "{s}", .{message});
     return error.LanguageError;
 }
 

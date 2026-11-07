@@ -13,6 +13,39 @@ pub const Options = struct {
 };
 pub const Error = hobby.Error || Path.PathError || error{ InvalidJoinCount, GeometryWorkLimit };
 
+// Reserve in the result allocator once. A null span is a straight edge.
+fn knotCapacity(spans: anytype) usize {
+    var count: usize = 0;
+    var previous_end = geometry.Point.zero;
+    for (spans) |entry| {
+        const span: ?hobby.Span = entry;
+        if (span) |s| {
+            if (!s.start.eql(.zero) and !s.start.eql(previous_end)) count += 1;
+            if (!s.end.eql(.zero)) count += 1;
+            previous_end = s.end;
+        } else previous_end = .zero;
+    }
+    return count;
+}
+
+pub fn fromKnots(allocator: std.mem.Allocator, knots: []const hobby.Knot, options: hobby.Options) Error!Path {
+    return fromKnotsWithScratch(allocator, allocator, knots, options);
+}
+
+/// Keep the solver's temporary arrays out of a long-lived path arena.
+pub fn fromKnotsWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Allocator, knots: []const hobby.Knot, options: hobby.Options) Error!Path {
+    const spans = try hobby.interpolateSpans(scratch, knots, options);
+    defer scratch.free(spans);
+    var path = Path.init(allocator);
+    errdefer path.deinit();
+    try path.segments.ensureTotalCapacityPrecise(allocator, 1 + spans.len + @intFromBool(options.closed));
+    try path.reserveKnots(knotCapacity(spans));
+    try path.moveTo(spans[0].curve.p0);
+    for (spans) |s| try path.solvedCubicTo(s.curve, s.start, s.end);
+    if (options.closed) try path.close();
+    return path;
+}
+
 /// The returned path owns its storage. Open paths need points.len-1 joins;
 /// closed paths need points.len joins, including the last-to-first edge.
 /// Smooth runs reuse Hobby with its default endpoint curl. A straight join
@@ -20,6 +53,10 @@ pub const Error = hobby.Error || Path.PathError || error{ InvalidJoinCount, Geom
 /// Repeated endpoints of smooth edges are rejected by Hobby; zero-length
 /// straight edges are retained. At least two finite points are required.
 pub fn construct(allocator: std.mem.Allocator, points: []const geometry.Point, joins: []const Join, options: Options) Error!Path {
+    return constructWithScratch(allocator, allocator, points, joins, options);
+}
+
+pub fn constructWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Allocator, points: []const geometry.Point, joins: []const Join, options: Options) Error!Path {
     if (points.len < 2) return error.TooFewKnots;
     const count = if (options.closed) points.len else points.len - 1;
     if (joins.len != count) return error.InvalidJoinCount;
@@ -31,16 +68,14 @@ pub fn construct(allocator: std.mem.Allocator, points: []const geometry.Point, j
         smooth_count += 1;
     };
     if (smooth_count == count) {
-        const knots = try allocator.alloc(hobby.Knot, points.len);
-        defer allocator.free(knots);
+        const knots = try scratch.alloc(hobby.Knot, points.len);
+        defer scratch.free(knots);
         for (points, knots) |point, *knot| knot.* = .{ .point = point };
-        const curves = try hobby.interpolate(allocator, knots, .{ .closed = options.closed });
-        defer allocator.free(curves);
-        return Path.fromCubics(allocator, curves, options.closed);
+        return fromKnotsWithScratch(allocator, scratch, knots, .{ .closed = options.closed });
     }
 
-    const curves = try allocator.alloc(?geometry.Cubic, if (smooth_count == 0) 0 else count);
-    defer allocator.free(curves);
+    const curves = try scratch.alloc(?hobby.Span, if (smooth_count == 0) 0 else count);
+    defer scratch.free(curves);
     @memset(curves, null);
     if (smooth_count != 0) {
         for (joins, 0..) |join, first| {
@@ -51,17 +86,22 @@ pub fn construct(allocator: std.mem.Allocator, points: []const geometry.Point, j
             while (first + length < count or options.closed) : (length += 1) {
                 if (joins[(first + length) % count] != .smooth) break;
             }
-            const knots = try allocator.alloc(hobby.Knot, length + 1);
-            defer allocator.free(knots);
+            const knots = try scratch.alloc(hobby.Knot, length + 1);
+            defer scratch.free(knots);
             for (knots, 0..) |*knot, offset| knot.* = .{ .point = points[(first + offset) % points.len] };
-            const run = try hobby.interpolate(allocator, knots, .{});
-            defer allocator.free(run);
-            for (run, 0..) |curve, offset| curves[(first + offset) % count] = curve;
+            const run = try hobby.interpolateSpans(scratch, knots, .{});
+            defer scratch.free(run);
+            for (run, 0..) |span, offset| {
+                curves[(first + offset) % count] = span;
+            }
         }
     }
 
     var result = Path.init(allocator);
     errdefer result.deinit();
+    const explicit_close = options.closed and joins[count - 1] == .smooth;
+    try result.segments.ensureTotalCapacityPrecise(allocator, 1 + count + @intFromBool(explicit_close));
+    try result.reserveKnots(knotCapacity(curves));
     try result.moveTo(points[0]);
     for (joins, 0..) |join, index| switch (join) {
         .straight => {
@@ -70,7 +110,7 @@ pub fn construct(allocator: std.mem.Allocator, points: []const geometry.Point, j
         },
         .smooth => {
             const curve = curves[index].?;
-            try result.cubicTo(curve.p1, curve.p2, curve.p3);
+            try result.solvedCubicTo(curve.curve, curve.start, curve.end);
         },
     };
     if (options.closed) try result.close();
@@ -103,6 +143,7 @@ test "uniform joins preserve Hobby controls and native line topology" {
     }
     var lines = try construct(std.testing.allocator, points[0..3], &.{ .straight, .straight, .straight }, .{ .closed = true });
     defer lines.deinit();
+    try std.testing.expectEqual(null, lines.knots);
     try std.testing.expectEqual(@as(usize, 4), lines.segments.items.len);
     try std.testing.expect(lines.segments.items[1] == .line and lines.segments.items[2] == .line and lines.segments.items[3] == .close);
     try std.testing.expectEqual(@as(usize, 3), lines.segmentCount());
@@ -173,4 +214,24 @@ fn allocationExercise(allocator: std.mem.Allocator) !void {
 test "path construction releases every partial allocation" {
     var stable = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
     try std.testing.checkAllAllocationFailures(stable.allocator(), allocationExercise, .{});
+}
+
+test "Hobby construction and cloning fit the exact result budget" {
+    const t = std.testing;
+    const n = 256;
+    var points: [n + 1]geometry.Point = undefined;
+    for (&points, 0..) |*p, i| p.* = .{ .x = @floatFromInt(i), .y = @floatFromInt(i % 7) };
+    const joins: [n]Join = @splat(.smooth);
+    const bytes = @sizeOf(Path.Segment) * (n + 1) + @sizeOf(Path.KnotTable) + @sizeOf(Path.KnotTable.Knot) * (n - 1);
+    var buffer: [bytes]u8 align(@alignOf(Path.KnotTable)) = undefined;
+    var result = std.heap.FixedBufferAllocator.init(&buffer);
+    var path = try constructWithScratch(result.allocator(), t.allocator, &points, &joins, .{});
+    defer path.deinit();
+    try t.expectEqual(n - 1, path.knotRecords().len);
+    var clone_buffer: [bytes]u8 align(@alignOf(Path.KnotTable)) = undefined;
+    var clone_storage = std.heap.FixedBufferAllocator.init(&clone_buffer);
+    var clone = try path.clone(clone_storage.allocator());
+    defer clone.deinit();
+    try t.expectEqualDeep(path.knotRecords(), clone.knotRecords());
+    try t.expect(path.knotRecords().ptr != clone.knotRecords().ptr);
 }

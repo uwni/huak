@@ -61,6 +61,15 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     try picture.fill(foreground, .{ .g = 1 }, .{});
     try picture.labelAtBaseline(0, demo.metrics(metrics[0]), .{ .x = 4, .y = 85 }, .{});
     const frames = [_]typst.FrameRef{try text.frame(0)};
+    const scene: @import("huak").render.Scene = .{ .picture = &picture, .size = .{ .x = 100, .y = 100 }, .frames = &frames };
+    try t.expectError(error.MeshRequiresPdf, scene.validate(.svg));
+    try scene.validate(.pdf);
+    {
+        const capabilities = library.capabilities.?;
+        defer library.capabilities = capabilities;
+        library.capabilities = capabilities & ~@as(u64, typst.c.TYPST_CAP_PDF_IMPORT);
+        try t.expectError(error.Unsupported, backend.submit(t.allocator, &library, &picture, 100, 100, .{ .frames = &frames, .pdf_mesh = true }));
+    }
     var document = try backend.submit(t.allocator, &library, &picture, 100, 100, .{ .frames = &frames, .pdf_mesh = true });
     defer document.deinit();
     text.deinit();

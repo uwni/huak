@@ -102,6 +102,18 @@ pub fn run(ctx: *h.Harness) !void {
     try h.output(hardlink_collision, "");
     try t.expectEqualStrings(original, try ctx.read("hardlink-a.svg"));
     try t.expectEqualStrings(original, try ctx.read("hardlink-b.pdf"));
+    const protected = try ctx.script("protected", "print(\"executed\");default picture(1,1)");
+    try ctx.temporary.dir.symLink(t.io, "protected.huak", "protected.svg", .{});
+    const input_collision = try ctx.command("run", protected, &.{"--output=protected.svg"}, false);
+    try h.contains(input_collision.stderr, "would overwrite input");
+    try h.output(input_collision, "");
+    try t.expectEqualStrings("print(\"executed\");default picture(1,1)", try ctx.read("protected.huak"));
+    _ = try ctx.script("imported", "export x:=1");
+    const importer = try ctx.script("importer", "import \"imported.huak\" as imported_module;default picture(imported_module.x,1)");
+    try ctx.temporary.dir.hardLink("imported.huak", ctx.temporary.dir, "imported.pdf", t.io, .{});
+    const import_collision = try ctx.command("run", importer, &.{"--output=imported.pdf"}, false);
+    try h.contains(import_collision.stderr, "would overwrite input");
+    try t.expectEqualStrings("export x:=1", try ctx.read("imported.huak"));
     try ctx.temporary.dir.symLink(t.io, "new-output.svg", "dangling-output.svg", .{});
     const dangling_collision = try ctx.command("run", visible, &.{ "--output", "shown=dangling-output.svg", "--output", "shown=new-output.svg" }, false);
     try h.contains(dangling_collision.stderr, "duplicate output path");

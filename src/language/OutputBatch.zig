@@ -31,9 +31,7 @@ fn Shared(comptime T: type) type {
 const Target = struct {
     allocator: std.mem.Allocator,
     view: objects.View,
-    width: f64,
-    height: f64,
-    origin: @import("../drawing/geometry.zig").Point,
+    has_mesh: bool = false,
     /// Each reference retains its enclosing shared Layout exactly once.
     frames: []typst.FrameRef = &.{},
     geometry: []*Geometry = &.{},
@@ -42,9 +40,7 @@ const Target = struct {
     fn scene(self: *const Target) !renderer.Scene {
         return .{
             .picture = &self.view.snapshot.picture,
-            .width = self.width,
-            .height = self.height,
-            .origin = self.origin,
+            .size = self.view.settings.size,
             .frames = self.frames,
             .tracks = try self.view.animation(),
             .object_ids = if (self.view.tracks.items.len != 0) self.view.snapshot.ids.items else null,
@@ -112,10 +108,9 @@ pub fn init(allocator: std.mem.Allocator, library: *typst.Library, sources: []co
             var view = try objects.Owner.fromScene(source.scene).viewWithBounds(allocator, source.index, renderer.FrameBounds{ .frames = frames });
             errdefer view.deinit();
             if (try view.animation()) |animation| try animation.validate();
-            const viewport = try renderer.viewport(&view.snapshot.picture, view.settings.size, frames);
             try targets.ensureUnusedCapacity(scratch, 1);
             const result = try allocator.create(Target);
-            result.* = .{ .allocator = allocator, .view = view, .width = viewport.max.x - viewport.min.x, .height = viewport.max.y - viewport.min.y, .origin = viewport.min };
+            result.* = .{ .allocator = allocator, .view = view };
             // Registration transfers cleanup to the batch transaction.
             targets.putAssumeCapacityNoClobber(container, result);
             break :target result;
@@ -139,6 +134,7 @@ pub fn init(allocator: std.mem.Allocator, library: *typst.Library, sources: []co
         snapshot.owners.clearAndFree(allocator);
         var references: std.AutoHashMapUnmanaged(u32, u32) = .empty;
         for (snapshot.picture.commands.items) |*command| {
+            if (renderer.usesMesh(command)) target.has_mesh = true;
             if (command.* != .label) continue;
             const reference = command.label.reference;
             if (reference >= frames.len) return error.InvalidFrameReference;
@@ -181,7 +177,7 @@ pub fn len(self: *const OutputBatch) usize {
 
 pub fn validate(self: *const OutputBatch, index: usize, format: renderer.Format) !void {
     const target = self.entries[index] orelse return error.ReleasedOutput;
-    try (try target.scene()).validate(format);
+    try format.validate((try target.view.animation()) != null, target.has_mesh);
 }
 
 pub fn render(self: *const OutputBatch, allocator: std.mem.Allocator, index: usize, format: renderer.Format, diagnostic: *?typst.Buffer) !renderer.Output {

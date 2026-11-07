@@ -115,9 +115,7 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
     defer @import("Engine.zig").evict(library);
 
     for (requests) |request| if (request.bindings.len != 0) {
-        var info: c.TypstVersionInfo = undefined;
-        try library.check(library.functions.version_info(&info), null);
-        if (info.capabilities & c.TYPST_CAP_LAYOUT_BINDINGS == 0) {
+        if (!try library.supports(c.TYPST_CAP_LAYOUT_BINDINGS)) {
             try library.setError("libtypst does not support request-local layout bindings");
             return error.Unsupported;
         }

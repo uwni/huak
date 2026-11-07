@@ -204,7 +204,9 @@ fn parseScript(self: *ModuleGraph, unit: *Unit, depth: usize) anyerror!void {
             const path = if (imported.bare) try std.fmt.allocPrint(self.syntax, "{s}.huak", .{imported.path}) else imported.path;
             break :local resolver.resolve(self.syntax, name, path) catch |err| {
                 if (err == error.OutOfMemory) return err;
-                return self.fail(unit, statement.span, "cannot import '{s}': {s}", .{ imported.path, @errorName(err) });
+                const failure = self.fail(unit, statement.span, "cannot import '{s}': {s}", .{ imported.path, @errorName(err) });
+                self.diagnostic.*.?.cause = .{ .module_import = err };
+                return failure;
             };
         };
         var target = self.load(child_source, depth + 1, imported_native) catch |err| {
@@ -583,8 +585,8 @@ const MixfixContext = struct {
     }
 };
 fn fail(self: *ModuleGraph, unit: *const Unit, span: source.Span, comptime format: []const u8, args: anytype) error{LanguageError} {
-    self.diagnostic.* = source.Diagnostic.init(span, format, args);
-    self.diagnostic.*.?.setSource(unit.name, unit.source_text);
+    const detail = source.Diagnostic.set(self.diagnostic, span, format, args);
+    detail.setSource(unit.name, unit.source_text);
     return error.LanguageError;
 }
 

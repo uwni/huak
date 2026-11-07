@@ -1,0 +1,95 @@
+import geometry.{compound, measure, region_union}
+import math.{abs,dot,max,norm,unit}
+import object.bounds
+
+// Boolean results orient exterior boundaries positively and holes negatively.
+export fn exterior_count(boundaries:list) -> int
+    if len(boundaries) <= 1 then return len(boundaries) end
+    empty := compound([])
+    count := 0
+    for boundary in boundaries do
+        if len(region_union(boundary, empty, fill_rule: "positive")) > 0 then count = count + 1 end
+    end
+    return count
+end
+
+// Equal contour counts alone can hide a lost stroke replaced by a small island.
+// Match each original contour once, within the largest allowed local change.
+export fn contour_boxes(boundaries:list) -> list
+    boxes := []
+    for boundary in boundaries do boxes += [bounds(boundary)] end
+    return boxes
+end
+
+export fn same_contours(boundaries:list, boxes:list, exteriors:int, tolerance:length) -> bool
+    if len(boundaries) != len(boxes) then return false end
+    available := contour_boxes(boundaries)
+    for box in boxes do
+        match := -1
+        best := tolerance+0.00001pt
+        for i in 0:len(available)-1 do
+            other := available[i]
+            if len(other) == 0 then continue end
+            delta := max(norm(box[0]-other[0]), norm(box[1]-other[1]))
+            if delta <= best then
+                best = delta
+                match = i
+            end
+        end
+        if match < 0 then return false end
+        available[match] = []
+    end
+    return exterior_count(boundaries) == exteriors
+end
+
+export struct Flank
+    a:vec2
+    b:vec2
+    direction:vec2
+    begin:length
+    finish:length
+    first:int
+    end_time:int
+end
+
+export fn continuous(a:Flank, b:Flank) -> bool
+    normal := (-a.direction.y,a.direction.x)
+    return norm(a.b-b.a) < 0.0000001pt and dot(a.direction,b.direction) > 0.9999999999 and abs(dot(b.b-a.b,normal)) < 0.0000001pt
+end
+
+export struct Outline
+    sides:list
+    travel:length
+    segments:int
+end
+
+// Normalized contours keep their Beziers. Collect straight supports, including
+// lines split into several segments or across the closing seam. The control
+// polygon length bounds the travel across an intervening nib shoulder.
+export fn straight_sides(boundary:path) -> Outline
+    sides := []
+    travel := 0pt
+    curves := measure(boundary).curves
+    if len(curves) == 0 then return Outline(sides,travel,0) end
+    for i in 0:len(curves)-1 do
+        c := curves[i]
+        start := travel
+        travel = travel + norm(c[1]-c[0]) + norm(c[2]-c[1]) + norm(c[3]-c[2])
+        chord := c[3]-c[0]
+        length := norm(chord)
+        if length == 0pt or travel-start-length > 0.000001*length then continue end
+        direction := unit(chord)
+        normal := (-direction.y,direction.x)
+        if max(abs(dot(c[1]-c[0],normal)),abs(dot(c[2]-c[0],normal))) > 0.0000001pt then continue end
+        side := Flank(c[0], c[3], direction, start, travel, i, i+1)
+        if len(sides) > 0 then
+            prev:Flank := sides[len(sides)-1]
+            if start == prev.finish and continuous(prev,side) then
+                sides[len(sides)-1] = Flank(prev.a,side.b,unit(side.b-prev.a),prev.begin,travel,prev.first,i+1)
+                continue
+            end
+        end
+        sides += side
+    end
+    return Outline(sides, travel, len(curves))
+end

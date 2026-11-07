@@ -82,9 +82,18 @@ pub const Transform = struct {
         return .{ .a = x, .d = y };
     }
     pub fn rotation(angle: f64) Transform {
+        if (@abs(angle) == std.math.pi / 2.0) {
+            const sign: f64 = if (angle > 0) 1 else -1;
+            return .{ .a = 0, .b = sign, .c = -sign, .d = 0 };
+        }
         const s = @sin(angle);
         const c = @cos(angle);
         return .{ .a = c, .b = s, .c = -s, .d = c };
+    }
+    /// Map local +x along the given vector and local +y to its left normal.
+    pub fn fromXAxis(direction: Point) !Transform {
+        const t = try direction.normalized();
+        return .{ .a = t.x, .b = t.y, .c = -t.y, .d = t.x };
     }
     pub fn apply(self: Transform, p: Point) Point {
         return .{ .x = self.a * p.x + self.c * p.y + self.e, .y = self.b * p.x + self.d * p.y + self.f };

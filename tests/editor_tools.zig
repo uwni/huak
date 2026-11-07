@@ -1,13 +1,15 @@
 //! Real standalone formatter and stdio language-server acceptance.
 const std = @import("std");
 const tooling = @import("huak_tooling");
+const typst = @import("libtypst");
 const options = @import("test_options");
 const t = std.testing;
 const Frontend = tooling.Frontend;
 
 test "formatter preserves Typst bytes comments and semantics and is idempotent" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = options.library_path };
-    defer frontend.deinit();
+    var editor_library = try typst.Library.open(options.library_path);
+    defer editor_library.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
     const native = "[\n    ```typ\n ] end   \n```\n #box[Inner]\n]";
     const input = "setup_typst {let word=[Hello]}\nexport fn make()->text\n// retained comment\nreturn typ" ++ native ++ "\nend   \nexport fn gather(values...)->list\nreturn values\nend\n";
     var diagnostic: ?tooling.compiler.Diagnostic = null;
@@ -19,12 +21,38 @@ test "formatter preserves Typst bytes comments and semantics and is idempotent" 
     try t.expectEqualStrings(formatted, again);
     var program = try frontend.compile(formatted, "/tmp/format.huak", &diagnostic);
     defer program.deinit();
+    const offset = std.mem.indexOf(u8, program.source_text, native).?;
+    for (program.constants) |constant| {
+        if (constant == .string and std.mem.eql(u8, constant.string, native)) {
+            try t.expect(constant.string.ptr == program.source_text[offset..].ptr);
+            break;
+        }
+    } else return error.MissingEmbeddedSource;
     try t.expectError(error.LanguageError, tooling.format.format(&frontend, "fn broken(\n", "/tmp/broken.huak", &diagnostic));
 }
 
+test "embedded parser and import failures belong to the request that tried to use them" {
+    const filename = "/tmp/huak-provider.huak";
+    for ([_]anyerror{ error.LibraryNotFound, error.OutOfMemory }) |reason| {
+        const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = reason };
+        var first: ?tooling.compiler.Diagnostic = null;
+        try t.expectError(if (reason == error.OutOfMemory) reason else error.LanguageError, frontend.check("x:=typ[hello]", filename, &first));
+        var next: ?tooling.compiler.Diagnostic = null;
+        try frontend.check("x:=1", filename, &next);
+        try t.expect(next == null);
+        try t.expectError(error.LanguageError, frontend.check("x:=typ nope", filename, &next));
+        try t.expect(next.?.cause == null);
+        try t.expectError(error.LanguageError, frontend.check("import \"missing-test-input/module.huak\" as module", filename, &next));
+        try t.expectEqual(error.FileNotFound, next.?.cause.?.module_import);
+        try t.expectEqual(reason, first.?.cause.?.unavailable_source_parser);
+        try t.expectEqualStrings(filename, first.?.fileName().?);
+    }
+}
+
 test "formatter preserves native regions while formatting a closing line suffix" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = options.library_path };
-    defer frontend.deinit();
+    var editor_library = try typst.Library.open(options.library_path);
+    defer editor_library.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
     const input =
         "fn labels()->list\n" ++
         "first:=typ[\n  Keep =  a,b\n]; second:=typ[Second]; values:=[1,2] // retain = a,b   \n" ++
@@ -45,8 +73,7 @@ test "formatter preserves native regions while formatting a closing line suffix"
 }
 
 test "formatter preserves explicit control headers and inline bodies" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     const input =
         \\import paint.*
         \\precedence extra above addition; associativity left end
@@ -97,12 +124,10 @@ test "formatter preserves explicit control headers and inline bodies" {
     const again = try tooling.format.format(&frontend, formatted, "/tmp/control-format.huak", &diagnostic);
     defer t.allocator.free(again);
     try t.expectEqualStrings(formatted, again);
-    try t.expect(frontend.native == null);
 }
 
 test "exposure declarations share formatting navigation completion hints and export services" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
@@ -160,7 +185,6 @@ test "exposure declarations share formatting navigation completion hints and exp
         }
     }
     for (seen) |received| try t.expect(received);
-    try t.expect(frontend.native == null);
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     const formatted = try tooling.format.format(&frontend, expected, "/tmp/expose-editor.huak", &diagnostic);
     defer t.allocator.free(formatted);
@@ -168,8 +192,7 @@ test "exposure declarations share formatting navigation completion hints and exp
 }
 
 test "formatter preserves scoped mixfix declarations and call labels" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     const input =
         \\import paint.*
         \\fn combine_digits(left:int,right:int)->int return left*10+right end
@@ -206,12 +229,10 @@ test "formatter preserves scoped mixfix declarations and call labels" {
     const again = try tooling.format.format(&frontend, formatted, "/tmp/mixfix-format.huak", &diagnostic);
     defer t.allocator.free(again);
     try t.expectEqualStrings(formatted, again);
-    try t.expect(frontend.native == null);
 }
 
 test "envelope tooling uses builtin metadata for signatures and preserves imported mixfix formatting" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     const source = "import paint.*;import pen.pensquare;import paint.envelope as side\nbrush:=pensquare(4pt)\ncurve:=(0,0)--(20,0)\nedge:=envelope of curve with brush\nplain:=envelope(curve,brush,0.01pt)\n";
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     const formatted = try tooling.format.format(&frontend, source, "/tmp/envelope-editor.huak", &diagnostic);
@@ -249,12 +270,11 @@ test "envelope tooling uses builtin metadata for signatures and preserves import
             hover = true;
         }
     }
-    try t.expect(completion and hover and frontend.native == null);
+    try t.expect(completion and hover);
 }
 
 test "language server applies sequential ranged changes to the evolving document" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
@@ -280,8 +300,7 @@ test "language server applies sequential ranged changes to the evolving document
 }
 
 test "language server shares mixfix metadata across unsaved imports formatting and picture discovery" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
@@ -289,8 +308,13 @@ test "language server shares mixfix metadata across unsaved imports formatting a
     const a = arena.allocator();
     var output: std.Io.Writer.Allocating = .init(t.allocator);
     defer output.deinit();
-    const dependency = "file:///tmp/mixfix-editor-library.huak";
-    const uri = "file:///tmp/mixfix-editor-root.huak";
+    var directory = t.tmpDir(.{});
+    defer directory.cleanup();
+    try directory.dir.writeFile(t.io, .{ .sub_path = "mixfix-editor-library.huak", .data = "export old_disk_value := 0" });
+    try directory.dir.symLink(t.io, "mixfix-editor-library.huak", "editor-alias.huak", .{});
+    const base = try directory.dir.realPathFileAlloc(t.io, ".", a);
+    const dependency = try tooling.definition.uriForPath(a, try std.fs.path.join(a, &.{ base, "editor-alias.huak" }));
+    const uri = try tooling.definition.uriForPath(a, try std.fs.path.join(a, &.{ base, "mixfix-editor-root.huak" }));
     const module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix(combine_digits) digits from _ to _ in unary\n";
     const changed_module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix(combine_digits) digits from _ plus _ in unary\n";
     const source = "import paint.*;import \"mixfix-editor-library.huak\".combine_digits as digits\nfn figure()->picture\nvalue:=digits from 2 to 3\nreturn picture(640, 480)\nend\nexport circle\nexport plate:=figure();default plate\n";
@@ -353,13 +377,13 @@ test "language server shares mixfix metadata across unsaved imports formatting a
     }
     for (received) |seen| try t.expect(seen);
     try t.expect(diagnosed and recovered);
-    try t.expect(frontend.native == null);
     try t.expect(frontend.overlay == null);
 }
 
 test "mixfix semantic colors follow syntax scopes and leave embedded content untouched" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = options.library_path };
-    defer frontend.deinit();
+    var editor_library = try typst.Library.open(options.library_path);
+    defer editor_library.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -441,8 +465,7 @@ fn runWithInput(allocator: std.mem.Allocator, argv: []const []const u8, input: ?
 }
 
 test "document ownership survives transport failure after opening and editing" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var broken_writer = std.Io.Writer.fixed(&.{});
@@ -455,12 +478,18 @@ test "document ownership survives transport failure after opening and editing" {
         \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/owned.huak","version":2},"contentChanges":[{"text":"x:=2"}]}}
     , &broken_writer));
     try t.expectEqualStrings("x:=2", session.documents.get("file:///tmp/owned.huak").?.text);
-    try t.expect(frontend.native == null);
 }
 
-test "language server checks unsaved imports and rechecks dependants after edits" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+test "language server resolves editor buffers before host imports and rechecks dependants" {
+    const Imports = struct {
+        fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !tooling.compiler.ResolvedSource {
+            if (std.mem.eql(u8, path, "host-input.huak")) return .{ .name = path, .source = "export offset:=1" };
+            if (std.mem.eql(u8, path, "huak-unsaved-module.huak")) return .{ .name = path, .source = "export value:=\"shadowed\"" };
+            return error.FileNotFound;
+        }
+    };
+    var context: u8 = 0;
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .overlay = .{ .ptr = &context, .vtable = &.{ .resolve = Imports.resolve } } };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var output: std.Io.Writer.Allocating = .init(t.allocator);
@@ -469,7 +498,7 @@ test "language server checks unsaved imports and rechecks dependants after edits
         \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/huak-unsaved-module.huak","version":1,"text":"export value:=1"}}}
     , &output.writer);
     try session.handle(
-        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/huak-unsaved-root.huak","version":1,"text":"import \"huak-unsaved-module.huak\" as module\nx:=module.value+1"}}}
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/huak-unsaved-root.huak","version":1,"text":"import \"huak-unsaved-module.huak\" as module\nimport \"host-input.huak\" as host\nx:=module.value+host.offset"}}}
     , &output.writer);
     var input = std.Io.Reader.fixed(output.written());
     while (try tooling.lsp.readMessage(t.allocator, &input)) |body| {
@@ -492,7 +521,6 @@ test "language server checks unsaved imports and rechecks dependants after edits
         if (std.mem.eql(u8, params.get("uri").?.string, "file:///tmp/huak-unsaved-root.huak")) root_diagnostic = params.get("diagnostics").?.array.items.len != 0;
     }
     try t.expect(root_diagnostic);
-    try t.expect(frontend.overlay == null);
 }
 
 test "standalone language server resolves standard module tree and nested native identities" {
@@ -537,8 +565,9 @@ test "standalone language server resolves standard module tree and nested native
             1 => {},
             2 => {
                 const items = response.get("result").?.object.get("items").?.array.items;
-                var frontend: Frontend = .{ .allocator = a, .io = t.io, .library_path = options.library_path };
-                defer frontend.deinit();
+                var editor_library = try typst.Library.open(options.library_path);
+                defer editor_library.deinit();
+                const frontend: Frontend = .{ .allocator = a, .io = t.io, .source_parser = .init(&editor_library) };
                 var diagnostic: ?tooling.compiler.Diagnostic = null;
                 const graph = try frontend.graph(a, source, "/tmp/huak-standard-tree.huak", &diagnostic);
                 const std_module = graph.resolveNamespace(graph.units.items[0], 0, "std") orelse return error.TestUnexpectedResult;
@@ -574,8 +603,9 @@ fn expectHintLabels(response: std.json.Value, expected: []const []const u8) !voi
 }
 
 test "inlay hints use syntax imports native Typst and UTF16 positions across edits" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = options.library_path };
-    defer frontend.deinit();
+    var editor_library = try typst.Library.open(options.library_path);
+    defer editor_library.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var output: std.Io.Writer.Allocating = .init(t.allocator);
@@ -642,7 +672,6 @@ test "inlay hints use syntax imports native Typst and UTF16 positions across edi
         }
     }
     try t.expectEqual(@as(usize, 5), responses);
-    try t.expect(frontend.native != null);
     try t.expect(frontend.overlay == null);
 }
 
@@ -1006,8 +1035,7 @@ fn definitionRequest(allocator: std.mem.Allocator, writer: *std.Io.Writer, id: u
 }
 
 test "record editor services share fields named arguments formatting and nominal type exports" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
@@ -1099,12 +1127,10 @@ test "record editor services share fields named arguments formatting and nominal
         }
     }
     for (seen) |received| try t.expect(received);
-    try t.expect(frontend.native == null);
 }
 
 test "native domain editor services expose coherent members without duplicate constructors" {
-    var frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
@@ -1164,5 +1190,4 @@ test "native domain editor services expose coherent members without duplicate co
         }
     }
     for (seen) |present| try t.expect(present);
-    try t.expect(frontend.native == null);
 }

@@ -16,7 +16,10 @@ function executablePath(folder, configured, name, platform) {
 
 function libraryArgs(folder, settings, platform) {
     const library = platform === 'win32' ? 'typst.dll' : platform === 'darwin' ? 'libtypst.dylib' : 'libtypst.so';
-    const candidates = folder ? ['debug', 'release'].map(profile => path.join(folder, 'libtypst', 'target', profile, library)) : [];
+    const candidates = folder ? [
+        path.join(folder, 'zig-out', 'lib', library),
+        ...['debug', 'release'].map(profile => path.join(folder, 'libtypst', 'target', profile, library)),
+    ] : [];
     const libtypst = configuredPath(settings.libtypstPath, folder) || candidates.find(candidate => fs.existsSync(candidate));
     return libtypst ? ['--libtypst', libtypst] : [];
 }

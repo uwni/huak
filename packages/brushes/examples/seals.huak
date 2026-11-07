@@ -1,0 +1,43 @@
+import paint.*
+import geometry.{compound, region_difference, region_union}
+import math.seed
+import pen.{makepen, stroke_outline}
+import pen_motion.along_normal
+import "../brushes.huak".{seal_edge, seal_knife}
+
+param chip_size:float = 0.40
+param density:float = 1.25
+param imprint_mix:float = 0.5
+param imprint_source:string = "qingtian"
+param random_seed:int = 146
+
+// 山川. Use the same asymmetric blade and centerlines for both impressions.
+strokes := compound([
+    bezier((11pt, 65pt), (11pt, 57pt), (10pt, 46pt), (14pt, 45pt))
+        & bezier((14pt, 45pt), (23pt, 44pt), (41pt, 46pt), (51pt, 45pt))
+        & bezier((51pt, 45pt), (53pt, 46pt), (52pt, 59pt), (52pt, 67pt)),
+    bezier((31pt, 45pt), (32pt, 53pt), (31pt, 65pt), (32pt, 73pt)),
+    bezier((15pt, 35pt), (18pt, 26pt), (16pt, 14pt), (9pt, 8pt)),
+    bezier((31pt, 35pt), (33pt, 25pt), (30pt, 20pt), (30pt, 9pt)),
+    bezier((49pt, 36pt), (53pt, 25pt), (50pt, 18pt), (51pt, 8pt))
+])
+// The chisel's long diagonal spans 5 pt on its local x axis.
+blade := makepen((-2.5pt, 0pt) -- (-0.05764pt, -1.79351pt) -- (2.5pt, 0pt) -- (-0.44634pt, 1.68741pt) -- cycle)
+ink := rgb(0.68, 0.14, 0.09)
+lettering := stroke_outline(strokes, pen(ink, nib:blade, motion:along_normal(corner:"rotate")))
+face := rectangle((0pt, 0pt), 64pt, 80pt)
+rim := rectangle((1.8pt, 1.8pt), 60.4pt, 76.4pt)
+
+seed(random_seed)
+relief := seal_edge(lettering, 5pt, "zhuwen", chip_size, density, imprint_mix, imprint_source)
+border := seal_knife(rim, 3.6pt, "zhuwen", chip_size, density, imprint_mix, imprint_source)
+seed(random_seed)
+incised := seal_edge(lettering, 5pt, "baiwen", chip_size, density, imprint_mix, imprint_source)
+inked_face := seal_edge(face, 3.6pt, "zhuwen", chip_size, density, imprint_mix, imprint_source)
+
+export plate := picture(152pt, 88pt)
+default plate
+drawing plate do
+    +(region_union(relief, border) filled ink) shifted (4pt, 4pt)
+    +(region_difference(inked_face, incised) filled ink) shifted (84pt, 4pt)
+end

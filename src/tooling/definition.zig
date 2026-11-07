@@ -9,7 +9,7 @@ const locations = @import("position.zig");
 const standard = @import("huak_std");
 const builtins = @import("../language/builtin.zig");
 
-pub const Location = struct { uri: []const u8, range: locations.Range };
+pub const Location = struct { path: []const u8, range: locations.Range };
 const NativeConstant = struct { namespace: builtins.Namespace, name: []const u8 };
 const NativeTarget = union(enum) { namespace: builtins.Namespace, function: builtins.Id, constant: NativeConstant };
 const Target = struct { unit: *const ModuleGraph.Unit, span: ast.Span, native: ?NativeTarget = null, module_start: bool = false };
@@ -19,22 +19,33 @@ pub const Completion = struct { label: []const u8, kind: u8, detail: []const u8,
 
 /// The result and all temporary graph storage belong to the caller's arena.
 /// Invalid syntax has no destination; allocation failures remain visible.
-pub fn find(frontend: *Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) !?Location {
-    const target = try targetAt(frontend, arena, text, path, byte_offset) orelse return null;
+pub fn find(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) !?Location {
+    const target = (try lookup(frontend, arena, text, path, byte_offset)).target orelse return null;
     if (target.native != null) return null;
-    return .{ .uri = try uriForPath(arena, target.unit.name), .range = .{ .start = locations.at(target.unit.source_text, target.span.start), .end = locations.at(target.unit.source_text, target.span.end) } };
+    return .{ .path = target.unit.name, .range = .{ .start = locations.at(target.unit.source_text, target.span.start), .end = locations.at(target.unit.source_text, target.span.end) } };
 }
 
-fn targetAt(frontend: *Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) !?Target {
-    const token = try tokenAt(frontend, text, byte_offset) orelse return null;
+const Lookup = struct { target: ?Target = null, identifier: ?[]const u8 = null };
+
+fn lookup(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) !Lookup {
     var diagnostic: ?@import("../language/source.zig").Diagnostic = null;
-    const graph = frontend.graph(arena, text, path, &diagnostic) catch |err| {
+    const parsed: ?ModuleGraph = frontend.graph(arena, text, path, &diagnostic) catch |err| incomplete: {
         if (err == error.OutOfMemory) return err;
-        return null;
+        break :incomplete null;
     };
-    const unit = graph.units.items[0];
-    const query: Query = .{ .graph = &graph, .unit = unit, .token = token, .name = text[token.span.start..token.span.end] };
-    return query.statements(unit.script.statements);
+    const blocks = if (parsed) |*graph| graph.units.items[0].headers.source_blocks else null;
+    const token = try tokenAt(frontend, text, byte_offset, blocks) orelse return .{};
+    const name = text[token.span.start..token.span.end];
+    var result: Lookup = .{ .identifier = if (token.kind == .identifier) name else null };
+    if (parsed) |*graph| {
+        const unit = graph.units.items[0];
+        const query: Query = .{ .graph = graph, .unit = unit, .token = token, .name = name };
+        if (SyntaxAt.find(unit.script.statements, token.span).node) |node| result.target = switch (node) {
+            .statement => |stmt| query.statementTarget(stmt),
+            .expression => |expr| query.expressionTarget(expr),
+        };
+    }
+    return result;
 }
 
 pub fn uriForPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -43,12 +54,12 @@ pub fn uriForPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "{f}", .{address.fmt(.all)});
 }
 
-/// Shared with hover. The normal lexer skips comments and strings atomically;
-/// native Typst blocks use the same upstream block provider as the parser.
-pub fn tokenAt(frontend: *Frontend, input: []const u8, byte_offset: usize) !?Lexer.Token {
+/// An incomplete document may still provide builtin hover before its error.
+fn tokenAt(frontend: *const Frontend, input: []const u8, byte_offset: usize, source_blocks: ?[]const ast.Span) !?Lexer.Token {
     var diagnostic: ?@import("../language/source.zig").Diagnostic = null;
     var scanner: Lexer = .{ .source = input, .diagnostic = &diagnostic };
     var trailing: ?Lexer.Token = null;
+    var blocks = source_blocks;
     while (true) {
         const token = scanner.next() catch return null;
         if (token.kind == .eof or token.span.start > byte_offset) return trailing;
@@ -58,13 +69,19 @@ pub fn tokenAt(frontend: *Frontend, input: []const u8, byte_offset: usize) !?Lex
         }
         if (token.span.end == byte_offset and token.kind == .identifier) trailing = token;
         if (token.kind == .kw_typ or token.kind == .kw_setup_typst) {
-            var start = scanner.pos;
-            while (start < input.len and (input[start] == ' ' or input[start] == '\t' or input[start] == '\r')) start += 1;
-            const length = frontend.sourceBlock(input[start..]) catch |err| {
-                if (err == error.OutOfMemory) return err;
-                return null;
-            };
-            scanner.pos = start + length;
+            if (blocks) |ranges| {
+                if (ranges.len == 0) return null;
+                scanner.pos = ranges[0].end;
+                blocks = ranges[1..];
+            } else {
+                var start = scanner.pos;
+                while (start < input.len and (input[start] == ' ' or input[start] == '\t' or input[start] == '\r')) start += 1;
+                const length = frontend.sourceBlock(input[start..]) catch |err| {
+                    if (err == error.OutOfMemory) return err;
+                    return null;
+                };
+                scanner.pos = start + length;
+            }
             if (byte_offset < scanner.pos) return null;
         }
     }
@@ -206,85 +223,41 @@ const Query = struct {
         return null;
     }
 
-    fn statements(self: Query, body: []const *ast.Stmt) ?Target {
-        for (body) |statement| if (self.contains(statement.span)) return self.visitStatement(statement);
-        return null;
-    }
-
-    fn visitStatement(self: Query, statement_: *const ast.Stmt) ?Target {
+    fn statementTarget(self: Query, statement_: *const ast.Stmt) ?Target {
         const offset = self.token.span.start;
         switch (statement_.value) {
-            .expression, .default_output => |expr| return self.expression(expr),
             .assignment => |assignment| {
                 if (assignment.annotation) |annotation| if (self.contains(annotation.span)) return self.resolveAnnotation(annotation);
-                if (self.contains(assignment.value.span)) return self.expression(assignment.value);
                 if (std.mem.eql(u8, self.name, assignment.name)) return self.named(assignment.name, offset, .value);
             },
-            .set => |update| {
-                if (self.contains(update.target.span)) return self.expression(update.target);
-                return self.expression(update.value);
-            },
-            .append_to => |append| {
-                if (self.contains(append.target.span)) return self.expression(append.target);
-                return self.expression(append.value);
-            },
             .list_append => |append| {
-                if (self.contains(append.value.span)) return self.expression(append.value);
                 if (std.mem.eql(u8, self.name, append.name)) return self.named(append.name, offset, .value);
             },
             .parameter => |parameter| {
                 if (parameter.annotation) |annotation| if (self.contains(annotation.span)) return self.resolveAnnotation(annotation);
-                if (parameter.default) |value| if (self.contains(value.span)) return self.expression(value);
                 if (std.mem.eql(u8, self.name, parameter.name)) return self.named(parameter.name, offset, .value);
             },
             inline .function, .expand_block => |function| {
                 if (function.result) |annotation| if (self.contains(annotation.span)) return self.resolveAnnotation(annotation);
                 for (function.params) |parameter| {
                     if (self.contains(parameter.annotation.span)) return self.resolveAnnotation(parameter.annotation);
-                    if (parameter.default) |value| if (self.contains(value.span)) return self.expression(value);
                     const span: ast.Span = .{ .start = parameter.span.start, .end = parameter.span.start + parameter.name.len };
                     if (self.contains(span)) return .{ .unit = self.unit, .span = span };
                 }
-                if (self.statements(function.body)) |target| return target;
                 if (declaration(self.unit, function.name, .callable)) |span| if (self.contains(span)) return .{ .unit = self.unit, .span = span };
             },
             .structure => |structure| {
                 for (structure.fields) |field| {
                     if (self.contains(field.annotation.span)) return self.resolveAnnotation(field.annotation);
-                    if (field.default) |value| if (self.contains(value.span)) return self.expression(value);
                     const span: ast.Span = .{ .start = field.span.start, .end = field.span.start + field.name.len };
                     if (self.contains(span)) return .{ .unit = self.unit, .span = span };
                 }
                 if (declaration(self.unit, structure.name, .type_symbol)) |span| if (self.contains(span)) return .{ .unit = self.unit, .span = span };
             },
-            .conditional => |conditional| {
-                for (conditional.branches) |branch| {
-                    if (self.contains(branch.condition.span)) return self.expression(branch.condition);
-                    if (self.statements(branch.body)) |target| return target;
-                }
-                return self.statements(conditional.otherwise);
+            .for_loop => |loop| if (std.mem.eql(u8, self.name, loop.name)) {
+                return self.named(loop.name, offset, .value);
             },
-            .while_loop => |loop| {
-                if (self.contains(loop.condition.span)) return self.expression(loop.condition);
-                return self.statements(loop.body);
-            },
-            .for_loop => |loop| {
-                switch (loop.iterable) {
-                    .collection => |expr| if (self.contains(expr.span)) {
-                        return self.expression(expr);
-                    },
-                    .range => |range| {
-                        if (self.contains(range.start.span)) return self.expression(range.start);
-                        if (range.step) |step| if (self.contains(step.span)) return self.expression(step);
-                        if (self.contains(range.stop.?.span)) return self.expression(range.stop.?);
-                    },
-                }
-                if (self.statements(loop.body)) |target| return target;
-                if (std.mem.eql(u8, self.name, loop.name)) return self.named(loop.name, offset, .value);
-            },
-            .return_value => |value| if (value) |expr| return self.expression(expr),
             .exported => |exported| {
-                if (exported.value) |expr| if (self.contains(expr.span)) return self.expression(expr);
                 for (exported.names) |name| if (self.contains(name.span)) return self.named(name.name, offset, .exported);
             },
             .typst_expose => |names| {
@@ -320,55 +293,17 @@ const Query = struct {
         return null;
     }
 
-    fn expression(self: Query, expr: *const ast.Expr) ?Target {
-        if (!self.contains(expr.span)) return null;
+    fn expressionTarget(self: Query, expr: *const ast.Expr) ?Target {
         switch (expr.value) {
-            .block => |body| return self.statements(body),
-            .expansion => |value| {
-                for (value.args) |arg| if (self.contains(arg.span)) return self.expression(arg);
-                if (self.contains(value.name.span)) return self.operator(value.name, .callable);
-                return self.statements(value.body);
+            .expansion => |value| if (self.contains(value.name.span)) {
+                return self.operator(value.name, .callable);
             },
             .name => |name| {
                 if (self.defaultNamespace(name, expr.span.start)) |namespace|
                     return .{ .unit = self.unit, .span = self.token.span, .native = .{ .namespace = namespace } };
                 return self.named(name, expr.span.start, .value);
             },
-            .list => |items| for (items) |item| {
-                if (self.contains(item.span)) return self.expression(item);
-            },
-            .dict => |entries| for (entries) |entry| {
-                if (self.contains(entry.value.span)) return self.expression(entry.value);
-            },
-            .vector => |pair| {
-                if (self.contains(pair.x.span)) return self.expression(pair.x);
-                if (pair.z) |z| if (self.contains(z.span)) return self.expression(z);
-                return self.expression(pair.y);
-            },
-            .unary => |unary| return self.expression(unary.operand),
-            .quantity => |quantity| return self.expression(quantity.operand),
-            .binary => |binary| {
-                if (self.contains(binary.left.span)) return self.expression(binary.left);
-                return self.expression(binary.right);
-            },
-            .path_join, .path_literal => {
-                const path = if (expr.value == .path_join) expr.value.path_join else expr.value.path_literal;
-                if (self.contains(path.left.span)) return self.expression(path.left);
-                return self.expression(path.right);
-            },
-            .grouped => |value| return self.expression(value),
-            .index => |index| {
-                if (self.contains(index.object.span)) return self.expression(index.object);
-                return self.expression(index.index);
-            },
-            .slice => |slice| {
-                if (self.contains(slice.object.span)) return self.expression(slice.object);
-                if (self.contains(slice.range.start.span)) return self.expression(slice.range.start);
-                if (slice.range.step) |step| if (self.contains(step.span)) return self.expression(step);
-                if (slice.range.stop) |stop| return self.expression(stop);
-            },
             .member => |member_| {
-                if (self.contains(member_.object.span)) return self.expression(member_.object);
                 if (!std.mem.eql(u8, self.name, member_.name)) return null;
                 const object = ungroup(member_.object);
                 if (self.namespaceReceiver(object)) |id| return self.public(id, member_.name);
@@ -382,22 +317,15 @@ const Query = struct {
                 if (self.recordForExpression(object, 0)) |record| return fieldTarget(record, member_.name);
             },
             .call => |call| {
-                for (call.args) |argument| if (self.contains(argument.span)) return self.expression(argument);
                 if (call.argument_names.len == call.args.len) for (call.argument_names, call.args, 0..) |name, argument, index| {
                     if (name) |label| if (std.mem.eql(u8, self.name, label) and self.token.span.end <= argument.span.start and
                         (index == 0 or self.token.span.start >= call.args[index - 1].span.end))
                         return self.argumentTarget(expr, label);
                 };
                 if (!std.mem.eql(u8, self.name, call.name)) return null;
-                if (call.dot and call.args.len != 0) {
-                    const object = ungroup(call.args[0]);
-                    if (self.namespaceReceiver(object)) |id| return self.public(id, call.name);
-                    if (self.defaultNamespaceReceiver(object) != null) return self.callTarget(expr);
-                }
-                return self.named(call.name, expr.span.start, .callable);
+                return self.callTarget(expr);
             },
             .mixfix_call => |call| {
-                for (call.args) |argument| if (self.contains(argument.span)) return self.expression(argument);
                 if (call.qualified) |binding| {
                     const owner = self.graph.units.items[binding.target.module.?];
                     return self.inUnit(owner).operatorTarget(binding.target, .callable);
@@ -497,13 +425,13 @@ const Query = struct {
             .name => |name| {
                 const target = self.named(name, expr.span.start, .value) orelse return null;
                 if (target.native != null) return null;
-                return self.inUnit(target.unit).recordForBinding(target.unit.script.statements, target.span, depth + 1);
+                return self.inUnit(target.unit).recordForBinding(target.span, depth + 1);
             },
             .member => |member_| {
                 const object = ungroup(member_.object);
                 if (self.namespaceReceiver(object)) |id| {
                     const target = self.public(id, member_.name) orelse return null;
-                    return self.inUnit(target.unit).recordForBinding(target.unit.script.statements, target.span, depth + 1);
+                    return self.inUnit(target.unit).recordForBinding(target.span, depth + 1);
                 }
                 const parent = self.recordForExpression(member_.object, depth + 1) orelse return null;
                 for (parent.statement.value.structure.fields) |field| if (std.mem.eql(u8, field.name, member_.name))
@@ -514,8 +442,8 @@ const Query = struct {
         return null;
     }
 
-    fn recordForBinding(self: Query, body: []const *ast.Stmt, span: ast.Span, depth: usize) ?RecordTarget {
-        if (statementAt(body, span)) |statement| {
+    fn recordForBinding(self: Query, span: ast.Span, depth: usize) ?RecordTarget {
+        if (SyntaxAt.find(self.unit.script.statements, span).statement) |statement| {
             switch (statement.value) {
                 .assignment => |assignment| {
                     if (assignment.annotation) |annotation_| return self.recordNamed(annotation_.name, annotation_.span.start);
@@ -529,14 +457,7 @@ const Query = struct {
                 inline .function, .expand_block => |function| {
                     for (function.params) |parameter| if (parameter.span.start <= span.start and span.end <= parameter.span.end)
                         return self.recordNamed(parameter.annotation.name, parameter.annotation.span.start);
-                    return self.recordForBinding(function.body, span, depth + 1);
                 },
-                .conditional => |conditional| {
-                    for (conditional.branches) |branch| if (self.recordForBinding(branch.body, span, depth + 1)) |record| return record;
-                    return self.recordForBinding(conditional.otherwise, span, depth + 1);
-                },
-                .while_loop => |loop| return self.recordForBinding(loop.body, span, depth + 1),
-                .for_loop => |loop| return self.recordForBinding(loop.body, span, depth + 1),
                 else => {},
             }
         }
@@ -558,8 +479,15 @@ fn fieldTarget(record: RecordTarget, name: []const u8) ?Target {
     return null;
 }
 
-pub fn describe(frontend: *Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) !?[]const u8 {
-    const target = try targetAt(frontend, arena, text, path, byte_offset) orelse return null;
+pub fn describe(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) !?[]const u8 {
+    const symbol = try lookup(frontend, arena, text, path, byte_offset);
+    if (symbol.target) |target| if (try describeTarget(arena, target)) |detail| return detail;
+    const name = symbol.identifier orelse return null;
+    const signature = builtins.implicit(name) orelse return null;
+    return try builtinText(arena, signature);
+}
+
+fn describeTarget(arena: std.mem.Allocator, target: Target) !?[]const u8 {
     if (target.native) |native| return switch (native) {
         .namespace => |namespace| try std.fmt.allocPrint(arena, "{s} — native functions and constants", .{namespace.name()}),
         .function => |id| try nativeFunctionText(arena, builtins.signature(id)),
@@ -620,28 +548,64 @@ fn symbolDetail(arena: std.mem.Allocator, query: Query, identity: ModuleGraph.le
     return "Huak symbol";
 }
 
-/// Select the innermost statement, including declarations inside expressions.
-fn statementAt(body: []const *ast.Stmt, span: ast.Span) ?*ast.Stmt {
-    const Visitor = struct {
+/// Locate the innermost node and its owning statement in source order. A
+/// cursor between arguments belongs to the call, including at an argument's
+/// right edge. Inside the argument, its own syntax determines completions.
+const SyntaxAt = struct {
+    node: ?ast.Node = null,
+    statement: ?*const ast.Stmt = null,
+    completion: ?*const ast.Expr = null,
+
+    fn find(body: []const *ast.Stmt, span: ast.Span) SyntaxAt {
+        var child: Child = .{ .span = span };
+        ast.walkStatements(&child, body) catch |err| std.debug.assert(err == error.Found);
+        var found: SyntaxAt = .{};
+        while (child.match) |node| {
+            found.node = node;
+            child.match = null;
+            switch (node) {
+                .statement => |stmt| found.statement = stmt,
+                .expression => |expr| if (span.start == span.end) {
+                    const inner = ungroup(expr);
+                    switch (inner.value) {
+                        .call => |call| {
+                            for (call.args) |arg| if (arg.span.start <= span.start and span.start < arg.span.end) {
+                                child.match = .{ .expression = arg };
+                                break;
+                            };
+                            if (child.match == null) found.completion = inner;
+                            continue;
+                        },
+                        .member => |member| if (member.object.span.end <= span.start) {
+                            found.completion = inner;
+                        },
+                        else => {},
+                    }
+                },
+            }
+            ast.walkChildren(&child, node) catch |err| std.debug.assert(err == error.Found);
+        }
+        return found;
+    }
+
+    /// Select one direct child. The outer loop follows the selected branch.
+    const Child = struct {
         span: ast.Span,
-        found: ?*ast.Stmt = null,
-        pub fn enter(self: *@This(), node: ast.Node) !bool {
-            const candidate = switch (node) {
-                .statement => |s| s.span,
-                .expression => |e| e.span,
+        match: ?ast.Node = null,
+
+        pub fn enter(self: *Child, node: ast.Node) error{Found}!bool {
+            const range = switch (node) {
+                inline else => |item| item.span,
             };
-            if (candidate.start > self.span.start or candidate.end < self.span.end) return false;
-            if (node == .statement) self.found = node.statement;
-            return true;
+            if (self.span.start < range.start or self.span.end > range.end) return false;
+            self.match = node;
+            return error.Found;
         }
     };
-    var visitor: Visitor = .{ .span = span };
-    ast.walkStatements(&visitor, body) catch unreachable;
-    return visitor.found;
-}
+};
 
 fn describeStatements(arena: std.mem.Allocator, body: []const *ast.Stmt, span: ast.Span) anyerror!?[]const u8 {
-    if (statementAt(body, span)) |statement| {
+    if (SyntaxAt.find(body, span).statement) |statement| {
         switch (statement.value) {
             .structure => |structure| {
                 for (structure.fields) |field| if (field.span.start == span.start)
@@ -655,17 +619,10 @@ fn describeStatements(arena: std.mem.Allocator, body: []const *ast.Stmt, span: a
             inline .function, .expand_block => |function| {
                 for (function.params) |parameter| if (parameter.span.start == span.start)
                     return try std.fmt.allocPrint(arena, "parameter {s}: {s}", .{ parameter.name, parameter.annotation.name });
-                if (try describeStatements(arena, function.body, span)) |detail| return detail;
                 return try functionText(arena, statement);
             },
             .assignment => |assignment| return try std.fmt.allocPrint(arena, "{s}{s}{s}", .{ assignment.name, if (assignment.annotation != null) ": " else "", if (assignment.annotation) |annotation_| annotation_.name else "" }),
             .parameter => |parameter| return try std.fmt.allocPrint(arena, "param {s}{s}{s}", .{ parameter.name, if (parameter.annotation != null) ": " else "", if (parameter.annotation) |annotation_| annotation_.name else "" }),
-            .conditional => |conditional| {
-                for (conditional.branches) |branch| if (try describeStatements(arena, branch.body, span)) |detail| return detail;
-                return try describeStatements(arena, conditional.otherwise, span);
-            },
-            .for_loop => |loop| return try describeStatements(arena, loop.body, span),
-            .while_loop => |loop| return try describeStatements(arena, loop.body, span),
             else => {},
         }
     }
@@ -718,7 +675,7 @@ fn appendModuleCompletions(arena: std.mem.Allocator, items: *std.ArrayList(Compl
 
 /// Syntax requests do not execute or typecheck a program. Completing an empty
 /// member after '.' repairs only that missing identifier in a request snapshot.
-pub fn complete(frontend: *Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) ![]const Completion {
+pub fn complete(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) ![]const Completion {
     var input = text;
     if (byte_offset != 0 and text[byte_offset - 1] == '.')
         input = try std.fmt.allocPrint(arena, "{s}__huak_completion__{s}", .{ text[0..byte_offset], text[byte_offset..] });
@@ -730,7 +687,8 @@ pub fn complete(frontend: *Frontend, arena: std.mem.Allocator, text: []const u8,
     const unit = graph.units.items[0];
     const query: Query = .{ .graph = &graph, .unit = unit, .token = .{ .kind = .identifier, .span = .{ .start = byte_offset, .end = byte_offset } }, .name = "" };
     var items: std.ArrayList(Completion) = .empty;
-    if (contextStatements(unit.script.statements, byte_offset)) |context| switch (context.value) {
+    const cursor: ast.Span = .{ .start = byte_offset, .end = byte_offset };
+    if (SyntaxAt.find(unit.script.statements, cursor).completion) |context| switch (context.value) {
         .member => |member_| {
             const object = ungroup(member_.object);
             if (query.defaultNamespaceReceiver(object)) |namespace| {
@@ -839,81 +797,6 @@ fn argumentSupplied(names: []const ?[]const u8, name: []const u8) bool {
     return false;
 }
 
-fn contextStatements(body: []const *ast.Stmt, offset: usize) ?*const ast.Expr {
-    for (body) |statement| {
-        if (offset < statement.span.start or offset > statement.span.end) continue;
-        switch (statement.value) {
-            .expression, .default_output => |expr| return contextExpression(expr, offset),
-            .assignment => |assignment| return contextExpression(assignment.value, offset),
-            .set => |set| return contextExpression(set.target, offset) orelse contextExpression(set.value, offset),
-            .append_to => |append| return contextExpression(append.target, offset) orelse contextExpression(append.value, offset),
-            .list_append => |append| return contextExpression(append.value, offset),
-            .parameter => |parameter| if (parameter.default) |value| return contextExpression(value, offset),
-            inline .function, .expand_block => |function| {
-                for (function.params) |parameter| if (parameter.default) |value| if (contextExpression(value, offset)) |context| return context;
-                return contextStatements(function.body, offset);
-            },
-            .structure => |structure| for (structure.fields) |field| {
-                if (field.default) |value| if (contextExpression(value, offset)) |context| return context;
-            },
-            .exported => |exported| if (exported.value) |value| return contextExpression(value, offset),
-            .return_value => |value| if (value) |expr| return contextExpression(expr, offset),
-            .conditional => |conditional| {
-                for (conditional.branches) |branch| {
-                    if (contextExpression(branch.condition, offset)) |context| return context;
-                    if (contextStatements(branch.body, offset)) |context| return context;
-                }
-                return contextStatements(conditional.otherwise, offset);
-            },
-            .for_loop => |loop| return (switch (loop.iterable) {
-                .collection => |expr| contextExpression(expr, offset),
-                .range => |range| contextExpression(range.start, offset) orelse (if (range.step) |step| contextExpression(step, offset) else null) orelse contextExpression(range.stop.?, offset),
-            }) orelse contextStatements(loop.body, offset),
-            .while_loop => |loop| return contextExpression(loop.condition, offset) orelse contextStatements(loop.body, offset),
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn contextExpression(expr_: *const ast.Expr, offset: usize) ?*const ast.Expr {
-    if (offset < expr_.span.start or offset > expr_.span.end) return null;
-    const expr = ungroup(expr_);
-    switch (expr.value) {
-        .block => |body| return contextStatements(body, offset),
-        .expansion => |value| {
-            for (value.args) |arg| if (contextExpression(arg, offset)) |found| return found;
-            return contextStatements(value.body, offset);
-        },
-        .member => |member_| return contextExpression(member_.object, offset) orelse if (offset >= member_.object.span.end) expr else null,
-        .call => |call| {
-            for (call.args) |argument| if (argument.span.start <= offset and offset < argument.span.end) return contextExpression(argument, offset);
-            return expr;
-        },
-        .list => |items| for (items) |item| {
-            if (contextExpression(item, offset)) |context| return context;
-        },
-        .dict => |entries| for (entries) |entry| {
-            if (contextExpression(entry.value, offset)) |context| return context;
-        },
-        .vector => |pair| return contextExpression(pair.x, offset) orelse contextExpression(pair.y, offset) orelse (if (pair.z) |z| contextExpression(z, offset) else null),
-        .unary => |unary| return contextExpression(unary.operand, offset),
-        .quantity => |quantity| return contextExpression(quantity.operand, offset),
-        .binary => |binary| return contextExpression(binary.left, offset) orelse contextExpression(binary.right, offset),
-        .path_join, .path_literal => {
-            const join = if (expr.value == .path_join) expr.value.path_join else expr.value.path_literal;
-            return contextExpression(join.left, offset) orelse contextExpression(join.right, offset);
-        },
-        .index => |index| return contextExpression(index.object, offset) orelse contextExpression(index.index, offset),
-        .slice => |slice| return contextExpression(slice.object, offset) orelse contextExpression(slice.range.start, offset) orelse (if (slice.range.step) |step| contextExpression(step, offset) else null) orelse (if (slice.range.stop) |stop| contextExpression(stop, offset) else null),
-        .mixfix_call => |call| for (call.args) |argument| {
-            if (contextExpression(argument, offset)) |context| return context;
-        },
-        else => {},
-    }
-    return null;
-}
-
 fn ungroup(expr: *const ast.Expr) *const ast.Expr {
     return if (expr.value == .grouped) ungroup(expr.value.grouped) else expr;
 }
@@ -956,8 +839,7 @@ const Fixture = struct {
     }
 
     fn lookup(self: *const Fixture, allocator: std.mem.Allocator, query: []const u8) !?Location {
-        var frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .library_path = "/missing-unused-library", .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
-        defer frontend.deinit();
+        const frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
         const offset = std.mem.lastIndexOf(u8, self.source, query) orelse return error.MissingTestQuery;
         return find(&frontend, allocator, self.source, self.name, offset);
     }
@@ -970,7 +852,7 @@ const Fixture = struct {
         var diagnostic: ?@import("../language/source.zig").Diagnostic = null;
         var scanner: Lexer = .{ .source = target_source, .pos = start, .diagnostic = &diagnostic };
         const token = try scanner.next();
-        try std.testing.expectEqualStrings(uri, result.uri);
+        try std.testing.expectEqualStrings(uri, try uriForPath(arena.allocator(), result.path));
         try std.testing.expectEqualDeep(locations.Range{ .start = locations.at(target_source, start), .end = locations.at(target_source, token.span.end) }, result.range);
     }
 
@@ -1111,7 +993,7 @@ test "an imported data value navigates to its file" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const target = (try fixture.lookup(arena.allocator(), "rows[0]")).?;
-    try std.testing.expectEqualStrings("file:///tmp/points.csv", target.uri);
+    try std.testing.expectEqualStrings("/tmp/points.csv", target.path);
     try std.testing.expectEqual(locations.at("1,2", 0), target.range.start);
 }
 
@@ -1129,12 +1011,11 @@ test "definition request arenas release allocations on every allocation failure"
 
 test "definition and hover token selection accepts identifier endpoints before punctuation" {
     const source = "fn target()->int return 1 end\nresult:=target()\n";
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const offset = std.mem.lastIndexOf(u8, source, "target()").? + "target".len;
-    const token = (try tokenAt(&frontend, source, offset)).?;
+    const token = (try tokenAt(&frontend, source, offset, &.{})).?;
     try std.testing.expectEqualStrings("target", source[token.span.start..token.span.end]);
     const result = (try find(&frontend, arena.allocator(), source, "/tmp/definition.huak", offset)).?;
     try std.testing.expectEqualDeep(locations.Position{ .line = 0, .character = 3 }, result.range.start);
@@ -1151,7 +1032,7 @@ test "qualified operators share exported identities while namespace tokens navig
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const result = (try fixture.lookup(arena.allocator(), "lib.twice")).?;
-    try std.testing.expectEqualStrings("file:///tmp/library.huak", result.uri);
+    try std.testing.expectEqualStrings("/tmp/library.huak", result.path);
     try std.testing.expectEqualDeep(locations.Position{ .line = 0, .character = 0 }, result.range.start);
 }
 
@@ -1177,8 +1058,7 @@ test "record navigation follows type annotations constructors aliases fields and
     try fixture.expect("target:alias", "file:///tmp/definition.huak", input, "target");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const offset = std.mem.indexOf(u8, input, "width:3").?;
     const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, offset)).?;
     try std.testing.expectEqualStrings("Widget.width: int", detail);
@@ -1198,8 +1078,7 @@ test "record navigation preserves imported reexported type identities and field 
 test "record completions infer member receivers and offer unsupplied constructor labels" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const prefix = "struct Widget\nwidth:int\nheight:int=2\nend\nitem:=Widget(width:1)\n";
     const source = prefix ++ "value:=item.";
     const fields = try complete(&frontend, arena.allocator(), source, "/tmp/completion.huak", source.len);
@@ -1211,10 +1090,13 @@ test "record completions infer member receivers and offer unsupplied constructor
     try std.testing.expectEqual(@as(usize, 1), arguments.len);
     try std.testing.expectEqualStrings("height", arguments[0].label);
     try std.testing.expectEqualStrings("height: ", arguments[0].insertText.?);
-    const positional = prefix ++ "value:=Widget(1,)";
-    const remaining = try complete(&frontend, arena.allocator(), positional, "/tmp/completion.huak", positional.len - 1);
-    try std.testing.expectEqual(@as(usize, 1), remaining.len);
-    try std.testing.expectEqualStrings("height", remaining[0].label);
+    const positional = prefix ++ "value:=Widget(math.abs(1),)";
+    const comma = std.mem.lastIndexOfScalar(u8, positional, ',').?;
+    for ([_]usize{ comma, comma + 1 }) |offset| {
+        const remaining = try complete(&frontend, arena.allocator(), positional, "/tmp/completion.huak", offset);
+        try std.testing.expectEqual(@as(usize, 1), remaining.len);
+        try std.testing.expectEqualStrings("height", remaining[0].label);
+    }
 }
 
 test "default math completion and hover use native metadata without source navigation" {
@@ -1224,8 +1106,7 @@ test "default math completion and hover use native metadata without source navig
     try fixture.expectNone("PI\n");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const function = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "sin(0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, function, "fn math.sin("));
     const constant = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "PI\n").?)).?;
@@ -1247,7 +1128,6 @@ test "default math completion and hover use native metadata without source navig
         try std.testing.expect(!std.mem.eql(u8, item.label, "sin"));
     }
     try std.testing.expect(namespace);
-    try std.testing.expect(frontend.native == null);
 }
 
 test "data and imported namespace bindings shadow default math tooling" {
@@ -1256,8 +1136,7 @@ test "data and imported namespace bindings shadow default math tooling" {
     try fixture.expect("PI\n", "file:///tmp/definition.huak", input, "PI");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.lastIndexOf(u8, input, "PI\n").?)).?;
     try std.testing.expectEqualStrings("Settings.PI: int", detail);
     const unfinished = "struct Settings\nPI:int\nend\nmath:=Settings(PI:2)\nvalue:=math.";
@@ -1277,23 +1156,20 @@ test "explicit math imports retain native hover and never invent a source docume
     try fixture.expectNone("cos(0)");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const function = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "sine(0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, function, "fn math.sin("));
     const constant = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.lastIndexOf(u8, input, "pi\n").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, constant, "math.PI: number"));
     const cosine = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "cos(0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, cosine, "fn math.cos("));
-    try std.testing.expect(frontend.native == null);
 }
 
 test "default native domains expose only their owned members and canonical hover" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     for (std.enums.values(builtins.Namespace)) |namespace| {
         const input = try std.fmt.allocPrint(a, "value:={s}.", .{namespace.name()});
         const members = try complete(&frontend, a, input, "/tmp/domains.huak", input.len);
@@ -1314,15 +1190,13 @@ test "default native domains expose only their owned members and canonical hover
         const namespace_hover = (try describe(&frontend, a, namespace_source, "/tmp/domains.huak", "value:=".len)).?;
         try std.testing.expect(std.mem.startsWith(u8, namespace_hover, namespace.name()));
     }
-    try std.testing.expect(frontend.native == null);
 }
 
 test "native domain data shadowing and imported aliases preserve their distinct targets" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     for (std.enums.values(builtins.Namespace)) |namespace| {
         const prefix = try std.fmt.allocPrint(a, "struct Settings value:int end\n{s}:=Settings(value:2)\nanswer:={s}.", .{ namespace.name(), namespace.name() });
         const members = try complete(&frontend, a, prefix, "/tmp/shadow.huak", prefix.len);
@@ -1359,12 +1233,11 @@ test "nested exported namespaces retain definitions types and module identities"
     try fixture.expect("width))", "file:///tmp/nested-library.huak", library, "width");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library", .overlay = .{ .ptr = @constCast(&fixture), .vtable = &.{ .resolve = Fixture.resolve } } };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .overlay = .{ .ptr = @constCast(&fixture), .vtable = &.{ .resolve = Fixture.resolve } } };
     const module_hover = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "tools.Widget:=").?)).?;
     try std.testing.expectEqualStrings("module /tmp/nested-library.huak", module_hover);
     const module_location = (try fixture.lookup(arena.allocator(), "tools.Widget:=")).?;
-    try std.testing.expectEqualStrings("file:///tmp/nested-library.huak", module_location.uri);
+    try std.testing.expectEqualStrings("/tmp/nested-library.huak", module_location.path);
     try std.testing.expectEqualDeep(locations.Position{ .line = 0, .character = 0 }, module_location.range.start);
     const unfinished = "import \"/tmp/nested-facade.huak\" as facade\nvalue:=facade.tools.";
     const members = try complete(&frontend, arena.allocator(), unfinished, fixture.name, unfinished.len);
@@ -1376,8 +1249,7 @@ test "standard root completes modules and nested native members without fake def
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const root = "import std\nvalue:=std.";
     const modules_ = try complete(&frontend, a, root, "/tmp/standard-root.huak", root.len);
     var has_weave = false;
@@ -1415,7 +1287,6 @@ test "standard root completes modules and nested native members without fake def
     const labels = try complete(&frontend, a, named, fixture.name, named.len - 1);
     try std.testing.expectEqual(@as(usize, 1), labels.len);
     try std.testing.expectEqualStrings("radius", labels[0].label);
-    try std.testing.expect(frontend.native == null);
 }
 
 test "tooling follows ordinary data shadowing and imports become visible at their declaration" {
@@ -1430,8 +1301,7 @@ test "tooling follows ordinary data shadowing and imports become visible at thei
     ;
     const fixture: Fixture = .{ .source = input };
     try fixture.expect("count(1)", "file:///tmp/definition.huak", input, "count:int");
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const before = std.mem.indexOf(u8, input, "disk((").?;
@@ -1461,8 +1331,7 @@ test "nested drawing modules preserve imported mixfix and infix navigation" {
     try fixture.expect("at (5,6)", "huak-stdlib:/std/paint.huak", standard.source("std/paint.huak").?, "at(content");
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "center (0,0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, detail, "fn geometry.circle("));
     const template = "export expand_block drawing(target:int)\nplace:=len.with(\"abc\")\nmixfix(place) place _ in unary\n...\nreturn target\nend\n";
@@ -1481,8 +1350,7 @@ test "nested drawing modules preserve imported mixfix and infix navigation" {
 test "primary native constructors remain callable through their normal namespace binding" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const input = "import std.pen\nnib:=pen(color.rgb(0,0,0))\n";
     const detail = (try describe(&frontend, arena.allocator(), input, "/tmp/constructors.huak", std.mem.indexOf(u8, input, "pen(color").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, detail, "fn pen.pen("));

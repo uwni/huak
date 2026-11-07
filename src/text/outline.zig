@@ -69,7 +69,7 @@ pub const Label = struct {
         const previous_maximum = target.maximum_depth;
         errdefer {
             target.truncateCommands(previous_commands);
-            target.storage.segments.items.len = previous_segments;
+            target.storage.truncateGeometry(previous_segments);
             target.scope_depth = previous_depth;
             target.maximum_depth = previous_maximum;
         }

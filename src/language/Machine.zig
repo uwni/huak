@@ -1710,26 +1710,31 @@ fn nativeFailureMessage(self: *Machine, err: anyerror, message: []const u8) Erro
     return error.RuntimeFailed;
 }
 fn fail(self: *Machine, comptime format: []const u8, args: anytype) Error {
-    if (self.failure == null) {
-        self.failure = .{ .diagnostic = source.Diagnostic.init(self.current_span, format, args) };
-        const origin = if (self.current_module == std.math.maxInt(u32) and self.frames.items.len != 0)
-            self.program.functions[self.frames.items[self.frames.items.len - 1].function].module
-        else
-            self.current_module;
-        if (origin < self.program.modules.len) {
-            const module_ = self.program.modules[origin];
-            self.failure.?.diagnostic.setSource(module_.name, module_.source_text);
-        }
-        const trace = self.arena.allocator().alloc(TraceEntry, self.frames.items.len) catch return error.OutOfMemory;
-        for (trace, 0..) |*entry, index| {
-            const frame = self.frames.items[self.frames.items.len - 1 - index];
-            const span = if (index == 0) self.current_span else self.frames.items[self.frames.items.len - index].call_span;
-            const module = if (index == 0) origin else self.frames.items[self.frames.items.len - index].call_module;
-            entry.* = .{ .function = self.program.functions[frame.function].name, .module = if (module == std.math.maxInt(u32)) self.program.functions[frame.function].module else module, .span = span };
-        }
-        self.failure.?.trace = trace;
-    }
+    if (self.failure != null) return error.RuntimeFailed;
+    self.failure = .{ .diagnostic = .{ .span = self.current_span } };
+    const failure = &self.failure.?;
+    failure.diagnostic.writeMessage(format, args);
+    self.captureTrace(failure) catch return error.OutOfMemory;
     return error.RuntimeFailed;
+}
+
+fn captureTrace(self: *Machine, failure: *RuntimeDiagnostic) error{OutOfMemory}!void {
+    const origin = if (self.current_module == std.math.maxInt(u32) and self.frames.items.len != 0)
+        self.program.functions[self.frames.items[self.frames.items.len - 1].function].module
+    else
+        self.current_module;
+    if (origin < self.program.modules.len) {
+        const module_ = self.program.modules[origin];
+        failure.diagnostic.setSource(module_.name, module_.source_text);
+    }
+    const trace = try self.arena.allocator().alloc(TraceEntry, self.frames.items.len);
+    for (trace, 0..) |*entry, index| {
+        const frame = self.frames.items[self.frames.items.len - 1 - index];
+        const span = if (index == 0) self.current_span else self.frames.items[self.frames.items.len - index].call_span;
+        const module = if (index == 0) origin else self.frames.items[self.frames.items.len - index].call_module;
+        entry.* = .{ .function = self.program.functions[frame.function].name, .module = if (module == std.math.maxInt(u32)) self.program.functions[frame.function].module else module, .span = span };
+    }
+    failure.trace = trace;
 }
 
 fn testProgram(functions: []const bytecode.Function, constants: []const Value, names: []const []const u8, global_types: []const Type) !bytecode.Program {

@@ -102,7 +102,7 @@ pub fn allocatedBytes(self: *const Scene) usize {
     return self.nodes.capacity * @sizeOf(Node) +
         self.storage.segments.capacity * @sizeOf(@import("path/Path.zig").Segment) +
         self.links.capacity * @sizeOf(Link) + self.containers.capacity * @sizeOf(Container) +
-        self.storage.styles.allocatedBytes();
+        self.storage.styles.allocatedBytes() + self.storage.knotBytes();
 }
 
 /// Reserve one leaf node's arrays within a storage budget. Normal ArrayList
@@ -110,13 +110,16 @@ pub fn allocatedBytes(self: *const Scene) usize {
 /// includes existing style data; insertion can subsequently add more.
 /// False leaves capacities unchanged. Failure may reserve capacity but
 /// never inserts a node or changes geometry, styles, or graph links.
-pub fn reserveNode(self: *Scene, segments: usize, budget: usize) !bool {
+pub fn reserveNode(self: *Scene, path: ?*const Path, budget: usize) !bool {
+    const solved_count = if (path) |p| p.knotRecords().len else 0;
     const growths = .{
         .{ &self.nodes, @as(usize, 1) },
         .{ &self.links, @as(usize, 1) },
-        .{ &self.storage.segments, segments },
+        .{ &self.storage.segments, if (path) |p| p.segments.items.len else @as(usize, 0) },
+        .{ &self.storage.knot_blocks, @as(usize, @intFromBool(solved_count != 0)) },
     };
-    var bytes = self.allocatedBytes();
+    // Storage copies only live knot records during insertion.
+    var bytes = self.allocatedBytes() +| solved_count *| @sizeOf(Path.KnotTable.Knot);
     inline for (growths) |growth| {
         const list = growth[0];
         const count = list.items.len +| growth[1];
@@ -324,7 +327,7 @@ pub fn clone(self: *Scene, parent: ?Index, source: *const Scene, index: Index, t
     errdefer {
         for (self.nodes.items[old_count..]) |node_| if (node_ == .path) self.storage.styles.release(node_.path.style);
         self.nodes.items.len = old_count;
-        self.storage.segments.items.len = old_geometry;
+        self.storage.truncateGeometry(old_geometry);
         self.links.items.len = old_count;
         self.containers.items.len = old_groups;
         if (old_parent) |link| {
@@ -371,9 +374,9 @@ fn cloneInto(self: *Scene, parent: ?Index, source: *const Scene, index: Index, l
         const transform = nodeTransform(&item);
         transform.* = try composeTransform(transform.*, t);
     }
-    const geometry: Storage.Geometry = .{ .primary = source.storage.segments.items };
+    const geometry = source.storage.asGeometry();
     self.nodes.appendAssumeCapacity(switch (item) {
-        .path => |value| .{ .path = try self.storage.copyPath(geometry, value) },
+        .path => |value| .{ .path = try self.storage.copyPath(geometry, value, if (self == source) .same_storage else .independent) },
         .label => item,
         .picture => |value| .{ .picture = self.storage.copyScope(geometry, value) },
     });
@@ -388,7 +391,7 @@ fn cloneInto(self: *Scene, parent: ?Index, source: *const Scene, index: Index, l
         if (child.scene == self and child.index >= limit) break;
         const cloned = try self.cloneInto(node, child.scene, child.index, limit, null);
         if (child.link().excluded) |ref| {
-            self.links.items[cloned].excluded = self.storage.copyRange(.{ .primary = source.storage.segments.items }, ref);
+            self.links.items[cloned].excluded = self.storage.copyRange(source.storage.asGeometry(), ref);
         }
     }
     return node;
@@ -586,7 +589,7 @@ pub fn snapshotWithBounds(self: *const Scene, allocator: Allocator, index: Index
     _ = try self.getNode(index);
     var result: Snapshot = .{ .picture = .init(allocator) };
     errdefer result.deinit();
-    result.picture.storage.segments = self.storage.segments;
+    result.picture.storage.borrowBank(&self.storage);
     try result.owners.put(allocator, self, {});
     if (!try self.isVisible(index)) return result;
     var ancestors: [DisplayList.max_scope_depth]Object = undefined;
@@ -638,7 +641,7 @@ fn endExclusion(result: *Snapshot, node: Object, opening: ?usize) !void {
 
 fn emit(_: *const Scene, result: *Snapshot, object_: Object, ids: anytype) !void {
     const source = try result.owners.getOrPut(result.picture.storage.allocator, object_.scene);
-    if (!source.found_existing and source.index != 0) try result.picture.sources.append(result.picture.storage.allocator, object_.scene.storage.segments.items);
+    if (!source.found_existing and source.index != 0) try result.picture.sources.append(result.picture.storage.allocator, object_.scene.storage.bank());
     const value = result.picture.commands.addOneAssumeCapacity();
     value.* = switch (object_.scene.nodes.items[object_.index]) {
         .path => |item| .{ .path = item },
@@ -906,7 +909,7 @@ test "importing borrowed banks owns their geometry without adding group depth" {
     defer path.deinit();
     var picture = DisplayList.init(a);
     defer picture.deinit();
-    try picture.sources.append(a, path.segments.items);
+    try picture.sources.append(a, .{ .segments = path.segments.items });
     for (0..DisplayList.max_scope_depth) |_| try picture.beginScope(.{}, null);
     try picture.commands.append(a, .{ .path = .{
         .path = .{ .first = 0, .count = path.segments.items.len, .source = 1 },
@@ -984,4 +987,69 @@ test "subtree cloning copies only selected geometry and owns paint and visibilit
     try cloneExercise(std.testing.allocator);
     var stable = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
     try std.testing.checkAllAllocationFailures(stable.allocator(), cloneExercise, .{});
+}
+
+test "clones share only solver records already owned by the destination scene" {
+    const t = std.testing;
+    const a = t.allocator;
+    var path = try @import("path/construct.zig").construct(a, &.{ .zero, .{ .x = 10, .y = 8 }, .{ .x = 20, .y = 0 } }, &.{ .smooth, .smooth }, .{});
+    defer path.deinit();
+    var scene = try Scene.init(a);
+    defer scene.deinit();
+    {
+        var foreign = try Scene.init(a);
+        defer foreign.deinit();
+        const external = try foreign.addPath(null, &path, &.{ .fill = .black }, .{});
+        const foreign_solved = (try foreign.storage.asGeometry().view(a, (try foreign.getNode(external)).path.path)).knotRecords();
+        const local = try scene.clone(0, &foreign, external, .{});
+        const local_solved = (try scene.storage.asGeometry().view(a, (try scene.getNode(local)).path.path)).knotRecords();
+        try t.expectEqualDeep(foreign_solved, local_solved);
+        try t.expect(local_solved.ptr != foreign_solved.ptr);
+    }
+    const original = (try scene.getNode(1)).path;
+    for (0..32) |_| {
+        const id = try scene.clone(0, &scene, 1, .translation(5, 0));
+        const cloned = (try scene.getNode(id)).path;
+        try t.expectEqual(original.path.knot_table, cloned.path.knot_table);
+        try t.expect(cloned.path.first != original.path.first);
+    }
+    try t.expectEqual(@as(usize, 1), scene.storage.knot_blocks.items.len);
+    try t.expectEqual(path.knotRecords().len * @sizeOf(Path.KnotTable.Knot), scene.storage.knot_bytes);
+}
+
+test "snapshot selects each owner's knot table and its independent copy outlives both owners" {
+    const t = std.testing;
+    const a = t.allocator;
+    var expected: [2]g.Point = undefined;
+    var independent = copy: {
+        var primary = try Scene.init(a);
+        defer primary.deinit();
+        var foreign = try Scene.init(a);
+        defer foreign.deinit();
+        var curve = try @import("path/construct.zig").construct(a, &.{ .zero, .{ .x = 5, .y = 8 }, .{ .x = 9, .y = 0 } }, &.{ .smooth, .smooth }, .{});
+        defer curve.deinit();
+        const local = try primary.addPath(0, &curve, &.{ .fill = .black }, .{});
+        try curve.transform(.{ .a = 0, .b = 1, .c = -1, .d = 0 });
+        const placed = try foreign.addPath(null, &curve, &.{ .fill = .black }, .{});
+        try primary.place(0, foreign.object(placed), null);
+        var snap = try primary.snapshot(a, 0, null);
+        defer snap.deinit();
+        const paths = snap.picture.commands.items[1..3];
+        try t.expectEqual(paths[0].path.path.knot_table, paths[1].path.path.knot_table);
+        try t.expect(paths[0].path.path.source != paths[1].path.path.source);
+        for (paths, [_]*const Scene{ &primary, &foreign }, [_]Index{ local, placed }, 0..) |cmd, owner, id, i| {
+            const stored = try owner.storage.asGeometry().view(a, (try owner.getNode(id)).path.path);
+            const viewed = try snap.picture.geometry().view(a, cmd.path.path);
+            try t.expectEqual(stored.knotRecords().ptr, viewed.knotRecords().ptr);
+            expected[i] = stored.knotRecords()[0].tangent;
+        }
+        try t.expect(!expected[0].eql(expected[1]));
+        break :copy try snap.picture.copy(a);
+    };
+    defer independent.deinit();
+    for (independent.commands.items[1..3], expected) |cmd, dir| {
+        try t.expectEqual(0, cmd.path.path.source);
+        const view = try independent.geometry().view(a, cmd.path.path);
+        try t.expectEqual(dir, view.knotRecords()[0].tangent);
+    }
 }

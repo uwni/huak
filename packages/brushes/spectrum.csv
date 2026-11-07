@@ -1,0 +1,7 @@
+mode,min_wavelength_widths,max_wavelength_widths,minus_edge_rms_widths,plus_edge_rms_widths,correlation
+zhuwen,1,2,0.019465,0.022878,-0.189088
+zhuwen,2,3,0.029021,0.025911,0.136253
+zhuwen,3,4,0.049511,0.027317,0.299459
+baiwen,1,2,0.025715,0.025135,0.028655
+baiwen,2,3,0.027941,0.027801,-0.310699
+baiwen,3,4,0.013940,0.022848,-0.676822

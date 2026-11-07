@@ -57,7 +57,7 @@ pub fn fork(parent: *Runtime) !Runtime {
         .gpa = parent.gpa,
         .scene_allocator = parent.scene_allocator,
         .arena = .init(parent.gpa),
-        .library = parent.library,
+        .backends = parent.backends,
         .options = parent.options,
         .current_module = parent.current_module,
         .shared_engine = if (parent.engine) |*engine| engine else null,
@@ -151,7 +151,7 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
             } else {
                 if (source_layout.handle == null) return error.InvalidFrameReference;
                 const destination = try own.create(typst.Layout);
-                destination.* = .{ .library = parent.library, .handle = null };
+                destination.* = .{ .library = parent.backends.typst, .handle = null };
                 target.* = destination;
                 moved += 1;
             }

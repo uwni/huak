@@ -1,5 +1,4 @@
 import object as objects
-import pen.stroke_outline
 
 fn insert(target:picture, source:object) -> void
     objects.append(target, source)
@@ -8,9 +7,11 @@ end
 fn erase(target:picture, sweep:path, sources:list, brush:any = false) -> void
     // A supplied pen sweeps a centerline. A ready-made footprint (such as a
     // width profile) already encloses the ink to remove.
-    footprint := sweep
-    if brush != false then footprint = stroke_outline(sweep, brush) end
-    objects.exclude(target, sources, footprint)
+    if brush == false then
+        objects.exclude(target, sources, sweep)
+    else
+        objects.exclude(target, sources, sweep, brush)
+    end
 end
 
 precedence insertion

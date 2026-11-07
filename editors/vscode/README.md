@@ -24,7 +24,7 @@ Colors follow the editor theme. Enable `editor.semanticHighlighting.enabled` if 
 
 Type names are highlighted in declaration annotations and function results. The same words can be ordinary values: for example, the parameter and body reference named `color` in `fn marker(color: color)` stay variable-colored, and range/slice endpoints are not mistaken for annotations.
 
-Build the tools in the Huak repository with `zig build`. The extension finds `zig-out/bin/huak-lsp`, `zig-out/bin/huak` and an existing Debug or Release libtypst library in the current workspace. Otherwise it uses `PATH`. Set **Huak: Server Path**, **Huak: Executable Path** and **Huak: Libtypst Path** for another installation; relative paths are resolved against the workspace folder.
+Build the tools in the Huak repository with `zig build`. The extension finds the executables in `zig-out/bin/` and libtypst in `zig-out/lib/`. It also recognizes standalone Cargo builds. Set **Huak: Server Path**, **Huak: Executable Path** and **Huak: Libtypst Path** for another installation. Relative paths resolve against the workspace folder.
 
 ## Live preview
 

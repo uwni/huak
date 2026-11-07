@@ -31,9 +31,7 @@ test "CLI processes preserve parameters visibility modules operators units and n
     try @import("cli/envelopes.zig").run(&context);
     try @import("cli/composition.zig").run(&context);
     try context.absent("arithmetic.svg");
-    // Original 192 process scenarios plus lazy typesetter loading, output
-    // aliases and polygon operations, driven through Zig's process/file APIs.
-    const expected_checks: usize = 234 + @import("cli/batch.zig").process_count + @import("cli/workers.zig").process_count + @import("cli/exposures.zig").process_count + @import("cli/envelopes.zig").process_count + @import("cli/composition.zig").process_count + @import("cli/imports.zig").process_count + @import("cli/variadic.zig").process_count + @import("cli/scopes.zig").process_count + @import("cli/slices.zig").process_count + @import("cli/mixfix.zig").process_count + @import("cli/assertions.zig").process_count + @import("cli/optimization.zig").process_count +
+    const expected_checks: usize = 236 + @import("cli/batch.zig").process_count + @import("cli/workers.zig").process_count + @import("cli/exposures.zig").process_count + @import("cli/envelopes.zig").process_count + @import("cli/composition.zig").process_count + @import("cli/imports.zig").process_count + @import("cli/variadic.zig").process_count + @import("cli/scopes.zig").process_count + @import("cli/slices.zig").process_count + @import("cli/mixfix.zig").process_count + @import("cli/assertions.zig").process_count + @import("cli/optimization.zig").process_count +
         @import("cli/path_queries.zig").process_count +
         @import("cli/weave.zig").process_count +
         @as(usize, @intFromBool(try context.exists("CASE-PROBE"))) +

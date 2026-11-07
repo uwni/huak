@@ -7,15 +7,10 @@ const language = huak.language;
 const options = @import("test_options");
 const pdf_text = @import("support/pdf.zig");
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 fn compile(library: *typst.Library, source: []const u8, optimize: bool, resolver: ?language.compiler.ImportResolver) !language.bytecode.Program {
     var diagnostic: ?language.compiler.Diagnostic = null;
     return language.compiler.compile(t.allocator, source, "parallel-text.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
         .optimize = optimize,
         .import_resolver = resolver,
     }, &diagnostic) catch |err| {

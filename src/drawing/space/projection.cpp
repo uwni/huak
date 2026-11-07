@@ -12,11 +12,8 @@
 #include <Geom_TrimmedCurve.hxx>
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
-#include <TColgp_Array1OfPnt.hxx>
-#include <TColgp_Array1OfPnt2d.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_IndexedMapOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
@@ -102,13 +99,11 @@ void writeEdge(Result &result, const TopoDS_Edge &edge, double tolerance,
 }
 } // namespace huak::space
 
-extern "C" int huak_space_project(const HuakModelShape *input,
-                                  size_t node_count, const size_t *roots,
-                                  size_t count, double azimuth,
-                                  double elevation, double focus,
-                                  double tolerance, int include_faces,
-                                  const HuakLight *light, HuakLinework *output,
-                                  char *error, size_t capacity) {
+static int project(const HuakModelShape *input, size_t node_count,
+                   const size_t *roots, size_t count, double azimuth,
+                   double elevation, double focus, double tolerance,
+                   int include_faces, const HuakLight *light,
+                   HuakLinework *output, char *error, size_t capacity) {
   using namespace huak::space;
   *output = {};
   try {
@@ -186,7 +181,13 @@ extern "C" int huak_space_project(const HuakModelShape *input,
   }
   return 1;
 }
-extern "C" void huak_space_release(HuakLinework *output) {
+static void release(HuakLinework *output) {
   delete static_cast<huak::space::Result *>(output->owner);
   *output = {};
+}
+
+extern "C" __attribute__((visibility("default")))
+const HuakProjectionV1 *huak_space_api_v1() {
+  static const HuakProjectionV1 api{project, release};
+  return &api;
 }

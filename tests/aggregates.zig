@@ -19,15 +19,10 @@ const ModuleResolver = struct {
     }
 };
 
-fn sourceBlock(context: *anyopaque, text: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(text);
-}
-
 fn compile(allocator: std.mem.Allocator, library: *typst.Library, text: []const u8, sources: []const ModuleSource, optimize: bool, diagnostic: *?l.compiler.Diagnostic) !l.bytecode.Program {
     var resolver: ModuleResolver = .{ .sources = sources };
     return l.compiler.compile(allocator, text, "/aggregates/main.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
         .import_resolver = .{ .ptr = &resolver, .vtable = &.{ .resolve = ModuleResolver.resolve } },
         .optimize = optimize,
     }, diagnostic);

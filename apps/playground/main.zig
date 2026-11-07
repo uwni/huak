@@ -57,7 +57,7 @@ export fn huak_render(filename_len: usize) bool {
 fn render(filename: []const u8, source: []const u8) !huak.render.Output {
     var detail: ?lang.compiler.Diagnostic = null;
     var program = lang.compiler.compile(allocator, source, filename, .{
-        .source_parser = .{ .ptr = &library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(&library),
         .import_resolver = if (examples) |*catalog| .{ .ptr = &catalog.value.files, .vtable = &.{ .resolve = resolveFile } } else null,
     }, &detail) catch |err| {
         if (detail) |*d| try writeReport(diagnostics.fromDiagnostic(allocator, filename, source, d));
@@ -75,7 +75,10 @@ fn render(filename: []const u8, source: []const u8) !huak.render.Output {
     try machine.prepareParameters(&.{});
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
-    var runtime = try lang.Runtime.init(allocator, allocator, &library, .{
+    var runtime = try lang.Runtime.initWithBackends(allocator, allocator, .{
+        .typst = &library,
+        .projection = if (@import("playground_options").has_projection) huak.Projection.linked() else null,
+    }, .{
         .inputs = try lang.Runtime.Options.scriptInputs(scratch.allocator(), &machine),
     });
     defer runtime.deinit();
@@ -93,11 +96,6 @@ fn writeReport(bundle: anyerror!std.zig.ErrorBundle) !void {
     var owned = try bundle;
     defer owned.deinit(allocator);
     try owned.renderToWriter(.{}, &report.writer);
-}
-
-fn sourceBlock(ctx: *anyopaque, source: []const u8) !usize {
-    const backend: *typst.Library = @ptrCast(@alignCast(ctx));
-    return backend.sourceBlock(source);
 }
 
 fn result() []const u8 {

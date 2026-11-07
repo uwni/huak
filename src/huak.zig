@@ -1,9 +1,10 @@
 //! Programmatic drawing API. Geometry and animation tracks are independent
 //! of the native typesetter; the backend explicitly uses libtypst.
 pub const core = @import("drawing/root.zig");
+pub const Projection = @import("drawing/space/Projection.zig");
 pub const language = @import("language/root.zig");
 pub const tooling = @import("tooling.zig");
-pub const backend = @import("render/typst/root.zig");
+pub const backend = @import("render/typst/scene.zig");
 pub const render = @import("render/root.zig");
 pub const worker = @import("concurrency/worker.zig");
 pub const animation = @import("animation/root.zig");

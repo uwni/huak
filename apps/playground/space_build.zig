@@ -2,10 +2,10 @@
 //! it was built against. The drawing adapter is shared with the desktop.
 const std = @import("std");
 
-pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath, sources: []const []const u8) void {
+pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath) void {
     const sdk = root.path(b, "wasi-sdk");
     const syslib = sdk.path(b, "share/wasi-sysroot/lib/wasm32-wasip1");
-    for (sources) |file| {
+    for ([_][]const u8{ "model.cpp", "projection.cpp", "visibility.cpp", "lighting.cpp", "curves.cpp" }) |file| {
         const part = std.fs.path.stem(file);
         const cc = std.Build.Step.Run.create(b, b.fmt("compile OCCT WASI {s}", .{part}));
         cc.addFileArg(sdk.path(b, "bin/clang++"));

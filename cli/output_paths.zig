@@ -5,22 +5,29 @@ const Output = @import("options.zig").Output;
 const Report = @import("Report.zig");
 const Identity = struct { device: u64, inode: u64 };
 const Missing = struct { parent: Identity, basename: []const u8 };
+pub const Existing = std.AutoHashMapUnmanaged(Identity, []const u8);
 
-pub fn validate(io: std.Io, allocator: std.mem.Allocator, outputs: []const Output, report: *Report) !void {
-    if (outputs.len < 2) return;
+pub fn validate(io: std.Io, allocator: std.mem.Allocator, outputs: []const Output, report: *Report) !Existing {
+    var files: Existing = .empty;
+    errdefer files.deinit(allocator);
     var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     const memory = arena.allocator();
     var paths: std.StringHashMapUnmanaged(void) = .{};
-    var files: std.AutoHashMapUnmanaged(Identity, void) = .{};
     var missing: std.ArrayList(Missing) = .empty;
     for (outputs) |output| {
-        const canonical = try destination(io, memory, output.path, 0);
-        if ((try paths.getOrPut(memory, canonical)).found_existing) return duplicate(output.path, report);
-        if (try identity(io, canonical)) |file| {
-            if ((try files.getOrPut(memory, file)).found_existing) return duplicate(output.path, report);
+        const path = try std.posix.toPosixPath(output.path);
+        if (try identity(io, std.mem.sliceTo(&path, 0))) |file| {
+            const entry = try files.getOrPut(allocator, file);
+            if (entry.found_existing) return duplicate(output.path, report);
+            entry.value_ptr.* = output.path;
             continue;
         }
+        // An absent destination needs alias checks only when another output
+        // could create it. Its parent is otherwise checked by the writer.
+        if (outputs.len < 2) continue;
+        const canonical = try destination(io, memory, output.path, 0);
+        if ((try paths.getOrPut(memory, canonical)).found_existing) return duplicate(output.path, report);
         const parent = try memory.dupeSentinel(u8, std.fs.path.dirname(canonical).?, 0);
         const directory = (try identity(io, parent)) orelse return error.FileNotFound;
         const basename = std.fs.path.basename(canonical);
@@ -33,6 +40,14 @@ pub fn validate(io: std.Io, allocator: std.mem.Allocator, outputs: []const Outpu
         }
         try missing.append(memory, .{ .parent = directory, .basename = basename });
     }
+    return files;
+}
+
+pub fn checkInput(io: std.Io, existing: *const Existing, input: []const u8, report: *Report) !void {
+    if (existing.count() == 0) return;
+    const path = try std.posix.toPosixPath(input);
+    const file = try identity(io, std.mem.sliceTo(&path, 0)) orelse return;
+    if (existing.get(file)) |output| return report.fail("huak: output '{s}' would overwrite input '{s}'", .{ output, input });
 }
 
 fn asciiOnly(name: []const u8) bool {

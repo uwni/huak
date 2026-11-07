@@ -7,35 +7,34 @@ const Frontend = @import("Frontend.zig");
 const Token = struct { span: source.Span, kind: ?Lexer.Kind, value_colon: bool = false };
 pub const Options = struct { tab_size: usize = 4, insert_spaces: bool = true };
 
-pub fn format(frontend: *Frontend, input: []const u8, path: []const u8, diagnostic: *?source.Diagnostic) ![]u8 {
+pub fn format(frontend: *const Frontend, input: []const u8, path: []const u8, diagnostic: *?source.Diagnostic) ![]u8 {
     return formatWithOptions(frontend, input, path, diagnostic, .{});
 }
 
-pub fn formatWithOptions(frontend: *Frontend, input: []const u8, path: []const u8, diagnostic: *?source.Diagnostic, options: Options) ![]u8 {
+pub fn formatWithOptions(frontend: *const Frontend, input: []const u8, path: []const u8, diagnostic: *?source.Diagnostic, options: Options) ![]u8 {
     if (options.tab_size == 0 or options.tab_size > 16) return error.InvalidIndentation;
-    try frontend.check(input, path, diagnostic);
-    return formatSource(frontend, input, diagnostic, options);
+    var arena = std.heap.ArenaAllocator.init(frontend.allocator);
+    defer arena.deinit();
+    const graph = try frontend.graph(arena.allocator(), input, path, diagnostic);
+    try @import("../language/compiler.zig").checkGraph(frontend.allocator, &graph);
+    const unit = graph.units.items[0];
+    return formatSource(frontend.allocator, unit.source_text, unit.headers.source_blocks, diagnostic, options);
 }
 
-fn formatSource(frontend: *Frontend, input: []const u8, diagnostic: *?source.Diagnostic, options: Options) ![]u8 {
-    const allocator = frontend.allocator;
+fn formatSource(allocator: std.mem.Allocator, input: []const u8, source_blocks: []const source.Span, diagnostic: *?source.Diagnostic, options: Options) ![]u8 {
     var tokens: std.ArrayList(Token) = .empty;
     defer tokens.deinit(allocator);
     var scanner: Lexer = .{ .source = input, .diagnostic = diagnostic };
+    var blocks = source_blocks;
     while (true) {
         const token = try scanner.next();
         if (token.kind == .eof) break;
         if (token.kind == .newline) continue;
-        try tokens.append(allocator, .{ .span = token.span, .kind = token.kind });
-        if (token.kind == .kw_typ or token.kind == .kw_setup_typst) {
-            var start = scanner.pos;
-            while (start < input.len and horizontal(input[start])) start += 1;
-            const length = try frontend.sourceBlock(input[start..]);
-            // An opaque token keeps the upstream-delimited region intact,
-            // including lines whose closing delimiter has Huak code after it.
-            try tokens.append(allocator, .{ .span = .{ .start = start, .end = start + length }, .kind = null });
-            scanner.pos = start + length;
-        }
+        if (blocks.len > 0 and token.span.start == blocks[0].start) {
+            try tokens.append(allocator, .{ .span = blocks[0], .kind = null });
+            scanner.pos = blocks[0].end;
+            blocks = blocks[1..];
+        } else try tokens.append(allocator, .{ .span = token.span, .kind = token.kind });
     }
     try markValueColons(allocator, tokens.items);
     var output: std.ArrayList(u8) = .empty;
@@ -204,8 +203,7 @@ const Indentation = struct {
 };
 
 fn expectFormat(input: []const u8, expected: []const u8, options: Options) !void {
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     var diagnostic: ?source.Diagnostic = null;
     const result = try formatWithOptions(&frontend, input, "/tmp/format.huak", &diagnostic, options);
     defer std.testing.allocator.free(result);
@@ -221,8 +219,7 @@ test "formatter normalizes assignment comparisons and comma gaps without changin
 }
 
 test "formatter retains semantic validation without executing the checked script" {
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     var diagnostic: ?source.Diagnostic = null;
     try std.testing.expectError(error.LanguageError, format(&frontend, "value:int:=\"wrong\"", "/tmp/invalid-format.huak", &diagnostic));
     const formatted = try format(&frontend, "panic(\"formatting must not execute\")", "/tmp/checked-format.huak", &diagnostic);
@@ -243,8 +240,7 @@ test "formatter preserves prefix adjacency units unary signs and statement separ
 
 test "formatter leaves the distinct execution results of spaced prefixes and adjacent calls intact" {
     const input = "fn wrap(x:int)->int return 2*x end\nmixfix(wrap) wrap _ in addition\na:=wrap (2)+3\nb:=wrap(2)+3\n";
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     var diagnostic: ?source.Diagnostic = null;
     const result = try format(&frontend, input, "/tmp/format.huak", &diagnostic);
     defer std.testing.allocator.free(result);
@@ -282,10 +278,8 @@ test "formatter leaves trailing list and import commas next to their closing del
 test "formatter releases token indentation and result owners on allocation failures" {
     const Check = struct {
         fn run(allocator: std.mem.Allocator) !void {
-            var frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-            defer frontend.deinit();
             var diagnostic: ?source.Diagnostic = null;
-            const result = try formatSource(&frontend, "x:=[\n1,2\n]\n", &diagnostic, .{});
+            const result = try formatSource(allocator, "x:=[\n1,2\n]\n", &.{}, &diagnostic, .{});
             allocator.free(result);
         }
     };
@@ -293,15 +287,13 @@ test "formatter releases token indentation and result owners on allocation failu
 }
 
 test "formatter indents structs and distinguishes value colons from types and slices" {
-    var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
     var diagnostic: ?source.Diagnostic = null;
     const input = "export struct Options\nwidth:int=2\nvalues:list=[1,2]\nend\nvalue:=Options(width :3,values:[1,2])\nvalue.width=4\nvalue.values+=5\nsettings:={\"label\" :\"Ω\",\"range\":value.values[0:1]}\n";
     const expected = "export struct Options\n    width:int = 2\n    values:list = [1, 2]\nend\nvalue := Options(width: 3, values: [1, 2])\nvalue.width = 4\nvalue.values += 5\nsettings := {\"label\": \"Ω\", \"range\": value.values[0:1]}\n";
-    const result = try formatSource(&frontend, input, &diagnostic, .{});
+    const result = try formatSource(std.testing.allocator, input, &.{}, &diagnostic, .{});
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings(expected, result);
-    const again = try formatSource(&frontend, result, &diagnostic, .{});
+    const again = try formatSource(std.testing.allocator, result, &.{}, &diagnostic, .{});
     defer std.testing.allocator.free(again);
     try std.testing.expectEqualStrings(result, again);
 }

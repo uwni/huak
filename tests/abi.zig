@@ -6,6 +6,13 @@ const binding = @import("typst_binding");
 const c = typst.c;
 const options = @import("test_options");
 
+test "an absent or incompatible optional projection library cannot supply a function table" {
+    const Projection = @import("huak").Projection;
+    try t.expectError(error.InvalidLibraryPath, Projection.open("valid.dylib\x00suffix"));
+    try t.expectError(error.LibraryNotFound, Projection.open("missing-projection-backend/no-library"));
+    try t.expectError(error.IncompatibleProjection, Projection.open(options.library_path));
+}
+
 fn check(library: *typst.Library, status: c.TypstStatus, report: *?*c.TypstDiagnostics) !void {
     defer {
         library.functions.diagnostics_release(report.*);
@@ -186,6 +193,20 @@ test "Zig block queries use native Typst syntax and preserve following host code
     try t.expectError(error.CompileFailed, library.sourceBlock("[open"));
     try t.expectError(error.CompileFailed, library.sourceBlock("{let text=\"open}"));
     try t.expectError(error.InvalidUtf8, library.sourceBlock("[\xff]"));
+    const brackets: [300]u8 = @splat(']');
+    const braces: [300]u8 = @splat('}');
+    const letters: [1000]u8 = @splat('x');
+    for ([_][]const u8{
+        "[`" ++ brackets ++ "`#box[结束]]",
+        "{/*" ++ braces ++ "*/ { let x = \"}\"; x } }",
+        "[#let x = \"" ++ brackets[0..150] ++ "\"; #x]",
+        "[hé" ++ letters[0..122] ++ "界 [outer [inner]]]",
+    }) |long| {
+        const input = try std.mem.concat(t.allocator, u8, &.{ long, "\nnext := " ++ letters });
+        defer t.allocator.free(input);
+        try t.expectEqual(long.len, try library.sourceBlock(input));
+        try t.expectError(error.CompileFailed, library.sourceBlock(long[0 .. long.len - 1]));
+    }
 }
 
 test "host engine inputs are copied and available to native code evaluation" {

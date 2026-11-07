@@ -1,0 +1,75 @@
+import "../distribution.csv" as rows
+import "../spectrum.csv" as spectrum_rows
+import assertions.assert
+import math.{max, min, randint, random}
+
+struct Histogram
+    bands:list
+    total:int
+end
+
+export struct Distribution
+    widths:Histogram
+    inner:Histogram
+    outer:Histogram
+    spectrum:list
+    grain:dict
+    rock:dict
+    qingtian:dict
+    album:dict
+end
+
+fn load(column:int) -> Distribution
+    hist := {"width_mm": Histogram([], 0), "corner_inner_mm": Histogram([], 0), "corner_outer_mm": Histogram([], 0)}
+    groups := {"grain": {}, "rock": {}, "qingtian": {}, "album": {}}
+    for i in 1:len(rows)-1 do
+        row := rows[i]
+        if dict_contains(hist, row[0]) then
+            count := int(row[column])
+            assert(count >= 0, "negative sample frequency")
+            if count > 0 then
+                h:Histogram := hist[row[0]]
+                h.total = h.total + count
+                h.bands += (float(row[1]), h.total)
+                hist[row[0]] = h
+            end
+        else
+            parameters:dict := groups[row[0]]
+            parameters[row[1]] = float(row[column])
+        end
+    end
+    mode := "zhuwen"
+    if column == 3 then mode = "baiwen" end
+    spectrum := []
+    for i in 1:len(spectrum_rows)-1 do
+        row := spectrum_rows[i]
+        if row[0] == mode then
+            spectrum += [[float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[5])]]
+        end
+    end
+    return Distribution(hist["width_mm"], hist["corner_inner_mm"], hist["corner_outer_mm"], spectrum, groups["grain"], groups["rock"], groups["qingtian"], groups["album"])
+end
+
+export laws := {"zhuwen": load(2), "baiwen": load(3)}
+
+fn draw_bin(law:Histogram) -> float
+    assert(law.total > 0, "empty seal distribution")
+    ticket := randint(1, law.total)
+    for band in law.bands do
+        if ticket <= band.y then return band.x end
+    end
+    return law.bands[len(law.bands)-1].x
+end
+
+// Chip bins have lower bounds; corner bins contain rounded bisector distances.
+export fn opening(law:Distribution) -> float
+    bin := draw_bin(law.widths)
+    low := max(bin, law.grain["low"])
+    high := min(bin + 0.1, law.grain["high"])
+    return low + random() * (high - low)
+end
+
+export fn corner_depth(law:Distribution, convex:bool) -> length
+    if convex then return draw_bin(law.outer) * 1mm end
+    return draw_bin(law.inner) * 1mm
+end

@@ -1,0 +1,3 @@
+// Independent Huak brushes. Each knife stroke is a fillable vector region.
+import "brushes/seal_knife.huak".{seal_edge, seal_knife}
+export seal_edge, seal_knife

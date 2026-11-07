@@ -169,7 +169,7 @@ const registry = .{
     .snapshot = .{ .namespace = .object, .args = .{ .target = .object }, .minimum = 1, .result = .picture },
     .object = .{ .namespace = .object, .implicit = true, .args = .{ .source = a, .fill = .color, .pen = .pen }, .minimum = 1, .result = .object },
     .object_clip = .{ .namespace = .object, .name = "clipped", .args = .{ .target = .object, .clip = .path }, .minimum = 2, .result = .picture },
-    .object_exclude = .{ .namespace = .object, .name = "exclude", .args = .{ .parent = .picture, .targets = .list, .hole = .path }, .minimum = 3, .result = u },
+    .object_exclude = .{ .namespace = .object, .name = "exclude", .args = .{ .parent = .picture, .targets = .list, .hole = .path, .brush = .pen }, .minimum = 3, .result = u },
     .object_style = .{ .namespace = .object, .name = "style", .args = .{ .target = .object, .fill = a, .pen = a }, .minimum = 1, .result = u },
     .object_visible = .{ .namespace = .object, .name = "show", .args = .{ .target = .object, .visible = .boolean }, .minimum = 2, .result = u },
     .object_transform = .{ .namespace = .object, .name = "transform", .args = .{ .target = .object, .transform = .transform }, .minimum = 2, .result = u },

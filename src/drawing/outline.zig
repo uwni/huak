@@ -88,15 +88,14 @@ fn Builder(comptime Resolver: type) type {
                 try self.budget.consume(1);
                 switch (command.*) {
                     .path => |*draw| {
-                        var path = borrowed(source.storage.allocator, try source.range(draw.path));
+                        var path = try source.geometry().view(source.storage.allocator, draw.path);
                         try self.add(&path, draw.style, draw.transform);
                     },
                     .push => |*group| {
                         var clip: ?Path = null;
                         if (group.clip) |reference| {
-                            const segments = try source.range(reference);
-                            try self.budget.geometry(segments);
-                            clip = borrowed(source.storage.allocator, segments);
+                            clip = try source.geometry().view(source.storage.allocator, reference);
+                            try self.budget.geometry(clip.?.segments.items);
                         }
                         if (clip) |*path| try self.result.beginScopeView(group.transform, path) else try self.result.beginScopeView(group.transform, null);
                     },
@@ -159,11 +158,11 @@ pub fn rawPaths(allocator: Allocator, source: *const DisplayList) ![]Path {
         try budget.consume(1);
         switch (command) {
             .path => |draw| {
-                const segments = try source.range(draw.path);
-                try budget.geometry(segments);
+                const view = try source.geometry().view(allocator, draw.path);
+                try budget.geometry(view.segments.items);
                 const world = draw.transform.then(transform);
                 if (!world.isFinite()) return error.NonFinite;
-                var copied = try copyPath(allocator, segments);
+                var copied = try view.copyView(allocator);
                 errdefer copied.deinit();
                 // Pure copies preserve all f64 bits, including signed zero.
                 if (!std.meta.eql(world, g.Transform{})) try copied.transform(world);
@@ -187,28 +186,6 @@ pub fn rawPaths(allocator: Allocator, source: *const DisplayList) ![]Path {
     }
     if (depth != 0) return error.UnbalancedGroups;
     return result.toOwnedSlice(allocator);
-}
-
-fn borrowed(allocator: Allocator, segments: []const Path.Segment) Path {
-    var result = Path.init(allocator);
-    result.segments.items = @constCast(segments);
-    result.segments.capacity = segments.len;
-    return result;
-}
-
-fn copyPath(allocator: Allocator, segments: []const Path.Segment) !Path {
-    var result = Path.init(allocator);
-    errdefer result.deinit();
-    try result.segments.ensureTotalCapacity(allocator, segments.len);
-    // Public constructors retain Path's validated topology and cached endpoint
-    // state. No borrowed picture geometry escapes through a returned Path.
-    for (segments) |segment| switch (segment) {
-        .move => |point| try result.moveTo(point),
-        .line => |point| try result.lineTo(point),
-        .cubic => |curve| try result.cubicTo(curve.c1, curve.c2, curve.end),
-        .close => try result.close(),
-    };
-    return result;
 }
 
 fn testCurve(allocator: Allocator) !Path {

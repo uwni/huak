@@ -11,7 +11,7 @@ const pens = @import("../../drawing/pen/root.zig");
 const physical = @import("pen.zig");
 const mesh_pdf = @import("../pdf/mesh.zig");
 
-pub const Options = struct {
+pub const SubmitOptions = struct {
     origin: g.Point = .zero,
     frames: ?[]const typst.FrameRef = null,
     /// IDs address picture.commands. Zero is unmarked; UINT64_MAX identifies
@@ -21,16 +21,68 @@ pub const Options = struct {
     pdf_mesh: bool = false,
 };
 
-pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, size: c.TypstPoint, options: Options) !typst.Document {
-    var builder: Builder = .{ .arena = .init(allocator), .library = library, .size = size, .pdf_mesh = options.pdf_mesh };
+pub const FrameBounds = struct {
+    frames: []const typst.FrameRef,
+    pub fn resolveBounds(self: FrameBounds, reference: u32) !g.BBox {
+        if (reference >= self.frames.len) return error.InvalidFrameReference;
+        const frame = self.frames[reference];
+        const box = try frame.layout.bounds(frame.index);
+        return .{ .min = .{ .x = box[0].x, .y = box[0].y }, .max = .{ .x = box[1].x, .y = box[1].y } };
+    }
+};
+
+pub fn viewport(picture: *const DisplayList, size: ?g.Point, frames: []const typst.FrameRef) !g.BBox {
+    if (size) |fixed| return .{ .min = .zero, .max = fixed };
+    var strokes: Builder.Strokes = .{ .workspace = .init(picture.storage.allocator) };
+    defer strokes.workspace.deinit();
+    return (try picture.measuredBounds(FrameBounds{ .frames = frames }, &strokes)) orelse .{ .min = .zero, .max = .zero };
+}
+
+/// Drawing defaults, grouping, IDs and physical-nib expansion belong to huak.
+/// Native calls submit complete paths and whole scene-item arrays.
+pub fn submit(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, width: f64, height: f64, options: SubmitOptions) !typst.Document {
+    return submitPicture(allocator, library, picture, .{ .x = width, .y = height }, options);
+}
+
+pub fn submitPicture(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, size: ?g.Point, options: SubmitOptions) !typst.Document {
+    library.clearError();
+    if (size) |p| if (!p.isFinite() or p.x <= 0 or p.y <= 0) return error.InvalidCanvas;
+    if (options.object_ids) |ids| {
+        if (ids.len != picture.commands.items.len) return error.InvalidObjectIds;
+        var seen: std.AutoHashMap(u64, void) = .init(allocator);
+        defer seen.deinit();
+        for (ids, picture.commands.items) |id, *command| {
+            if (id == 0) continue;
+            if (id == std.math.maxInt(u64) or command.* == .pop or (try seen.getOrPut(id)).found_existing) return error.InvalidObjectIds;
+        }
+    }
+    if (size != null) _ = try picture.bounds();
+    return document(allocator, library, picture, size, options);
+}
+
+fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, size: ?g.Point, options: SubmitOptions) !typst.Document {
+    var builder: Builder = .{ .arena = .init(allocator), .library = library, .size = undefined, .pdf_mesh = options.pdf_mesh };
     defer builder.deinit();
     const memory = builder.arena.allocator();
     // Resolve all physical pens before native submission, preserving geometry
     // diagnostics ahead of frame-reference or native scene errors.
-    const strokes = try builder.prepareStrokes(picture, options.pen_geometry);
+    const labels = options.frames orelse &.{};
+    var origin = options.origin;
+    const strokes = if (size) |page| fixed: {
+        builder.size = .{ .x = page.x, .y = page.y };
+        break :fixed try builder.prepareStrokes(picture, options.pen_geometry);
+    } else fitted: {
+        var strokes = builder.strokePass(options.pen_geometry);
+        defer strokes.workspace.deinit();
+        const box = (try picture.measuredBounds(FrameBounds{ .frames = labels }, &strokes)) orelse return error.InvalidCanvas;
+        const page = box.max.sub(box.min);
+        if (!page.isFinite() or page.x <= 0 or page.y <= 0) return error.InvalidCanvas;
+        builder.size = .{ .x = page.x, .y = page.y };
+        origin = box.min;
+        break :fitted strokes.items.items;
+    };
     builder.segments = try NativeSegments.init(memory, picture);
     try builder.levels.append(memory, .{});
-    const labels = options.frames orelse &.{};
     var stroke_index: usize = 0;
     for (picture.commands.items, 0..) |*command, index| {
         const id = if (options.object_ids) |ids| ids[index] else 0;
@@ -56,7 +108,7 @@ pub fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: 
     }
     if (builder.levels.items.len != 1) return error.UnbalancedGroup;
     const child = try builder.childScene(builder.levels.items[0].items.items);
-    var root_item = try builder.item(.{ .d = -1, .e = 0 - options.origin.x, .f = size.y + options.origin.y }, null, if (options.object_ids != null) std.math.maxInt(u64) else 0, null);
+    var root_item = try builder.item(.{ .d = -1, .e = -origin.x, .f = builder.size.y + origin.y }, null, if (options.object_ids != null) std.math.maxInt(u64) else 0, null);
     root_item.kind = c.TYPST_ITEM_SCENE;
     root_item.scene = child;
     const root = try builder.scene(&.{root_item});
@@ -176,23 +228,56 @@ const Builder = struct {
     }
 
     fn prepareStrokes(self: *Builder, picture: *const DisplayList, options: pens.StrokeOptions) ![]const ?Stroke {
-        const memory = self.arena.allocator();
-        var strokes: std.ArrayList(?Stroke) = .empty;
+        var strokes = self.strokePass(options);
+        defer strokes.workspace.deinit();
         for (picture.commands.items) |*command| {
             if (command.* != .path) continue;
             const draw = &command.path;
             const pen = if (draw.style.pen) |*value| value else continue;
             if (!pen.needsGeometry()) continue;
-            var stroke = (try physical.resolve(self.arena.child_allocator, try picture.range(draw.path), draw.style, options)) orelse {
-                try strokes.append(memory, null);
-                continue;
-            };
-            defer stroke.deinit();
-            const data = try memory.alloc(c.TypstPathSegment, stroke.path.segments.items.len);
-            for (stroke.path.segments.items, data) |segment, *out| out.* = pathSegment(segment);
-            try strokes.append(memory, .{ .path = try self.pathData(data), .style = try self.style(&stroke.style), .transform = stroke.transform });
+            _ = try strokes.visitStroke(try picture.geometry().view(picture.storage.allocator, draw.path), draw.style, null);
         }
-        return strokes.items;
+        return strokes.items.items;
+    }
+
+    fn strokePass(self: *Builder, options: pens.StrokeOptions) Strokes {
+        return .{ .workspace = .init(self.arena.child_allocator), .encoder = self, .options = options };
+    }
+
+    const Strokes = struct {
+        workspace: std.heap.ArenaAllocator,
+        encoder: ?*Builder = null,
+        options: pens.StrokeOptions = .{},
+        items: std.ArrayList(?Stroke) = .empty,
+
+        // Each physical path is expanded once. A fitted page measures the same
+        // outline that is submitted, before releasing the temporary Zig path.
+        pub fn visitStroke(self: *Strokes, center: Path, style_: *const DisplayList.Style, transform: ?g.Transform) !?g.BBox {
+            // Geometry temporaries end with this stroke; encoded paths live
+            // through native submission in the builder's separate arena.
+            _ = self.workspace.reset(.retain_capacity);
+            const stroke = try physical.resolvePath(self.workspace.allocator(), center, style_, self.options);
+            if (self.encoder) |builder| {
+                const native = try builder.encodeStroke(&stroke, &style_.pen.?);
+                try self.items.append(builder.arena.allocator(), native);
+            }
+            if (transform) |t| return physical.inkBounds(&stroke, center.segments.items, style_, t);
+            return null;
+        }
+    };
+
+    fn encodeStroke(self: *Builder, stroke: *const pens.Stroke, pen: *const DisplayList.Pen) !?Stroke {
+        if (stroke.transform == null and stroke.path.segments.items.len == 0) return null;
+        if (pen.motion) |motion| try physical.checkOutputPrecision(&stroke.path, motion.tolerance);
+        const data = try self.arena.allocator().alloc(c.TypstPathSegment, stroke.path.segments.items.len);
+        for (stroke.path.segments.items, data) |segment, *out| out.* = pathSegment(segment);
+        // The normalized ellipse uses a unit circular stroke. Dashes have
+        // already been applied to the centerline by the geometry kernel.
+        const native_style: DisplayList.Style = if (stroke.transform != null)
+            .{ .pen = .{ .color = pen.color, .cap = pen.cap, .join = pen.join, .miter_limit = pen.miter_limit } }
+        else
+            .{ .fill = pen.color };
+        return .{ .path = try self.pathData(data), .style = try self.style(&native_style), .transform = stroke.transform };
     }
 
     fn append(self: *Builder, item_: c.TypstSceneItem) !void {
@@ -219,6 +304,7 @@ const Builder = struct {
     fn paint(self: *Builder, path_: *const c.TypstPath, style_: *const c.TypstStyle, gradient: ?*const Gradient, transform: g.Transform, id: u64) !void {
         if (gradient) |value| if (value.* == .mesh_fill) {
             if (!self.pdf_mesh) return error.MeshRequiresPdf;
+            if (!try self.library.supports(c.TYPST_CAP_PDF_IMPORT)) return error.Unsupported;
             const encoded = try mesh_pdf.encode(self.arena.child_allocator, value.mesh_fill, path_, style_.fill_rule == c.TYPST_FILL_EVENODD);
             defer mesh_pdf.release(encoded.buffer);
             if (self.image_context == null) self.image_context = try typst.Engine.init(self.library, .{});
@@ -422,10 +508,10 @@ test "mixed nib and ordinary paths convert only referenced intervals" {
         for ([_]bool{ false, true }) |filled| {
             var picture = DisplayList.init(t.allocator);
             defer picture.deinit();
-            try picture.sources.append(picture.storage.allocator, &source);
+            try picture.sources.append(picture.storage.allocator, .{ .segments = &source });
             const nib_range: DisplayList.PathRef = .{ .first = 0, .count = 2, .source = 1 };
             const ordinary: DisplayList.PathRef = .{ .first = 2, .count = 2, .source = 1 };
-            const pen: DisplayList.Pen = .{ .nib = nib, .cap = .round, .join = .round };
+            const pen: DisplayList.Pen = .{ .nib = nib, .cap = .round, .join = .round, .dash = &.{ 4, 2 }, .dash_phase = 1 };
             const draw: DisplayList.PathCommand = .{ .path = nib_range, .style = &.{ .pen = pen, .fill = if (filled) DisplayList.Color.black else null }, .transform = .{} };
             try picture.commands.append(picture.storage.allocator, .{ .path = draw });
             try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = ordinary, .style = &.{ .pen = .{} }, .transform = .{} } });
@@ -434,9 +520,15 @@ test "mixed nib and ordinary paths convert only referenced intervals" {
             defer builder.arena.deinit();
             const strokes = try builder.prepareStrokes(&picture, .{});
             try t.expectEqual(@as(usize, 1), strokes.len);
-            var resolved = (try physical.resolve(t.allocator, source[0..2], draw.style, .{})).?;
-            defer resolved.deinit();
+            var resolved = try physical.resolve(t.allocator, source[0..2], draw.style, .{});
+            defer resolved.path.deinit();
             const stroke = strokes[0].?;
+            if (nib == .ellipse) {
+                try t.expectEqual(@as(u32, c.TYPST_STYLE_STROKE), stroke.style.flags);
+                try t.expectEqual(@as(f64, 1), stroke.style.stroke_width_pt);
+                try t.expectEqual(@as(usize, 0), stroke.style.dash_count);
+                try t.expectEqual(@as(f64, 0), stroke.style.dash_phase_pt);
+            } else try t.expectEqual(@as(u32, c.TYPST_STYLE_FILL), stroke.style.flags);
             for (resolved.path.segments.items, stroke.path.segments[0..stroke.path.segment_count]) |segment, converted| try t.expectEqualDeep(pathSegment(segment), converted);
             var counter = t.FailingAllocator.init(t.allocator, .{});
             {
@@ -469,7 +561,7 @@ test "native intervals share repeated and overlapping ranges without duplicating
     };
     var picture = DisplayList.init(t.allocator);
     defer picture.deinit();
-    try picture.sources.append(picture.storage.allocator, &source);
+    try picture.sources.append(picture.storage.allocator, .{ .segments = &source });
     const first: DisplayList.PathRef = .{ .first = 2, .count = 5, .source = 1 };
     const overlap: DisplayList.PathRef = .{ .first = 5, .count = 4, .source = 1 };
     try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = first, .style = &.{ .fill = .black }, .transform = .{} } });
@@ -501,11 +593,11 @@ test "consecutive native ranges allocate the same interval storage as one range"
         .{ .line = .{ .x = @floatFromInt(index), .y = 1 } };
     var whole = DisplayList.init(t.allocator);
     defer whole.deinit();
-    try whole.sources.append(whole.storage.allocator, &source);
+    try whole.sources.append(whole.storage.allocator, .{ .segments = &source });
     try whole.commands.append(whole.storage.allocator, .{ .path = .{ .path = .{ .first = 0, .count = source.len, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
     var separate = DisplayList.init(t.allocator);
     defer separate.deinit();
-    try separate.sources.append(separate.storage.allocator, &source);
+    try separate.sources.append(separate.storage.allocator, .{ .segments = &source });
     for (0..800) |index| try separate.commands.append(separate.storage.allocator, .{ .path = .{ .path = .{ .first = index * 2, .count = 2, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
     // Repeating the final reference must not grow its interval storage either.
     try separate.commands.append(separate.storage.allocator, .{ .path = .{ .path = .{ .first = source.len - 2, .count = 2, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
@@ -544,7 +636,7 @@ fn nativeIntervalExercise(allocator: std.mem.Allocator) !void {
     };
     var picture = DisplayList.init(std.testing.allocator);
     defer picture.deinit();
-    try picture.sources.append(picture.storage.allocator, &source);
+    try picture.sources.append(picture.storage.allocator, .{ .segments = &source });
     const clip: DisplayList.PathRef = .{ .first = 0, .count = source.len, .source = 1 };
     const hole: DisplayList.PathRef = .{ .first = 5, .count = 4, .source = 1 };
     const owned: DisplayList.PathRef = .{ .first = 0, .count = source.len };
@@ -576,7 +668,7 @@ test "empty and invalid ranges retain bounds and submission error order" {
     const source = [_]Path.Segment{ .{ .move = .{ .x = 1, .y = 2 } }, .{ .line = .{ .x = 3, .y = 4 } } };
     var picture = DisplayList.init(t.allocator);
     defer picture.deinit();
-    try picture.sources.append(picture.storage.allocator, &source);
+    try picture.sources.append(picture.storage.allocator, .{ .segments = &source });
     const bad: DisplayList.PathRef = .{ .first = 2, .count = 1, .source = 1 };
     try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = .{ .first = 1, .count = 0, .source = 1 }, .style = &.{ .fill = .black }, .transform = .{} } });
     try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = bad, .style = &.{ .fill = .black }, .transform = .{} } });
@@ -607,23 +699,57 @@ test "empty and invalid ranges retain bounds and submission error order" {
     try t.expectError(error.InvalidPath, document(t.allocator, &library, &picture, .{ .x = 10, .y = 10 }, .{}));
 }
 
+test "moving pen workspace is reused and encoded coordinates retain their precision budget" {
+    const a = std.testing.allocator;
+    var path = Path.init(a);
+    defer path.deinit();
+    try path.moveTo(.{ .x = 100, .y = 0 });
+    try path.lineTo(.{ .x = 110, .y = 0 });
+    const motion: pens.Motion = .{ .tracks = &.{.{ .kind = .scale, .first = 0, .len = 2 }}, .keys = &.{ .{ .t = 0, .value = 1 }, .{ .t = 1, .value = 2 } } };
+    const paint: DisplayList.Pen = .{ .nib = pens.Nib.square(), .motion = &motion };
+    var geometric = try pens.resolveStroke(a, a, path, &paint, .{ .tolerance = 1e-7 }, .outline);
+    defer geometric.path.deinit();
+    try std.testing.expect(geometric.path.segments.items.len > 0);
+    try std.testing.expectError(error.OutputPrecisionRange, physical.checkOutputPrecision(&geometric.path, 1e-7));
+    try physical.checkOutputPrecision(&geometric.path, 0.001);
+
+    var outer = std.heap.ArenaAllocator.init(a);
+    defer outer.deinit();
+    var measure: Builder.Strokes = .{ .workspace = .init(outer.allocator()) };
+    defer measure.workspace.deinit();
+    for (0..2) |_| _ = try measure.visitStroke(path, &.{ .pen = paint }, .{});
+    const capacity = outer.queryCapacity();
+    for (0..32) |_| _ = try measure.visitStroke(path, &.{ .pen = paint }, .{});
+    try std.testing.expectEqual(capacity, outer.queryCapacity());
+}
+
 fn prepareStrokeExercise(allocator: std.mem.Allocator) !void {
-    const source = [_]Path.Segment{ .{ .move = .{ .x = 0, .y = 0 } }, .{ .line = .{ .x = 20, .y = 0 } } };
+    const source = [_]Path.Segment{ .{ .move = .{ .x = 10, .y = 20 } }, .{ .line = .{ .x = 40, .y = 20 } }, .{ .line = .{ .x = 40, .y = 40 } }, .close };
     var picture = DisplayList.init(std.testing.allocator);
     defer picture.deinit();
-    try picture.sources.append(picture.storage.allocator, &source);
+    try picture.sources.append(picture.storage.allocator, .{ .segments = &source });
     for ([_]pens.Nib{ pens.Nib.square(), .{ .ellipse = .{ .a = 4, .d = 2 } } }) |nib| {
-        const style = try picture.storage.styles.intern(&.{ .pen = .{ .nib = nib, .dash = &.{ 4, 2 } } });
-        try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = .{ .first = 0, .count = source.len, .source = 1 }, .style = style, .transform = .{} } });
+        for ([_][]const f64{ &.{}, &.{ 4, 2 } }) |dash| {
+            const style = try picture.storage.styles.intern(&.{ .pen = .{ .nib = nib, .cap = .round, .join = .round, .dash = dash, .dash_phase = 1 } });
+            var first = try physical.resolve(allocator, &source, style, .{});
+            defer first.path.deinit();
+            var second = try physical.resolve(allocator, &source, style, .{});
+            defer second.path.deinit();
+            try std.testing.expect(first.path.segments.items.ptr != second.path.segments.items.ptr);
+            try std.testing.expectEqualDeep(first.path.segments.items, second.path.segments.items);
+            try picture.commands.append(picture.storage.allocator, .{ .path = .{ .path = .{ .first = 0, .count = source.len, .source = 1 }, .style = style, .transform = .{} } });
+        }
     }
     var library: typst.Library = undefined;
     var builder: Builder = .{ .arena = .init(allocator), .library = &library, .size = .{ .x = 10, .y = 10 } };
     defer builder.arena.deinit();
     const strokes = try builder.prepareStrokes(&picture, .{});
-    try std.testing.expectEqual(@as(usize, 2), strokes.len);
-    for (strokes) |stroke| try std.testing.expect(stroke.?.path.segment_count != 0);
-    try std.testing.expect(strokes[0].?.style.flags & c.TYPST_STYLE_FILL != 0);
-    try std.testing.expect(strokes[1].?.style.flags & c.TYPST_STYLE_STROKE != 0);
+    try std.testing.expectEqual(picture.commands.items.len, strokes.len);
+    for (strokes, picture.commands.items) |stroke, command| {
+        try std.testing.expect(stroke.?.path.segment_count != 0);
+        const flags: u32 = if (command.path.style.pen.?.nib.? == .ellipse) c.TYPST_STYLE_STROKE else c.TYPST_STYLE_FILL;
+        try std.testing.expectEqual(flags, stroke.?.style.flags);
+    }
 }
 
 test "native stroke preparation releases every failed allocation" {
@@ -637,7 +763,7 @@ test "independent geometry banks preserve source identity and convert each used 
     const first = [_]Path.Segment{ .{ .move = .{ .x = 1, .y = 2 } }, .{ .line = .{ .x = 3, .y = 4 } } };
     const second = [_]Path.Segment{ .{ .move = .{ .x = 10, .y = 20 } }, .{ .line = .{ .x = 30, .y = 40 } } };
     var picture = DisplayList.init(t.allocator);
-    try picture.sources.appendSlice(t.allocator, &.{ &first, &second });
+    try picture.sources.appendSlice(t.allocator, &.{ .{ .segments = &first }, .{ .segments = &second } });
     defer picture.deinit();
     const one: DisplayList.PathRef = .{ .first = 0, .count = first.len, .source = 1 };
     const two: DisplayList.PathRef = .{ .first = 0, .count = second.len, .source = 2 };

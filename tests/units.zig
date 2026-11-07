@@ -6,11 +6,6 @@ const options = @import("test_options");
 const l = huak.language;
 const t = std.testing;
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 test "unit syntax and dimensions reach native geometry and typography with identical optimized results" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
@@ -56,7 +51,7 @@ test "unit syntax and dimensions reach native geometry and typography with ident
     ;
     for ([_]bool{ false, true }) |optimize| {
         var diagnostic: ?l.compiler.Diagnostic = null;
-        var program = l.compiler.compile(t.allocator, source, "native-units.huak", .{ .optimize = optimize, .source_parser = .{ .ptr = &library, .vtable = &.{ .block = sourceBlock } } }, &diagnostic) catch |err| {
+        var program = l.compiler.compile(t.allocator, source, "native-units.huak", .{ .optimize = optimize, .source_parser = .init(&library) }, &diagnostic) catch |err| {
             if (diagnostic) |detail| std.debug.print("units compiler: {s}\n", .{detail.text()});
             return err;
         };

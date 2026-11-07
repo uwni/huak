@@ -22,29 +22,32 @@ pub const Side = struct {
         const n = @max(@abs(self.a), @abs(self.b));
         return (self.a / n) / (self.a / n - self.b / n);
     }
-    fn inside(self: Side, u: f64) bool {
-        return (1 - u) * self.a + u * self.b < 0;
+    /// All sign-changing roots have already been inserted as cuts. The
+    /// open interval starting at lo takes its sign from the corresponding
+    /// endpoint, even when no binary64 value lies strictly inside it.
+    fn insideRightOf(self: Side, lo: f64, cut: ?f64) bool {
+        if (cut) |r| return if (lo < r) self.a < 0 else self.b < 0;
+        return self.a < 0 or self.b < 0;
     }
 };
 
 // Emit the oriented difference of two sheet restrictions on the same edge.
 // Interior mesh edges are cancelled here, before allocating any geometry.
 pub fn difference(out: *Boundary, a: Point, b: Point, positive: Side, negative: Side) !void {
-    if (!positive.changes() and !negative.changes()) {
+    const positive_cut = if (positive.changes()) positive.root() else null;
+    const negative_cut = if (negative.changes()) negative.root() else null;
+    if (positive_cut == null and negative_cut == null) {
         const p = positive.a < 0 or positive.b < 0;
         const n = negative.a < 0 or negative.b < 0;
         if (p != n) try out.line(if (p) a else b, if (p) b else a);
         return;
     }
-    var cuts = [4]f64{ 0, 1, 1, 1 };
-    if (positive.changes()) cuts[1] = positive.root();
-    if (negative.changes()) cuts[2] = negative.root();
+    var cuts = [4]f64{ 0, positive_cut orelse 1, negative_cut orelse 1, 1 };
     if (cuts[2] < cuts[1]) std.mem.swap(f64, &cuts[1], &cuts[2]);
     for (cuts[0..3], cuts[1..]) |lo, hi| {
         if (hi <= lo) continue;
-        const mid = (lo + hi) / 2;
-        const p = positive.inside(mid);
-        if (p == negative.inside(mid)) continue;
+        const p = positive.insideRightOf(lo, positive_cut);
+        if (p == negative.insideRightOf(lo, negative_cut)) continue;
         const from = a.lerp(b, lo);
         const to = a.lerp(b, hi);
         try out.line(if (p) from else to, if (p) to else from);
@@ -113,6 +116,19 @@ pub const Sides = struct {
 fn cross(a: Point, b: Point) f64 {
     const product = a.y * b.x;
     return @mulAdd(f64, a.x, b.y, -product) - @mulAdd(f64, a.y, b.x, -product);
+}
+
+test "edge between adjacent representable fold roots survives and cancels its reverse" {
+    const lo: f64 = 0.5;
+    const hi = std.math.nextAfter(f64, lo, 1);
+    const first: Side = .{ .a = lo, .b = lo - 1 };
+    const second: Side = .{ .a = hi, .b = hi - 1 };
+    var boundary: Boundary = .{ .allocator = std.testing.allocator, .limit = 1 };
+    defer boundary.deinit();
+    try difference(&boundary, .zero, .{ .x = 1, .y = 0 }, first, second);
+    try std.testing.expectEqual(@as(usize, 1), boundary.lines.count());
+    try boundary.line(.{ .x = hi, .y = 0 }, .{ .x = lo, .y = 0 });
+    try std.testing.expectEqual(@as(usize, 0), boundary.lines.count());
 }
 
 test "fold of (u+t,ut) is exactly the parabola (2t,t squared)" {

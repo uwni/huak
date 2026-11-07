@@ -155,10 +155,10 @@ fn phases(init: std.process.Init, library_path: []const u8, script: []const u8, 
     const io = init.io;
     const a = std.heap.smp_allocator;
     const path = try std.Io.Dir.cwd().realPathFileAlloc(io, script, init.arena.allocator());
-    var frontend: huak.tooling.Frontend = .{ .allocator = a, .io = io, .library_path = library_path };
-    defer frontend.deinit();
     const loading = std.Io.Clock.awake.now(io);
-    const library = try frontend.getLibrary();
+    var library = try typst.Library.open(library_path);
+    defer library.deinit();
+    const frontend: huak.tooling.Frontend = .{ .allocator = a, .io = io, .source_parser = .init(&library) };
     std.debug.print("mode={s} library={s} profile={any} load_ms={d:.3}\n", .{ @tagName(builtin.mode), library_path, instrument, ms(loading, std.Io.Clock.awake.now(io)) });
     var expected: ?Digest = null;
     for (0..count) |iteration| {
@@ -173,12 +173,18 @@ fn phases(init: std.process.Init, library_path: []const u8, script: []const u8, 
         };
         const compiled = std.Io.Clock.awake.now(io);
         var profile: Profile = .{ .io = io, .base = .{} };
-        var prepared = try prepare(a, io, library, &program, if (instrument) &profile else null);
-        program.deinit();
+        var prepared = acquire: {
+            defer program.deinit();
+            break :acquire try prepare(a, io, &library, &program, if (instrument) &profile else null);
+        };
         const detached = std.Io.Clock.awake.now(io);
         var scratch: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        errdefer scratch.deinit();
+        errdefer prepared.batch.deinit();
         var native_error: ?typst.Buffer = null;
+        errdefer if (native_error) |*detail| detail.deinit();
         var svg = try prepared.batch.render(scratch.allocator(), 0, .svg, &native_error);
+        errdefer svg.deinit();
         const rendered = std.Io.Clock.awake.now(io);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = output, .data = svg.bytes() });
         const written = std.Io.Clock.awake.now(io);

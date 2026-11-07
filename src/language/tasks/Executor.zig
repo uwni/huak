@@ -195,7 +195,7 @@ const Shared = struct {
     fn compute(self: *Shared, index: usize) bool {
         const outcome = &self.outcomes[index];
         const task = self.region.tasks[index];
-        defer self.owner.runtime.library.clearError();
+        defer self.owner.runtime.backends.typst.clearError();
         const active = self.active.fetchAdd(1, .acq_rel) + 1;
         _ = self.peak.fetchMax(active, .monotonic);
         _ = self.executed.fetchAdd(1, .monotonic);

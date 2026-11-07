@@ -14,26 +14,42 @@ pub const Style = style.Style;
 pub const Metrics = struct { width: f64, height: f64, baseline: f64 };
 /// Source zero is this picture's owned geometry. Other sources borrow the
 /// corresponding segment bank for the lifetime of the immutable picture view.
-pub const PathRef = struct { first: usize, count: usize, source: u32 = 0 };
-/// Read-only geometry banks. Both rendering and scene snapshots borrow this
-/// view; only the original owners may free or grow the underlying arrays.
+pub const PathRef = struct { first: usize, count: usize, source: u32 = 0, knot_table: u32 = 0 };
+pub const Bank = struct { segments: []const Path.Segment = &.{}, blocks: []const KnotBlock = &.{} };
+/// The same source selects both the segments and the directory of immutable
+/// knot tables. A table ID is local to its bank; zero is an unannotated path.
 pub const Geometry = struct {
-    primary: []const Path.Segment = &.{},
-    sources: []const []const Path.Segment = &.{},
-
-    pub fn source(self: Geometry, index: u32) Error![]const Path.Segment {
+    primary: Bank = .{},
+    sources: []const Bank = &.{},
+    fn bank(self: Geometry, index: u32) Error!Bank {
         if (index == 0) return self.primary;
         if (index > self.sources.len) return error.InvalidPath;
         return self.sources[index - 1];
     }
-
-    pub fn range(self: Geometry, reference: PathRef) Error![]const Path.Segment {
-        const segments = try self.source(reference.source);
-        if (reference.first > segments.len or reference.count > segments.len - reference.first) return error.InvalidPath;
-        return segments[reference.first..][0..reference.count];
+    pub fn source(self: Geometry, index: u32) Error![]const Path.Segment {
+        return (try self.bank(index)).segments;
+    }
+    pub fn range(self: Geometry, ref: PathRef) Error![]const Path.Segment {
+        const segments = try self.source(ref.source);
+        if (ref.first > segments.len or ref.count > segments.len - ref.first) return error.InvalidPath;
+        return segments[ref.first..][0..ref.count];
+    }
+    fn table(self: Geometry, ref: PathRef) Error!?*const Path.KnotTable {
+        if (ref.knot_table == 0) return null;
+        const blocks = (try self.bank(ref.source)).blocks;
+        if (ref.knot_table > blocks.len) return error.InvalidPath;
+        return &blocks[ref.knot_table - 1].table;
+    }
+    /// Read-only path. Its bank owns both arrays until mutation or release.
+    pub fn view(self: Geometry, a: std.mem.Allocator, ref: PathRef) Error!Path {
+        var path_ = Path.init(a);
+        path_.segments.items = @constCast(try self.range(ref));
+        path_.knots = @constCast(try self.table(ref));
+        return path_;
     }
 };
 pub const PathCommand = struct { path: PathRef, style: *const Style, transform: g.Transform };
+
 pub const Label = struct { reference: u32, metrics: Metrics, transform: g.Transform };
 pub const Scope = struct { transform: g.Transform, clip: ?PathRef };
 pub const Error = std.mem.Allocator.Error || error{
@@ -51,27 +67,68 @@ pub const Error = std.mem.Allocator.Error || error{
 };
 
 const Storage = @This();
+const KnotBlock = struct { after: usize, table: Path.KnotTable };
 
 allocator: std.mem.Allocator,
 styles: style.Pool,
 segments: std.ArrayList(Path.Segment) = .empty,
+knot_blocks: std.ArrayList(KnotBlock) = .empty,
+knot_bytes: usize = 0,
 
 pub fn init(allocator: std.mem.Allocator) Storage {
     return .{ .allocator = allocator, .styles = .init(allocator) };
 }
 pub fn deinit(self: *Storage) void {
+    self.truncateGeometry(0);
+    self.knot_blocks.deinit(self.allocator);
     self.segments.deinit(self.allocator);
     self.styles.deinit();
     self.* = undefined;
 }
-pub fn range(self: *const Storage, reference: PathRef) Error![]const Path.Segment {
-    return (Geometry{ .primary = self.segments.items }).range(reference);
+pub fn knotBytes(self: *const Storage) usize {
+    return self.knot_bytes + self.knot_blocks.capacity * @sizeOf(KnotBlock);
 }
+pub fn truncateGeometry(self: *Storage, count: usize) void {
+    while (self.knot_blocks.getLastOrNull()) |block| {
+        if (block.after <= count) break;
+        _ = self.knot_blocks.pop();
+        self.knot_bytes -= block.table.entries.items.len * @sizeOf(Path.KnotTable.Knot);
+        var table = block.table;
+        table.entries.deinit(self.allocator);
+    }
+    self.segments.items.len = count;
+}
+fn copyKnots(self: *Storage, src: ?*const Path.KnotTable) Error!u32 {
+    const table = (src orelse return 0).*;
+    if (table.entries.items.len == 0) return 0;
+    if (self.knot_blocks.items.len >= std.math.maxInt(u32)) return error.InvalidPath;
+    try self.knot_blocks.ensureUnusedCapacity(self.allocator, 1);
+    self.knot_blocks.appendAssumeCapacity(.{ .after = self.segments.items.len, .table = try table.clone(self.allocator) });
+    self.knot_bytes += table.entries.items.len * @sizeOf(Path.KnotTable.Knot);
+    return @intCast(self.knot_blocks.items.len);
+}
+pub fn bank(self: *const Storage) Bank {
+    return .{ .segments = self.segments.items, .blocks = self.knot_blocks.items };
+}
+pub fn asGeometry(self: *const Storage) Geometry {
+    return .{ .primary = self.bank() };
+}
+/// A snapshot borrows its primary geometry as one unit, just like other banks.
+pub fn borrowBank(self: *Storage, src: *const Storage) void {
+    self.segments = src.segments;
+    self.knot_blocks = src.knot_blocks;
+}
+pub fn range(self: *const Storage, reference: PathRef) Error![]const Path.Segment {
+    return self.asGeometry().range(reference);
+}
+
 /// Callers validate inputs and reserve their node/command first.
 pub fn path(self: *Storage, value: *const Path, style_value: *const Style, transform: g.Transform) Error!PathCommand {
     const paint = try self.styles.intern(style_value);
     errdefer self.styles.release(paint);
-    const reference = try self.addSegments(value.segments.items);
+    var reference = try self.addSegments(value.segments.items);
+    errdefer self.truncateGeometry(reference.first);
+    reference.knot_table = try self.copyKnots(value.knots);
     return .{ .path = reference, .style = paint, .transform = transform };
 }
 /// Inputs have passed validateScope; the caller has reserved its node/command.
@@ -89,10 +146,15 @@ pub fn copyRange(self: *Storage, geometry: Geometry, reference: PathRef) PathRef
     self.segments.appendSliceAssumeCapacity(geometry.range(reference) catch unreachable);
     return result;
 }
-pub fn copyPath(self: *Storage, geometry: Geometry, value: PathCommand) Error!PathCommand {
+/// same_storage requires a command already owned by self. Its immutable
+/// knot block predates the new segment range and survives clone rollback.
+pub fn copyPath(self: *Storage, geometry: Geometry, value: PathCommand, ownership: enum { independent, same_storage }) Error!PathCommand {
     var result = value;
     result.path = self.copyRange(geometry, result.path);
+    errdefer self.truncateGeometry(result.path.first);
     result.style = try self.styles.intern(result.style);
+    errdefer self.styles.release(result.style);
+    result.path.knot_table = if (ownership == .same_storage) value.path.knot_table else try self.copyKnots(try geometry.table(value.path));
     return result;
 }
 pub fn copyScope(self: *Storage, geometry: Geometry, value: Scope) Scope {
@@ -189,4 +251,35 @@ pub fn validatePath(segments: []const Path.Segment, closed: bool) Error!void {
     // A move-only path is valid editable source geometry. Clip regions still
     // require a drawable, closed contour; empty drawing commands stay invalid.
     if (segments.len == 0 or (closed and (!drawable or open))) return error.InvalidPath;
+}
+
+test "copying solved curves owns the knot data and rolls back failed allocations" {
+    const t = std.testing;
+    var path_ = try @import("path/construct.zig").construct(t.allocator, &.{ .zero, .{ .x = 4, .y = 7 }, .{ .x = 9, .y = 2 } }, &.{ .smooth, .smooth }, .{});
+    defer path_.deinit();
+    var source = Storage.init(t.allocator);
+    defer source.deinit();
+    const draw = try source.path(&path_, &.{ .fill = .black }, .{});
+    const view = try source.asGeometry().view(t.allocator, draw.path);
+    try t.expect(view.knotRecords().ptr != path_.knotRecords().ptr);
+    const exercise = struct {
+        fn run(a: std.mem.Allocator, geometry: Geometry, command: PathCommand) !void {
+            var target = Storage.init(a);
+            defer target.deinit();
+            try target.segments.ensureUnusedCapacity(a, command.path.count);
+            const copy = target.copyPath(geometry, command, .independent) catch |err| {
+                try t.expectEqual(@as(usize, 0), target.segments.items.len);
+                try t.expectEqual(@as(usize, 0), target.knot_bytes);
+                return err;
+            };
+            const from = try geometry.view(a, command.path);
+            const to = try target.asGeometry().view(a, copy.path);
+            try t.expectEqualDeep(from.knotRecords(), to.knotRecords());
+            try t.expect(to.knotRecords().ptr != from.knotRecords().ptr);
+            target.truncateGeometry(0);
+            try t.expectEqual(@as(usize, 0), target.knot_blocks.items.len);
+            try t.expectEqual(@as(usize, 0), target.knot_bytes);
+        }
+    };
+    try t.checkAllAllocationFailures(t.allocator, exercise.run, .{ source.asGeometry(), draw });
 }

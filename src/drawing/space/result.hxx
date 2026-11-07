@@ -2,13 +2,17 @@
 #include "projection.h"
 #include <HLRAlgo_Projector.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
-#include <TopTools_IndexedMapOfShape.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <NCollection_List.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS_Edge.hxx>
 #include <memory>
 #include <optional>
 #include <vector>
 
 namespace huak::space {
+using ShapeList = NCollection_List<TopoDS_Shape>;
+using ShapeIndex = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
 TopoDS_Shape buildShape(const HuakModelShape &,
                         const std::vector<TopoDS_Shape> &, double tolerance);
 struct Result {
@@ -41,7 +45,7 @@ struct Surfaces {
   explicit Surfaces(const std::vector<TopoDS_Shape> &shapes);
   const std::vector<Hit> &along(const gp_Lin &, const gp_Dir &toward_eye);
   std::vector<std::unique_ptr<IntCurvesFace_ShapeIntersector>> probes;
-  std::vector<TopTools_IndexedMapOfShape> faces;
+  std::vector<ShapeIndex> faces;
   std::vector<Hit> hits;
   size_t count = 0;
 };
@@ -50,6 +54,7 @@ void drawEdges(Result &, Surfaces &, const std::vector<Feature> &,
                std::vector<TopoDS_Edge> *cell_boundaries);
 void intersectShapes(const std::vector<TopoDS_Shape> &, const Surfaces &,
                      std::vector<Feature> &);
+TopoDS_Shape splitFaces(const ShapeList &objects, const ShapeList &tools);
 void projectFaces(Result &, Surfaces &, const std::vector<TopoDS_Shape> &,
                   const std::vector<TopoDS_Edge> &cell_boundaries,
                   const HLRAlgo_Projector &, const gp_Dir &toward_eye,

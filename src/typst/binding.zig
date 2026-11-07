@@ -51,12 +51,16 @@ pub fn compatible(version: u32, capabilities: u64) bool {
 }
 
 pub fn load(dynamic: *std.DynLib) Error!Functions {
+    var info: c.TypstVersionInfo = undefined;
+    return bind(dynamic, &info);
+}
+
+pub fn bind(dynamic: anytype, info: *c.TypstVersionInfo) Error!Functions {
     const version_function = dynamic.lookup(*const @TypeOf(c.typst_abi_version), "typst_abi_version") orelse return error.MissingSymbol;
     const version = version_function();
     if ((version >> 16) != (abi_version >> 16) or (version & 0xffff) < (abi_version & 0xffff)) return error.IncompatibleAbi;
     const information = dynamic.lookup(*const @TypeOf(c.typst_version_info), "typst_version_info") orelse return error.MissingSymbol;
-    var info: c.TypstVersionInfo = undefined;
-    if (information(&info) != c.TYPST_OK or !compatible(version, info.capabilities) or
+    if (information(info) != c.TYPST_OK or !compatible(version, info.capabilities) or
         info.abi_major != (version >> 16) or info.abi_minor != (version & 0xffff)) return error.IncompatibleAbi;
     var functions: Functions = undefined;
     inline for (@typeInfo(Functions).@"struct".field_names) |name| {

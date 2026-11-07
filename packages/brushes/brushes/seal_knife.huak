@@ -1,0 +1,245 @@
+import assertions.assert
+import geometry.{compound, contour_ranges, measure, region_difference, region_union, samples_at_length, subpaths}
+import math.{abs, cos, dot, floor, log, max, min, norm, pow, randn, random, sqrt, unit}
+import color.rgb
+import pen.{makepen, stroke_outline, stroke_path}
+import pen_motion.along_normal
+import "seal_data.huak" as samples
+import "stroke_wander.huak".stroke_wander
+import "straight_sides.huak".{Flank, continuous, straight_sides, exterior_count, contour_boxes, same_contours}
+
+// Wrap the profile along the exposed edge. The two faces of this cutter
+// straddle the edge, so union and subtraction expose opposite faces.
+fn chip(edge:measure, center:length, opening:length, profile:list) -> path
+    last := len(profile) - 1
+    distances := []
+    for i in 0:last do
+        along := profile[i].x - 0.5
+        distance := center + along * opening
+        if distance < 0pt then distance = distance + edge.length
+        elseif distance >= edge.length then distance = distance - edge.length end
+        distances += distance
+    end
+    samples := samples_at_length(edge, distances)
+    chord := samples[last][1] - samples[0][1]
+    if norm(chord) == 0pt then return compound([]) end
+    tangent := unit(chord)
+    normal := (-tangent.y, tangent.x)
+    upper := []
+    lower := []
+    for i in 0:last do
+        depth := opening * profile[i].y
+        // A single-valued fracture profile cannot wrap back over its own shoulders.
+        if dot(samples[i][2], tangent) <= 0 then return compound([]) end
+        upper += samples[i][1] + normal * depth
+        lower += samples[i][1] - normal * depth
+    end
+    for i in last-1:-1:1 do upper += lower[i] end
+    return path(upper, true)
+end
+
+// At a tight turn, overlapping chips can enclose a speck or cut through a
+// narrow counter. Retry smaller groups to keep the rest of the marked edge.
+fn apply_masks(base:path, masks:list, inward:bool, boxes:list, exteriors:int, tolerance:length) -> path
+    if len(masks) == 0 then return base end
+    cuts := compound(masks)
+    // The native region operator accepts at most 65536 input segments per
+    // operation. Split the same cuts before composition; never thin the sample.
+    if len(base) + len(cuts) <= 65536 or len(masks) == 1 then
+        result := base
+        if inward then result = region_difference(base, cuts)
+        else result = region_union(base, cuts) end
+        if len(contour_ranges(result)) == len(boxes) then
+            if same_contours(subpaths(result),boxes,exteriors,tolerance) then return result end
+        end
+        if len(masks) == 1 then return base end
+    end
+    mid := int(len(masks) / 2)
+    first := apply_masks(base, masks[0:mid-1], inward, boxes, exteriors,tolerance)
+    return apply_masks(first, masks[mid:], inward, boxes, exteriors,tolerance)
+end
+
+fn corner_masks(boundary:path, width:length, strength:float, law:samples.Distribution, cuts:list, fills:list)
+    outline := straight_sides(boundary)
+    sides := outline.sides
+    travel := outline.travel
+    if len(sides) < 2 then return end
+    first:Flank := sides[0]
+    last:Flank := sides[len(sides)-1]
+    if last.finish == travel and first.begin == 0pt and continuous(last,first) then
+        sides[0] = Flank(last.a,first.b,unit(first.b-last.a),last.begin-travel,first.finish,last.first,first.end_time)
+        sides = sides[0:len(sides)-2]
+    end
+    arms := []
+    for side in sides do
+        if norm(side.b-side.a) >= 0.8*width then arms += side end
+    end
+    if len(arms) < 2 then return end
+    for i in 0:len(arms)-1 do
+        a:Flank := arms[i]
+        b:Flank := arms[(i+1)%len(arms)]
+        gap := b.begin-a.finish
+        if i == len(arms)-1 then gap = gap+travel end
+        if gap > width then continue end
+        u := a.direction
+        v := b.direction
+        angle_cos := dot(u,v)
+        if abs(angle_cos) > cos(80deg) then continue end
+        turn := u.x*v.y-u.y*v.x
+        delta := b.a-a.b
+        along := (delta.x*v.y-delta.y*v.x)/turn
+        back := (u.x*delta.y-u.y*delta.x)/turn
+        if min(along,back) < -0.00001pt then continue end
+        convex := turn > 0
+        depth := samples.corner_depth(law, convex)*strength
+        if depth == 0pt then continue end
+        tip := a.b+along*u
+        // The CSV measures displacement along the angle bisector. Convert it
+        // to a distance along each arm and leave room for neighboring corners.
+        leg := min(depth/sqrt((1-angle_cos)/2), 0.7*width)
+        leg = min(leg, 0.45*min(norm(tip-a.a),norm(b.b-tip)))
+        mask := path([tip-u*leg, tip, tip+v*leg], true)
+        if convex then cuts += [mask] else fills += [mask] end
+    end
+end
+
+// Two faceted shoulders meet at the deepest point. Shape parameters describe
+// the measured peak position, shoulder curvature, and residual height variation.
+fn fracture(shape:dict, aspect:float) -> list
+    peak := max(0.18, min(0.82, 0.5 + shape["peak_sd"] * randn()))
+    points := [(0, 0)]
+    for side in 0:1 do
+        bow := shape["bow"] + shape["bow_sd"] * randn()
+        for j in 1:3 do
+            t := j / 4
+            x := peak * t
+            if side == 1 then
+                t = 1 - t
+                x = 1 - (1 - peak) * t
+            end
+            h := t + 4*t*(1-t)*bow + shape["facet_sd"] * randn()
+            points += (x, aspect * max(0, min(1, h)))
+        end
+        if side == 0 then points += (peak, aspect) end
+    end
+    points += (1, 0)
+    return points
+end
+
+fn carve(base:path, width:length, mode:string, chip_size:float, density:float, imprint_mix:float, imprint_source:string, corner_scale:float, wander:float, spectrum:list) -> path
+    assert(width > 0pt, "seal knife needs a positive stroke width")
+    assert(mode == "zhuwen" or mode == "baiwen", "seal knife mode must be zhuwen or baiwen")
+    assert(chip_size >= 0 and chip_size <= 0.75, "seal knife chip_size must be in [0, 0.75]")
+    assert(density >= 0, "seal knife density must be nonnegative")
+    assert(imprint_mix >= 0 and imprint_mix <= 1, "seal knife imprint_mix must be in [0, 1]")
+    assert(imprint_source == "qingtian" or imprint_source == "album", "imprint_source must be qingtian or album")
+    assert(corner_scale >= 0, "seal knife corner_scale must be nonnegative")
+    assert(wander >= 0, "seal knife wander must be nonnegative")
+    law:samples.Distribution := samples.laws[mode]
+    nominal := base
+    boundaries := subpaths(base)
+    if corner_scale > 0 then
+        cuts := []
+        fills := []
+        for boundary in boundaries do corner_masks(boundary, width, corner_scale, law, cuts, fills) end
+        if len(cuts)+len(fills) > 0 then
+            exteriors := exterior_count(boundaries)
+            boxes := contour_boxes(boundaries)
+            nominal = apply_masks(nominal, cuts, true, boxes, exteriors,width)
+            nominal = apply_masks(nominal, fills, false, boxes, exteriors,width)
+            boundaries = subpaths(nominal)
+        end
+    end
+    if wander > 0 then
+        bands := spectrum
+        if len(bands) == 0 then bands = law.spectrum end
+        nominal = stroke_wander(nominal, width, wander, bands)
+        boundaries = subpaths(nominal)
+    end
+    if chip_size == 0 or density == 0 then return nominal end
+    masks := []
+    paper := law.qingtian
+    if imprint_source == "album" then paper = law.album end
+    for boundary in boundaries do
+        edge := measure(boundary)
+        expected := edge.length / width * density * law.grain["rate"]
+        count := int(floor(expected))
+        if random() < expected - count then count = count + 1 end
+        if count == 0 then continue end
+        // Jitter one position in each arc-length cell. A random phase wraps
+        // the cells across the seam; long clean runs between large cuts are avoided.
+        step := edge.length / count
+        phase := random() * edge.length
+        for i in 0:count-1 do
+            center := phase + (i + random()) * step
+            if center >= edge.length then center = center - edge.length end
+            size := samples.opening(law)
+            shape := law.rock
+            use_print := random() < imprint_mix
+            if use_print then shape = paper end
+            use_qingtian := use_print and imprint_source == "qingtian"
+            aspect_law := shape
+            if use_qingtian then aspect_law = law.grain end
+            log_aspect:float := aspect_law["log_aspect"] + aspect_law["aspect_sd"] * randn()
+            if use_qingtian then
+                log_aspect = log_aspect + law.grain["aspect_slope"] * log(size / law.grain["width_center"])
+            end
+            aspect := min(0.65, pow(2.718281828459045, log_aspect))
+            opening := min(width * chip_size * (size / law.grain["high"]), edge.length / 4)
+            mask := chip(edge, center, opening, fracture(shape, aspect))
+            if len(mask) > 0 then masks += [mask] end
+        end
+    end
+    return apply_masks(nominal, masks, mode == "zhuwen", contour_boxes(boundaries), exterior_count(boundaries),width*chip_size)
+end
+
+fn round_cap(sample:list, radius:length, rounding:float) -> path
+    center := sample[1]
+    if rounding == 1 then return geometry.circle(center,radius) end
+    r := radius*rounding
+    tangent := sample[2]
+    half_flat := (-tangent.y,tangent.x)*(radius-r)
+    return stroke_path((center-half_flat) -- (center+half_flat),2*r,"round","round")
+end
+
+fn knife_outline(curve:path, width:length, cap:string, cap_roundness:float) -> path
+    assert(cap == "butt" or cap == "round" or cap == "square", "unknown seal knife cap")
+    assert(cap_roundness >= 0 and cap_roundness <= 1, "cap_roundness must be in [0, 1]")
+    radius := width / 2
+    blade := makepen((-radius,0pt) -- (radius,0pt) -- cycle)
+    knife := pen(rgb(0,0,0), nib:blade, motion:along_normal(corner:"rotate"))
+    guides := []
+    caps := []
+    for part in subpaths(curve) do
+        edge := measure(part)
+        if edge.length == 0pt then
+            // A stationary dot has no direction. Use the requested cap's stamp.
+            if cap != "butt" then caps += [stroke_path(part,width,cap,"round")] end
+            continue
+        end
+        if (cap == "square" or (cap == "round" and cap_roundness > 0)) and not contour_ranges(part)[0][2] then
+            ends := samples_at_length(edge,[0pt,edge.length])
+            if cap == "round" then
+                for sample in ends do caps += [round_cap(sample,radius,cap_roundness)] end
+            else
+                a := ends[0][1]
+                b := ends[1][1]
+                guides += [(a - ends[0][2]*radius) -- a, b -- (b + ends[1][2]*radius)]
+            end
+        end
+        guides += [part]
+    end
+    base := stroke_outline(compound(guides),knife)
+    if len(caps) == 0 then return base end
+    return region_union(base,compound(caps))
+end
+
+export fn seal_knife(curve:path, width:length, mode:string, chip_size:float = 0.40, density:float = 1.25, imprint_mix:float = 0.5, imprint_source:string = "qingtian", corner_scale:float = 1, wander:float = 0, spectrum:list = [], cap:string = "round", cap_roundness:float = 1) -> path
+    return carve(knife_outline(curve,width,cap,cap_roundness), width, mode, chip_size, density, imprint_mix, imprint_source, corner_scale, wander, spectrum)
+end
+
+// For an existing filled letter or the outline from a custom chisel nib,
+// width supplies the physical reference scale for size and density.
+export fn seal_edge(shape:path, width:length, mode:string, chip_size:float = 0.40, density:float = 1.25, imprint_mix:float = 0.5, imprint_source:string = "qingtian", corner_scale:float = 1, wander:float = 0, spectrum:list = []) -> path
+    return carve(region_union(shape, compound([])), width, mode, chip_size, density, imprint_mix, imprint_source, corner_scale, wander, spectrum)
+end

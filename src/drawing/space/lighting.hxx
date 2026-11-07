@@ -1,18 +1,17 @@
 #pragma once
 #include "result.hxx"
-#include <TopTools_ListOfShape.hxx>
 #include <TopoDS_Face.hxx>
 namespace huak::space {
 struct FaceLight {
   bool planar = false;
-  TopTools_IndexedMapOfShape lit_cells;
+  ShapeIndex lit_cells;
   size_t start = 0, count = 0;
 };
 
 class Lighting {
 public:
   Lighting(const HuakLight &, const Surfaces &, const HLRAlgo_Projector &,
-           const gp_Dir &, double tolerance, TopTools_ListOfShape &boundaries);
+           const gp_Dir &, double tolerance, ShapeList &boundaries);
   struct Sample {
     double diffuse;
     bool gleam;

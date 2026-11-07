@@ -6,13 +6,9 @@ const typst = @import("libtypst");
 const l = huak.language;
 const options = @import("test_options");
 const scene = @import("support/scene.zig");
-fn sourceBlock(ctx: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(ctx));
-    return library.sourceBlock(source);
-}
 fn compile(library: *typst.Library, source: []const u8) !l.bytecode.Program {
     var diagnostic: ?l.compiler.Diagnostic = null;
-    return l.compiler.compile(t.allocator, source, "native-test.huak", .{ .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } } }, &diagnostic) catch |err| {
+    return l.compiler.compile(t.allocator, source, "native-test.huak", .{ .source_parser = .init(library) }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("compiler: {s}\n", .{detail.text()});
         return err;
     };
@@ -291,8 +287,9 @@ test "formatting preserves prefix binding and native SVG PDF output" {
         \\+typ[Formatting a=b,c] at (2mm,3mm)
         \\end
     ;
-    var frontend: huak.tooling.Frontend = .{ .allocator = t.allocator, .io = t.io, .library_path = options.library_path };
-    defer frontend.deinit();
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const frontend: huak.tooling.Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&library) };
     var diagnostic: ?l.compiler.Diagnostic = null;
     const formatted = try huak.tooling.format.format(&frontend, source, "format-preservation.huak", &diagnostic);
     defer t.allocator.free(formatted);
@@ -300,8 +297,6 @@ test "formatting preserves prefix binding and native SVG PDF output" {
     try t.expect(std.mem.indexOf(u8, formatted, "ordinary := twice(2)+3") != null);
     try t.expect(std.mem.indexOf(u8, formatted, "literal := \"x=1,y=2\"") != null);
     try t.expect(std.mem.indexOf(u8, formatted, "typ[Formatting a=b,c]") != null);
-    var library = try typst.Library.open(options.library_path);
-    defer library.deinit();
     var original_svg: ?[]u8 = null;
     defer if (original_svg) |bytes| t.allocator.free(bytes);
     var original_pdf: ?[]u8 = null;
@@ -1035,7 +1030,7 @@ test "drawing returns typed instances and appended groups remain animation targe
             \\animate(left,"opacity",[[0,1],[1,0]])
             \\animate(right,"opacity",[[0,0],[1,1]])
             \\animate(empty,"opacity",[[0,0],[1,1]])
-        , "object-handles.huak", .{ .optimize = optimize, .source_parser = .{ .ptr = &library, .vtable = &.{ .block = sourceBlock } } }, &diagnostic);
+        , "object-handles.huak", .{ .optimize = optimize, .source_parser = .init(&library) }, &diagnostic);
         defer program.deinit();
         var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
         defer runtime.deinit();
@@ -1412,7 +1407,7 @@ fn compileModulesOptimized(library: *typst.Library, source: []const u8, sources:
     var resolver: ModuleResolver = .{ .sources = sources };
     var diagnostic: ?l.compiler.Diagnostic = null;
     return l.compiler.compile(t.allocator, source, "/native/main.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
         .import_resolver = .{ .ptr = &resolver, .vtable = &.{ .resolve = ModuleResolver.resolve } },
         .optimize = optimize,
     }, &diagnostic) catch |err| {

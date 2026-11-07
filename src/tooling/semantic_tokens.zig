@@ -14,7 +14,7 @@ const Token = struct { span: ast.Span, kind: Kind };
 
 /// The encoded result and syntax snapshot belong to the request arena.
 /// Incomplete syntax falls back to lexical highlighting; OOM is propagated.
-pub fn collect(frontend: *Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8) ![]const u32 {
+pub fn collect(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8) ![]const u32 {
     var diagnostic: ?@import("../language/source.zig").Diagnostic = null;
     const graph = frontend.graph(arena, text, path, &diagnostic) catch |err| {
         if (err == error.OutOfMemory) return err;

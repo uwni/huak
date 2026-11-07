@@ -98,12 +98,17 @@ extern "C" {
 #endif
 /* All input is borrowed for the call. On success release the output once.
    Focus zero selects orthographic projection. Coordinates are in points. */
-int huak_space_project(const HuakModelShape *, size_t node_count,
-                       const size_t *roots, size_t count, double azimuth,
-                       double elevation, double focus, double tolerance,
-                       int include_faces, const HuakLight *, HuakLinework *,
-                       char *error, size_t capacity);
-void huak_space_release(HuakLinework *);
+typedef struct {
+  int (*project)(const HuakModelShape *, size_t node_count, const size_t *roots,
+                 size_t count, double azimuth, double elevation, double focus,
+                 double tolerance, int include_faces, const HuakLight *,
+                 HuakLinework *, char *error, size_t capacity);
+  void (*release)(HuakLinework *);
+} HuakProjectionV1;
+
+/* The table is immutable and valid until the library is unloaded. Incompatible
+   changes to the table or any input/output structure require a new entry point. */
+const HuakProjectionV1 *huak_space_api_v1(void);
 #ifdef __cplusplus
 }
 #endif

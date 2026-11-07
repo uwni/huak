@@ -23,11 +23,9 @@
 #include <Geom_BezierCurve.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_TrimmedCurve.hxx>
-#include <TColgp_Array1OfPnt.hxx>
-#include <TColgp_Array1OfPnt2d.hxx>
+#include <NCollection_Array1.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Wire.hxx>
@@ -39,7 +37,7 @@ namespace huak::space {
 namespace {
 gp_Pnt xyz(const double *v) { return {v[0], v[1], v[2]}; }
 TopoDS_Edge cubic(gp_Pnt a, gp_Pnt b, gp_Pnt c, gp_Pnt d) {
-  TColgp_Array1OfPnt pts(1, 4);
+  NCollection_Array1<gp_Pnt> pts(1, 4);
   pts(1) = a;
   pts(2) = b;
   pts(3) = c;
@@ -113,7 +111,7 @@ TopoDS_Shape readProfile(const HuakModelShape &m, Handle(Geom_Surface) surface,
     if (bez || end.x != here.x || end.y != here.y) {
       TopoDS_Edge edge;
       if (!surface.IsNull()) {
-        TColgp_Array1OfPnt2d pts(1, bez ? 4 : 2);
+        NCollection_Array1<gp_Pnt2d> pts(1, bez ? 4 : 2);
         pts(1) = {here.x, here.y};
         if (bez) {
           pts(2) = {cmd.p[0].x, cmd.p[0].y};
@@ -211,7 +209,7 @@ TopoDS_Shape buildShape(const HuakModelShape &m,
     return profile;
   }
   case HUAK_SURFACE_CURVE: {
-    TopTools_IndexedMapOfShape faces;
+    ShapeIndex faces;
     TopExp::MapShapes(in(0), TopAbs_FACE, faces);
     if (m.face < 0 || m.face >= faces.Extent())
       throw std::invalid_argument("surface face index out of range");
@@ -276,7 +274,7 @@ TopoDS_Shape buildShape(const HuakModelShape &m,
   case HUAK_FUSE:
   case HUAK_COMMON:
   case HUAK_CUT: {
-    TopTools_ListOfShape left, right;
+    ShapeList left, right;
     left.Append(in(0));
     right.Append(in(1));
     BRepAlgoAPI_BooleanOperation op;

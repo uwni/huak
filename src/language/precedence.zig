@@ -154,7 +154,7 @@ fn Binding(comptime Resolver: type) type {
         operators: std.ArrayList(Operator) = .empty,
 
         fn fail(self: *Self, span: ast.Span, comptime format: []const u8, args: anytype) error{LanguageError} {
-            self.diagnostic.* = source.Diagnostic.init(span, format, args);
+            _ = source.Diagnostic.set(self.diagnostic, span, format, args);
             return error.LanguageError;
         }
         fn append(self: *Self, token: Token) !void {

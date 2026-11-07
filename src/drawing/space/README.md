@@ -62,6 +62,14 @@ Eq. 13). OCCT traces this contour on the face. Huak fits an ellipse to each
 connected projected highlight for the radial color falloff and clips it to
 the visible highlight boundary. See the [highlight example](../../../examples/space/highlight.huak).
 
+Projection first partitions the model's silhouettes and boundaries, then inserts
+lighting contours into occupied cells, excluding the empty background. This
+preserves the boundary relationship at isophote tangencies; lighting does not
+turn silhouettes into interior cut edges.
+The adapter retains OCCT's computed curve-intersection parameters on both edges.
+This prevents a subsequent nearest-point query from losing an incidence near a
+turning point; it neither changes the curves nor increases their tolerances.
+
 ### Choosing a line style
 
 Each entry in `result.lines` has a 2D `curve`, a `kind` and a separate
@@ -90,12 +98,28 @@ See [different pens for contours, edges and intersections](../../../examples/spa
 
 ## Desktop
 
-Build with `-Docct=<prefix>` and run `zig build test-space -Docct=<prefix>`.
-The tested native installation is OCCT 7.9.3 (Homebrew 7.9.3_1, macOS arm64).
-The executable links to the system's OCCT shared libraries. The default build uses
-only the two- and three-component vector types and the ordinary 2D drawing engine.
+The same desktop executable handles 2D and 3D. At startup it opens
+`libhuak_space.dylib` (macOS) or `libhuak_space.so` (Linux) once. It looks in
+`../lib/` relative to the executable and in the executable's directory.
+The adapter links against OCCT. The system loader must be able to find those
+libraries, for example beside the adapter or via `DYLD_LIBRARY_PATH` on macOS
+and `LD_LIBRARY_PATH` on Linux. If loading fails, 2D drawing and model construction
+remain available. Calling `space.project` then reports the missing backend.
+
+Build the adapter with CMake and the [OCCT 8.0.1 SDK](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8.0.1):
+
+```sh
+zig build space-backend -Docct="$OCCT_PREFIX"
+zig build test-space -Docct="$OCCT_PREFIX"
+```
+
+CMake can also discover a system SDK when the prefix is omitted. The native
+C++ toolchain uses the SDK's imported libraries. The versioned C entry point
+`huak_space_api_v1` returns the projection and release function table.
+Each projection releases its result before returning. Watch builds and workers
+borrow the table for the lifetime of their host session.
 Open CASCADE Technology is licensed under LGPL 2.1 with the Open CASCADE exception.
-An enabled desktop installation includes the [notice and license texts](licenses/).
+The adapter installation includes the [notice and license texts](licenses/).
 
 ## Optional Playground build
 

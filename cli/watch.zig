@@ -26,7 +26,6 @@ pub fn run(session: *Session) !void {
     defer std.posix.sigaction(.TERM, &previous_term, null);
     var watched: Dependencies = .init(allocator, io, cwd);
     defer watched.deinit();
-    defer session.frontend.dependency_observer = null;
 
     while (!stopping.load(.monotonic)) {
         var observed: Dependencies = .init(allocator, io, cwd);
@@ -34,9 +33,7 @@ pub fn run(session: *Session) !void {
         defer if (!transferred) observed.deinit();
         try observed.addInput(session.options.script.?);
         for (session.options.fonts) |font| try observed.addInput(font);
-        session.frontend.dependency_observer = .{ .ptr = &observed, .vtable = &.{ .observe = Dependencies.observe } };
-        const succeeded = try rebuild(session, cwd);
-        session.frontend.dependency_observer = null;
+        const succeeded = try rebuild(session, cwd, &observed);
         if (!succeeded) {
             // A syntax error may stop discovery before an old dependency is
             // visited. Keep those paths until the next successful build.
@@ -49,7 +46,7 @@ pub fn run(session: *Session) !void {
     }
 }
 
-fn rebuild(session: *Session, cwd: []const u8) !bool {
+fn rebuild(session: *Session, cwd: []const u8, observed: *Dependencies) !bool {
     const io = session.io;
     var temporary: std.heap.ArenaAllocator = .init(session.allocator);
     defer temporary.deinit();
@@ -58,7 +55,7 @@ fn rebuild(session: *Session, cwd: []const u8) !bool {
     if (session.options.json) {
         try event(io, .{ .event = "build_start" });
     } else std.debug.print("watch: building {s}\n", .{session.options.script.?});
-    session.build(&report) catch |err| {
+    session.build(&report, .{ .ptr = observed, .vtable = &.{ .observe = Dependencies.observe } }) catch |err| {
         if (session.options.json) {
             try event(io, .{ .event = "error", .message = report.message orelse @errorName(err) });
         } else {

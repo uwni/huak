@@ -132,6 +132,9 @@ const Builder = struct {
                     const time = curves.getNearestTime(&piece, vertex.point) orelse continue;
                     if (time > 0 and time < 1 and curves.withinDistance(vertex.point, curves.getPoint(&piece, time), epsilon)) {
                         const original_time = if (handles) interval.first.time + (interval.last.time - interval.first.time) * time else curves.getNearestTime(&source.cubic, vertex.point) orelse return error.GeometryFailed;
+                        // An interior time on the snapped piece can round to a
+                        // source endpoint. Splitting there repeats this interval.
+                        if (!(original_time > interval.first.time and original_time < interval.last.time)) continue;
                         const cut: Cut = .{ .time = original_time, .sample = vertex.sample };
                         try self.cuts[i].append(allocator, cut);
                         try pieces.append(allocator, .{ .first = interval.first, .last = cut });
@@ -143,12 +146,18 @@ const Builder = struct {
         }
         var short: std.ArrayList([2]usize) = .empty;
         var edge_capacity: usize = 0;
+        const degree = marks;
+        @memset(degree, 0);
         for (self.cuts, sources) |*cuts, *source| {
             edge_capacity = try std.math.add(usize, edge_capacity, cuts.items.len - 1);
             sortCuts(cuts.items);
             for (cuts.items[1..], cuts.items[0 .. cuts.items.len - 1]) |last, first| {
                 const first_vertex = self.vertexIndex(first.sample);
                 const last_vertex = self.vertexIndex(last.sample);
+                if (first.time != last.time) {
+                    degree[first_vertex] += 1;
+                    degree[last_vertex] += 1;
+                }
                 if (first_vertex == last_vertex) continue;
                 const first_point = self.graph.vertices.items[first_vertex].point;
                 const last_point = self.graph.vertices.items[last_vertex].point;
@@ -160,8 +169,27 @@ const Builder = struct {
                 if (shortLength(&part, 4 * epsilon)) try short.append(allocator, .{ first.sample, last.sample });
             }
         }
-        for (short.items) |pair| self.samples.items[self.root(pair[0])].parent = self.root(pair[1]);
-        if (short.items.len != 0) try self.createVertices();
+        if (short.items.len != 0) {
+            // A chain of individually short spans can enclose a large feature.
+            // Bound the whole cluster in the same spatial budget as a single span.
+            const boxes = try allocator.alloc(geometry.BBox, self.graph.vertices.items.len);
+            for (self.graph.vertices.items, boxes) |vertex, *box| box.* = geometry.BBox.fromPoint(vertex.point);
+            for (short.items) |pair| {
+                // Moving a junction changes the cyclic order of the edges that
+                // wind around it. Only contract ordinary subdivisions of a run.
+                if (degree[self.vertexIndex(pair[0])] != 2 or degree[self.vertexIndex(pair[1])] != 2) continue;
+                const first = self.root(pair[0]);
+                const last = self.root(pair[1]);
+                if (first == last) continue;
+                const destination = self.vertexIndex(last);
+                const box = boxes[self.vertexIndex(first)].unite(boxes[destination]);
+                const diagonal = box.max.sub(box.min);
+                if (diagonal.dot(diagonal) >= 16 * epsilon * epsilon) continue;
+                self.samples.items[first].parent = last;
+                boxes[destination] = box;
+            }
+            try self.createVertices();
+        }
         try self.graph.edges.ensureTotalCapacityPrecise(self.storage, edge_capacity);
         const by_vertex = try allocator.alloc(std.ArrayList(usize), self.graph.vertices.items.len);
         @memset(by_vertex, .empty);
@@ -364,8 +392,8 @@ const Builder = struct {
             const direction = if (other.straight and edge.straight) blk: {
                 if (other.cubic.p0.eql(edge.cubic.p0)) break :blk 1;
                 if (other.cubic.p0.eql(edge.cubic.p3)) break :blk -1;
-                break :blk self.coincidence(&other.cubic, &edge.cubic);
-            } else self.coincidence(&other.cubic, &edge.cubic);
+                break :blk self.coincidence(other, &edge);
+            } else self.coincidence(other, &edge);
             if (direction != 0) {
                 for (0..2) |j| other.windings[j] = try std.math.add(i32, other.windings[j], direction * edge.windings[j]);
                 return;
@@ -374,14 +402,17 @@ const Builder = struct {
         try by_vertex[first].append(self.allocator, self.graph.edges.items.len);
         self.graph.edges.appendAssumeCapacity(edge);
     }
-    fn coincidence(self: *Builder, a: *const Cubic, b: *const Cubic) i32 {
+    fn coincidence(self: *Builder, a: *const Edge, b: *const Edge) i32 {
         var times: [3]f64 = undefined;
         for (&times, 1..) |*time, i| {
-            const p = curves.getPoint(b, @as(f64, @floatFromInt(i)) / 4);
+            const p = curves.getPoint(&b.cubic, @as(f64, @floatFromInt(i)) / 4);
             // The verified adapter uses the upstream tolerance-aware on-curve
             // query; nearest-point search has a different accuracy contract.
-            time.* = curves.getTimeOf(a, p, self.epsilon) orelse return 0;
+            time.* = curves.getTimeOf(&a.cubic, p, self.epsilon) orelse return 0;
         }
+        // On short edges, two samples can both snap to time zero. Distinct
+        // endpoint vertices give the exact orientation even in that case.
+        if (a.from != a.to) return if (a.from == b.from) 1 else -1;
         return if (times[0] < times[2]) 1 else -1;
     }
     fn sortByDirections(self: *Builder, outgoing: []usize, sorted: []SortEntry) bool {
@@ -516,6 +547,28 @@ test "piece lookup retains all vertices on either bound, including zero-width ra
     try std.testing.expectEqualSlices(Candidate, vertices[1..], Candidate.inRange(&vertices, 0, 1));
     try std.testing.expectEqualSlices(Candidate, vertices[1..3], Candidate.inRange(&vertices, 0, 0));
     try std.testing.expectEqual(0, Candidate.inRange(&vertices, 0.25, 0.75).len);
+}
+
+test "coincident short curves add winding forward and subtract winding in reverse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var g: Graph = .{ .sources = &.{} };
+    var builder: Builder = .{ .graph = &g, .allocator = allocator, .storage = allocator, .epsilon = 1, .cuts = &.{} };
+    var by_vertex: [2]std.ArrayList(usize) = @splat(.empty);
+    try g.edges.ensureTotalCapacity(allocator, 3);
+    // The endpoints are farther apart than epsilon, yet all three interior
+    // membership probes lie in the snapping neighborhood of the start.
+    const curve: Cubic = .{ .p0 = .zero, .p1 = .{ .x = 0.4, .y = 0.1 }, .p2 = .{ .x = 0.8, .y = 0.1 }, .p3 = .{ .x = 1.25, .y = 0 } };
+    var edge: Edge = .{ .cubic = curve, .from = 0, .to = 1, .curve = 0, .time1 = 0, .time2 = 1, .windings = .{ 1, 0 }, .straight = false };
+    try builder.addEdge(&by_vertex, edge);
+    try builder.addEdge(&by_vertex, edge);
+    try std.testing.expectEqual([2]i32{ 2, 0 }, g.edges.items[0].windings);
+    edge.cubic = curve.reversed();
+    std.mem.swap(usize, &edge.from, &edge.to);
+    try builder.addEdge(&by_vertex, edge);
+    try std.testing.expectEqual(@as(usize, 1), g.edges.items.len);
+    try std.testing.expectEqual([2]i32{ 1, 0 }, g.edges.items[0].windings);
 }
 
 fn checkConstructionLifetime(allocator: Allocator) !void {

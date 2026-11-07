@@ -1,6 +1,7 @@
 //! Compilation and editor services; applications own I/O policy and entrypoints.
 pub const compiler = @import("language/compiler.zig");
 pub const Frontend = @import("tooling/Frontend.zig");
+pub const SourceLoader = @import("tooling/SourceLoader.zig");
 pub const format = @import("tooling/format.zig");
 pub const lsp = @import("tooling/lsp.zig");
 pub const position = @import("tooling/position.zig");

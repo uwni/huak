@@ -44,6 +44,11 @@ const Text = struct { layout: *typst.Layout, frame: usize, metrics: DisplayList.
 pub const SceneOwner = @import("runtime/objects.zig").Owner;
 pub const Format = renderer.Format;
 pub const Output = renderer.Output;
+/// Host-owned services. Every worker borrows the same backends until it joins.
+pub const Backends = struct {
+    typst: *typst.Library,
+    projection: ?*const @import("../drawing/space/Projection.zig").VTable = null,
+};
 pub const Options = struct {
     /// Configuration bytes are copied during Runtime.init. Library is borrowed
     /// at a stable address until Runtime and every exported result are freed.
@@ -96,7 +101,7 @@ gpa: std.mem.Allocator,
 /// Scene arrays and paints retain this allocator through output handoff.
 scene_allocator: std.mem.Allocator,
 arena: std.heap.ArenaAllocator,
-library: *typst.Library,
+backends: Backends,
 options: Options,
 outputs_taken: bool = false,
 engine: ?typst.Engine = null,
@@ -130,7 +135,11 @@ object_storage: ?u32 = null,
 /// Both allocators must support concurrent use and remain valid until all
 /// task results and outputs have been released. They may be the same allocator.
 pub fn init(allocator: std.mem.Allocator, scene_allocator: std.mem.Allocator, library: *typst.Library, options: Options) !Runtime {
-    var result: Runtime = .{ .gpa = allocator, .scene_allocator = scene_allocator, .arena = .init(allocator), .library = library, .options = options };
+    return initWithBackends(allocator, scene_allocator, .{ .typst = library }, options);
+}
+
+pub fn initWithBackends(allocator: std.mem.Allocator, scene_allocator: std.mem.Allocator, backends: Backends, options: Options) !Runtime {
+    var result: Runtime = .{ .gpa = allocator, .scene_allocator = scene_allocator, .arena = .init(allocator), .backends = backends, .options = options };
     errdefer result.deinit();
     const a = result.mem();
     const fonts = try a.alloc(typst.FontSource, options.font_sources.len);
@@ -218,21 +227,18 @@ pub fn render(self: *Runtime, value: Value, format: Format) !Output {
     const target = try self.objectValue(value, false);
     var selected = try target.owner.viewWithBounds(self.gpa, target.index, renderer.FrameBounds{ .frames = self.frames.items });
     defer selected.deinit();
-    const viewport = try renderer.viewport(&selected.snapshot.picture, selected.settings.size, self.frames.items);
     const tracks = try selected.animation();
     if (tracks) |animation_| try animation_.validate();
     const scene: renderer.Scene = .{
         .picture = &selected.snapshot.picture,
-        .width = viewport.max.x - viewport.min.x,
-        .height = viewport.max.y - viewport.min.y,
-        .origin = viewport.min,
+        .size = selected.settings.size,
         .frames = self.frames.items,
         .object_ids = if (selected.tracks.items.len != 0) selected.snapshot.ids.items else null,
         .tracks = tracks,
     };
     var diagnostic_buffer: ?typst.Buffer = null;
     defer if (diagnostic_buffer) |*buffer| buffer.deinit();
-    return scene.render(self.gpa, self.library, format, &diagnostic_buffer) catch |err| {
+    return scene.render(self.gpa, self.backends.typst, format, &diagnostic_buffer) catch |err| {
         if (diagnostic_buffer) |buffer| self.native_message = self.mem().dupe(u8, buffer.bytes()) catch "cannot copy native diagnostic";
         return err;
     };
@@ -248,7 +254,7 @@ pub fn takeOutputs(self: *Runtime, values: []const Value) !OutputBatch {
         const target = try self.objectValue(value, false);
         source.* = target.owner.scene.object(target.index);
     }
-    const batch = try OutputBatch.init(self.gpa, self.library, sources, self.frames.items);
+    const batch = try OutputBatch.init(self.gpa, self.backends.typst, sources, self.frames.items);
     self.outputs_taken = true;
     return batch;
 }
@@ -262,7 +268,7 @@ fn diagnostic(ctx: ?*anyopaque) []const u8 {
     return from(ctx).native_message;
 }
 fn captureNative(self: *Runtime) void {
-    var buffer = self.library.lastError() catch return;
+    var buffer = self.backends.typst.lastError() catch return;
     defer buffer.deinit();
     self.native_message = self.mem().dupe(u8, buffer.bytes()) catch "cannot copy native diagnostic";
 }
@@ -275,7 +281,7 @@ fn engineRef(self: *Runtime) !*typst.Engine {
             .use_bundled_fonts = self.options.use_bundled_fonts,
             .inputs = self.options.inputs,
         };
-        self.engine = self.library.createEngineWithOptions(&options) catch |err| {
+        self.engine = self.backends.typst.createEngineWithOptions(&options) catch |err| {
             self.captureNative();
             return err;
         };
@@ -722,25 +728,33 @@ fn storeScene(self: *Runtime, value: Scene) !*SceneOwner {
     try self.scene_values.append(self.mem(), target);
     return target;
 }
-fn objectStorage(self: *Runtime, segments: usize) !*SceneOwner {
+fn objectStorage(self: *Runtime, curve: ?*const Path) !*SceneOwner {
+    const page_budget = 64 * 1024;
     if (self.object_storage) |index| {
         const owner = self.scene_values.items[index];
         // Bound array growth before insertion consumes the page budget.
         // An oversized object occupies a fresh page of its own. Styles and
         // tracks added later count toward the next insertion's budget.
-        if (try owner.scene.reserveNode(segments, 64 * 1024 -| owner.animation_state.allocatedBytes())) return owner;
+        if (try owner.scene.reserveNode(curve, page_budget -| owner.animation_state.allocatedBytes())) return owner;
     }
-    const owner = try self.storeScene(.{ .storage = .init(self.scene_allocator) });
+    var fresh: Scene = .{ .storage = .init(self.scene_allocator) };
+    // Apply the same bounded growth to the first object. A path larger than
+    // the entire page may still be stored alone.
+    _ = fresh.reserveNode(curve, page_budget) catch |err| {
+        fresh.deinit();
+        return err;
+    };
+    const owner = try self.storeScene(fresh);
     self.object_storage = owner.owner_index;
     return owner;
 }
 fn pathObject(self: *Runtime, curve: *const Path, style: *const DisplayList.Style, transform: g.Transform) !Value {
-    const owner = try self.objectStorage(curve.segments.items.len);
+    const owner = try self.objectStorage(curve);
     return .{ .object = .{ .owner = owner, .index = try owner.scene.addPath(null, curve, style, transform) } };
 }
 
 fn labelObject(self: *Runtime, reference: u32, position: g.Point, transform: g.Transform) !Value {
-    const owner = try self.objectStorage(0);
+    const owner = try self.objectStorage(null);
     return .{ .object = .{ .owner = owner, .index = try owner.scene.label(null, reference, self.texts.items[reference].metrics, position, transform) } };
 }
 fn nextOwnerIndex(self: *Runtime) !u32 {
@@ -818,6 +832,13 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return objectHandle(target.scene.object(0));
         },
         .object_exclude => {
+            const sweep = try self.path(args[2]);
+            var painted: ?Path = null;
+            defer if (painted) |*path_| path_.deinit();
+            if (hasArgument(args, 3)) {
+                const brush = try self.penValue(args[3]);
+                painted = try renderer.strokeFootprint(self.gpa, self.gpa, sweep, &brush, null);
+            }
             const parent = try self.objectValue(args[0], true);
             const values = try sequence(args[1]);
             const targets = try self.gpa.alloc(Scene.Object, values.len);
@@ -826,7 +847,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 const target = try self.objectValue(value, true);
                 object.* = target.owner.scene.object(target.index);
             }
-            parent.owner.scene.exclude(parent.index, targets, try self.path(args[2])) catch |err| {
+            parent.owner.scene.exclude(parent.index, targets, painted orelse sweep) catch |err| {
                 if (err == error.DifferentParents) self.native_message = "erase targets must be direct children of the current drawing";
                 return err;
             };
@@ -975,7 +996,11 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 value.join = .round;
                 const tolerance = if (hasArgument(args, 10)) try lengthPoints(args[10]) else 0.001;
                 value.motion = readMotion(own, if (legacy) args[8] else args[9], legacy, tolerance) catch |err| {
-                    self.native_message = "motion requires a bounded polynomial or ordered [fraction,value] keys, nonnegative scale controls, and a positive physical tolerance";
+                    self.native_message = switch (err) {
+                        error.InvalidFrameCorner => "frame corner must be strict, rotate, or overlap",
+                        error.ConflictingFrameCorners => "path frames in one motion must use the same corner policy",
+                        else => "motion requires a bounded polynomial or ordered [fraction,value] keys, nonnegative scale controls, and a positive physical tolerance",
+                    };
                     if (legacy and err == error.InvalidMotion) return error.InvalidProfile;
                     return err;
                 };
@@ -1012,7 +1037,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         .stroke_outline => {
             const tolerance = if (hasArgument(args, 2)) try lengthPoints(args[2]) else null;
             const brush = try self.penValue(args[1]);
-            return self.pathResult(try renderer.strokeFootprint(own, self.gpa, try self.path(args[0]), &brush, tolerance));
+            return self.pathResult(try pen_geometry.footprint(own, self.gpa, try self.path(args[0]), &brush, tolerance));
         },
         .translate => {
             if (args[0] == .vec3) {
@@ -1334,19 +1359,12 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const colors = try self.gpa.alloc(DisplayList.Color, values.len);
             defer self.gpa.free(colors);
             for (values, colors) |value, *dest| dest.* = try self.color(value);
-            const ramp: @import("../drawing/style.zig").Gradient.Ramp = .{ .start = start, .end = end, .colors = colors };
-            const gradient: @import("../drawing/style.zig").Gradient = .{ .linear_fill = ramp };
-            if (id == .linear_stroke) {
-                var brush = try self.penValue(args[4]);
-                if (!brush.needsGeometry()) {
-                    brush.color = colors[0];
-                    return self.pathObject(&curve, &.{ .pen = brush, .gradient = &.{ .linear_stroke = ramp } }, .{});
-                }
-                var outline_ = try renderer.strokeFootprint(self.gpa, self.gpa, curve, &brush, null);
-                defer outline_.deinit();
-                return self.pathObject(&outline_, &.{ .fill = colors[0], .gradient = &gradient }, .{});
-            }
-            return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &gradient }, .{});
+            const ramp: DisplayList.Gradient.Ramp = .{ .start = start, .end = end, .colors = colors };
+            if (id == .linear_fill)
+                return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &.{ .linear_fill = ramp } }, .{});
+            var brush = try self.penValue(args[4]);
+            brush.color = colors[0];
+            return self.pathObject(&curve, &.{ .pen = brush, .gradient = &.{ .linear_stroke = ramp } }, .{});
         },
         .draw, .fill, .filldraw, .label => {
             return switch (id) {
@@ -1515,18 +1533,18 @@ fn constructPath(self: *Runtime, id: builtin.Id, args: []const Value) !Value {
                 defer self.gpa.free(joins);
                 for (points, values) |*out, value| out.* = try point(value);
                 for (joins, kinds) |*out, value| out.* = std.meta.stringToEnum(path_construct.Join, try string(value)) orelse return error.InvalidPathJoin;
-                result = try path_construct.construct(a, points, joins, .{ .closed = closed });
+                result = try path_construct.constructWithScratch(a, self.gpa, points, joins, .{ .closed = closed });
             } else if (id == .path) {
                 if (values.len == 0) return error.InvalidPath;
                 try result.moveTo(try point(values[0]));
                 for (values[1..]) |v| try result.lineTo(try point(v));
                 if (closed) try result.close();
             } else {
-                const knots = try a.alloc(hobby.Knot, values.len);
+                const knots = try self.gpa.alloc(hobby.Knot, values.len);
+                defer self.gpa.free(knots);
                 const tension = if (hasArgument(args, 2)) try numeric(args[2]) else 1;
                 for (values, knots) |v, *k| k.* = .{ .point = try point(v), .incoming_tension = tension, .outgoing_tension = tension };
-                const curves = try hobby.interpolate(a, knots, .{ .closed = closed });
-                result = try Path.fromCubics(a, curves, closed);
+                result = try path_construct.fromKnotsWithScratch(a, self.gpa, knots, .{ .closed = closed });
             }
         },
         else => unreachable,
@@ -1599,13 +1617,23 @@ fn readMotion(a: std.mem.Allocator, input: Value, legacy: bool, tolerance: f64) 
     const tracks = try a.alloc(Motion.Track, if (legacy) 1 else values.len);
     var keys: std.ArrayList(Motion.Key) = .empty;
     var visits: usize = 0;
+    var corner: ?Motion.Corner = null;
     for (tracks, 0..) |*track, i| {
         var stops = values;
         var kind: Motion.Kind = .scale;
         if (!legacy) {
             const op = try sequence(values[i]);
-            if (op.len != 2) return error.InvalidMotion;
+            if (op.len == 0) return error.InvalidMotion;
             kind = std.meta.stringToEnum(Motion.Kind, try string(op[0])) orelse return error.InvalidMotion;
+            if (kind == .path_frame) {
+                if (op.len > 2) return error.InvalidMotion;
+                const mode: Motion.Corner = if (op.len == 1) .strict else std.meta.stringToEnum(Motion.Corner, try string(op[1])) orelse return error.InvalidFrameCorner;
+                if (corner != null and corner.? != mode) return error.ConflictingFrameCorners;
+                corner = mode;
+                track.* = .{ .kind = kind, .first = keys.items.len, .len = 0 };
+                continue;
+            }
+            if (op.len != 2) return error.InvalidMotion;
             const operand = op[1];
             const list = types.sequence(operand);
             if (list == null or (list.?.len > 0 and list.?[0] == .string)) {
@@ -1625,7 +1653,7 @@ fn readMotion(a: std.mem.Allocator, input: Value, legacy: bool, tolerance: f64) 
         }
     }
     const motion = try a.create(Motion);
-    motion.* = .{ .tracks = tracks, .keys = keys.items, .tolerance = tolerance };
+    motion.* = .{ .tracks = tracks, .keys = keys.items, .tolerance = tolerance, .corner = corner orelse .strict };
     try motion.validate();
     return motion;
 }

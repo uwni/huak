@@ -104,15 +104,20 @@ The following adaptations are intentional and apply to every input:
   Restore binary64 coordinates with the existing representability check.
 - Retain the upstream diagonal-based geometric resolution and floating-point
   magnitude floor. Cap the geometric term at one eighth of the requested
-  spatial tolerance: the graph removes spans shorter than four times its
-  epsilon, so each boundary receives at most half that spatial budget. This
-  prevents a distant component from erasing tolerance-sized local gaps.
+  spatial tolerance. Spans shorter than four epsilon can be contracted between
+  ordinary degree-two vertices. The diagonal of the merged cluster must also
+  stay below four epsilon, so a chain cannot erase a larger feature. Junctions
+  retain the cyclic order of their incident edges.
 - Preserve the association between both locations of each intersection when
   constructing graph vertices. Independently rounded evaluations need not be
-  rediscovered as the same event by coordinate distance.
+  rediscovered as the same event by coordinate distance. A projected cut must
+  lie strictly inside its interval after mapping back to source parameters,
+  so each subdivision advances in binary64.
 - Test curve coincidence with the existing tolerance-aware `Curve.getTimeOf`.
   Nearest-point projection uses a different parameter stopping tolerance and
-  cannot establish this membership predicate.
+  cannot establish this membership predicate. Coincident edges with distinct
+  endpoint vertices take their relative winding direction from those vertices.
+  Interior samples can map to the same endpoint within the snapping tolerance.
 - Sort numerical roots numerically. JavaScript's default lexicographic array
   sort can reverse roots written in ordinary and scientific notation.
 - Apply nonzero, evenodd, positive and negative rules directly to the signed

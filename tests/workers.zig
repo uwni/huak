@@ -8,15 +8,10 @@ const options = @import("test_options");
 const l = huak.language;
 const pdf_text = @import("support/pdf.zig");
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 fn compile(library: *typst.Library, source: []const u8, optimize: bool) !l.bytecode.Program {
     var diagnostic: ?l.compiler.Diagnostic = null;
     return l.compiler.compile(t.allocator, source, "workers.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
         .optimize = optimize,
     }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("compiler: {s}\n", .{detail.text()});
@@ -903,7 +898,7 @@ test "imported builders share module text while initialization and local setting
     var context: u8 = 0;
     var diagnostic: ?l.compiler.Diagnostic = null;
     var program = try l.compiler.compile(t.allocator, source, "/workers/main.huak", .{
-        .source_parser = .{ .ptr = &library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(&library),
         .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } },
     }, &diagnostic);
     defer program.deinit();

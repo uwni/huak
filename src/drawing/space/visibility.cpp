@@ -1,4 +1,8 @@
 #include "lighting.hxx"
+#include <BOPAlgo_PaveFiller.hxx>
+#include <BOPDS_DS.hxx>
+#include <BOPDS_Interf.hxx>
+#include <BOPDS_PaveBlock.hxx>
 #include <BOPTools_AlgoTools3D.hxx>
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
@@ -8,11 +12,12 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <IntTools_Context.hxx>
+#include <IntTools_Tools.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_Map.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
-#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
@@ -23,6 +28,74 @@
 #include <tuple>
 
 namespace huak::space {
+namespace {
+class Intersections : public BOPAlgo_PaveFiller {
+  void PerformEE(const Message_ProgressRange &range) override {
+    BOPAlgo_PaveFiller::PerformEE(range);
+    if (HasErrors())
+      return;
+    // OCCT reprojects new intersection vertices to recover edge parameters.
+    // Near a turning point that projection can find a different local minimum.
+    // Retain the already computed E/E parameters on both incident edges instead
+    // of leaving an intersection vertex connected to only one of them.
+    NCollection_Map<int> changed;
+    for (const auto &hit : myDS->InterfEE()) {
+      const auto &part = hit.CommonPart();
+      if (hit.IndexNew() < 0 || part.Type() != TopAbs_VERTEX)
+        continue;
+      int vertex = hit.IndexNew(), merged;
+      if (myDS->HasShapeSD(vertex, merged))
+        vertex = merged;
+      const auto &v = TopoDS::Vertex(myDS->Shape(vertex));
+      double parameters[2];
+      IntTools_Tools::VertexParameters(part, parameters[0], parameters[1]);
+      for (int side = 0; side < 2; ++side) {
+        const auto &edge = side ? part.Edge2() : part.Edge1();
+        const double t = parameters[side];
+        double first, last;
+        const auto curve = BRep_Tool::Curve(edge, first, last);
+        // Merged vertices must still satisfy the original modeling tolerance.
+        if (BRep_Tool::Pnt(v).Distance(curve->Value(t)) >
+            BRep_Tool::Tolerance(v) + BRep_Tool::Tolerance(edge) + FuzzyValue())
+          continue;
+        const int index = myDS->Index(edge);
+        for (const auto &block : myDS->PaveBlocks(index)) {
+          double lo, hi;
+          block->Range(lo, hi);
+          if (t <= lo + Precision::PConfusion() ||
+              t >= hi - Precision::PConfusion())
+            continue;
+          BOPDS_Pave pave;
+          pave.SetIndex(vertex);
+          pave.SetParameter(t);
+          block->AppendExtPave(pave);
+          changed.Add(index);
+        }
+      }
+    }
+    if (!changed.IsEmpty())
+      SplitPaveBlocks(changed, false);
+  }
+};
+} // namespace
+
+TopoDS_Shape splitFaces(const ShapeList &objects, const ShapeList &tools) {
+  Intersections intersections;
+  intersections.SetArguments(objects);
+  for (const auto &tool : tools)
+    intersections.AddArgument(tool);
+  intersections.Perform();
+  if (intersections.HasErrors())
+    throw std::runtime_error("projected boundary intersection failed");
+  BRepAlgoAPI_Splitter split(intersections);
+  split.SetArguments(objects);
+  split.SetTools(tools);
+  split.Build();
+  if (!split.IsDone())
+    throw std::runtime_error("projected face subdivision failed");
+  return split.Shape();
+}
+
 Surfaces::Surfaces(const std::vector<TopoDS_Shape> &shapes)
     : probes(shapes.size()), faces(shapes.size()) {
   for (size_t i = 0; i < shapes.size(); ++i) {
@@ -105,7 +178,7 @@ void projectFaces(Result &out, Surfaces &surfaces,
                   const std::vector<TopoDS_Edge> &cell_boundaries,
                   const HLRAlgo_Projector &projector, const gp_Dir &toward_eye,
                   const HuakLight *light, double tolerance) {
-  TopTools_ListOfShape tools;
+  ShapeList tools;
   Bnd_Box bounds;
   auto boundary = [&](const TopoDS_Edge &edge) {
     if (!edge.IsNull()) {
@@ -116,7 +189,7 @@ void projectFaces(Result &out, Surfaces &surfaces,
   for (const auto &edge : cell_boundaries)
     boundary(edge);
   for (const auto &shape : shapes) {
-    TopTools_IndexedDataMapOfShapeListOfShape adjacent;
+    NCollection_IndexedDataMap<TopoDS_Shape, ShapeList, TopTools_ShapeMapHasher> adjacent;
     TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE,
                                         adjacent);
     for (int i = 1; i <= adjacent.Extent(); ++i) {
@@ -131,27 +204,51 @@ void projectFaces(Result &out, Surfaces &surfaces,
       boundary(projected(edge, projector, tolerance));
     }
   }
-  std::optional<Lighting> lighting;
-  if (light)
-    lighting.emplace(*light, surfaces, projector, toward_eye, tolerance, tools);
   if (bounds.IsVoid() || tools.IsEmpty())
     return;
 
   double x0, y0, z0, x1, y1, z1;
   bounds.Get(x0, y0, z0, x1, y1, z1);
   const double margin = std::max({x1 - x0, y1 - y0, 1.0});
-  TopTools_ListOfShape objects;
+  ShapeList objects;
   objects.Append(BRepBuilderAPI_MakeFace(gp_Pln(gp::XOY()), x0 - margin,
                                          x1 + margin, y0 - margin, y1 + margin)
                      .Face());
-  BRepAlgoAPI_Splitter split;
-  split.SetArguments(objects);
-  split.SetTools(tools);
-  split.Build();
-  if (!split.IsDone())
-    throw std::runtime_error("projected face subdivision failed");
+  TopoDS_Shape partition = splitFaces(objects, tools);
   BRep_Builder builder;
   Handle(IntTools_Context) context = new IntTools_Context();
+  std::optional<Lighting> lighting;
+  if (light) {
+    // Establish geometric boundaries before inserting lighting contours.
+    // At a silhouette tangency OCCT must order an interior contour against
+    // the face boundary, not treat both as unrelated interior edges.
+    tools.Clear();
+    lighting.emplace(*light, surfaces, projector, toward_eye, tolerance, tools);
+    if (!tools.IsEmpty()) {
+      // Lighting only partitions occupied cells. Keep them together: they are
+      // already mutually split, and the empty background needs no shading.
+      TopoDS_Compound domain;
+      for (TopExp_Explorer cells(partition, TopAbs_FACE); cells.More();
+           cells.Next()) {
+        const auto cell = TopoDS::Face(cells.Current());
+        gp_Pnt sample;
+        gp_Pnt2d uv;
+        if (BOPTools_AlgoTools3D::PointInFace(cell, sample, uv, context))
+          throw std::runtime_error("cannot locate projected face interior");
+        if (surfaces.along(projector.Shoot(sample.X(), sample.Y()), toward_eye)
+                .empty())
+          continue;
+        if (domain.IsNull())
+          builder.MakeCompound(domain);
+        builder.Add(domain, cell);
+      }
+      if (domain.IsNull())
+        return;
+      objects.Clear();
+      objects.Append(domain);
+      partition = splitFaces(objects, tools);
+    }
+  }
   // Merge neighboring cells only where the same sheet has the same rank.
   struct Regions {
     TopoDS_Compound body, spot;
@@ -163,7 +260,7 @@ void projectFaces(Result &out, Surfaces &surfaces,
       builder.MakeCompound(group);
     builder.Add(group, cell);
   };
-  for (TopExp_Explorer cells(split.Shape(), TopAbs_FACE); cells.More();
+  for (TopExp_Explorer cells(partition, TopAbs_FACE); cells.More();
        cells.Next()) {
     auto cell = TopoDS::Face(cells.Current());
     gp_Pnt sample;

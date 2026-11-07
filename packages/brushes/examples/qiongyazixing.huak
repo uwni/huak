@@ -1,0 +1,100 @@
+// 煢鴉梓行 · 漢繆篆朱文。右列煢鴉，左列梓行。
+// 煢、行參照羅福頤《漢印文字徵》，梓參照吳讓之「張文梓印」，鴉依所附朱印摹寫。
+// https://w9.ihp.sinica.edu.tw/wenwu/posts/288
+import paint.*
+import geometry.{arc, compound, point_at}
+import transform.compose
+import math.seed
+import "qiongyazixing_parts.huak" as parts
+import assertions.assert
+import "../brushes.huak".seal_knife
+
+param random_seed:int = 270
+param stroke_width:length = 2pt
+param cap_roundness:float = 0.8
+param rim_radius:length = 2.6pt
+param chip_size:float = 0.46
+param density:float = 1.35
+param corner_scale:float = 1
+param wander:float = 0.75
+// Empty uses the measured zhuwen spectrum; each custom row is [lo, hi, rms−, rms+, ρ].
+spectrum := []
+
+// 整字的寬、高倍率以部件組字後的尺寸為 1，先變形刀路，再運用同一筆寬。
+param qiong_width:float = 0.95
+param qiong_height:float = 1.05
+param ya_width:float = 1.01
+param ya_height:float = 0.95
+param zi_width:float = 1
+param zi_height:float = 0.94
+param xing_width:float = 1
+param xing_height:float = 1.06
+
+// 以部件自己的原點縮放，再將該原點放到指定位置。
+fn place(guide:path, origin:vec2, sx:float = 1, sy:float = 1) -> path
+    assert(sx > 0 and sy > 0, "width and height scales must be positive")
+    return transformed(guide, compose(scale(sx, sy), translate(origin)))
+end
+
+fn frame(radius:length) -> path
+    lo := 2.6pt
+    hi := 97.4pt
+    assert(radius >= 0pt and radius <= (hi-lo)/2, "rim_radius must fit the frame")
+    if radius == 0pt then return rectangle((lo, lo), hi-lo, hi-lo) end
+    if radius == (hi-lo)/2 then return circle((50pt, 50pt), radius) end
+    corners := [arc((hi-radius, lo+radius), radius, -90deg, 90deg),
+        arc((hi-radius, hi-radius), radius, 0deg, 90deg),
+        arc((lo+radius, hi-radius), radius, 90deg, 90deg),
+        arc((lo+radius, lo+radius), radius, 180deg, 90deg)]
+    rim := corners[0]
+    for i in 1:3 do
+        corner := corners[i]
+        rim = rim & (point_at(rim, len(rim)) -- point_at(corner, 0)) & corner
+    end
+    return closed(rim)
+end
+
+// 煢：取「榮」的雙火與冖（《漢印文字徵》六卷四葉），下配「訊」右旁的卂（三卷四葉）。
+qiong := compound([
+    place(parts.fire_left, (-10.5pt, 0pt)),
+    place(parts.fire_right, (10.6pt, 0pt)),
+    place(parts.cover, (-5.14pt, -15.12pt)),
+    place(parts.xun, (-1.7pt, -34.88pt))
+])
+
+// 鴉：兩豎以底框為共同基線，牙與鳥的間距取自原印。
+ya := compound([
+    place(parts.tooth, (-7.2475pt, 0pt)),
+    place(parts.bird, (0.3345pt, 0pt))
+])
+
+// 梓：取「張文梓印」的束腰木旁與兩層弧形辛旁。木的原點即接框處。
+zi := compound([
+    parts.wood,
+    place(parts.xin, (21.55pt, -5.05pt))
+])
+
+// 行：上部參照《漢印文字徵》二卷十八葉，下部兩腳向外舒展。
+xing := compound([
+    place(parts.step_left, (-4.9pt, 0pt)),
+    place(parts.step_right, (5pt, 0pt))
+])
+
+guides := [
+    frame(rim_radius),
+    place(ya, (73.75pt, 2.6pt), ya_width, ya_height),
+    place(qiong, (72.5pt, 93.1pt), qiong_width, qiong_height),
+    place(zi, (14.5pt, 97.4pt), zi_width, zi_height),
+    place(xing, (26.3pt, 7.63pt), xing_width, xing_height)
+]
+
+seed(random_seed)
+ink := rgb(217/255, 33/255, 33/255)
+export seal := picture(100pt, 100pt)
+default seal
+drawing seal do
+    for guide in guides do
+        +seal_knife(guide, stroke_width, "zhuwen", chip_size, density,
+            corner_scale: corner_scale, wander: wander, spectrum: spectrum, cap: "round", cap_roundness: cap_roundness) filled ink
+    end
+end

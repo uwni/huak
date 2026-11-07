@@ -16,8 +16,9 @@ const numeric = @import("numeric.zig");
 const task_plan = @import("tasks/plan.zig");
 pub const ResolvedSource = ModuleGraph.ResolvedSource;
 pub const ImportResolver = ModuleGraph.ImportResolver;
+pub const SourceParser = Parser.SourceParser;
 pub const CompileOptions = struct {
-    source_parser: ?Parser.SourceParser = null,
+    source_parser: anyerror!?SourceParser = null,
     import_resolver: ?ImportResolver = null,
     optimize: bool = true,
 };
@@ -225,8 +226,8 @@ const Compiler = struct {
     }
 
     fn fail(self: *Compiler, span: Span, comptime format: []const u8, args: anytype) error{LanguageError} {
-        self.diagnostic.* = Diagnostic.init(span, format, args);
-        self.diagnostic.*.?.setSource(self.environment.unit.name, self.environment.unit.source_text);
+        const detail = Diagnostic.set(self.diagnostic, span, format, args);
+        detail.setSource(self.environment.unit.name, self.environment.unit.source_text);
         return error.LanguageError;
     }
     fn narrow(self: *Compiler, value: usize, span: Span) !u32 {
@@ -1026,9 +1027,9 @@ const Compiler = struct {
                         return self.fail(span, "mixfix function used before its declaration is complete", .{});
                 };
             },
-            .setup_typst => |code| {
+            .setup_typst => |block| {
                 if (!context.entry or context.block_depth != 1) return self.fail(span, "setup_typst must be at script top level", .{});
-                _ = try context.emit(.setup_typst, try self.addConstant(.{ .string = code }, span), 0, span);
+                _ = try context.emit(.setup_typst, try self.addConstant(.{ .string = block[1 .. block.len - 1] }, span), 0, span);
             },
             // Exposure is lexical metadata, not an evaluated statement. Its
             // declarations are validated after forward value types are known.
@@ -1403,13 +1404,9 @@ const Compiler = struct {
                 try self.compileStatements(context, body);
                 return self.finishBlock(context, &block, !definitelyReturns(body), span);
             },
-            .typst => |code| {
+            .typst => |block| {
                 const count = try self.compileTypstCaptures(context, span);
-                // Store the code block delimiters with the constant. Every
-                // evaluation then borrows this string instead of allocating a
-                // bracketed copy of the source per request.
-                const wrapped = try std.fmt.allocPrint(self.allocator, "[{s}]", .{code});
-                _ = try context.emit(.typst, try self.addConstant(.{ .string = wrapped }, span), count, span);
+                _ = try context.emit(.typst, try self.addConstant(.{ .string = block }, span), count, span);
                 return .text;
             },
         }
@@ -2362,29 +2359,49 @@ const DefaultReferences = struct {
     }
 };
 
-pub fn compile(allocator: std.mem.Allocator, input: []const u8, name: []const u8, options: CompileOptions, diagnostic: *?Diagnostic) !bc.Program {
-    return (try compileImpl(allocator, input, name, options, diagnostic, .compile)).?;
+/// Module source survives in storage. The AST belongs to syntax. Providers
+/// are only borrowed while resolving the root and its imports.
+pub fn parseModules(storage: std.mem.Allocator, syntax: std.mem.Allocator, input: []const u8, name: []const u8, options: CompileOptions, diagnostic: *?Diagnostic) !ModuleGraph {
+    diagnostic.* = null;
+    var graph = ModuleGraph.init(storage, syntax, .{ .source_parser = options.source_parser }, options.import_resolver, diagnostic);
+    try graph.root(name, input);
+    graph.options = .{};
+    graph.resolver = null;
+    return graph;
 }
 
 /// Run the same parsing, linking and semantic checks without producing an
 /// executable Program, optimizing bytecode or scheduling picture tasks.
 pub fn check(allocator: std.mem.Allocator, input: []const u8, name: []const u8, options: CompileOptions, diagnostic: *?Diagnostic) !void {
-    _ = try compileImpl(allocator, input, name, options, diagnostic, .check);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const graph = try parseModules(arena.allocator(), arena.allocator(), input, name, options, diagnostic);
+    try checkGraph(allocator, &graph);
 }
 
-fn compileImpl(allocator: std.mem.Allocator, input: []const u8, name: []const u8, options: CompileOptions, diagnostic: *?Diagnostic, comptime purpose: enum { compile, check }) !?bc.Program {
-    diagnostic.* = null;
+/// Check a graph already parsed by an editor tool. The check owns its
+/// temporary lowering state; the caller keeps the graph and its source ranges.
+pub fn checkGraph(allocator: std.mem.Allocator, graph: *const ModuleGraph) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    _ = try lowerGraph(graph, arena.allocator(), arena.allocator());
+}
+
+fn lowerGraph(graph: *const ModuleGraph, memory: std.mem.Allocator, syntax: std.mem.Allocator) !Build {
+    const count = graph.units.items.len;
+    var build: Build = .{ .allocator = memory, .syntax_allocator = syntax, .graph = graph, .functions = .init(memory), .constants = .init(memory), .records = .init(memory), .argument_bindings = .init(memory), .parameters = .init(memory), .names = .init(memory), .types = .init(memory), .readonly = .init(memory), .modules = try memory.alloc(bc.Module, count), .environments = try syntax.alloc(*Environment, count), .precedence = try precedence.Table.init(syntax) };
+    for (graph.order.items) |index| try compileUnit(&build, graph.units.items[index], index, graph.diagnostic);
+    return build;
+}
+
+pub fn compile(allocator: std.mem.Allocator, input: []const u8, name: []const u8, options: CompileOptions, diagnostic: *?Diagnostic) !bc.Program {
     var arena: std.heap.ArenaAllocator = .init(allocator);
-    var transferred = false;
-    defer if (!transferred) arena.deinit();
+    errdefer arena.deinit();
     const memory = arena.allocator();
     var syntax_arena: std.heap.ArenaAllocator = .init(allocator);
     defer syntax_arena.deinit();
-    var graph = ModuleGraph.init(memory, syntax_arena.allocator(), .{ .source_parser = options.source_parser }, options.import_resolver, diagnostic);
-    try graph.root(name, input);
-    var build: Build = .{ .allocator = memory, .syntax_allocator = syntax_arena.allocator(), .graph = &graph, .functions = .init(memory), .constants = .init(memory), .records = .init(memory), .argument_bindings = .init(memory), .parameters = .init(memory), .names = .init(memory), .types = .init(memory), .readonly = .init(memory), .modules = try memory.alloc(bc.Module, graph.units.items.len), .environments = try syntax_arena.allocator().alloc(*Environment, graph.units.items.len), .precedence = try precedence.Table.init(syntax_arena.allocator()) };
-    for (graph.order.items) |module_index| try compileUnit(&build, graph.units.items[module_index], module_index, diagnostic);
-    if (purpose == .check) return null;
+    const graph = try parseModules(memory, syntax_arena.allocator(), input, name, options, diagnostic);
+    var build = try lowerGraph(&graph, memory, syntax_arena.allocator());
     if (options.optimize) {
         {
             var pool_index = optimizer.PoolIndex.init(allocator);
@@ -2416,7 +2433,6 @@ fn compileImpl(allocator: std.mem.Allocator, input: []const u8, name: []const u8
     program.task_regions = try task_plan.build(memory, &program);
     // Planning also allocates in memory; copy the arena owner only afterwards.
     program.arena = arena;
-    transferred = true;
     return program;
 }
 

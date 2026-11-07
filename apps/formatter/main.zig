@@ -2,6 +2,7 @@
 const std = @import("std");
 const clap = @import("clap");
 const tooling = @import("huak_tooling");
+const typst = @import("libtypst");
 const defaults = @import("host_options");
 const params = clap.parseParamsComptime(
     \\--help                   Display usage.
@@ -40,14 +41,15 @@ fn run(init: std.process.Init) !u8 {
     const stdin_path = args.args.@"stdin-filepath" orelse "stdin.huak";
     const library_path = args.args.libtypst orelse defaults.library_path;
     if ((stdin and files.len != 0) or (stdout and files.len > 1) or (check and stdout)) return error.InvalidArguments;
-    var frontend: tooling.Frontend = .{ .allocator = init.gpa, .io = init.io, .library_path = library_path };
-    defer frontend.deinit();
+    var backend = typst.Library.open(library_path);
+    defer if (backend) |*library| library.deinit() else |_| {};
+    const frontend: tooling.Frontend = .{ .allocator = init.gpa, .io = init.io, .source_parser = if (backend) |*library| .init(library) else |err| err };
     if (stdin or files.len == 0) {
         var reader_buffer: [8192]u8 = undefined;
         var reader = std.Io.File.stdin().readerStreaming(init.io, &reader_buffer);
         var source: std.Io.Writer.Allocating = .init(a);
         _ = try reader.interface.streamRemaining(&source.writer);
-        const path = try std.fs.path.resolve(a, &.{stdin_path});
+        const path = try tooling.SourceLoader.canonicalPath(init.io, a, stdin_path);
         const formatted = try format(&frontend, source.written(), path);
         defer init.gpa.free(formatted);
         if (check) return if (std.mem.eql(u8, source.written(), formatted)) 0 else 1;
@@ -83,9 +85,10 @@ fn run(init: std.process.Init) !u8 {
     return if (check and changed) 1 else 0;
 }
 
-fn format(frontend: *tooling.Frontend, source: []const u8, path: []const u8) ![]u8 {
+fn format(frontend: *const tooling.Frontend, source: []const u8, path: []const u8) ![]u8 {
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     return tooling.format.format(frontend, source, path, &diagnostic) catch |err| {
+        if (err == error.OutOfMemory) return err;
         if (diagnostic) |*message| {
             tooling.diagnostics.report(frontend.io, frontend.allocator, path, source, message);
             return error.Reported;

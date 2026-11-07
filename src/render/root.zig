@@ -5,32 +5,35 @@ const typst = @import("libtypst");
 const g = @import("../drawing/geometry.zig");
 const DisplayList = @import("../drawing/DisplayList.zig");
 const animation = @import("../animation/root.zig");
-const backend = @import("typst/root.zig");
+const backend = @import("typst/scene.zig");
 const svg = @import("svg/animation.zig");
 
-pub const FrameBounds = struct {
-    frames: []const typst.FrameRef,
-    pub fn resolveBounds(self: FrameBounds, reference: u32) !g.BBox {
-        if (reference >= self.frames.len) return error.InvalidFrameReference;
-        const frame = self.frames[reference];
-        const box = try frame.layout.bounds(frame.index);
-        return .{ .min = .{ .x = box[0].x, .y = box[0].y }, .max = .{ .x = box[1].x, .y = box[1].y } };
-    }
-};
+pub const FrameBounds = backend.FrameBounds;
 
 pub fn bounds(picture: *const DisplayList, frames: []const typst.FrameRef) !?g.BBox {
     return picture.boundsWith(FrameBounds{ .frames = frames });
 }
 
-pub fn viewport(picture: *const DisplayList, size: ?g.Point, frames: []const typst.FrameRef) !g.BBox {
-    if (size) |value| return .{ .min = .zero, .max = value };
-    return (try bounds(picture, frames)) orelse .{ .min = .zero, .max = .zero };
-}
+pub const viewport = backend.viewport;
 
 pub const motionFootprint = @import("typst/pen.zig").motionFootprint;
 pub const strokeFootprint = @import("typst/pen.zig").strokeFootprint;
 
-pub const Format = enum { svg, pdf };
+pub const Format = enum {
+    svg,
+    pdf,
+
+    pub fn validate(self: Format, animated: bool, mesh: bool) !void {
+        if (animated and self == .pdf) return error.AnimationRequiresSvg;
+        if (mesh and self == .svg) return error.MeshRequiresPdf;
+    }
+};
+
+pub fn usesMesh(command: *const DisplayList.Command) bool {
+    if (command.* != .path) return false;
+    const gradient = command.path.style.gradient orelse return false;
+    return gradient.* == .mesh_fill;
+}
 
 /// Matching allocation owners stay with the bytes and never cross the ABI.
 pub const Output = union(enum) {
@@ -57,23 +60,27 @@ pub const Output = union(enum) {
 /// until render returns. Concurrent calls use independent scratch allocators.
 pub const Scene = struct {
     picture: *const DisplayList,
-    width: f64,
-    height: f64,
+    /// An omitted size fits the page to its ink during submission.
+    size: ?g.Point = null,
     origin: g.Point = .zero,
     frames: []const typst.FrameRef = &.{},
     object_ids: ?[]const u64 = null,
     tracks: ?animation.Animation = null,
 
     pub fn validate(self: Scene, format: Format) !void {
-        if (self.tracks != null and format == .pdf) return error.AnimationRequiresSvg;
+        const mesh = format == .svg and for (self.picture.commands.items) |*command| {
+            if (usesMesh(command)) break true;
+        } else false;
+        return format.validate(self.tracks != null, mesh);
     }
 
     /// diagnostic must initially own nothing. Preserve the host's presentation
     /// of the per-call native diagnostic before returning. The caller owns the
     /// copied Buffer, including on failure.
     pub fn render(self: Scene, allocator: std.mem.Allocator, library: *typst.Library, format: Format, diagnostic: *?typst.Buffer) !Output {
-        try self.validate(format);
-        var document = backend.submit(allocator, library, self.picture, self.width, self.height, .{
+        // SVG mesh support is checked as the encoder visits the paints.
+        if (format == .pdf) try self.validate(format);
+        var document = backend.submitPicture(allocator, library, self.picture, self.size, .{
             .origin = self.origin,
             .frames = self.frames,
             .object_ids = self.object_ids,

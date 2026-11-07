@@ -33,13 +33,9 @@ const drawing =
     \\curve:=smooth([(10,20),(80,80+offset),(180,40),(300,100)])
     \\object.append(pic, object.draw(curve, pen(rgb(0.2,0.4,0.8),2)))
 ;
-fn sourceBlock(ctx: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(ctx));
-    return library.sourceBlock(source);
-}
 fn compile(a: std.mem.Allocator, library: *typst.Library, source: []const u8) !l.bytecode.Program {
     var diagnostic: ?l.compiler.Diagnostic = null;
-    return l.compiler.compile(a, source, "benchmark.huak", .{ .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } } }, &diagnostic) catch |err| {
+    return l.compiler.compile(a, source, "benchmark.huak", .{ .source_parser = .init(library) }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("{s}\n", .{detail.text()});
         return err;
     };

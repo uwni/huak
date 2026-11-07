@@ -26,6 +26,18 @@ end
 mixfix(then_motion) _ followed by _ in path
 export then_motion
 
+// Local +x follows the original curve's tangent, +y its left normal.
+fn path_frame(corner:string = "strict") -> list
+    if corner == "strict" then return [["path_frame"]] end
+    return [["path_frame",corner]]
+end
+export path_frame
+
+fn along_normal(corner:string = "strict") -> list
+    return then_motion(rotation(90deg),path_frame(corner))
+end
+export along_normal
+
 // Arithmetic in this lexical block constructs scalar expressions for the
 // motion. The ordinary arithmetic outside the block keeps its usual meaning.
 fn add_expr(a:any,b:any) -> list return ["+",a,b] end

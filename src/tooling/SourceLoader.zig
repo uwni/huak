@@ -4,6 +4,28 @@ const compiler = @import("../language/compiler.zig");
 
 const SourceLoader = @This();
 
+/// Identify an editor buffer or stdin input by its physical path, including
+/// the nearest existing parent of a file that has not been saved yet.
+pub fn canonicalPath(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![:0]const u8 {
+    return std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            const lexical = try std.fs.path.resolve(allocator, &.{path});
+            defer allocator.free(lexical);
+            var parent = std.fs.path.dirname(lexical);
+            while (parent) |directory| : (parent = std.fs.path.dirname(directory)) {
+                const actual = std.Io.Dir.cwd().realPathFileAlloc(io, directory, allocator) catch |parent_err| switch (parent_err) {
+                    error.FileNotFound, error.NotDir => continue,
+                    else => return parent_err,
+                };
+                defer allocator.free(actual);
+                return std.fs.path.joinZ(allocator, &.{ actual, lexical[directory.len..] });
+            }
+            return allocator.dupeSentinel(u8, lexical, 0);
+        },
+        else => return err,
+    };
+}
+
 const CachedSource = struct { name: [:0]u8, source: []u8 };
 /// Hosts can observe paths attempted by the resolver, including missing
 /// imports. The callback borrows the path only for the duration of the call.

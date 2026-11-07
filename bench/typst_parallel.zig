@@ -19,11 +19,6 @@ const Result = struct {
     layout_owners: usize,
 };
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 fn script(allocator: std.mem.Allocator, count: usize, trial: usize, exposed: bool) ![]u8 {
     var writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer writer.deinit();
@@ -48,7 +43,7 @@ fn script(allocator: std.mem.Allocator, count: usize, trial: usize, exposed: boo
 fn compile(allocator: std.mem.Allocator, library: *typst.Library, source: []const u8) !language.bytecode.Program {
     var diagnostic: ?language.compiler.Diagnostic = null;
     return language.compiler.compile(allocator, source, "typst-parallel-benchmark.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
     }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("compiler: {s}\n", .{detail.text()});
         return err;

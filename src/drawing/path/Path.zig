@@ -5,6 +5,51 @@ const std = @import("std");
 const g = @import("../geometry.zig");
 pub const Point = g.Point;
 pub const Cubic = g.Cubic;
+const Direction = @import("Direction.zig");
+pub const KnotTable = @import("KnotTable.zig");
+/// Local coordinates of a drawable segment. The origin travels on the
+/// source curve; the axes follow its tangent and left normal.
+pub const SegmentFrame = struct {
+    curve: Cubic,
+    cubic: bool,
+    direction: Direction,
+    start: Point = .zero,
+    end: Point = .zero,
+
+    pub fn init(curve: Cubic, cubic: bool) !SegmentFrame {
+        return .{ .curve = curve, .cubic = cubic, .direction = try Direction.init(curve, cubic) };
+    }
+
+    pub fn ray(self: *const SegmentFrame, u: f64) Direction.Ray {
+        if (u == 0 and !self.start.eql(.zero)) return .{ self.start.x, self.start.y };
+        if (u == 1 and !self.end.eql(.zero)) return .{ self.end.x, self.end.y };
+        return self.direction.ray(u);
+    }
+
+    pub fn useSolved(self: *SegmentFrame, dirs: [2]Point, max_delta: f64) !void {
+        self.start = dirs[0];
+        self.end = dirs[1];
+        // Interior derivatives still belong to the stored cubic. Charge the
+        // endpoint rotation difference to the sweep's spatial error budget.
+        inline for (.{ self.start, self.end }, .{ @as(f64, 0), @as(f64, 1) }) |v, u| {
+            if (!v.eql(.zero)) {
+                const raw = try (try self.direction.at(u)).normalized();
+                if (raw.distance(try v.normalized()) > max_delta) return error.PrecisionRange;
+            }
+        }
+    }
+
+    pub fn point(self: *const SegmentFrame, u: f64) Point {
+        return if (self.cubic) self.curve.at(u) else self.curve.p0.lerp(self.curve.p3, u);
+    }
+
+    pub fn at(self: *const SegmentFrame, u: f64) !g.Transform {
+        if (!std.math.isFinite(u) or u < 0 or u > 1) return error.InvalidParameter;
+        const origin = self.point(u);
+        const basis = try g.Transform.fromXAxis(try Direction.narrow(self.ray(u)));
+        return basis.then(.translation(origin.x, origin.y));
+    }
+};
 pub const Segment = union(enum) {
     move: Point,
     line: Point,
@@ -44,6 +89,7 @@ const Path = @This();
 
 allocator: std.mem.Allocator,
 segments: std.ArrayList(Segment) = .empty,
+knots: ?*KnotTable = null,
 current: ?Point = null,
 start: ?Point = null,
 open: bool = false,
@@ -52,6 +98,10 @@ pub fn init(allocator: std.mem.Allocator) Path {
     return .{ .allocator = allocator };
 }
 pub fn deinit(self: *Path) void {
+    if (self.knots) |table| {
+        table.entries.deinit(self.allocator);
+        self.allocator.destroy(table);
+    }
     self.segments.deinit(self.allocator);
     self.* = undefined;
 }
@@ -74,9 +124,50 @@ pub fn cubicTo(self: *Path, c1: Point, c2: Point, end: Point) !void {
     try self.segments.append(self.allocator, .{ .cubic = .{ .c1 = c1, .c2 = c2, .end = end } });
     self.current = end;
 }
+pub fn knotRecords(self: *const Path) []const KnotTable.Knot {
+    return if (self.knots) |table| table.entries.items else &.{};
+}
+
+pub fn reserveKnots(self: *Path, count: usize) !void {
+    if (count == 0) return;
+    if (self.knots) |table| return table.entries.ensureTotalCapacityPrecise(self.allocator, count);
+    const table = try self.allocator.create(KnotTable);
+    errdefer self.allocator.destroy(table);
+    table.* = .{};
+    try table.entries.ensureTotalCapacityPrecise(self.allocator, count);
+    self.knots = table;
+}
+fn growKnots(self: *Path, additional: usize) !void {
+    if (additional == 0) return;
+    if (self.knots) |table| return table.entries.ensureUnusedCapacity(self.allocator, additional);
+    try self.reserveKnots(additional);
+}
+fn copyKnots(self: *Path, source: *const Path) !void {
+    const records = source.knotRecords();
+    if (records.len == 0) return;
+    try self.reserveKnots(records.len);
+    self.knots.?.entries.appendSliceAssumeCapacity(records);
+}
+pub fn solvedCubicTo(self: *Path, c: Cubic, start: Point, end: Point) !void {
+    if (start.eql(.zero) and end.eql(.zero)) return self.cubicTo(c.p1, c.p2, c.p3);
+    if (self.segments.items.len >= std.math.maxInt(u32)) return error.InvalidPath;
+    const sides = KnotTable.sides(@intCast(self.segments.items.len), c, start, end);
+    var extra: usize = @intFromBool(sides[1] != null);
+    if (sides[0]) |k| {
+        if (self.knots == null or !self.knots.?.mergesStart(k)) extra += 1;
+    }
+    try self.growKnots(extra);
+    try self.cubicTo(c.p1, c.p2, c.p3);
+    for (sides) |side| if (side) |k| self.knots.?.push(k);
+}
+fn solvedAt(self: *const Path, index: usize, c: Cubic) [2]Point {
+    return if (self.knots) |table| table.directions(self.segments.items, index, c) else .{ .zero, .zero };
+}
+
 pub fn close(self: *Path) !void {
     if (!self.open) return error.InvalidPath;
     try self.segments.append(self.allocator, .close);
+    if (self.knots) |table| table.close(self.segments.items);
     self.current = self.start;
     self.open = false;
 }
@@ -115,11 +206,28 @@ pub fn circle(allocator: std.mem.Allocator, center: Point, radius: f64) !Path {
 pub fn clone(self: Path, allocator: std.mem.Allocator) !Path {
     var result = Path.init(allocator);
     errdefer result.deinit();
-    try result.segments.appendSlice(allocator, self.segments.items);
+    result.segments = .fromOwnedSlice(try allocator.dupe(Segment, self.segments.items));
+    try result.copyKnots(&self);
     result.current = self.current;
     result.start = self.start;
     result.open = self.open;
     return result;
+}
+
+/// Materialize a borrowed segment bank with validated topology and current
+/// point, retaining the construction directions under the new owner.
+pub fn copyView(self: *const Path, a: std.mem.Allocator) !Path {
+    var out = Path.init(a);
+    errdefer out.deinit();
+    try out.segments.ensureTotalCapacityPrecise(a, self.segments.items.len);
+    for (self.segments.items) |seg| switch (seg) {
+        .move => |p| try out.moveTo(p),
+        .line => |p| try out.lineTo(p),
+        .cubic => |c| try out.cubicTo(c.c1, c.c2, c.end),
+        .close => try out.close(),
+    };
+    try out.copyKnots(self);
+    return out;
 }
 
 /// An oriented circular arc, approximated by cubic spans of at most 90 degrees.
@@ -167,10 +275,14 @@ pub fn subpaths(self: Path, allocator: std.mem.Allocator) ![]Path {
         part.* = Path.init(allocator);
         initialized += 1;
         try part.segments.ensureTotalCapacityPrecise(allocator, end - begin);
-        for (self.segments.items[begin..end]) |segment| switch (segment) {
+        for (self.segments.items[begin..end], begin..) |segment, index| switch (segment) {
             .move => |point| try part.moveTo(point),
             .line => |point| try part.lineTo(point),
-            .cubic => |curve| try part.cubicTo(curve.c1, curve.c2, curve.end),
+            .cubic => |curve| {
+                const c: Cubic = .{ .p0 = part.current orelse return error.InvalidPath, .p1 = curve.c1, .p2 = curve.c2, .p3 = curve.end };
+                const dirs = self.solvedAt(index, c);
+                try part.solvedCubicTo(c, dirs[0], dirs[1]);
+            },
             .close => try part.close(),
         };
         begin = end;
@@ -178,14 +290,26 @@ pub fn subpaths(self: Path, allocator: std.mem.Allocator) ![]Path {
     return result;
 }
 pub fn bounds(self: Path) ?g.BBox {
+    return segmentBounds(self.segments.items, .{}, .geometry) catch unreachable;
+}
+
+/// Bounds of drawable segments after placement. A move alone has no ink.
+pub fn paintedBounds(segments: []const Segment, placement: g.Transform) error{NonFinite}!?g.BBox {
+    return segmentBounds(segments, placement, .ink);
+}
+
+fn segmentBounds(segments: []const Segment, placement: g.Transform, comptime kind: enum { geometry, ink }) error{NonFinite}!?g.BBox {
     var result: ?g.BBox = null;
-    var current: Point = .zero;
-    var start: Point = .zero;
-    for (self.segments.items) |segment| {
+    var current: Point = if (kind == .ink) placement.apply(.zero) else .zero;
+    var start = current;
+    for (segments) |raw| {
+        var segment = raw;
+        if (kind == .ink) mapSegment(&segment, &placement);
         const box: g.BBox = switch (segment) {
             .move => |p| blk: {
                 current = p;
                 start = p;
+                if (kind == .ink) continue;
                 break :blk .fromPoint(p);
             },
             .line => |p| blk: {
@@ -194,9 +318,10 @@ pub fn bounds(self: Path) ?g.BBox {
                 break :blk b;
             },
             .cubic => |c| blk: {
-                const b = (Cubic{ .p0 = current, .p1 = c.c1, .p2 = c.c2, .p3 = c.end }).bounds();
+                const curve: Cubic = .{ .p0 = current, .p1 = c.c1, .p2 = c.c2, .p3 = c.end };
+                if (kind == .ink and !curve.isFinite()) return error.NonFinite;
                 current = c.end;
-                break :blk b;
+                break :blk curve.bounds();
             },
             .close => blk: {
                 const b = g.BBox.fromPoints(current, start);
@@ -204,6 +329,7 @@ pub fn bounds(self: Path) ?g.BBox {
                 break :blk b;
             },
         };
+        if (kind == .ink and (!box.min.isFinite() or !box.max.isFinite())) return error.NonFinite;
         result = if (result) |b| b.unite(box) else box;
     }
     return result;
@@ -251,6 +377,15 @@ pub fn transform(self: *Path, t: g.Transform) !void {
     for (self.segments.items) |*segment| {
         if (!segmentFinite(segment, t)) return error.NonFinite;
     }
+    for (self.knotRecords()) |k| _ = try k.mapped(self.segments.items, t);
+    if (self.knots) |table| {
+        const original = table.entries.items;
+        table.entries.items.len = 0;
+        for (original) |k| {
+            const mapped = k.mapped(self.segments.items, t) catch unreachable;
+            if (mapped.incoming != 0 or mapped.outgoing != 0) table.entries.appendAssumeCapacity(mapped);
+        }
+    }
     for (self.segments.items) |*segment| mapSegment(segment, &t);
     if (self.current) |p| self.current = t.apply(p);
     if (self.start) |p| self.start = t.apply(p);
@@ -258,8 +393,13 @@ pub fn transform(self: *Path, t: g.Transform) !void {
 pub fn transformed(self: Path, allocator: std.mem.Allocator, t: g.Transform) !Path {
     var result = Path.init(allocator);
     errdefer result.deinit();
-    try result.segments.ensureTotalCapacity(allocator, self.segments.items.len);
+    try result.segments.ensureTotalCapacityPrecise(allocator, self.segments.items.len);
     if (!t.isFinite()) return error.NonFinite;
+    try result.reserveKnots(self.knotRecords().len);
+    for (self.knotRecords()) |k| {
+        const mapped = try k.mapped(self.segments.items, t);
+        if (mapped.incoming != 0 or mapped.outgoing != 0) result.knots.?.entries.appendAssumeCapacity(mapped);
+    }
     // A fresh result can discard partial work instead of recomputing each
     // coordinate to keep an existing path unchanged on failure.
     for (self.segments.items) |*segment| {
@@ -273,10 +413,27 @@ pub fn transformed(self: Path, allocator: std.mem.Allocator, t: g.Transform) !Pa
     result.open = self.open;
     return result;
 }
+fn prepareKnotAppend(self: *Path, other: Path, offset: usize) !void {
+    const records = other.knotRecords();
+    if (records.len == 0) return;
+    if (offset > std.math.maxInt(u32) - records[records.len - 1].index) return error.InvalidPath;
+    try self.growKnots(records.len);
+}
+fn appendKnots(self: *Path, other: Path, offset: usize, matrix: ?g.Transform) void {
+    for (other.knotRecords()) |k| {
+        var placed = if (matrix) |t| k.mapped(other.segments.items, t) catch unreachable else k;
+        if (placed.incoming == 0 and placed.outgoing == 0) continue;
+        placed.index += @intCast(offset);
+        self.knots.?.push(placed);
+    }
+}
 /// Append subpaths, preserving moves and drawing order.
 pub fn append(self: *Path, other: Path) !void {
     if (self.segments.items.ptr == other.segments.items.ptr and other.segments.items.len != 0) return error.InvalidPath;
+    const offset = self.segments.items.len;
+    try self.prepareKnotAppend(other, offset);
     try self.segments.appendSlice(self.allocator, other.segments.items);
+    self.appendKnots(other, offset, null);
     if (other.current != null) {
         self.current = other.current;
         self.start = other.start;
@@ -288,6 +445,9 @@ pub fn append(self: *Path, other: Path) !void {
 pub fn appendTransformed(self: *Path, other: Path, t: g.Transform) !void {
     if (self.segments.items.ptr == other.segments.items.ptr and other.segments.items.len != 0) return error.InvalidPath;
     if (!t.isFinite()) return error.NonFinite;
+    const offset = self.segments.items.len;
+    for (other.knotRecords()) |k| _ = try k.mapped(other.segments.items, t);
+    try self.prepareKnotAppend(other, offset);
     // Validate every result before changing this path.
     for (other.segments.items) |*segment| {
         if (!segmentFinite(segment, t)) return error.NonFinite;
@@ -298,6 +458,7 @@ pub fn appendTransformed(self: *Path, other: Path, t: g.Transform) !void {
         mapSegment(&mapped, &t);
         self.segments.appendAssumeCapacity(mapped);
     }
+    self.appendKnots(other, offset, t);
     if (other.current) |current| {
         self.current = t.apply(current);
         if (other.start) |start| self.start = t.apply(start);
@@ -318,7 +479,10 @@ pub fn join(self: *Path, other: Path) !void {
         .move => return error.InvalidPath,
         else => {},
     };
+    const offset = self.segments.items.len - 1;
+    try self.prepareKnotAppend(other, offset);
     try self.segments.appendSlice(self.allocator, other.segments.items[1..]);
+    self.appendKnots(other, offset, null);
     self.current = other.current;
     self.open = other.open;
 }
@@ -363,7 +527,11 @@ pub fn reverse(self: Path, allocator: std.mem.Allocator) !Path {
             };
             switch (self.segments.items[i]) {
                 .line => try result.lineTo(previous),
-                .cubic => |c| try result.cubicTo(c.c2, c.c1, previous),
+                .cubic => |c| {
+                    const src: Cubic = .{ .p0 = previous, .p1 = c.c1, .p2 = c.c2, .p3 = c.end };
+                    const dirs = self.solvedAt(i, src);
+                    try result.solvedCubicTo(src.reversed(), dirs[1].scale(-1), dirs[0].scale(-1));
+                },
                 else => return error.InvalidPath,
             }
         }
@@ -530,13 +698,13 @@ fn selectCurveAt(self: Path, time: f64) PathError!CurveSelection {
 }
 
 /// Advances in drawable-segment time. Moves and empty closing edges consume no time.
-const CurveReader = struct {
+pub const CurveReader = struct {
     segments: []const Segment,
     current: Point = .zero,
     start: Point = .zero,
     open: bool = false,
 
-    fn read(self: *CurveReader, skip: usize) PathError!struct { curve: Cubic, is_cubic: bool } {
+    pub fn read(self: *CurveReader, skip: usize) PathError!struct { curve: Cubic, is_cubic: bool } {
         var remaining = skip;
         var current = self.current;
         var start = self.start;
@@ -666,7 +834,7 @@ pub fn trimmed(self: Path, allocator: std.mem.Allocator, begin: f64, end: f64) a
     var start: Point = .zero;
     var need_move = true;
     var subpath_time: f64 = 0;
-    for (self.segments.items) |segment| {
+    for (self.segments.items, 0..) |segment, index| {
         if (segment == .move) {
             current = segment.move;
             start = current;
@@ -693,7 +861,8 @@ pub fn trimmed(self: Path, allocator: std.mem.Allocator, begin: f64, end: f64) a
                 const cut = try curve.trimmed(lo, hi);
                 if (need_move or result.current == null) try result.moveTo(cut.p0);
                 if (segment == .cubic) {
-                    try result.cubicTo(cut.p1, cut.p2, cut.p3);
+                    const dirs = self.solvedAt(index, curve);
+                    try result.solvedCubicTo(cut, if (lo == 0) dirs[0] else .zero, if (hi == 1) dirs[1] else .zero);
                 } else if (segment == .close and begin <= subpath_time and hi == 1) {
                     try result.close();
                 } else try result.lineTo(cut.p3);
@@ -718,7 +887,7 @@ pub fn clippedToRect(self: Path, allocator: std.mem.Allocator, rect: g.BBox) !Pa
     var start: Point = .zero;
     var need_move = true;
     var contour_kept = true;
-    for (self.segments.items) |segment| {
+    for (self.segments.items, 0..) |segment, index| {
         if (segment == .move) {
             current = segment.move;
             start = current;
@@ -770,7 +939,10 @@ pub fn clippedToRect(self: Path, allocator: std.mem.Allocator, rect: g.BBox) !Pa
             fragment.p0 = curve.at(lo);
             fragment.p3 = curve.at(hi);
             if (need_move or result.current == null or !result.current.?.eql(fragment.p0)) try result.moveTo(fragment.p0);
-            if (segment == .cubic) try result.cubicTo(fragment.p1, fragment.p2, fragment.p3) else try result.lineTo(fragment.p3);
+            if (segment == .cubic) {
+                const dirs = self.solvedAt(index, curve);
+                try result.solvedCubicTo(fragment, if (lo == 0) dirs[0] else .zero, if (hi == 1) dirs[1] else .zero);
+            } else try result.lineTo(fragment.p3);
             need_move = false;
         }
         // A fully retained contour must keep its closed stroke join. Only
@@ -1668,6 +1840,9 @@ test "circle construction keeps four cubic quarters and finite exact axis bounds
     try std.testing.expectEqual(@as(f64, 1), box.min.x);
     try std.testing.expectEqual(@as(f64, 6), box.max.y);
     try std.testing.expect(!p.open);
+    try p.moveTo(.{ .x = 50, .y = -20 });
+    try std.testing.expectEqual(@as(f64, 50), p.bounds().?.max.x);
+    try std.testing.expectEqual(box, (try paintedBounds(p.segments.items, .{})).?);
     try std.testing.expectError(error.InvalidParameter, Path.circle(std.testing.allocator, .zero, 0));
     try std.testing.expectError(error.NonFinite, Path.circle(std.testing.allocator, .zero, std.math.inf(f64)));
     var huge = try Path.circle(std.testing.allocator, .zero, 1.7e308);
@@ -2098,4 +2273,160 @@ fn exerciseFreshTransform(allocator: std.mem.Allocator) !void {
 
 test "fresh transform releases every failed result allocation" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseFreshTransform, .{});
+}
+
+test "segment-local basis retains the derivative through cancellation" {
+    const e = 0x1p-54;
+    const curve: Cubic = .{
+        .p0 = .{ .x = -1, .y = 0 },
+        .p1 = .{ .x = e, .y = e },
+        .p2 = .{ .x = -1, .y = 2 * e },
+        .p3 = .{ .x = 2 * e, .y = 3 * e },
+    };
+    const frame = try SegmentFrame.init(curve, true);
+    const basis = try frame.at(0.5);
+    // At u=1/2 the Bernstein derivative is proportional to (1,4).
+    // Rounding the control-point differences to f64 first loses its x part.
+    try std.testing.expectEqual(curve.at(0.5), basis.apply(.zero));
+    try std.testing.expectApproxEqAbs(1 / @sqrt(@as(f64, 17)), basis.a, 1e-15);
+    try std.testing.expectEqual(4 * basis.a, basis.b);
+    try std.testing.expectEqual(-basis.b, basis.c);
+    try std.testing.expectEqual(basis.a, basis.d);
+    try std.testing.expectError(error.InvalidParameter, frame.at(1.1));
+}
+
+// These fixtures start with a move and contain only cubics, so drawable
+// time i-1/2 identifies the cubic at command i.
+fn expectSolved(path: Path, index: usize, start: Point, end: Point) !void {
+    const pos = try path.curveAt(@as(f64, @floatFromInt(index)) - 0.5);
+    try std.testing.expectEqual([2]Point{ start, end }, path.solvedAt(index, pos.curve));
+}
+
+test "shared Hobby knot validates edits on each side before a rounding transform" {
+    const a = std.testing.allocator;
+    var path = try @import("construct.zig").construct(a, &.{ .zero, .{ .x = 5, .y = 8 }, .{ .x = 11, .y = 0 } }, &.{ .smooth, .smooth }, .{});
+    defer path.deinit();
+    try std.testing.expectEqual(1, path.knotRecords().len);
+    const dir = path.knotRecords()[0].tangent;
+    const left = &path.segments.items[1].cubic;
+    const right = &path.segments.items[2].cubic;
+    left.c1.x += 1;
+    right.c2.y += 1;
+    try expectSolved(path, 1, .zero, dir);
+    try expectSolved(path, 2, dir, .zero);
+    const original = left.c2;
+    left.c2.y = std.math.nextAfter(f64, original.y, std.math.inf(f64));
+    try expectSolved(path, 1, .zero, .zero);
+    try expectSolved(path, 2, dir, .zero);
+    const shift = g.Transform.translation(0, 0x1p40);
+    try std.testing.expectEqual(shift.apply(left.c2), shift.apply(original));
+    var placed = try path.transformed(a, shift);
+    defer placed.deinit();
+    try expectSolved(placed, 1, .zero, .zero);
+    try expectSolved(placed, 2, dir, .zero);
+    var in_place = try path.clone(a);
+    defer in_place.deinit();
+    try in_place.transform(shift);
+    var appended = Path.init(a);
+    defer appended.deinit();
+    try appended.appendTransformed(path, shift);
+    for ([_]Path{ in_place, appended }) |p| try std.testing.expectEqualDeep(placed.knotRecords(), p.knotRecords());
+    left.c2 = original;
+    const departing = right.c1;
+    right.c1.x += 1;
+    try expectSolved(path, 1, .zero, dir);
+    try expectSolved(path, 2, .zero, .zero);
+    left.end.x += 1;
+    try expectSolved(path, 1, .zero, .zero);
+    right.c1 = departing;
+    try expectSolved(path, 2, .zero, .zero);
+}
+
+test "coincident endpoint controls validate the first noncoincident handle and its order" {
+    const a = std.testing.allocator;
+    const x: Point = .{ .x = 1, .y = 0 };
+    var path = Path.init(a);
+    defer path.deinit();
+    try path.moveTo(.zero);
+    // The departure uses the chord (order three), the arrival its nearest handle.
+    try path.solvedCubicTo(.{ .p0 = .zero, .p1 = .zero, .p2 = .zero, .p3 = x }, x, x);
+    try expectSolved(path, 1, x, x);
+    const c = &path.segments.items[1].cubic;
+    c.end.y = 1;
+    try expectSolved(path, 1, .zero, .zero);
+    c.end = x;
+    c.c2 = x; // Same departure witness point, different derivative order.
+    try expectSolved(path, 1, .zero, .zero);
+
+    var second = Path.init(a);
+    defer second.deinit();
+    try second.moveTo(.zero);
+    try second.solvedCubicTo(.{ .p0 = .zero, .p1 = .zero, .p2 = x, .p3 = x.scale(2) }, x, .zero);
+    second.segments.items[1].cubic.end.y = 1;
+    try expectSolved(second, 1, x, .zero);
+    second.segments.items[1].cubic.c2.y = 1;
+    try expectSolved(second, 1, .zero, .zero);
+}
+
+test "shared Hobby knots survive reversal and cuts only at retained endpoints" {
+    const a = std.testing.allocator;
+    const points = [_]Point{ .zero, .{ .x = 10, .y = 2 }, .{ .x = 20, .y = 3 }, .{ .x = 30, .y = 1 } };
+    var path = try @import("construct.zig").construct(a, &points, &.{ .smooth, .smooth, .smooth }, .{});
+    defer path.deinit();
+    const left = path.knotRecords()[0].tangent;
+    const right = path.knotRecords()[1].tangent;
+    try std.testing.expect(!left.eql(right));
+    var rev = try path.reverse(a);
+    defer rev.deinit();
+    var back_cut = try path.trimmed(a, 2.75, 0.25);
+    defer back_cut.deinit();
+    for ([_]Path{ rev, back_cut }) |p| {
+        try std.testing.expectEqual(2, p.knotRecords().len);
+        try expectSolved(p, 1, .zero, right.scale(-1));
+        try expectSolved(p, 2, right.scale(-1), left.scale(-1));
+        try expectSolved(p, 3, left.scale(-1), .zero);
+    }
+    var cut = try path.clippedToRect(a, .fromPoints(.{ .x = 5, .y = -100 }, .{ .x = 25, .y = 100 }));
+    defer cut.deinit();
+    try std.testing.expectEqual(2, cut.knotRecords().len);
+    try expectSolved(cut, 1, .zero, left);
+    try expectSolved(cut, 2, left, right);
+    try expectSolved(cut, 3, right, .zero);
+    var half = try path.trimmed(a, 1, 1.75);
+    defer half.deinit();
+    try std.testing.expectEqual(1, half.knotRecords().len);
+    try expectSolved(half, 1, left, .zero);
+}
+
+test "closed Hobby seam is stored once and independent directions at a corner survive" {
+    const a = std.testing.allocator;
+    var loop = try @import("construct.zig").construct(a, &.{ .zero, .{ .x = 8, .y = 0 }, .{ .x = 2, .y = 7 } }, &.{ .smooth, .smooth, .smooth }, .{ .closed = true });
+    defer loop.deinit();
+    const records = loop.knotRecords();
+    try std.testing.expectEqual(3, records.len);
+    try std.testing.expect(records[0].seam);
+    try expectSolved(loop, 1, records[0].tangent, records[1].tangent);
+    try expectSolved(loop, 3, records[2].tangent, records[0].tangent);
+    loop.segments.items[1].cubic.c1.y += 1;
+    try expectSolved(loop, 1, .zero, records[1].tangent);
+    try expectSolved(loop, 3, records[2].tangent, records[0].tangent);
+    var shifted = try loop.transformed(a, .translation(4, 2));
+    defer shifted.deinit();
+    try expectSolved(shifted, 1, .zero, records[1].tangent);
+    try expectSolved(shifted, 3, records[2].tangent, records[0].tangent);
+    var rev = try loop.reverse(a);
+    defer rev.deinit();
+    try expectSolved(rev, 1, records[0].tangent.scale(-1), records[2].tangent.scale(-1));
+    try expectSolved(rev, 3, records[1].tangent.scale(-1), .zero);
+
+    const x: Point = .{ .x = 1, .y = 0 };
+    const y: Point = .{ .x = 0, .y = 1 };
+    var corner = Path.init(a);
+    defer corner.deinit();
+    try corner.moveTo(.zero);
+    try corner.solvedCubicTo(.line(.zero, x), .zero, x);
+    try corner.solvedCubicTo(.line(x, x.add(y)), y, .zero);
+    try std.testing.expectEqual(2, corner.knotRecords().len);
+    try expectSolved(corner, 1, .zero, x);
+    try expectSolved(corner, 2, y, .zero);
 }

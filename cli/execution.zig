@@ -7,7 +7,7 @@ const language = huak.language;
 const flags = @import("options.zig");
 const Report = @import("Report.zig");
 
-pub fn execute(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library, program: *const language.bytecode.Program, options: flags.Options, path: []const u8, source: []const u8, report: *Report) !language.OutputBatch {
+pub fn execute(allocator: std.mem.Allocator, io: std.Io, backends: language.Runtime.Backends, program: *const language.bytecode.Program, options: flags.Options, path: []const u8, source: []const u8, report: *Report) !language.OutputBatch {
     var temporary: std.heap.ArenaAllocator = .init(allocator);
     defer temporary.deinit();
     const scratch = temporary.allocator();
@@ -36,7 +36,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library
         };
         font.* = .{ .data = bytes };
     }
-    var runtime = try language.Runtime.init(allocator, std.heap.c_allocator, library, .{ .font_sources = fonts, .use_bundled_fonts = options.bundled_fonts, .inputs = inputs });
+    var runtime = try language.Runtime.initWithBackends(allocator, std.heap.c_allocator, backends, .{ .font_sources = fonts, .use_bundled_fonts = options.bundled_fonts, .inputs = inputs });
     defer runtime.deinit();
     machine.host = runtime.host();
     var workers: language.tasks.Executor = .{ .allocator = allocator, .io = io, .runtime = &runtime, .jobs = options.jobs };

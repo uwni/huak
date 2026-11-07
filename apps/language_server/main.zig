@@ -2,6 +2,7 @@
 const std = @import("std");
 const clap = @import("clap");
 const tooling = @import("huak_tooling");
+const typst = @import("libtypst");
 const defaults = @import("host_options");
 const params = clap.parseParamsComptime(
     \\--help              Display usage.
@@ -30,8 +31,9 @@ fn run(init: std.process.Init) !bool {
         return true;
     }
     const path = result.args.libtypst orelse defaults.library_path;
-    var frontend: tooling.Frontend = .{ .allocator = init.gpa, .io = init.io, .library_path = path };
-    defer frontend.deinit();
+    var backend = typst.Library.open(path);
+    defer if (backend) |*library| library.deinit() else |_| {};
+    const frontend: tooling.Frontend = .{ .allocator = init.gpa, .io = init.io, .source_parser = if (backend) |*library| .init(library) else |err| err };
     var session: tooling.lsp.Session = .{ .frontend = &frontend };
     defer session.deinit();
     var read_buffer: [8192]u8 = undefined;

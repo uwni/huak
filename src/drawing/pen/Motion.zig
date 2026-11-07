@@ -5,20 +5,27 @@ const std = @import("std");
 const g = @import("../geometry.zig");
 const Motion = @This();
 
-pub const Kind = enum { scale, scale_x, scale_y, rotate };
+pub const Kind = enum { scale, scale_x, scale_y, rotate, path_frame };
+pub const Corner = enum { strict, rotate, overlap };
 pub const max_degree = 12;
 pub const Track = struct { kind: Kind, first: usize, len: usize, polynomial: bool = false, uncertainty: f64 = 0 };
 pub const Key = struct { t: f64, value: f64 };
 tracks: []const Track,
 keys: []const Key,
 tolerance: f64 = 0.001,
+corner: Corner = .strict,
 
 pub fn validate(self: *const Motion) !void {
     if (!std.math.isFinite(self.tolerance) or self.tolerance <= 0 or self.tracks.len == 0) return error.InvalidMotion;
     var first: usize = 0;
     for (self.tracks) |track| {
         if (!std.math.isFinite(track.uncertainty) or track.uncertainty < 0) return error.InvalidMotion;
-        if (track.first != first or track.len < 2 or track.len > self.keys.len - first) return error.InvalidMotion;
+        if (track.first != first) return error.InvalidMotion;
+        if (track.kind == .path_frame) {
+            if (track.len != 0 or track.polynomial or track.uncertainty != 0) return error.InvalidMotion;
+            continue;
+        }
+        if (track.len < 2 or track.len > self.keys.len - first) return error.InvalidMotion;
         if (track.polynomial and track.len > max_degree + 1) return error.InvalidMotion;
         const keys = self.keys[first..][0..track.len];
         if (keys[0].t != 0 or keys[keys.len - 1].t != 1) return error.InvalidMotion;
@@ -37,7 +44,7 @@ pub fn clone(self: *const Motion, a: std.mem.Allocator) !*const Motion {
     errdefer a.destroy(copy);
     const tracks = try a.dupe(Track, self.tracks);
     errdefer a.free(tracks);
-    copy.* = .{ .tracks = tracks, .keys = try a.dupe(Key, self.keys), .tolerance = self.tolerance };
+    copy.* = .{ .tracks = tracks, .keys = try a.dupe(Key, self.keys), .tolerance = self.tolerance, .corner = self.corner };
     return copy;
 }
 
@@ -48,7 +55,7 @@ pub fn destroy(self: *const Motion, a: std.mem.Allocator) void {
 }
 
 pub fn eql(self: *const Motion, other: *const Motion) bool {
-    if (self.tolerance != other.tolerance or self.tracks.len != other.tracks.len) return false;
+    if (self.tolerance != other.tolerance or self.corner != other.corner or self.tracks.len != other.tracks.len) return false;
     for (self.tracks, other.tracks) |a, b| if (a.kind != b.kind or a.len != b.len or a.polynomial != b.polynomial or a.uncertainty != b.uncertainty) return false;
     return std.mem.eql(u8, std.mem.sliceAsBytes(self.keys), std.mem.sliceAsBytes(other.keys));
 }
@@ -56,6 +63,7 @@ pub fn eql(self: *const Motion, other: *const Motion) bool {
 pub fn hash(self: *const Motion, seed: u64) u64 {
     var h = std.hash.Wyhash.init(seed);
     h.update(std.mem.asBytes(&self.tolerance));
+    h.update(&.{@backingInt(self.corner)});
     for (self.tracks) |track| {
         h.update(&.{ @backingInt(track.kind), @intFromBool(track.polynomial) });
         h.update(std.mem.asBytes(&track.len));
@@ -96,24 +104,65 @@ fn value(keys: []const Key, polynomial: bool, t: f64) f64 {
 pub fn nextKey(self: *const Motion, t: f64) f64 {
     var next: f64 = 1;
     for (self.tracks) |op| {
+        if (op.kind == .path_frame) continue;
         const keys = self.keys[op.first..][0..op.len];
         if (!op.polynomial) next = @min(next, keys[interval(keys, t) + 1].t);
     }
     return next;
 }
 
+pub fn usesPathFrame(self: *const Motion) bool {
+    for (self.tracks) |op| if (op.kind == .path_frame) return true;
+    return false;
+}
+
+pub fn constantInProgress(self: *const Motion) bool {
+    for (self.tracks) |op| {
+        if (op.kind == .path_frame) continue;
+        const keys = self.keys[op.first..][0..op.len];
+        for (keys[1..]) |key| if (key.value != keys[0].value) return false;
+    }
+    return true;
+}
+
+pub const Context = struct { progress: f64, tangent: ?g.Point = null };
+
+/// Convenience for context-independent motions.
 pub fn at(self: *const Motion, t: f64) g.Transform {
+    return self.atContext(.{ .progress = t }) catch unreachable;
+}
+
+pub fn atContext(self: *const Motion, context: Context) !g.Transform {
     var result: g.Transform = .{};
     for (self.tracks) |op| {
-        const v = value(self.keys[op.first..][0..op.len], op.polynomial, t);
+        if (op.kind == .path_frame) {
+            result = result.then(try g.Transform.fromXAxis(context.tangent orelse return error.UndefinedPathFrame));
+            continue;
+        }
+        const v = value(self.keys[op.first..][0..op.len], op.polynomial, context.progress);
         result = result.then(switch (op.kind) {
             .scale => g.Transform.scaling(v, v),
             .scale_x => g.Transform.scaling(v, 1),
             .scale_y => g.Transform.scaling(1, v),
             .rotate => g.Transform.rotation(v),
+            .path_frame => unreachable,
         });
     }
     return result;
+}
+
+/// Build an ordinary motion for a turn in place. Freeze every progress
+/// operand at the knot and replace each local frame, in composition order,
+/// with a linear rotation track. Storage belongs to the sweep.
+pub fn cornerTurn(self: *const Motion, progress: f64, start: f64, angle: f64, tracks: []Track, keys: []Key) Motion {
+    for (self.tracks, tracks, 0..) |op, *out, i| {
+        const frame = op.kind == .path_frame;
+        const first = if (frame) start else value(self.keys[op.first..][0..op.len], op.polynomial, progress);
+        keys[2 * i] = .{ .t = 0, .value = first };
+        keys[2 * i + 1] = .{ .t = 1, .value = if (frame) start + angle else first };
+        out.* = .{ .kind = if (frame) .rotate else op.kind, .first = 2 * i, .len = 2 };
+    }
+    return .{ .tracks = tracks, .keys = keys, .tolerance = self.tolerance };
 }
 
 // Operator norm bounds for a product M(t), M'(t), M''(t).
@@ -124,11 +173,11 @@ pub const Bounds = struct {
     uncertainty: f64 = 0,
     fn then(self: Bounds, kind: Kind, amplitude: f64, delta: f64, curvature: f64, uncertainty: f64) Bounds {
         const n: f64 = switch (kind) {
-            .rotate => 1,
+            .rotate, .path_frame => 1,
             .scale => amplitude,
             .scale_x, .scale_y => @max(1, amplitude),
         };
-        const d2 = curvature + (if (kind == .rotate) delta * delta else 0);
+        const d2 = curvature + (if (kind == .rotate or kind == .path_frame) delta * delta else 0);
         return .{ .uncertainty = (n + uncertainty) * self.uncertainty + uncertainty * self.scale, .scale = n * self.scale, .speed = delta * self.scale + n * self.speed, .acceleration = d2 * self.scale + 2 * delta * self.speed + n * self.acceleration };
     }
 };
@@ -148,9 +197,11 @@ fn trackBounds(keys: []const Key, polynomial: bool) Bounds {
     return b;
 }
 
+/// Bounds with the path frame held fixed (including progress sensitivity).
 pub fn bounds(self: *const Motion) Bounds {
     var b: Bounds = .{};
     for (self.tracks) |op| {
+        if (op.kind == .path_frame) continue;
         const k = trackBounds(self.keys[op.first..][0..op.len], op.polynomial);
         b = b.then(op.kind, k.scale, k.speed, k.acceleration, op.uncertainty);
     }
@@ -160,9 +211,21 @@ pub fn bounds(self: *const Motion) Bounds {
 // Caller splits at every key. Derivatives here are with respect to [0,1]
 // on this interval, so the chord interpolation error is bounded by M''/8.
 pub fn chordError(self: *const Motion, t0: f64, t1: f64, radius: f64) f64 {
+    std.debug.assert(!self.usesPathFrame());
+    return self.intervalError(t0, t1, radius, .{});
+}
+
+/// Bounds on the frame angle's derivatives in the interval's unit parameter.
+pub const AngularBounds = @import("../path/Direction.zig").AngularBounds;
+
+pub fn intervalError(self: *const Motion, t0: f64, t1: f64, radius: f64, frame: AngularBounds) f64 {
     var b: Bounds = .{};
     const dt = t1 - t0;
     for (self.tracks) |op| {
+        if (op.kind == .path_frame) {
+            b = b.then(op.kind, 1, frame.speed, frame.acceleration, 0);
+            continue;
+        }
         const keys = self.keys[op.first..][0..op.len];
         if (op.polynomial) {
             const k = trackBounds(keys, true);

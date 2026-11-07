@@ -2,6 +2,7 @@
 //! document checking and formatting share the ordinary language frontend.
 const std = @import("std");
 const Frontend = @import("Frontend.zig");
+const SourceLoader = @import("SourceLoader.zig");
 const formatting = @import("format.zig");
 const inlay = @import("inlay_hints.zig");
 const locations = @import("position.zig");
@@ -52,7 +53,7 @@ pub fn writeMessage(allocator: std.mem.Allocator, writer: *std.Io.Writer, value:
     try writer.flush();
 }
 
-const Document = struct { text: []u8, path: []const u8, version: i64 };
+const Document = struct { text: []u8, path: [:0]const u8, version: i64 };
 // Protocol payloads only; ErrorBundle remains the diagnostic owner.
 const RelatedInformation = struct {
     const Location = struct { uri: []const u8, range: locations.Range };
@@ -67,7 +68,7 @@ const PublishedDiagnostic = struct {
     relatedInformation: []const RelatedInformation,
 };
 pub const Session = struct {
-    frontend: *Frontend,
+    frontend: *const Frontend,
     documents: std.StringHashMapUnmanaged(Document) = .{},
     initialized: bool = false,
     shutdown: bool = false,
@@ -89,7 +90,8 @@ pub const Session = struct {
     }
 
     pub fn handle(self: *Session, bytes: []const u8, writer: *std.Io.Writer) !void {
-        const parsed = std.json.parseFromSlice(Json, self.frontend.allocator, bytes, .{ .allocate = .alloc_always }) catch {
+        const parsed = std.json.parseFromSlice(Json, self.frontend.allocator, bytes, .{ .allocate = .alloc_always }) catch |err| {
+            if (err == error.OutOfMemory) return err;
             return self.failure(writer, .null, -32700, "Parse error");
         };
         defer parsed.deinit();
@@ -139,9 +141,6 @@ pub const Session = struct {
             return;
         }
         const params = field(message, "params") orelse .null;
-        const previous_overlay = self.frontend.overlay;
-        self.frontend.overlay = .{ .ptr = self, .vtable = &.{ .resolve = overlay } };
-        defer self.frontend.overlay = previous_overlay;
         self.dispatch(method, params, id, writer) catch |err| switch (err) {
             error.InvalidParams, error.InvalidUri, error.UnknownDocument => if (id) |request_id| try self.failure(writer, request_id, -32602, @errorName(err)),
             else => return err,
@@ -149,12 +148,14 @@ pub const Session = struct {
     }
 
     fn dispatch(self: *Session, method: []const u8, params: Json, id: ?Json, writer: *std.Io.Writer) !void {
-        const allocator = self.frontend.allocator;
+        var frontend = self.frontend.*;
+        frontend.overlay = .{ .ptr = self, .vtable = &.{ .resolve = overlay } };
+        const allocator = frontend.allocator;
         if (std.mem.eql(u8, method, "initialized") or std.mem.eql(u8, method, "$/cancelRequest")) return;
         if (std.mem.eql(u8, method, "huak/standardSource")) {
             if (id == null) return;
             const uri = string(field(params, "uri")) orelse return error.InvalidParams;
-            const path = try pathFromUri(allocator, uri);
+            const path = try pathFromUri(self.frontend.io, allocator, uri);
             defer allocator.free(path);
             const content = standard.source(path) orelse return error.InvalidParams;
             return self.reply(writer, id.?, content);
@@ -167,7 +168,10 @@ pub const Session = struct {
             const byte_offset = locations.offset(document.text, try position(field(params, "position") orelse return error.InvalidParams)) orelse return error.InvalidParams;
             var arena: std.heap.ArenaAllocator = .init(allocator);
             defer arena.deinit();
-            return self.reply(writer, id.?, try definitions.find(self.frontend, arena.allocator(), document.text, document.path, byte_offset));
+            const target = try definitions.find(&frontend, arena.allocator(), document.text, document.path, byte_offset) orelse
+                return self.reply(writer, id.?, @as(?RelatedInformation.Location, null));
+            const address = if (std.mem.eql(u8, document.path, target.path)) uri else if (self.openDocument(target.path)) |entry| entry.key_ptr.* else try definitions.uriForPath(arena.allocator(), target.path);
+            return self.reply(writer, id.?, RelatedInformation.Location{ .uri = address, .range = target.range });
         }
         if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
             if (id == null) return;
@@ -176,7 +180,7 @@ pub const Session = struct {
             const document = self.documents.getPtr(uri) orelse return error.UnknownDocument;
             var arena: std.heap.ArenaAllocator = .init(allocator);
             defer arena.deinit();
-            return self.reply(writer, id.?, .{ .data = try semantic_tokens.collect(self.frontend, arena.allocator(), document.text, document.path) });
+            return self.reply(writer, id.?, .{ .data = try semantic_tokens.collect(&frontend, arena.allocator(), document.text, document.path) });
         }
         if (std.mem.eql(u8, method, "textDocument/inlayHint")) {
             if (id == null) return;
@@ -190,7 +194,7 @@ pub const Session = struct {
             var arena: std.heap.ArenaAllocator = .init(allocator);
             defer arena.deinit();
             var diagnostic: ?compiler.Diagnostic = null;
-            const syntax = self.frontend.syntax(arena.allocator(), document.text, document.path, &diagnostic) catch |err| {
+            const syntax = frontend.syntax(arena.allocator(), document.text, document.path, &diagnostic) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 return self.reply(writer, id.?, [_]bool{});
             };
@@ -203,7 +207,7 @@ pub const Session = struct {
             const uri = string(field(item, "uri")) orelse return error.InvalidParams;
             const document = self.documents.getPtr(uri) orelse return error.UnknownDocument;
             var diagnostic: ?compiler.Diagnostic = null;
-            var program = self.frontend.compile(document.text, document.path, &diagnostic) catch |err| {
+            var program = frontend.compile(document.text, document.path, &diagnostic) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 if (diagnostic) |detail| return self.failure(writer, id.?, -32603, detail.text());
                 return self.failure(writer, id.?, -32603, @errorName(err));
@@ -222,7 +226,7 @@ pub const Session = struct {
             var arena: std.heap.ArenaAllocator = .init(allocator);
             defer arena.deinit();
             var items: std.ArrayList(definitions.Completion) = .empty;
-            const contextual = try definitions.complete(self.frontend, arena.allocator(), document.text, document.path, byte_offset);
+            const contextual = try definitions.complete(&frontend, arena.allocator(), document.text, document.path, byte_offset);
             try items.appendSlice(arena.allocator(), contextual);
             if (definitions.memberRequest(document.text, byte_offset))
                 return self.reply(writer, id.?, .{ .isIncomplete = false, .items = items.items });
@@ -246,14 +250,8 @@ pub const Session = struct {
             const byte_offset = locations.offset(document.text, try position(field(params, "position") orelse return error.InvalidParams)) orelse return error.InvalidParams;
             var arena: std.heap.ArenaAllocator = .init(allocator);
             defer arena.deinit();
-            if (try definitions.describe(self.frontend, arena.allocator(), document.text, document.path, byte_offset)) |detail|
+            if (try definitions.describe(&frontend, arena.allocator(), document.text, document.path, byte_offset)) |detail|
                 return self.reply(writer, id.?, .{ .contents = .{ .kind = "plaintext", .value = detail } });
-            const name = try identifierAt(self.frontend, document.text, byte_offset);
-            if (name) |identifier| if (builtins.implicit(identifier)) |signature| {
-                const detail = try definitions.builtinText(allocator, signature);
-                defer allocator.free(detail);
-                return self.reply(writer, id.?, .{ .contents = .{ .kind = "plaintext", .value = detail } });
-            };
             return self.reply(writer, id.?, @as(?bool, null));
         }
         if (std.mem.eql(u8, method, "textDocument/didOpen")) {
@@ -262,7 +260,7 @@ pub const Session = struct {
             const text = string(field(item, "text")) orelse return error.InvalidParams;
             const version = integer(field(item, "version")) orelse return error.InvalidParams;
             {
-                const path = try pathFromUri(allocator, uri);
+                const path = try pathFromUri(self.frontend.io, allocator, uri);
                 errdefer allocator.free(path);
                 const owned_text = try allocator.dupe(u8, text);
                 errdefer allocator.free(owned_text);
@@ -275,7 +273,7 @@ pub const Session = struct {
                 }
                 existing.value_ptr.* = .{ .text = owned_text, .path = path, .version = version };
             }
-            return self.diagnoseAll(writer);
+            return self.diagnoseAll(&frontend, writer);
         }
         if (std.mem.eql(u8, method, "textDocument/didChange")) {
             const item = field(params, "textDocument") orelse return error.InvalidParams;
@@ -309,7 +307,7 @@ pub const Session = struct {
                 }
                 document.version = version;
             }
-            return self.diagnoseAll(writer);
+            return self.diagnoseAll(&frontend, writer);
         }
         if (std.mem.eql(u8, method, "textDocument/didClose")) {
             const item = field(params, "textDocument") orelse return error.InvalidParams;
@@ -319,7 +317,7 @@ pub const Session = struct {
                 self.freeDocument(removed.value);
             }
             try writeMessage(allocator, writer, .{ .jsonrpc = "2.0", .method = "textDocument/publishDiagnostics", .params = .{ .uri = uri, .diagnostics = [_]bool{} } });
-            return self.diagnoseAll(writer);
+            return self.diagnoseAll(&frontend, writer);
         }
         if (std.mem.eql(u8, method, "textDocument/formatting")) {
             if (id == null) return;
@@ -331,9 +329,9 @@ pub const Session = struct {
             const spaces = field(options, "insertSpaces") orelse return error.InvalidParams;
             if (spaces != .bool or tab_size < 1 or tab_size > 16) return error.InvalidParams;
             var diagnostic: ?compiler.Diagnostic = null;
-            const formatted = formatting.formatWithOptions(self.frontend, document.text, document.path, &diagnostic, .{ .tab_size = @intCast(tab_size), .insert_spaces = spaces.bool }) catch |err| {
-                if (diagnostic) |*detail| {
-                    var bundle = try bundles.fromDiagnostic(allocator, document.path, document.text, detail);
+            const formatted = formatting.formatWithOptions(&frontend, document.text, document.path, &diagnostic, .{ .tab_size = @intCast(tab_size), .insert_spaces = spaces.bool }) catch |err| {
+                if (err != error.OutOfMemory and diagnostic != null) {
+                    var bundle = try bundles.fromDiagnostic(allocator, document.path, document.text, &diagnostic.?);
                     defer bundle.deinit(allocator);
                     return self.failure(writer, id.?, -32603, bundle.nullTerminatedString(bundle.getErrorMessage(bundle.getMessages()[0]).msg));
                 }
@@ -346,32 +344,37 @@ pub const Session = struct {
         if (id) |request_id| try self.failure(writer, request_id, -32601, "Method not found");
     }
 
-    fn diagnoseAll(self: *Session, writer: *std.Io.Writer) !void {
+    fn diagnoseAll(self: *Session, frontend: *const Frontend, writer: *std.Io.Writer) !void {
         var entries = self.documents.iterator();
-        while (entries.next()) |entry| try self.diagnostics(entry.key_ptr.*, entry.value_ptr, writer);
+        while (entries.next()) |entry| try self.diagnostics(frontend, entry.key_ptr.*, entry.value_ptr, writer);
     }
 
     fn overlay(context: *anyopaque, allocator: std.mem.Allocator, importer: []const u8, path: []const u8) !compiler.ResolvedSource {
         const self: *Session = @ptrCast(@alignCast(context));
-        const wanted = try std.fs.path.resolve(allocator, &.{ std.fs.path.dirname(importer) orelse ".", path });
-        defer allocator.free(wanted);
-        const canonical = std.Io.Dir.cwd().realPathFileAlloc(self.frontend.io, wanted, allocator) catch |err| switch (err) {
-            error.FileNotFound, error.NotDir => null,
-            else => return err,
-        };
-        defer if (canonical) |name| allocator.free(name);
-        var entries = self.documents.valueIterator();
-        while (entries.next()) |document| {
-            if (std.mem.eql(u8, wanted, document.path) or (canonical != null and std.mem.eql(u8, canonical.?, document.path))) return .{ .name = document.path, .source = document.text };
-        }
-        return error.FileNotFound;
+        const joined = if (std.fs.path.isAbsolute(path)) path else try std.fs.path.join(allocator, &.{ std.fs.path.dirname(importer) orelse ".", path });
+        defer if (!std.fs.path.isAbsolute(path)) allocator.free(joined);
+        const key = try SourceLoader.canonicalPath(self.frontend.io, allocator, joined);
+        defer allocator.free(key);
+        if (self.openDocument(key)) |entry| return .{ .name = entry.value_ptr.path, .source = entry.value_ptr.text };
+        const fallback = self.frontend.overlay orelse return error.FileNotFound;
+        return fallback.resolve(allocator, importer, path);
     }
 
-    fn diagnostics(self: *Session, uri: []const u8, document: *const Document, writer: *std.Io.Writer) !void {
+    fn openDocument(self: *Session, path: []const u8) ?std.StringHashMapUnmanaged(Document).Entry {
+        var found: ?std.StringHashMapUnmanaged(Document).Entry = null;
+        var entries = self.documents.iterator();
+        while (entries.next()) |entry| {
+            if (std.mem.eql(u8, path, entry.value_ptr.path) and
+                (found == null or std.mem.order(u8, entry.key_ptr.*, found.?.key_ptr.*) == .lt)) found = entry;
+        }
+        return found;
+    }
+
+    fn diagnostics(self: *Session, frontend: *const Frontend, uri: []const u8, document: *const Document, writer: *std.Io.Writer) !void {
         var diagnostic: ?compiler.Diagnostic = null;
-        self.frontend.check(document.text, document.path, &diagnostic) catch |err| {
-            if (diagnostic) |*detail| {
-                var bundle = try bundles.fromDiagnostic(self.frontend.allocator, document.path, document.text, detail);
+        frontend.check(document.text, document.path, &diagnostic) catch |err| {
+            if (err != error.OutOfMemory and diagnostic != null) {
+                var bundle = try bundles.fromDiagnostic(frontend.allocator, document.path, document.text, &diagnostic.?);
                 defer bundle.deinit(self.frontend.allocator);
                 return self.publishBundle(uri, document, bundle, writer);
             }
@@ -426,14 +429,9 @@ pub const Session = struct {
         const path = bundle.nullTerminatedString(loc.src_path);
         if (!std.fs.path.isAbsolute(path)) return null;
         var content: ?[]const u8 = null;
-        var documents = self.documents.valueIterator();
-        while (documents.next()) |document| if (std.mem.eql(u8, document.path, path)) {
-            content = document.text;
-            break;
-        };
-        if (content == null and loc.source_line == 0) content = std.Io.Dir.cwd().readFileAlloc(self.frontend.io, path, allocator, .limited(16 * 1024 * 1024)) catch null;
-        const address: std.Uri = .{ .scheme = "file", .host = .{ .raw = "" }, .path = .{ .raw = path } };
-        return .{ .uri = try std.fmt.allocPrint(allocator, "{f}", .{address.fmt(.all)}), .range = locationRange(bundle, loc, content) };
+        if (self.openDocument(path)) |entry| return .{ .uri = entry.key_ptr.*, .range = locationRange(bundle, loc, entry.value_ptr.text) };
+        if (loc.source_line == 0) content = std.Io.Dir.cwd().readFileAlloc(self.frontend.io, path, allocator, .limited(16 * 1024 * 1024)) catch null;
+        return .{ .uri = try definitions.uriForPath(allocator, path), .range = locationRange(bundle, loc, content) };
     }
 
     fn reply(self: *Session, writer: *std.Io.Writer, id: Json, result: anytype) !void {
@@ -473,14 +471,14 @@ fn position(value: Json) !locations.Position {
     if (line < 0 or character < 0) return error.InvalidParams;
     return .{ .line = @intCast(line), .character = @intCast(character) };
 }
-fn pathFromUri(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+fn pathFromUri(io: std.Io, allocator: std.mem.Allocator, text: []const u8) ![:0]const u8 {
     const uri = std.Uri.parse(text) catch return error.InvalidUri;
     if (std.ascii.eqlIgnoreCase(uri.scheme, "huak-stdlib")) {
         if (uri.host != null or uri.query != null or uri.fragment != null) return error.InvalidUri;
         const raw = try uri.path.toRawMaybeAlloc(allocator);
         defer if (uri.path == .percent_encoded and std.mem.indexOfScalar(u8, uri.path.percent_encoded, '%') != null) allocator.free(raw);
         if (raw.len == 0 or raw[0] != '/' or standard.source(raw[1..]) == null) return error.InvalidUri;
-        return allocator.dupe(u8, raw[1..]);
+        return allocator.dupeSentinel(u8, raw[1..], 0);
     }
     if (!std.ascii.eqlIgnoreCase(uri.scheme, "file") or uri.query != null or uri.fragment != null) return error.InvalidUri;
     if (uri.host) |host| {
@@ -491,12 +489,7 @@ fn pathFromUri(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     const raw = try uri.path.toRawMaybeAlloc(allocator);
     defer if (uri.path == .percent_encoded and std.mem.indexOfScalar(u8, uri.path.percent_encoded, '%') != null) allocator.free(raw);
     if (!std.fs.path.isAbsolute(raw) or std.mem.indexOfScalar(u8, raw, 0) != null) return error.InvalidUri;
-    return std.fs.path.resolve(allocator, &.{raw});
-}
-
-fn identifierAt(frontend: *Frontend, input: []const u8, byte_offset: usize) !?[]const u8 {
-    const token = try definitions.tokenAt(frontend, input, byte_offset) orelse return null;
-    return if (token.kind == .identifier) input[token.span.start..token.span.end] else null;
+    return SourceLoader.canonicalPath(io, allocator, raw);
 }
 
 test "JSON-RPC framing handles multiple messages and rejects conflicting lengths" {
@@ -525,8 +518,7 @@ test "ErrorBundle locations produce UTF-16 ranges and structured related informa
     detail.diagnostic.setSource("/unavailable/figure file.huak", text);
     var bundle = try bundles.fromRuntime(allocator, "/unavailable/figure file.huak", text, &detail, &.{.{ .name = "/unavailable/figure file.huak", .source_text = text, .entry = 0, .exports = &.{} }});
     defer bundle.deinit(allocator);
-    var frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .library_path = "/missing-unused-library" };
-    defer frontend.deinit();
+    var frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io };
     var session: Session = .{ .frontend = &frontend };
     defer session.deinit();
     var output: std.Io.Writer.Allocating = .init(allocator);

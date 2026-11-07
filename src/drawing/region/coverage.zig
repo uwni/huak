@@ -222,14 +222,14 @@ const Builder = struct {
             const command = value.commands.items[index.*];
             index.* += 1;
             switch (command) {
-                .path => |draw| try self.painted(.{ .path = borrowed(self.allocator, try value.range(draw.path)), .style = draw.style.*, .transform = draw.transform }, state),
+                .path => |draw| try self.painted(.{ .path = try value.geometry().view(self.allocator, draw.path), .style = draw.style.*, .transform = draw.transform }, state),
                 .push => |group| {
                     var child: State = .{ .transform = group.transform.then(state.transform), .clip = state.clip };
                     if (!child.transform.isFinite()) return error.NonFinite;
                     var owned_clip: ?Path = null;
                     defer if (owned_clip) |*clip| clip.deinit();
                     if (group.clip) |reference| {
-                        const clip = borrowed(self.allocator, try value.range(reference));
+                        const clip = try value.geometry().view(self.allocator, reference);
                         try self.consume(clip);
                         owned_clip = try self.region(clip, child.transform, .nonzero);
                         if (state.clip) |parent| {
@@ -254,13 +254,6 @@ const Builder = struct {
         if (grouped) return error.UnbalancedGroups;
     }
 };
-
-fn borrowed(allocator: Allocator, segments: []const Path.Segment) Path {
-    var result = Path.init(allocator);
-    result.segments.items = @constCast(segments);
-    result.segments.capacity = segments.len;
-    return result;
-}
 
 /// Filling implicitly closes every open contour, including those followed by
 /// another moveto. Rebuild using Path's checks rather than inventing an edge

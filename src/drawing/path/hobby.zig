@@ -58,9 +58,26 @@ pub const Error = error{
 /// adjacent knots are diagnosed; no substitute spline or numerical fallback
 /// is used. The work and storage are O(knots.len).
 pub fn interpolate(allocator: std.mem.Allocator, knots: []const Knot, options: Options) Error![]Cubic {
+    return interpolateAs(Cubic, allocator, knots, options);
+}
+
+pub const Span = struct {
+    curve: Cubic,
+    start: Point = .zero,
+    end: Point = .zero,
+
+    pub fn hasTangents(self: *const Span) bool {
+        return !self.start.eql(.zero) or !self.end.eql(.zero);
+    }
+};
+pub fn interpolateSpans(allocator: std.mem.Allocator, knots: []const Knot, options: Options) Error![]Span {
+    return interpolateAs(Span, allocator, knots, options);
+}
+
+fn interpolateAs(comptime T: type, allocator: std.mem.Allocator, knots: []const Knot, options: Options) Error![]T {
     try validate(knots, options);
     const count = if (options.closed) knots.len else knots.len - 1;
-    const segments = try allocator.alloc(Cubic, count);
+    const segments = try allocator.alloc(T, count);
     errdefer allocator.free(segments);
     const work = try allocator.alloc(Row, knots.len + 1);
     defer allocator.free(work);
@@ -151,7 +168,7 @@ fn wrapped(angle: f64) f64 {
     return angle;
 }
 
-fn solveSpan(knots: []const Knot, start: usize, length: usize, cyclic: bool, options: Options, storage: []Row, segments: []Cubic) Error!void {
+fn solveSpan(knots: []const Knot, start: usize, length: usize, cyclic: bool, options: Options, storage: []Row, segments: anytype) Error!void {
     const count = if (cyclic) length else length + 1;
     const work = storage[0..count];
     @memset(work, .{});
@@ -235,7 +252,24 @@ fn solveSpan(knots: []const Knot, start: usize, length: usize, cyclic: bool, opt
             .p3 = q.point,
         };
         if (!cubic.isFinite()) return error.NumericalFailure;
-        segments[(start + i) % segments.len] = cubic;
+        segments[(start + i) % segments.len] = if (@TypeOf(segments) == []Cubic) cubic else .{ .curve = cubic };
+    }
+    if (@TypeOf(segments) == []Span) {
+        // A smooth knot has one solved direction. Compute it once, before
+        // either adjacent handle is rounded into an absolute control point.
+        for (@as(usize, if (cyclic) 0 else 1)..length) |i| {
+            const delta = at(knots, start, i + 1).point.sub(at(knots, start, i).point);
+            const theta = work[i].theta;
+            const chord = delta.normalized() catch return error.NumericalFailure;
+            const tangent = geometry.Transform.rotation(theta).apply(chord);
+            const index = (start + i) % segments.len;
+            segments[index].start = tangent;
+            segments[(index + segments.len - 1) % segments.len].end = tangent;
+        }
+        if (!cyclic) {
+            if (first.outgoing()) |v| segments[start].start = v;
+            if (last.incoming()) |v| segments[(start + length - 1) % segments.len].end = v;
+        }
     }
 }
 

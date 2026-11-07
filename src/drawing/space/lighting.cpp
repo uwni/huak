@@ -3,7 +3,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepGProp.hxx>
-#include <BRepTopAdaptor_MapOfShapeTool.hxx>
+#include <BRepTopAdaptor_Tool.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Contap_Contour.hxx>
@@ -11,6 +11,7 @@
 #include <GeomLib.hxx>
 #include <HLRTopoBRep_DSFiller.hxx>
 #include <HLRTopoBRep_Data.hxx>
+#include <NCollection_DataMap.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -25,13 +26,13 @@ static void projectContour(const TopoDS_Face &face, gp_Dir direction,
                                 double width,
                                 const HLRAlgo_Projector &projector,
                                 double tolerance,
-                                TopTools_ListOfShape &boundaries) {
+                                ShapeList &boundaries) {
   if (face.Orientation() == TopAbs_REVERSED)
     direction.Reverse();
   Contap_Contour contour;
   contour.Init(gp_Vec(direction), width - M_PI / 2);
   HLRTopoBRep_Data data;
-  BRepTopAdaptor_MapOfShapeTool tools;
+  NCollection_DataMap<TopoDS_Shape, BRepTopAdaptor_Tool, TopTools_ShapeMapHasher> tools;
   HLRTopoBRep_DSFiller::Insert(face, contour, data, tools, 0);
   if (!contour.IsDone())
     throw std::runtime_error("cannot trace lighting contour");
@@ -54,7 +55,7 @@ static void projectContour(const TopoDS_Face &face, gp_Dir direction,
 
 Lighting::Lighting(const HuakLight &light, const Surfaces &surfaces,
                    const HLRAlgo_Projector &projector, const gp_Dir &toward_eye,
-                   double tolerance, TopTools_ListOfShape &boundaries)
+                   double tolerance, ShapeList &boundaries)
     : light_(light), sun_(light.direction[0], light.direction[1], light.direction[2]),
       eye_(toward_eye) {
   const gp_Vec bisector = gp_Vec(sun_) + gp_Vec(toward_eye);

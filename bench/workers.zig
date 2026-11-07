@@ -107,14 +107,9 @@ fn fixture(allocator: std.mem.Allocator, workload: Workload, count: usize) !Fixt
     return .{ .source = try writer.toOwnedSlice(), .names = names };
 }
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 fn compile(allocator: std.mem.Allocator, library: *typst.Library, source: []const u8) !l.bytecode.Program {
     var diagnostic: ?l.compiler.Diagnostic = null;
-    return l.compiler.compile(allocator, source, "worker-benchmark.huak", .{ .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } } }, &diagnostic) catch |err| {
+    return l.compiler.compile(allocator, source, "worker-benchmark.huak", .{ .source_parser = .init(library) }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("compiler: {s}\n", .{detail.text()});
         return err;
     };

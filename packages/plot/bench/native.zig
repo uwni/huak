@@ -36,11 +36,11 @@ pub fn main(init: std.process.Init) !void {
 fn sample(init: std.process.Init, library_path: []const u8, kind: []const u8, count: []const u8, batch: []const u8) !void {
     const a = std.heap.smp_allocator;
     const io = init.io;
-    var frontend: huak.tooling.Frontend = .{ .allocator = a, .io = io, .library_path = library_path };
-    defer frontend.deinit();
     const start = std.Io.Clock.awake.now(io);
-    const library = try frontend.getLibrary();
+    var library = try typst.Library.open(library_path);
+    defer library.deinit();
     const loaded = std.Io.Clock.awake.now(io);
+    const frontend: huak.tooling.Frontend = .{ .allocator = a, .io = io, .source_parser = .init(&library) };
     const path = try std.Io.Dir.cwd().realPathFileAlloc(io, "packages/plot/bench/workload.huak", a);
     defer a.free(path);
     const source = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited);
@@ -53,7 +53,7 @@ fn sample(init: std.process.Init, library_path: []const u8, kind: []const u8, co
     defer program.deinit();
     const compiled = std.Io.Clock.awake.now(io);
     var outputs = blk: {
-        var runtime = try l.Runtime.init(a, a, library, .{});
+        var runtime = try l.Runtime.init(a, a, &library, .{});
         defer runtime.deinit();
         var machine = try l.Machine.init(a, &program, runtime.host(), .{});
         defer machine.deinit();

@@ -16,7 +16,7 @@ pub fn resolve(picture: *DisplayList, ids: []const u64, scopes: []const Scope, g
     if (scopes.len == 0) return;
     const allocator = picture.storage.allocator;
     const bank = std.math.cast(u32, picture.sources.items.len + 1) orelse return error.TooManyObjects;
-    try picture.sources.append(allocator, &.{});
+    try picture.sources.append(allocator, .{});
     // Innermost scopes close first, so bounds can use their resolved clips.
     for (scopes) |scope| {
         const hole = borrowed(allocator, scope.hole);
@@ -47,7 +47,7 @@ pub fn resolve(picture: *DisplayList, ids: []const u64, scopes: []const Scope, g
         }
         const first = generated.items.len;
         try generated.appendSlice(allocator, keep.segments.items);
-        picture.sources.items[bank - 1] = generated.items;
+        picture.sources.items[bank - 1].segments = generated.items;
         picture.commands.items[scope.start].push.clip = .{ .first = first, .count = keep.segments.items.len, .source = bank };
     }
 }

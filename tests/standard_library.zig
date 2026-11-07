@@ -7,15 +7,10 @@ const options = @import("test_options");
 const l = huak.language;
 const scene = @import("support/scene.zig");
 
-fn sourceBlock(context: *anyopaque, source: []const u8) !usize {
-    const library: *typst.Library = @ptrCast(@alignCast(context));
-    return library.sourceBlock(source);
-}
-
 fn compile(library: *typst.Library, source: []const u8, optimize: bool) !l.bytecode.Program {
     var diagnostic: ?l.compiler.Diagnostic = null;
     return l.compiler.compile(t.allocator, source, "standard-library-test.huak", .{
-        .source_parser = .{ .ptr = library, .vtable = &.{ .block = sourceBlock } },
+        .source_parser = .init(library),
         .optimize = optimize,
     }, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("compiler: {s}\n", .{detail.text()});
@@ -554,7 +549,7 @@ test "composed pictures are independent snapshots and word roles preserve target
             "import paint\nvalue:=paint.brush.rainbow",
         }) |invalid| {
             var diagnostic: ?l.compiler.Diagnostic = null;
-            try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, invalid, "invalid-drawing-notation.huak", .{ .optimize = optimize, .source_parser = .{ .ptr = &library, .vtable = &.{ .block = sourceBlock } } }, &diagnostic));
+            try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, invalid, "invalid-drawing-notation.huak", .{ .optimize = optimize, .source_parser = .init(&library) }, &diagnostic));
             try t.expect(diagnostic != null);
         }
     }
@@ -1157,4 +1152,101 @@ test "motion expressions retain units and composition order through painted and 
         defer svg.deinit();
         try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);
     }
+}
+
+test "standard library normal motion composes with scale in SVG and PDF" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var program = try compile(&library,
+        \\import paint.*; import std.pen_motion.*; import pen.pensquare
+        \\turn := (scaling x 4 y 1) followed by along_normal()
+        \\ink := pen(rgb(0.2,0.4,0.7), nib:pensquare(2pt), motion:turn, tolerance:0.05pt)
+        \\p := (10pt,4pt) -- (10pt,20pt)
+        \\export page := drawing picture(25pt,25pt) do +draw p with ink end
+        \\guide := bezier((5pt,8pt),(18pt,30pt),(32pt,2pt),(45pt,20pt))
+        \\export curved := drawing picture(50pt,32pt) do +draw guide with ink end
+        \\import object.region
+        \\export footprint := region(page.children[0])
+    , true);
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try execute(&machine);
+    const footprint = try runtime.path(machine.getGlobal("footprint").?);
+    const box = footprint.bounds().?;
+    try t.expectApproxEqAbs(@as(f64, 8), box.width(), 1e-10);
+    try t.expectApproxEqAbs(@as(f64, 18), box.height(), 1e-10);
+    var svg = try runtime.render(machine.getGlobal("curved").?, .svg);
+    defer svg.deinit();
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    var pdf = try runtime.render(machine.getGlobal("curved").?, .pdf);
+    defer pdf.deinit();
+    try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
+}
+
+test "normal nib corner choices share one guide but yield distinct painted regions" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var program = try compile(&library,
+        \\import paint.*; import pen_motion.*; import pen.pensquare
+        \\import object.region; import geometry.region_intersection; import assertions.assert
+        \\guide := (2pt,14pt) -- (14pt,14pt) -- (14pt,26pt)
+        \\fn brush(mode:string) -> pen
+        \\    turn := (scaling x 4 y 0.25) followed by along_normal(corner:mode)
+        \\    return pen(rgb(0,0,0),nib:pensquare(2pt),motion:turn,tolerance:0.02pt)
+        \\end
+        \\pivot := draw(guide,brush("rotate"))
+        \\jump := draw(guide,brush("overlap"))
+        \\probe := rectangle((16.5pt,11.4pt),0.1pt,0.1pt)
+        \\assert(len(region_intersection(region(pivot,0.02pt),probe))>0)
+        \\assert(len(region_intersection(region(jump,0.02pt),probe))==0)
+        \\import pen.{makepen,stroke_outline}; import geometry.{subpaths,region_difference}
+        \\blade := makepen((-1.1pt,0pt) -- (1.1pt,0pt) -- cycle)
+        \\seal := stroke_outline(rectangle((2.6pt,2.6pt),94.8pt,94.8pt),pen(rgb(0,0,0),nib:blade,motion:along_normal(corner:"rotate")))
+        \\assert(len(subpaths(seal))==2)
+        \\assert(len(region_difference(circle((2.2pt,2.2pt),0.1pt),seal))==0)
+        \\assert(len(region_intersection(circle((50pt,50pt),1pt),seal))==0)
+        \\export page := drawing picture(32pt,32pt) do +pivot; +jump end
+    , true);
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try execute(&machine);
+    var svg = try runtime.render(machine.getGlobal("page").?, .svg);
+    defer svg.deinit();
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    var pdf = try runtime.render(machine.getGlobal("page").?, .pdf);
+    defer pdf.deinit();
+    try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
+}
+
+test "Hobby knot directions survive picture storage, region extraction and both exports" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var program = try compile(&library,
+        \\import paint.*; import pen.pensquare; import pen_motion.*; import object.region; import assertions.assert
+        \\knots := [(0pt,0pt),(60pt,80pt),(130pt,20pt),(210pt,90pt)]
+        \\motion := (scaling x 3 y 1) followed by along_normal()
+        \\brush := pen(rgb(0.2,0.4,0.7),nib:pensquare(2pt),motion:motion,tolerance:0.02pt)
+        \\spine := knots[0] ~~ knots[1] ~~ knots[2] ~~ knots[3]
+        \\export page := drawing picture(240pt,130pt) do +draw spine with brush; +draw smooth(knots) with brush end
+        \\assert(len(region(page.children[0],0.02pt))>0)
+    , true);
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try execute(&machine);
+    const page = machine.getGlobal("page").?;
+    var svg = try runtime.render(page, .svg);
+    defer svg.deinit();
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    var pdf = try runtime.render(page, .pdf);
+    defer pdf.deinit();
+    try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
 }

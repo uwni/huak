@@ -6,12 +6,15 @@ on:
     paths:
       - 'build.zig'
       - 'build.zig.zon'
+      - 'build/**'
       - 'cli/**'
       - 'src/**'
       - 'stdlib/**'
       - 'apps/formatter/**'
       - 'apps/language_server/**'
       - 'libtypst/include/**'
+      - 'tests/space_projection.cpp'
+      - 'tests/space_loader.cpp'
       - '.github/workflows/huak-nightly.yml'
   workflow_dispatch:
 
@@ -24,8 +27,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - { runner: ubuntu-24.04, platform: linux-x86_64, library: libtypst.so }
-          - { runner: macos-15, platform: macos-arm64, library: libtypst.dylib }
+          - { runner: ubuntu-24.04, platform: linux-x86_64, backend: libhuak_space.so }
+          - { runner: macos-15, platform: macos-arm64, backend: libhuak_space.dylib }
     runs-on: ${{ matrix.runner }}
     env:
       RUSTUP_TOOLCHAIN: "1.92.0"
@@ -41,11 +44,56 @@ jobs:
       - name: Build and test the desktop tools
         run: |
           cargo test --locked --manifest-path src/render/pdf/Cargo.toml --target-dir target/pdf-mesh
-          zig build install test-backend test-cli-options \
-            -Doptimize=ReleaseSafe -Dcpu=baseline -Druntime-libtypst=${{ matrix.library }}
+          zig build tools test-backend test-cli-options \
+            -Doptimize=ReleaseSafe -Dcpu=baseline
           zig-out/bin/huak --help
-      - name: Package executables
-        run: tar -czf huak-${{ matrix.platform }}.tar.gz -C zig-out/bin huak huak-fmt huak-lsp
+      - name: Restore OCCT SDK
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: occt
+        with:
+          path: .occt-sdk
+          key: occt-8.0.1-modeling-v1-${{ matrix.runner }}-${{ runner.arch }}
+      - name: Check out OCCT 8.0.1
+        if: steps.occt.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Open-Cascade-SAS/OCCT
+          ref: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
+          path: .occt-source
+          persist-credentials: false
+      - name: Build the required OCCT toolkits
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: |
+          cmake -S .occt-source -B "$RUNNER_TEMP/occt" -G Ninja \
+            -DINSTALL_DIR="$PWD/.occt-sdk" -DINSTALL_DIR_LAYOUT=Unix -DINSTALL_DIR_LIB=lib \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_RESOURCES=OFF -DBUILD_MODULE_Draw=OFF \
+            -DBUILD_MODULE_ApplicationFramework=OFF -DBUILD_MODULE_DataExchange=OFF \
+            -DBUILD_MODULE_Visualization=OFF -DBUILD_MODULE_ModelingAlgorithms=OFF \
+            -DBUILD_MODULE_ModelingData=OFF -DBUILD_MODULE_FoundationClasses=OFF \
+            "-DBUILD_ADDITIONAL_TOOLKITS=TKOffset TKHLR"
+          cmake --build "$RUNNER_TEMP/occt" --parallel 2
+          cmake --install "$RUNNER_TEMP/occt"
+      - name: Build and test the C++ adapter against the native SDK
+        run: |
+          cmake -S src/drawing/space -B "$RUNNER_TEMP/projection" \
+            -DCMAKE_BUILD_TYPE=Release -DOpenCASCADE_ROOT="$PWD/.occt-sdk"
+          cmake --build "$RUNNER_TEMP/projection" --parallel --target huak_space check
+          cmake --install "$RUNNER_TEMP/projection" --prefix "$PWD/zig-out"
+      - name: Package executables and the optional projection library
+        run: |
+          tar -czf huak-${{ matrix.platform }}.tar.gz -C "$PWD/zig-out/bin" huak huak-fmt huak-lsp \
+            -C "$PWD/zig-out/lib" ${{ matrix.backend }} -C "$PWD/zig-out" share/licenses/huak/occt
+          dest=$(mktemp -d)
+          tar -xf huak-${{ matrix.platform }}.tar.gz -C "$dest"
+          export LD_LIBRARY_PATH="$PWD/.occt-sdk/lib" DYLD_LIBRARY_PATH="$PWD/.occt-sdk/lib"
+          "$RUNNER_TEMP/projection/space_loader" "$dest/${{ matrix.backend }}"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            DYLD_PRINT_LIBRARIES=1 "$dest/huak" --help 2>"$dest/loaded"
+            grep -F "$dest/${{ matrix.backend }}" "$dest/loaded"
+          else
+            LD_DEBUG=libs "$dest/huak" --help 2>"$dest/loaded"
+            grep -F 'calling init:' "$dest/loaded" | grep -F "$dest/${{ matrix.backend }}"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: huak-${{ matrix.platform }}
