@@ -1,0 +1,24 @@
+// Filled arrowheads live outside the shaft bounds. The cut used to trim the
+// shaft must not clip the appended decorations.
+import paint.*
+import object.{bounds, region}
+import geometry.region_intersection
+import assertions.assert
+import "../../nodegraph.huak" as nodegraph
+
+solid := nodegraph.edge(
+    nodegraph.absolute((0pt, 0pt)),
+    nodegraph.absolute((80pt, 0pt)),
+    {"marks": [nodegraph.mark("solid")], "stroke": rgb(0.15, 0.47, 0.66), "thickness": 0.8pt},
+)
+pic := nodegraph.diagram([solid], {"margin": 0pt})
+ink := region(pic, 0.01pt)
+box := bounds(pic)
+mid := (box[0].y+box[1].y)/2
+
+// The solid triangle spans 74.4..80pt. This probe is inside its tip only when
+// the filled head is exported rather than clipped with the shaft.
+probe := circle((79pt, mid), 0.3pt)
+hit := region_intersection(ink, probe, 0.01pt)
+assert(len(bounds(hit)) == 2, "solid arrowhead must remain visible")
+print("filled mark checks passed")

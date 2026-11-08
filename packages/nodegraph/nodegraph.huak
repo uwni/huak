@@ -250,8 +250,9 @@ export expand_block drawing(target:Scene)
     wire := wire.with(target: target)
     group := group.with(target: target)
     matrix := matrix.with(target: target)
-    mixfix(place) place _ at _ in unary
-    mixfix(link) link _ to _ in unary
+    // The trailing options are optional; omitting them uses the defaults.
+    mixfix(place) place _ at _ with _ in unary
+    mixfix(link) link _ to _ with _ in unary
     mixfix(wire) wire _ to _ in unary
     mixfix(group) group _ containing _ with _ in unary
     mixfix(matrix) matrix _ in unary

@@ -3,7 +3,7 @@ export drawing
 import color.rgb
 import pen.envelope
 import transform.{translate, scale, rotate, transformed}
-import geometry.{closed, rectangle, circle, smooth, bezier, reverse, joined, region_difference}
+import geometry.{closed, rectangle, circle, smooth, bezier, reverse, joined, fillet, region_difference}
 import object.{clip, reset_clip, draw, fill, filldraw, label, append, bounds, region, snapshot}
 import object.transform as transform_object
 precedence concatenation
@@ -66,6 +66,14 @@ fn shifted(source:object, offset:vec2) -> object
 end
 mixfix(shifted) _ shifted _ in path
 export shifted
+
+// Radii follow rectangle path order: lower-left, lower-right, upper-right,
+// upper-left. A scalar applies the same radius to all four corners.
+fn rounded_rect(origin:vec2, width:length, height:length, radii:any) -> path
+    assert(width > 0pt and height > 0pt, "rounded rectangle dimensions must be positive")
+    return fillet(rectangle(origin, width, height), radii)
+end
+export rounded_rect
 
 // Clip an independent world-space snapshot. The source keeps its identity,
 // ancestors, native text and original clip scopes.

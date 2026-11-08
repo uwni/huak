@@ -144,6 +144,7 @@ const registry = .{
     .region_difference = .{ .namespace = .geometry, .args = .{ .first = .path_or_shape, .second = .path_or_shape, .tolerance = length, .fill_rule = .string }, .minimum = 2, .result = .path_or_shape },
     .region_xor = .{ .namespace = .geometry, .args = .{ .first = .path, .second = .path, .tolerance = length, .fill_rule = .string }, .minimum = 2, .result = .path },
     .offset = .{ .namespace = .geometry, .args = .{ .curve = .path, .distance = length, .join = .string, .miter_limit = n, .tolerance = length, .fill_rule = .string }, .minimum = 2, .result = .path },
+    .fillet = .{ .namespace = .geometry, .args = .{ .curve = .path, .radii = a }, .minimum = 2, .result = .path },
     .stroke_path = .{ .namespace = .pen, .args = .{ .curve = .path, .width = length, .cap = .string, .join = .string, .miter_limit = n, .tolerance = length }, .minimum = 2, .result = .path },
     .clip_region = .{ .namespace = .geometry, .args = .{ .curve = .path, .min = p, .max = p, .tolerance = length, .fill_rule = .string }, .minimum = 3, .result = .path },
     .clip_lines = .{ .namespace = .geometry, .args = .{ .curve = .path, .min = p, .max = p, .tolerance = length }, .minimum = 3, .result = .path },

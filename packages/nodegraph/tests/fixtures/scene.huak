@@ -2,7 +2,7 @@ import paint.*
 import geometry.point_at
 import math.{abs, norm}
 import "../../nodegraph.huak" as nodegraph
-import "../../nodegraph.huak".{scene, geometry, anchor, place, link, group, matrix, anchor_node, route_edge, finish, grid, edge}
+import "../../nodegraph.huak".{scene, geometry, anchor, place, link, group, matrix, anchor_node, route_edge, finish, grid, edge, arrows}
 import assertions.assert
 
 fn near(a:vec2, b:vec2)
@@ -35,6 +35,17 @@ nodegraph.drawing m do
     nodes := matrix [[typ[A], typ[B]], [typ[C]]]
 end
 assert(len(m.geometry.objects) == 3)
+
+// Options use the same natural-language template as the optionless form.
+s2 := scene({"spacing": (10pt, 10pt), "margin": 4pt})
+nodegraph.drawing s2 do
+    a := place typ[E] at grid(0, 0) with {"fill": rgb(0.9, 0.95, 1)}
+    b := place typ[F] at grid(1, 0)
+    link a to b with {"marks": arrows("-|>")}
+end
+assert(s2.finished, "scene with options must finish")
+assert(len(s2.geometry.objects) == 3, "scene with options must resolve both nodes and the edge")
+
 debug_scene := scene({"debug": true})
 nodegraph.drawing debug_scene do
     place typ[D] at grid(0, 0)

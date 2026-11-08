@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(init.io, "target/nodegraph/acceptance");
     const probe = try check.write("no-std-dependency.huak", "import \"std/nodegraph.huak\".*\n");
     try contains(try check.huak(&.{ "check", probe }, false), "unknown standard library module");
-    for ([_][]const u8{ "regression", "api", "mark_trim", "offset", "shapes", "shift", "mark_inherit", "defocus", "mark_extrude", "cylinder", "brace_shape", "snap_priority", "mark_props", "label_anchor" }) |name| {
+    for ([_][]const u8{ "regression", "api", "mark_trim", "filled_marks", "offset", "shapes", "shift", "mark_inherit", "defocus", "mark_extrude", "cylinder", "brace_shape", "snap_priority", "mark_props", "label_anchor" }) |name| {
         const output = try check.huak(&.{ "run", try check.fmt("tests/fixtures/{s}.huak", .{name}) }, true);
         try contains(output, "checks passed");
     }

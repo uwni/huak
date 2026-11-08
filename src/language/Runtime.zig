@@ -9,6 +9,7 @@ const transform_geometry = @import("../drawing/transform/root.zig");
 const mapping = transform_geometry.mapping;
 const path_crossings = @import("../drawing/path/crossings.zig");
 const path_construct = @import("../drawing/path/construct.zig");
+const path_fillet = @import("../drawing/path/fillet.zig");
 const DisplayList = @import("../drawing/DisplayList.zig");
 const Scene = @import("../drawing/Scene.zig");
 const pen_geometry = @import("../drawing/pen/root.zig");
@@ -1325,6 +1326,39 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 else => unreachable,
             };
             return self.pathResult(try regions.combine(own, try self.path(args[0]), try self.path(args[1]), operation, options));
+        },
+        .fillet => {
+            const source = try self.path(args[0]);
+            var scalar: [1]f64 = undefined;
+            var list: ?[]f64 = null;
+            defer if (list) |values| a.free(values);
+            const radii: []const f64 = if (args[1] == .list) blk: {
+                const values = try sequence(args[1]);
+                // A list is per-vertex; one-element lists would be ambiguous
+                // with the scalar form, so require the scalar form instead.
+                if (values.len < 2) return error.InvalidRadii;
+                const converted = try a.alloc(f64, values.len);
+                errdefer a.free(converted);
+                for (values, converted) |value, *out| out.* = try lengthPoints(value);
+                list = converted;
+                break :blk converted;
+            } else blk: {
+                scalar[0] = try lengthPoints(args[1]);
+                break :blk &scalar;
+            };
+            const converted = path_fillet.fillet(own, source, radii) catch |err| {
+                switch (err) {
+                    error.InvalidRadii => self.native_message = "fillet radii must be one value or one per vertex",
+                    error.UnsupportedSegment => self.native_message = "fillet requires one closed polygon made of line segments",
+                    error.TooFewVertices => self.native_message = "fillet requires at least three vertices",
+                    error.ConcaveCorner => self.native_message = "fillet does not support concave corners",
+                    error.RadiusTooLarge => self.native_message = "fillet radius is too large for adjacent edges",
+                    error.DegeneratePolygon, error.DegenerateCorner => self.native_message = "fillet requires a nondegenerate polygon",
+                    else => {},
+                }
+                return err;
+            };
+            return self.pathResult(converted);
         },
         .offset => {
             var options: regions.Options = .{};

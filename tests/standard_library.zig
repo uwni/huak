@@ -238,6 +238,39 @@ test "native clip accumulates through UFCS and reset clears the copied scope" {
     }
 }
 
+test "fillet rounds polygons and rounded_rect accepts per-corner radii" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compile(&library,
+            \\import paint.*
+            \\import geometry.fillet
+            \\import assertions.assert
+            \\tri:=path([(0pt,0pt),(20pt,0pt),(8pt,12pt)],true)
+            \\all:=fillet(tri,1pt)
+            \\some:=fillet(tri,[1pt,0pt,2pt])
+            \\rect:=rounded_rect((0pt,0pt),30pt,20pt,[2pt,4pt,6pt,8pt])
+            \\assert(len(all)>len(tri) and len(some)>len(tri) and len(rect)>4)
+            \\p0:=picture(30pt,30pt);append(p0,object(all))
+            \\p1:=picture(30pt,30pt);append(p1,object(some))
+            \\p2:=picture(30pt,30pt);append(p2,object(rect))
+            \\export p0,p1,p2
+        , optimize);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+        for ([_][]const u8{ "p0", "p1", "p2" }) |name| {
+            var svg = try runtime.render(machine.getGlobal(name).?, .svg);
+            defer svg.deinit();
+            try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+            try t.expect(std.mem.indexOf(u8, svg.bytes(), "c ") != null);
+        }
+    }
+}
+
 test "standard brushes and engraving compose with user profiles retained text and native exports" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();

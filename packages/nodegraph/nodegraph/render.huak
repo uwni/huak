@@ -247,7 +247,12 @@ export fn edge_object(item:edges.ResolvedEdge) -> PaintedObject
             end
         end
     end
-    if len(masks) > 0 then result = cut(result, compound(masks)) end
+    // Marks sit outside the shaft's bounds. Cut the shaft before composing the
+    // marks; the cut's clip would otherwise drop filled arrowheads.
+    shaft := result
+    if len(masks) > 0 then shaft = cut(shaft, compound(masks)) end
+    result = picture()
+    append(result, shaft)
     append(result, decorations)
     if len(below) > 0 then clearance = compound(below) end
     return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
