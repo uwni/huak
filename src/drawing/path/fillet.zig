@@ -82,9 +82,6 @@ pub fn fillet(allocator: Allocator, source: Path, radii: []const f64) !Path {
             corners[index] = .{ .p_in = current, .p_out = current };
             continue;
         }
-        // Reflex corners need the opposite construction; keep the first
-        // implementation honest instead of silently producing the wrong side.
-        if (turn * orientation <= 0) return error.ConcaveCorner;
         if (@abs(turn) >= std.math.pi - epsilon) return error.RadiusTooLarge;
 
         const tangent_distance = radius * @tan(@abs(turn) / 2);
@@ -100,7 +97,11 @@ pub fn fillet(allocator: Allocator, source: Path, radii: []const f64) !Path {
             g.Point{ .x = incoming_direction.y, .y = -incoming_direction.x };
         const p_in = current.sub(incoming_direction.scale(tangent_distance));
         const p_out = current.add(outgoing_direction.scale(tangent_distance));
-        const center = p_in.add(inward.scale(radius));
+        // Convex vertices put the center on the material side. A reflex
+        // vertex uses the opposite side, which fills the notch and keeps the
+        // tangent points on the actual adjacent segments.
+        const convex = turn * orientation > 0;
+        const center = p_in.add(inward.scale(if (convex) radius else -radius));
         const radial_error = center.distance(p_out) - radius;
         if (!std.math.isFinite(radial_error) or
             @abs(radial_error) > 1e-7 * @max(@as(f64, 1), radius))
@@ -155,23 +156,26 @@ fn collectPolygon(source: Path, allocator: Allocator, points: *std.ArrayList(g.P
     var closed = false;
     for (source.segments.items) |segment| switch (segment) {
         .move => |point| {
-            if (moved or closed) return error.UnsupportedSegment;
+            if (moved or closed) return error.MultipleContours;
             if (!point.isFinite()) return error.NonFinite;
             moved = true;
             try points.append(allocator, point);
         },
         .line => |point| {
-            if (!moved or closed) return error.UnsupportedSegment;
+            if (!moved) return error.InvalidPath;
+            if (closed) return error.MultipleContours;
             if (!point.isFinite()) return error.NonFinite;
             try points.append(allocator, point);
         },
-        .cubic => return error.UnsupportedSegment,
+        .cubic => return error.CurvedSegment,
         .close => {
-            if (!moved or closed) return error.UnsupportedSegment;
+            if (!moved) return error.InvalidPath;
+            if (closed) return error.MultipleContours;
             closed = true;
         },
     };
-    if (!moved or !closed or source.open) return error.UnsupportedSegment;
+    if (!moved) return error.TooFewVertices;
+    if (!closed or source.open) return error.OpenPath;
     if (points.items.len < 3) return error.TooFewVertices;
     // A closed path may spell its final edge explicitly before CLOSE.
     if (points.items[points.items.len - 1].eql(points.items[0])) points.items.len -= 1;
@@ -333,27 +337,69 @@ test "zero radius keeps a reflex vertex sharp while convex corners round" {
     try std.testing.expect(countCubics(result) > 0);
 }
 
-test "fillet rejects concave, open, curved, oversized, and mismatched inputs" {
-    var concave = Path.init(std.testing.allocator);
-    defer concave.deinit();
-    try concave.moveTo(.zero);
-    try concave.lineTo(.{ .x = 20, .y = 0 });
-    try concave.lineTo(.{ .x = 20, .y = 10 });
-    try concave.lineTo(.{ .x = 10, .y = 4 });
-    try concave.lineTo(.{ .x = 0, .y = 10 });
-    try concave.close();
-    try std.testing.expectError(error.ConcaveCorner, fillet(std.testing.allocator, concave, &.{1}));
+test "reflex corner with a radius fills the notch" {
+    var source = Path.init(std.testing.allocator);
+    defer source.deinit();
+    try source.moveTo(.zero);
+    try source.lineTo(.{ .x = 20, .y = 0 });
+    try source.lineTo(.{ .x = 20, .y = 10 });
+    try source.lineTo(.{ .x = 10, .y = 4 });
+    try source.lineTo(.{ .x = 0, .y = 10 });
+    try source.close();
+
+    var result = try fillet(std.testing.allocator, source, &.{1});
+    defer result.deinit();
+    try std.testing.expect(countCubics(result) > 0);
+    const bounds = result.bounds().?;
+    try std.testing.expectApproxEqAbs(@as(f64, 0), bounds.min.x, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 20), bounds.max.x, 1e-9);
+}
+
+test "clockwise reflex polygon uses the same notch-side construction" {
+    var source = Path.init(std.testing.allocator);
+    defer source.deinit();
+    try source.moveTo(.{ .x = 0, .y = 10 });
+    try source.lineTo(.{ .x = 10, .y = 4 });
+    try source.lineTo(.{ .x = 20, .y = 10 });
+    try source.lineTo(.{ .x = 20, .y = 0 });
+    try source.lineTo(.{ .x = 0, .y = 0 });
+    try source.close();
+
+    var result = try fillet(std.testing.allocator, source, &.{1});
+    defer result.deinit();
+    try std.testing.expect(countCubics(result) > 0);
+    const bounds = result.bounds().?;
+    try std.testing.expectApproxEqAbs(@as(f64, 0), bounds.min.y, 1e-9);
+    try std.testing.expect(bounds.max.y <= 10 + 1e-9);
+}
+
+test "fillet rejects open, curved, multi-contour, oversized, and mismatched inputs" {
+    var empty = Path.init(std.testing.allocator);
+    defer empty.deinit();
+    try std.testing.expectError(error.TooFewVertices, fillet(std.testing.allocator, empty, &.{1}));
 
     var open = Path.init(std.testing.allocator);
     defer open.deinit();
     try open.moveTo(.zero);
     try open.lineTo(.{ .x = 10, .y = 0 });
     try open.lineTo(.{ .x = 0, .y = 10 });
-    try std.testing.expectError(error.UnsupportedSegment, fillet(std.testing.allocator, open, &.{1}));
+    try std.testing.expectError(error.OpenPath, fillet(std.testing.allocator, open, &.{1}));
 
     var curved = try Path.circle(std.testing.allocator, .zero, 5);
     defer curved.deinit();
-    try std.testing.expectError(error.UnsupportedSegment, fillet(std.testing.allocator, curved, &.{1}));
+    try std.testing.expectError(error.CurvedSegment, fillet(std.testing.allocator, curved, &.{1}));
+
+    var multiple = Path.init(std.testing.allocator);
+    defer multiple.deinit();
+    try multiple.moveTo(.zero);
+    try multiple.lineTo(.{ .x = 10, .y = 0 });
+    try multiple.lineTo(.{ .x = 0, .y = 10 });
+    try multiple.close();
+    try multiple.moveTo(.{ .x = 20, .y = 0 });
+    try multiple.lineTo(.{ .x = 30, .y = 0 });
+    try multiple.lineTo(.{ .x = 20, .y = 10 });
+    try multiple.close();
+    try std.testing.expectError(error.MultipleContours, fillet(std.testing.allocator, multiple, &.{1}));
 
     var square = Path.init(std.testing.allocator);
     defer square.deinit();

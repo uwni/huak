@@ -20,6 +20,9 @@ pub fn main(init: std.process.Init) !void {
         const output = try check.huak(&.{ "run", try check.fmt("tests/fixtures/{s}.huak", .{name}) }, true);
         try contains(output, "checks passed");
     }
+    try contains(try check.huak(&.{ "run", "tests/fixtures/brace_color.huak", "--output=target/nodegraph/acceptance/brace-color.svg" }, true), "brace color checks passed");
+    const brace_color = try check.read(try check.path("brace-color.svg"));
+    for ([_][]const u8{ "#008000", "#0000ff", "#ff8000" }) |color| try contains(brace_color, color);
     try contains(try check.huak(&.{ "run", "tests/fixtures/scene.huak", "--output=target/nodegraph/acceptance/scene.svg", "--output=debug_grid=target/nodegraph/acceptance/debug-grid.svg" }, true), "scene checks passed");
     const grid = try check.read(try check.path("debug-grid.svg"));
     if (std.mem.count(u8, grid, "stroke=\"#8c9ebf\"") != 4) return error.MissingGridEdges;

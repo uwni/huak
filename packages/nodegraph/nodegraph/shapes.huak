@@ -130,18 +130,19 @@ export fn text_center(dst:object, body:text, center:vec2, angle:angle = 0deg)
 end
 
 // Stretch uses Typst's own glyph assembly, preserving a native text frame.
-// Pass an explicitly styled typ[...] frame to node() for other typography.
-export fn stretched_glyph(kind:string, extent:length, side:string = "bottom") -> text
+// The optional fill colors the glyph; false keeps the document text color.
+export fn stretched_glyph(kind:string, extent:length, side:string = "bottom", fill:any = false) -> text
     assert(extent > 0pt, "stretched glyph extent must be positive")
     assert(kind == "brace" or kind == "bracket" or kind == "paren", "unknown stretched glyph kind")
     assert(side == "bottom" or side == "top" or side == "left" or side == "right", "unknown glyph side")
-    typst_expose kind, extent, side
+    typst_expose kind, extent, side, fill
     return typ[#{
         let glyphs = (
             brace: (bottom: sym.brace.b, top: sym.brace.t, left: sym.brace.l, right: sym.brace.r),
             bracket: (bottom: sym.bracket.b, top: sym.bracket.t, left: sym.bracket.l, right: sym.bracket.r),
             paren: (bottom: sym.paren.b, top: sym.paren.t, left: sym.paren.l, right: sym.paren.r),
         )
-        math.stretch(glyphs.at(huak.kind).at(huak.side), size: huak.extent)
+        let body = math.stretch(glyphs.at(huak.kind).at(huak.side), size: huak.extent)
+        if huak.fill == false { body } else { text(fill: huak.fill, body) }
     }]
 end

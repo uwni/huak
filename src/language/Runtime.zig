@@ -1349,9 +1349,11 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const converted = path_fillet.fillet(own, source, radii) catch |err| {
                 switch (err) {
                     error.InvalidRadii => self.native_message = "fillet radii must be one value or one per vertex",
-                    error.UnsupportedSegment => self.native_message = "fillet requires one closed polygon made of line segments",
-                    error.TooFewVertices => self.native_message = "fillet requires at least three vertices",
-                    error.ConcaveCorner => self.native_message = "fillet does not support concave corners",
+                    error.OpenPath => self.native_message = "fillet requires a closed polygon",
+                    error.CurvedSegment => self.native_message = "fillet requires line segments only",
+                    error.MultipleContours => self.native_message = "fillet requires exactly one contour",
+                    error.InvalidPath, error.TooFewVertices => self.native_message = "fillet requires a polygon with at least three vertices",
+                    error.NonFinite => self.native_message = "fillet requires finite polygon coordinates",
                     error.RadiusTooLarge => self.native_message = "fillet radius is too large for adjacent edges",
                     error.DegeneratePolygon, error.DegenerateCorner => self.native_message = "fillet requires a nondegenerate polygon",
                     else => {},

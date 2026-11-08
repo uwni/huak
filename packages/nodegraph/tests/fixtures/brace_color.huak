@@ -1,0 +1,11 @@
+// Stretched grouping glyphs use the node's fill color.
+import paint.rgb
+import assertions.assert
+import "../../nodegraph.huak".*
+
+green := node("green", absolute((0pt, 0pt)), typ[], {"shape": "bracket", "shape_options": {"dir": "left"}, "width": 10pt, "height": 60pt, "fill": rgb(0, 0.5, 0)})
+blue := node("blue", absolute((40pt, 0pt)), typ[], {"shape": "brace", "shape_options": {"dir": "left"}, "width": 10pt, "height": 60pt, "fill": rgb(0, 0, 1)})
+orange := node("orange", absolute((80pt, 0pt)), typ[], {"shape": "paren", "shape_options": {"dir": "right"}, "width": 10pt, "height": 60pt, "fill": rgb(1, 0.5, 0)})
+export colored := diagram([green, blue, orange], {"margin": 0pt})
+default colored
+print("brace color checks passed")
