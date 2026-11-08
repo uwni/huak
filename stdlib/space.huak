@@ -2,7 +2,8 @@
 import projection.{project_scene, model_shape as Shape}
 import geometry.{compound, rectangle, circle}
 import transform.matrix
-import object.{region, fill, radial_fill, append, clipped}
+import object.{region, fill, radial_fill, append}
+import paint.clipped
 import color.rgb
 import assertions.assert
 

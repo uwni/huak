@@ -1211,7 +1211,9 @@ test "workers publish detached object subtrees and retain text through dependent
         \\import paint.*
         \\fn item(x:length)->object
         \\    root:=picture()
-        \\    group:=object.append(root, picture(transform: translate((x,0pt))))
+        \\    group:=picture()
+        \\    object.transform(group, translate((x,0pt)))
+        \\    object.append(root, group)
         \\    object.append(group, fill(rectangle((0pt,0pt),12pt,12pt), rgb(0.2,0.5,0.8)))
         \\    title:=typ[Worker object]
         \\    subtitle:=typ[Shared layout owner]

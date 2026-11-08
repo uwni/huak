@@ -4,7 +4,7 @@ import color.rgb
 import pen.envelope
 import transform.{translate, scale, rotate, transformed}
 import geometry.{closed, rectangle, circle, smooth, bezier, reverse, joined, region_difference}
-import object.{draw, fill, filldraw, label, append, bounds, region, snapshot, clipped as clipped_object}
+import object.{clip, reset_clip, draw, fill, filldraw, label, append, bounds, region, snapshot}
 import object.transform as transform_object
 precedence concatenation
     below path
@@ -14,7 +14,7 @@ end
 mixfix(joined) _ & _ in concatenation
 export rgb, pen, envelope, translate, scale, rotate, transformed
 export rectangle, circle, path, smooth, bezier, closed, reverse, joined
-export picture, object, bounds, draw, fill, filldraw, label, append
+export picture, object, clip, reset_clip, bounds, draw, fill, filldraw, label, append
 
 // Composable object expressions and word operators. Detailed policy controls
 // remain available in brush/engraving; these functions choose drawing defaults.
@@ -67,6 +67,15 @@ end
 mixfix(shifted) _ shifted _ in path
 export shifted
 
+// Clip an independent world-space snapshot. The source keeps its identity,
+// ancestors, native text and original clip scopes.
+fn clipped(source:object, area:path) -> picture
+    result := snapshot(source)
+    clip(result, area)
+    return result
+end
+export clipped
+
 // Clip an independent instance snapshot. The mask is the actual ink region;
 // text in the copied content stays native and the removed area is transparent.
 fn cut(source:object, hole:any, tolerance:length = 0.001pt) -> picture
@@ -82,7 +91,7 @@ fn cut(source:object, hole:any, tolerance:length = 0.001pt) -> picture
     if len(keep) == 0 then
         return picture()
     end
-    return clipped_object(source, keep)
+    return clipped(source, keep)
 end
 mixfix(cut) _ cut _ in path
 export cut

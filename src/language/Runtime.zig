@@ -433,6 +433,27 @@ fn mutableSolver(self: *Runtime, index: usize) !*constraints.Solver {
     return self.solvers.items[index];
 }
 const Instance = struct { owner: *SceneOwner, index: Scene.Index };
+/// Accumulated display clip. The scene stores one root path, so each call
+/// intersects the current path with the new region before replacing it.
+fn intersectClip(self: *Runtime, instance: Instance, region: *const Path) !void {
+    var current = (try instance.owner.scene.currentClip(instance.index)) orelse {
+        try instance.owner.scene.setClip(instance.index, region);
+        return;
+    };
+    defer current.deinit();
+    // An already empty clip stays empty, but the new region is still checked.
+    if (current.segments.items.len == 0) {
+        try Scene.validateClip(region);
+        return;
+    }
+    var combined = try regions.combine(self.scene_allocator, current, region.*, .intersect, .{ .fill_rule = .nonzero });
+    defer combined.deinit();
+    if (combined.segments.items.len == 0) {
+        try instance.owner.scene.setEmptyClip(instance.index);
+    } else {
+        try instance.owner.scene.setClip(instance.index, &combined);
+    }
+}
 fn objectValue(self: *Runtime, value: Value, mutable: bool) !Instance {
     if (value != .object) return error.TypeMismatch;
     // Object values are unforgeable in the language and live only for this
@@ -792,7 +813,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             }
             return .unit;
         },
-        .object_transform, .object_remove, .object_before, .object_style, .object_visible => {
+        .object_transform, .object_remove, .object_before, .object_style, .object_visible, .object_clip, .object_reset_clip => {
             const instance = try self.objectValue(args[0], true);
             switch (id) {
                 .object_visible => {
@@ -814,6 +835,11 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                     try instance.owner.scene.setStyle(instance.index, &style);
                 },
                 .object_transform => try instance.owner.scene.applyTransform(instance.index, try self.transformValue(args[1])),
+                .object_clip => {
+                    const region = try self.path(args[1]);
+                    try self.intersectClip(instance, &region);
+                },
+                .object_reset_clip => try instance.owner.scene.setClip(instance.index, null),
                 .object_remove => {
                     try instance.owner.scene.remove(instance.index);
                 },
@@ -853,15 +879,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             };
             return .unit;
         },
-        .snapshot, .object_clip => {
-            const result = try self.transformedObject(args[0], .{});
-            if (id == .object_clip) {
-                const object = try self.objectValue(result, true);
-                const clip = try self.path(args[1]);
-                try object.owner.scene.setClip(object.index, &clip);
-            }
-            return result;
-        },
+        .snapshot => return self.transformedObject(args[0], .{}),
         .print => {
             if (self.task_borrow != null) return error.TaskSideEffect;
             const message = try formatValue(a, args[0]);
@@ -1456,13 +1474,11 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (hasArgument(args, 0) != hasArgument(args, 1)) return error.InvalidCanvas;
             const size: ?g.Point = if (hasArgument(args, 0)) .{ .x = try lengthPoints(args[0]), .y = try lengthPoints(args[1]) } else null;
             if (size) |value| try validateCanvas(value.x, value.y);
-            const transform = if (hasArgument(args, 2)) try self.transformValue(args[2]) else g.Transform{};
-            const clip = if (hasArgument(args, 3)) try self.path(args[3]) else null;
             const owner = try self.gpa.create(SceneOwner);
             errdefer self.gpa.destroy(owner);
             owner.* = .{ .scene = .{ .storage = .init(self.scene_allocator) }, .owner_index = try self.nextOwnerIndex(), .animation_state = .init(self.gpa) };
             errdefer owner.scene.deinit();
-            const index = try owner.scene.addPicture(null, transform, if (clip) |*curve| curve else null);
+            const index = try owner.scene.addPicture(null, .{}, null);
             (try owner.scene.settings(index)).size = size;
             try self.scene_values.append(self.mem(), owner);
             return objectHandle(owner.scene.object(index));
@@ -2171,7 +2187,41 @@ fn pictureAllocationScenario(a: std.mem.Allocator) !void {
     _ = try runtime.invoke(a, .snapshot, &.{first});
     const clip = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .zero }, .{ .int = 10 }, .{ .int = 10 } });
     _ = try runtime.invoke(a, .object_clip, &.{ first, clip });
+    _ = try runtime.invoke(a, .object_reset_clip, &.{first});
     try std.testing.expectEqual(@as(usize, 5), try testChildCount(first));
+}
+
+test "clip intersects the root scope and reset clears every accumulated path" {
+    const a = std.testing.allocator;
+    var unused_library: typst.Library = undefined;
+    var runtime = try Runtime.init(a, a, &unused_library, .{});
+    defer runtime.deinit();
+    const picture = try runtime.invoke(a, .picture, &.{});
+    const left = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .zero }, .{ .int = 10 }, .{ .int = 20 } });
+    const top = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .zero }, .{ .int = 20 }, .{ .int = 10 } });
+    const outside = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .{ .x = 100, .y = 100 } }, .{ .int = 10 }, .{ .int = 10 } });
+    const owner = testOwner(picture);
+    const node = try owner.scene.getNode(picture.object.index);
+
+    _ = try runtime.invoke(a, .object_clip, &.{ picture, left });
+    try std.testing.expect(node.picture.clip != null);
+    const first_count = node.picture.clip.?.count;
+    try std.testing.expect(first_count != 0);
+
+    _ = try runtime.invoke(a, .object_clip, &.{ picture, top });
+    try std.testing.expect(node.picture.clip != null);
+    try std.testing.expect(node.picture.clip.?.count != 0);
+
+    _ = try runtime.invoke(a, .object_reset_clip, &.{picture});
+    try std.testing.expect(node.picture.clip == null);
+
+    _ = try runtime.invoke(a, .object_clip, &.{ picture, outside });
+    _ = try runtime.invoke(a, .object_clip, &.{ picture, left });
+    try std.testing.expect(node.picture.clip != null);
+    try std.testing.expectEqual(@as(usize, 0), node.picture.clip.?.count);
+
+    _ = try runtime.invoke(a, .object_reset_clip, &.{picture});
+    try std.testing.expect(node.picture.clip == null);
 }
 
 test "picture owners release all resources when allocation fails" {

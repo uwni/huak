@@ -1,10 +1,9 @@
 import drawing.drawing
 import math.{sin, cos, sqrt, max, norm}
-import transform.translate
 import geometry.{circle, sample_path}
 import object.bounds
 import pen.profile_outline
-import object.{draw, fill}
+import object.{clip, draw, fill}
 // Engraving recipes. Sampling, clipping and stroke expansion remain native
 // geometry mechanisms; density, lighting and mark placement are policies here.
 import assertions.assert
@@ -19,7 +18,8 @@ fn hatch(region:path, spacing:length, width:length, angle:angle, ink:color) -> o
     radius := norm(box[1] - box[0]) / 2
     direction := (cos(angle), sin(angle))
     normal := (-direction.y, direction.x)
-    result := picture(transform: translate((0, 0)), clip: region)
+    result := picture()
+    clip(result, region)
     drawing result do
         for distance in -radius:spacing:radius do
             midpoint := center + normal * distance
@@ -38,7 +38,8 @@ fn dots(region:path, spacing:length, radius:length, ink:color) -> object
     assert(radius > 0pt, "dot radius must be positive")
     box := bounds(region)
     assert(len(box) == 2, "dots needs a nonempty region")
-    result := picture(transform: translate((0, 0)), clip: region)
+    result := picture()
+    clip(result, region)
     drawing result do
         row := 0
         for y in box[0].y:spacing:box[1].y do
@@ -64,7 +65,8 @@ fn sphere(center:vec2, radius:length, ink:color, lines:int) -> object
         positions += float(i) / 24
     end
     profile_positions := positions
-    result := picture(transform: translate((0, 0)), clip: circle(center, radius))
+    result := picture()
+    clip(result, circle(center, radius))
     drawing result do
         for row in 1:lines - 1 do
             ny := -1 + 2 * float(row) / lines
@@ -100,7 +102,8 @@ fn tube(curve:path, diameter:length, ink:color, stripes:int, steps:int) -> objec
     assert(steps >= 2, "tube needs at least two samples per contour")
     samples := sample_path(curve, steps)
     boundary := profile_outline(curve, [0, 1], [diameter, diameter], "round", "round")
-    result := picture(transform: translate((0, 0)), clip: boundary)
+    result := picture()
+    clip(result, boundary)
     drawing result do
         for stripe in 1:stripes - 1 do
             side := -1 + 2 * float(stripe) / stripes

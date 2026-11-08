@@ -442,9 +442,36 @@ pub fn isVisible(self: *const Scene, index: Index) !bool {
 
 pub fn setClip(self: *Scene, index: Index, clip: ?*const Path) !void {
     if ((try self.getNode(index)).* != .picture) return error.ExpectedPicture;
-    try Storage.validateScope(.{}, clip);
+    try validateClip(clip);
     const scope = try self.storage.scope(.{}, clip);
     self.nodes.items[index].picture.clip = scope.clip;
+}
+
+pub fn validateClip(path: ?*const Path) !void {
+    try Storage.validateScope(.{}, path);
+}
+
+/// Copy of the picture's root clip. An accumulated clip can intersect to
+/// nothing; count zero is that hidden state and is distinct from no clip.
+pub fn currentClip(self: *const Scene, index: Index) !?Path {
+    const command = try self.getNode(index);
+    if (command.* != .picture) return error.ExpectedPicture;
+    const reference = command.picture.clip orelse return null;
+    var result = Path.init(self.storage.allocator);
+    errdefer result.deinit();
+    for (try self.storage.range(reference)) |segment| switch (segment) {
+        .move => |point| try result.moveTo(point),
+        .line => |point| try result.lineTo(point),
+        .cubic => |curve| try result.cubicTo(curve.c1, curve.c2, curve.end),
+        .close => try result.close(),
+    };
+    return result;
+}
+
+/// Hide the complete subtree without confusing it with an absent clip.
+pub fn setEmptyClip(self: *Scene, index: Index) !void {
+    if ((try self.getNode(index)).* != .picture) return error.ExpectedPicture;
+    self.nodes.items[index].picture.clip = .{ .first = 0, .count = 0 };
 }
 
 /// Exclude a region from selected direct child placements. Prepare every

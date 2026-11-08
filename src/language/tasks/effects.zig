@@ -522,7 +522,7 @@ const Analysis = struct {
                 result = arguments[1];
                 if (!arguments[0].fresh_owner or !result.fresh_owner) self.safe = false;
             },
-            .canvas, .timeline, .animate, .motion, .object_transform, .object_remove, .object_before, .object_style, .object_visible => {
+            .canvas, .timeline, .animate, .motion, .object_transform, .object_remove, .object_before, .object_style, .object_visible, .object_clip, .object_reset_clip => {
                 if (arguments.len == 0 or !arguments[0].fresh_owner or (arguments[0].kind != .picture and arguments[0].kind != .object and arguments[0].kind != .any)) self.safe = false;
                 // Animation ownership is currently published on the serial path.
                 if (id == .animate or id == .motion) self.safe = false;
@@ -546,7 +546,7 @@ const Analysis = struct {
             .bounds => {
                 if (arguments.len != 0 and arguments[0].kind.isObject()) self.uses_typst = true;
             },
-            .outlines, .region, .snapshot, .object_clip => {
+            .outlines, .region, .snapshot => {
                 if (id != .region) result.fresh_owner = true;
                 if (arguments.len == 0) self.safe = false else switch (arguments[0].kind) {
                     .path, .path_or_shape => {},

@@ -115,8 +115,11 @@ test "affine mapping and transformation preserve nested clips native text and so
     const source =
         \\import paint.*;import assertions.assert
         \\import transform.{mapped,matrix}
-        \\outer:=picture(transform:translate((20pt,30pt)),clip:rectangle((0pt,0pt),80pt,60pt))
-        \\inner:=picture(transform:rotate(15deg))
+        \\outer:=picture()
+        \\object.transform(outer,translate((20pt,30pt)))
+        \\clip(outer,rectangle((0pt,0pt),80pt,60pt))
+        \\inner:=picture()
+        \\object.transform(inner,rotate(15deg))
         \\append(outer,inner)
         \\append(inner,fill(circle((20pt,20pt),12pt),rgb(0.2,0.4,0.8)))
         \\append(inner,label(typ[Affine $x^2$ Ω],(10pt,35pt)))
@@ -1012,7 +1015,8 @@ test "drawing returns typed instances and appended groups remain animation targe
             \\second:=object.append(pic, object.draw(curve))
             \\assert(first!=second)
             \\saved:=[first,second]
-            \\group:=object.append(pic, picture(transform: translate((0,0))))
+            \\group:=picture()
+            \\object.append(pic, group)
             \\object.append(group, object.filldraw(curve, rgb(1,0,0), pen(rgb(0,0,0),1)))
             \\text_object:=object.append(group, object.label(typ[Native text], (10,30)))
             \\component:=picture()
@@ -1309,7 +1313,10 @@ test "animation and group state belong to each explicit picture" {
         \\import paint.{rgb, pen, translate, rectangle, circle, fill, filldraw, picture, append};import animation.{timeline, animate};animated:=picture(80,40); static:=picture(100,50)
         \\id:=object.append(animated, object.fill(circle((10,10),2), rgb(1,0,0)))
         \\animated.timeline(1.25)
-        \\group:=object.append(static, picture(transform: translate((10,5)), clip: rectangle((0,0),20,20)))
+        \\group:=picture()
+        \\object.transform(group, translate((10,5)))
+        \\object.clip(group, rectangle((0,0),20,20))
+        \\object.append(static, group)
         \\object.append(group, object.filldraw(rectangle((1,1),5,5), rgb(0,0,1), pen(rgb(0,0,0),1)))
         \\static.append(copy(animated)); animate(id,"opacity",[[0,0],[1,1]])
     );
@@ -2648,7 +2655,9 @@ test "one picture container supports automatic extent nested export copies and i
         \\export page := picture()
         \\default page
         \\drawing page do
-        \\    child := picture(transform: translate((-20pt,-10pt))); +child
+        \\    child := picture()
+        \\    object.transform(child, translate((-20pt,-10pt)))
+        \\    +child
         \\    drawing child do
         \\        shape := make(child)
         \\    end
@@ -2656,7 +2665,8 @@ test "one picture container supports automatic extent nested export copies and i
         \\child:=page.children[0]; shape:=child.children[0]; assert(page.width==30pt and page.height==15pt)
         \\assert(child.parent==page and child.kind=="picture")
         \\assert(child.width==30pt and child.height==15pt)
-        \\fixed := picture(100pt,80pt,clip:rectangle((-50pt,-50pt),200pt,200pt))
+        \\fixed := picture(100pt,80pt)
+        \\object.clip(fixed,rectangle((-50pt,-50pt),200pt,200pt))
         \\object.append(fixed,copy(child))
         \\copied := copy(fixed)
         \\export inner := copied.children[0]

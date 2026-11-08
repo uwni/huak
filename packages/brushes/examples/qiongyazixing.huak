@@ -104,7 +104,8 @@ drawing seal do
     +carve(rim) filled ink
     // 四字收在同一個裁剪分組：框線以外的刀路一律裁掉，
     // 貼到框上的字照常與邊框連成一氣。
-    strokes := picture(clip: rim)
+    strokes := picture()
+    clip(strokes, rim)
     drawing strokes do
         for guide in guides do
             +carve(guide) filled ink

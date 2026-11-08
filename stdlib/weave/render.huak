@@ -97,7 +97,9 @@ export fn compose(plan:analysis.Plan, gap:length, tolerance:length) -> picture
             keep := compound([])
             for piece in pieces.remaining do keep = region_union(keep, piece, tolerance) end
             if len(keep) == 0 then continue end
-            target = object.append(result, picture(clip:keep))
+            child := picture()
+            object.clip(child, keep)
+            target = object.append(result, child)
         end
         object.append(target, draw(strand.curve, strand.stroke))
     end

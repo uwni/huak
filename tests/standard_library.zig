@@ -209,6 +209,35 @@ test "paint prelude reexports canonical functions without wrappers" {
     }
 }
 
+test "native clip accumulates through UFCS and reset clears the copied scope" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compile(&library,
+            \\import paint.*
+            \\pic:=picture(20pt,20pt)
+            \\pic.clip(rectangle((0pt,0pt),10pt,20pt))
+            \\pic.clip(rectangle((0pt,0pt),20pt,10pt))
+            \\copy_pic:=copy(pic)
+            \\copy_pic.reset_clip()
+            \\export pic, copy_pic
+        , optimize);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+        const clipped = machine.getGlobal("pic").?;
+        const cleared = machine.getGlobal("copy_pic").?;
+        const clipped_node = try scene.owner(clipped).scene.getNode(clipped.object.index);
+        const cleared_node = try scene.owner(cleared).scene.getNode(cleared.object.index);
+        try t.expect(clipped_node.picture.clip != null);
+        try t.expect(clipped_node.picture.clip.?.count != 0);
+        try t.expect(cleared_node.picture.clip == null);
+    }
+}
+
 test "standard brushes and engraving compose with user profiles retained text and native exports" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
@@ -273,6 +302,10 @@ test "standard module private functions and unknown modules remain diagnosed" {
             .{ .source = "import paint.timeline", .message = "does not export 'timeline'" },
             .{ .source = "import \"std/missing.huak\" as missing", .message = "unknown standard library module" },
             .{ .source = "import paint.{path, picture};rainbow(picture(640, 480),path((0,0),(10,0)),1mm,10)", .message = "unknown function 'rainbow'" },
+            .{ .source = "import paint.*;p:=picture(transform:translate((0pt,0pt)))", .message = "unknown argument 'transform' for 'picture'" },
+            .{ .source = "import paint.*;p:=picture(clip:rectangle((0pt,0pt),1pt,1pt))", .message = "unknown argument 'clip' for 'picture'" },
+            .{ .source = "import paint.*;p:=path((0pt,0pt),(1pt,1pt));p.clip(rectangle((0pt,0pt),1pt,1pt))", .message = "expected picture, found path" },
+            .{ .source = "import paint.*;p:=path((0pt,0pt),(1pt,1pt));reset_clip(p)", .message = "expected picture, found path" },
         }) |case| {
             var diagnostic: ?l.compiler.Diagnostic = null;
             try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, case.source, "private-standard-library.huak", .{ .optimize = optimize }, &diagnostic));
@@ -900,7 +933,9 @@ test "object instances retain native text local copies world snapshots and indep
         var program = try compile(&library,
             \\import paint.*;import assertions.assert
             \\root:=picture()
-            \\g:=object.append(root, picture(transform: translate((20pt,0pt))))
+            \\g:=picture()
+            \\object.transform(g, translate((20pt,0pt)))
+            \\object.append(root, g)
             \\curve:=rectangle((0pt,0pt),10pt,10pt)
             \\a:=object.append(g, fill(curve, rgb(1,0,0)))
             \\b:=object.append(g, fill(curve, rgb(0,0,1), translate((15pt,0pt))))
@@ -964,7 +999,9 @@ test "erase keeps live siblings in paint order with parent-space dashed strokes"
             \\    return len(region_intersection(region(obj),rectangle((x,y),0.5pt,0.5pt)))>0
             \\end
             \\export page:=picture(90pt,40pt)
-            \\g:=append(page,picture(transform:translate((2pt,3pt))))
+            \\g:=picture()
+            \\object.transform(g,translate((2pt,3pt)))
+            \\append(page,g)
             \\band:=fill(rectangle((0pt,0pt),40pt,20pt),rgb(1,0,0))
             \\grid:=copy(band); curve:=copy(band); later:=copy(band)
             \\sweep:=(0pt,10pt)--(40pt,10pt)

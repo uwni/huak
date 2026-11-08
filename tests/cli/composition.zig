@@ -2,7 +2,7 @@
 const std = @import("std");
 const t = std.testing;
 const h = @import("harness.zig");
-pub const process_count = 22;
+pub const process_count = 23;
 
 pub fn run(ctx: *h.Harness) !void {
     const script = try ctx.script("composition/main",
@@ -73,6 +73,7 @@ pub fn run(ctx: *h.Harness) !void {
     }
     try t.expectEqualStrings(try ctx.read("composition-1.svg"), try ctx.read("composition-4.svg"));
     try t.expectEqualStrings(try ctx.read("composition-1.pdf"), try ctx.read("composition-4.pdf"));
+    try nativeClip(ctx);
     try batch(ctx);
     try objectCutters(ctx);
     const tolerance = try ctx.script("composition/tolerance", "import paint.*\np:=cut(picture(),circle((0,0),1),0pt)\n");
@@ -101,6 +102,35 @@ pub fn run(ctx: *h.Harness) !void {
     try t.expectEqualStrings(serial.stderr, parallel.stderr);
     try ctx.absent("animated-cut-1.svg");
     try ctx.absent("animated-cut-4.svg");
+}
+
+fn nativeClip(ctx: *h.Harness) !void {
+    const script = try ctx.script("composition/native-clip",
+        \\import paint.*
+        \\accumulated:=picture(20pt,20pt)
+        \\drawing accumulated do
+        \\    +rectangle((0pt,0pt),20pt,20pt) filled rgb(1,0,0)
+        \\end
+        \\accumulated.clip(rectangle((0pt,0pt),10pt,20pt))
+        \\accumulated.clip(rectangle((0pt,0pt),20pt,10pt))
+        \\cleared:=picture(20pt,20pt)
+        \\drawing cleared do
+        \\    +rectangle((0pt,0pt),20pt,20pt) filled rgb(1,0,0)
+        \\end
+        \\clip(cleared,rectangle((0pt,0pt),10pt,20pt))
+        \\reset_clip(cleared)
+        \\export accumulated,cleared
+    );
+    try h.output(try ctx.command("run", script, &.{
+        "--output=accumulated=native-clip-accumulated.svg",
+        "--output=cleared=native-clip-cleared.svg",
+    }, true), "");
+    const accumulated = try ctx.svg("native-clip-accumulated.svg");
+    try accumulated.viewBox("0 0 20 20");
+    try t.expectEqual(@as(usize, 1), accumulated.count("clipPath"));
+    try t.expectEqual(@as(usize, 1), clipReferences(accumulated));
+    const cleared = try ctx.svg("native-clip-cleared.svg");
+    try t.expectEqual(@as(usize, 0), cleared.count("clipPath"));
 }
 
 fn batch(ctx: *h.Harness) !void {
@@ -175,8 +205,14 @@ fn objectCutters(ctx: *h.Harness) !void {
         \\ink:=pen(rgb(0.2,0.2,0.2),1pt,"round","miter",4,[6pt,3pt],1pt,nib)
         \\object.append(cutter, draw(bezier((5pt,80pt),(50pt,130pt),(70pt,75pt),(95pt,115pt)), ink, translate((10pt,0pt))))
         \\child:=picture()
-        \\outer:=object.append(child, picture(transform: translate((5pt,5pt)), clip: rectangle((0pt,0pt),25pt,25pt)))
-        \\inner:=object.append(outer, picture(transform: translate((5pt,0pt)), clip: rectangle((0pt,0pt),20pt,20pt)))
+        \\outer:=picture()
+        \\object.transform(outer, translate((5pt,5pt)))
+        \\object.clip(outer, rectangle((0pt,0pt),25pt,25pt))
+        \\object.append(child, outer)
+        \\inner:=picture()
+        \\object.transform(inner, translate((5pt,0pt)))
+        \\object.clip(inner, rectangle((0pt,0pt),20pt,20pt))
+        \\object.append(outer, inner)
         \\object.append(inner, object.fill(rectangle((-20pt,-20pt),60pt,60pt)))
         \\append(cutter, copy(child), translate((110pt,75pt)))
         \\object.append(cutter, object.filldraw(circle((165pt,95pt),8pt), rgb(0.6,0.1,0.2), pen(rgb(0,0,0),3pt)))

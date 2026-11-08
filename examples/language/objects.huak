@@ -4,7 +4,9 @@ import assertions.assert
 export plate := picture(100mm, 60mm)
 default plate
 drawing plate do
-    content := picture(transform: translate((10mm, 10mm))); +content
+    content := picture()
+    object.transform(content, translate((10mm, 10mm)))
+    +content
     drawing content do
         +fill circle((10mm, 10mm), 7mm)
         +typ[Native text] at (0mm, 24mm)

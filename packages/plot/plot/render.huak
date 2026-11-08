@@ -3,7 +3,7 @@ import collections.get
 import assertions.assert
 import color.rgb
 import geometry.{rectangle}
-import object.{append,draw,fill,clipped}
+import object.{append,draw,fill,clip as clip_picture}
 import "model.huak".{Figure,Axis,Layer,horizontal,primary}
 import "rulers.huak" as rulers
 import "arrows.huak" as arrows
@@ -708,7 +708,8 @@ fn paint_intervals(dst:picture, fig:Figure, panel:Panel, item:Layer, xr:rulers.R
                 if not yp.cut_before then low = (low.x,0pt) end
                 if not yp.cut_after then high = (high.x,fig.height) end
             end
-            tile := picture(clip:rectangle(low,high.x-low.x,high.y-low.y))
+            tile := picture()
+            clip_picture(tile,rectangle(low,high.x-low.x,high.y-low.y))
             append(dst,tile)
             paint_layer(tile,view,item,ink,width)
         end
@@ -740,7 +741,8 @@ export fn render(fig:Figure) -> picture
             target := dst
             if is_clipped then
                 if clipped_group==false then
-                    clipped_group = picture(clip:rectangle(panel.origin,panel.size.x,panel.size.y))
+                    clipped_group = picture()
+                    clip_picture(clipped_group,rectangle(panel.origin,panel.size.x,panel.size.y))
                     append(dst,clipped_group)
                 end
                 target = clipped_group

@@ -4,7 +4,6 @@ import color.rgb
 import geometry.sample_path
 import pen.profile_outline
 import object.{draw, linear_stroke}
-import transform.translate
 import math
 // Artistic policies composed from ordinary geometry builtins.
 // Widths passed to profile_outline are full widths, indexed by physical
@@ -53,7 +52,7 @@ fn rainbow(curve:path, width:length, steps:int) -> object
     assert(width >= 0pt, "rainbow width must be nonnegative")
     assert(steps >= 2, "rainbow needs at least two samples per contour")
     if width == 0pt then return picture() end
-    result := picture(transform: translate((0, 0)))
+    result := picture()
     axis := curve.linear_axis
     if axis != false then
         stops := []
