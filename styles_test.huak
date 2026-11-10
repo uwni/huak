@@ -1,0 +1,3 @@
+setup_typst {
+    let header(body) = text(fill: red, size: 20pt, body)
+}

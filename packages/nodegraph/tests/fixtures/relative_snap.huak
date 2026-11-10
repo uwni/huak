@@ -1,0 +1,13 @@
+// A relative endpoint is an exact anchor, not a request to search nearby nodes.
+import paint.*
+import object.bounds
+import assertions.assert
+import "../../nodegraph.huak" as nodegraph
+
+pin := nodegraph.node("pin", nodegraph.absolute((0pt, 0pt)), typ[A], {"shape": "none"})
+device := nodegraph.node("device", nodegraph.absolute((100pt, 0pt)), typ[B], {"width": 20pt, "height": 20pt, "snap": false})
+link := nodegraph.edge(nodegraph.named("pin"), nodegraph.relative(nodegraph.named("device", "west"), (0pt, 0pt)), {"name": "link"})
+route := nodegraph.route(nodegraph.geometry([pin, device, link]), "link")
+box := bounds(route)
+assert(box[1].x-box[0].x > 50pt, "relative endpoint must keep the full route")
+print("relative snap checks passed")

@@ -1,0 +1,19 @@
+// A port-column node sizes itself from port_pitch and exposes edge anchors.
+import paint.*
+import object.bounds
+import assertions.assert
+import "../../nodegraph.huak" as nodegraph
+
+pin := nodegraph.node("pin", nodegraph.absolute((-40pt, 0pt)), typ[], {"shape": "none"})
+device := nodegraph.node("device", nodegraph.absolute((0pt, 0pt)), typ[decoder], {
+    "width": 40pt, "ports": {"west": 4, "east": 4}, "port_pitch": 20pt,
+})
+out := nodegraph.node("out", nodegraph.absolute((40pt, 0pt)), typ[], {"shape": "none"})
+first := nodegraph.edge(nodegraph.named("pin"), nodegraph.port("device", "west", 0), {"name": "first"})
+last := nodegraph.edge(nodegraph.port("device", "east", 3), nodegraph.named("out"), {"name": "last"})
+geometry := nodegraph.geometry([pin, device, out, first, last])
+heads := bounds(nodegraph.route(geometry, "first"))
+tails := bounds(nodegraph.route(geometry, "last"))
+assert(heads[1].y > 20pt, "first west port must sit above the node center")
+assert(tails[0].y < -20pt, "last east port must sit below the node center")
+print("ports checks passed")

@@ -1,7 +1,7 @@
 // Paint policy. Each output object is clipped at most once against later
 // clearances, avoiding a clip nesting depth proportional to diagram size.
 import math.{abs, atan2, cos, dot, floor, max, min, norm, sin, unit}
-import object.{append, draw, fill}
+import object.{append, draw, fill, outlines}
 import transform.{apply, compose, rotate, transformed, translate}
 import geometry.{arclength, compound, intersection_times, offset, point_at, rectangle, region_union, sample_at_length, tangent_at, trimmed}; import object.{bounds}
 import color.rgb
@@ -49,14 +49,16 @@ export fn node_object(item:layout.ResolvedNode) -> PaintedObject
         if kind == "brace" or kind == "bracket" or kind == "paren" then
             shape_options:dict := opt.get(options, "shape_options", {})
             side:string := opt.get(shape_options, "dir", "bottom")
+            sep:length := opt.get(shape_options, "sep", 0pt)
+            assert(sep >= 0pt, "node graph separator must be nonnegative")
             extent:length := item.size.x
             if side == "left" or side == "right" then extent = item.size.y end
-            glyph := shapes.stretched_glyph(kind, extent, side, opt.get(options, "fill", false))
+            glyph := shapes.stretched_glyph(kind, extent, side, opt.get(options, "fill", false), opt.get(shape_options, "font_size", 0pt))
             glyph_center:vec2 := center
-            if side == "bottom" then glyph_center = (center.x, center.y-item.size.y/2-glyph.height/2) end
-            if side == "top" then glyph_center = (center.x, center.y+item.size.y/2+glyph.height/2) end
-            if side == "left" then glyph_center = (center.x-item.size.x/2-glyph.width/2, center.y) end
-            if side == "right" then glyph_center = (center.x+item.size.x/2+glyph.width/2, center.y) end
+            if side == "bottom" then glyph_center = (center.x, center.y-item.size.y/2-sep-glyph.height/2) end
+            if side == "top" then glyph_center = (center.x, center.y+item.size.y/2+sep+glyph.height/2) end
+            if side == "left" then glyph_center = (center.x-item.size.x/2-sep-glyph.width/2, center.y) end
+            if side == "right" then glyph_center = (center.x+item.size.x/2+sep+glyph.width/2, center.y) end
             shapes.text_center(result, glyph, glyph_center)
         elseif kind != "none" then
             object.append(result, fill(outline, opt.get(options, "fill", rgb(0, 0, 0, 0))))
@@ -275,31 +277,17 @@ fn by_layer(objects:list) -> list
     return result
 end
 
-export fn compose_objects(objects:list, margin:length = 6pt) -> picture
+export fn compose_objects(objects:list, margin:length = 0pt) -> picture
     assert(margin >= 0pt, "diagram margin must be nonnegative")
     ordered := by_layer(objects)
-    has_bounds := false
-    low := (0pt, 0pt)
-    high := (0pt, 0pt)
-    for i in 0:len(ordered)-1 do
-        if not ordered[i].floating then
-            box := bounds(ordered[i].content)
-            if len(box) > 0 then
-                if not has_bounds then low = box[0]; high = box[1]; has_bounds = true
-                else
-                    low = (min(low.x, box[0].x), min(low.y, box[0].y))
-                    high = (max(high.x, box[1].x), max(high.y, box[1].y))
-                end
-            end
-        end
-    end
-    result := picture(max(1pt, high.x-low.x+2*margin), max(1pt, high.y-low.y+2*margin))
-    shift := translate((margin, margin)-low)
+    // Unbounded picture: Huak derives the output page from the actual object bounds.
+    result := picture()
+    shift := translate((margin, margin))
     for i in 0:len(ordered)-1 do
         source:object := ordered[i].content
         holes := []
         for j in i+1:len(ordered)-1 do
-            if len(ordered[j].clearance) > 0 then holes += ordered[j].clearance end
+            if len(ordered[j].clearance) > 0 then holes += [ordered[j].clearance] end
         end
         if len(holes) > 0 then source = cut(source, compound(holes)) end
         append(result, copy(source), shift)

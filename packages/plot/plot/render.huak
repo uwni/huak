@@ -382,7 +382,7 @@ end
 export fn layout(fig:Figure, panels:list)
     rows := 1; cols := 1
     for panel in panels do rows = max(rows,int(panel.source.cell.x)+1); cols = max(cols,int(panel.source.cell.y)+1) end
-    margin:length := get(fig.options,"margin",12pt)
+    margin:length := get(fig.options,"margin",0pt)
     gap:length := get(fig.options,"gap",16pt)
     assert(margin >= 0pt and gap >= 0pt,"figure spacing must be nonnegative")
     cell := ((fig.width-2*margin-(cols-1)*gap)/cols,(fig.height-2*margin-(rows-1)*gap)/rows)
@@ -472,7 +472,9 @@ fn legend(dst:picture, panel:Panel, fig:Figure)
     if position=="bottom-right" then p = (o.x+s.x-size.x-5pt,o.y+5pt) end
     if position=="outside-right" then p = (o.x+s.x+panel.right-panel.legend_right,o.y+s.y-size.y) end
     if position=="outside-bottom" then p = (o.x,o.y-panel.bottom+2pt) end
-    append(dst,fill(rectangle(p,size.x,size.y),rgb(1,1,1,0.94)))
+    if get(fig.options,"background",rgb(1,1,1)) != false then
+        append(dst,fill(rectangle(p,size.x,size.y),rgb(1,1,1,0.94)))
+    end
     colors := palette(fig)
     columns:int := get(panel.source.options,"legend_columns",1)
     rows := int(ceil(float(len(panel.legends))/columns))
@@ -483,7 +485,7 @@ fn legend(dst:picture, panel:Panel, fig:Figure)
         ink := get(item.options,"color",colors[get(item.options,"series_index",i)%len(colors)])
         at := p+(4pt+(j%columns)*(size.x-8pt)/columns,size.y-4pt-(int(j/columns)+0.5)*height)
         stroke := get(item.options,"pen",pen(ink,get(item.options,"width",get(fig.options,"line_width",1.2pt)),dash:get(item.options,"dash",[])))
-        if item.kind=="arrow" or item.kind=="lines" or item.kind=="hline" or item.kind=="vline" then
+        if (item.kind=="arrow" or item.kind=="lines" or item.kind=="hline" or item.kind=="vline") and get(item.options,"legend_line",true) then
             ends := "none"
             if item.kind=="arrow" then ends = "end" end
             arrows.stroke(dst,[at+(2pt,0pt),at+(22pt,0pt)],stroke,get(item.options,"arrow",ends),get(item.options,"arrow_size",6pt))
@@ -491,7 +493,7 @@ fn legend(dst:picture, panel:Panel, fig:Figure)
             a := at+(12pt,-5pt); b := at+(12pt,5pt); cap := (3pt,0pt)
             if get(item.options,"orientation","vertical")=="horizontal" then a = at+(3pt,0pt); b = at+(21pt,0pt); cap = (0pt,3pt) end
             segment(dst,a,b,stroke); segment(dst,a-cap,a+cap,stroke); segment(dst,b-cap,b+cap,stroke)
-        elseif item.kind!="scatter" and item.kind!="annotation" then
+        elseif item.kind!="scatter" and item.kind!="annotation" and get(item.options,"legend_line",true) then
             shape := rectangle(at+(2pt,-3pt),20pt,6pt)
             interior:any := get(item.options,"fill",ink)
             if interior!=false then append(dst,fill(shape,interior)) end
@@ -619,7 +621,12 @@ fn paint_layer(dst:picture, panel:Panel, item:Layer, ink:color, width:length)
         arrows.stroke(dst,endpoints,stroke,ends,get(item.options,"arrow_size",6pt))
     elseif item.kind=="annotation" then
         p := affine_point(panel,item.x[0],item.y[0])
-        if retained(panel,p) then labels.place(dst,item.data["body"],p) end
+        alignment:string := get(item.options,"align","center")
+        anchor:vec2 := (0.5,0.5)
+        if alignment=="left" then anchor = (0,0.5)
+        elseif alignment=="right" then anchor = (1,0.5)
+        elseif alignment!="center" then panic("unknown annotation align: "+alignment) end
+        if retained(panel,p) then labels.place(dst,item.data["body"],p,anchor) end
     elseif item.kind=="errorbars" then
         upper:list := get(item.options,"upper",item.data["errors"])
         assert(len(upper)==len(item.x),"upper errors length differs from data")
@@ -719,7 +726,8 @@ end
 export fn render(fig:Figure) -> picture
     panels := prepare(fig)
     layout(fig,panels)
-    dst := picture(fig.width,fig.height)
+    dst := picture()
+    if not get(fig.options,"auto_bounds",false) then dst = picture(fig.width,fig.height) end
     background:any := get(fig.options,"background",rgb(1,1,1))
     if background != false then append(dst,fill(rectangle((0pt,0pt),fig.width,fig.height),background)) end
     colors := palette(fig)

@@ -1,6 +1,6 @@
 // Arrow and relationship marks are ordinary pictures in local coordinates.
 // No shared mark registry or renderer state is needed.
-import math.{atan2}
+import math.{atan2, cos, sin}
 import object.{append, draw, fill}
 import geometry.{arclength, circle, closed, compound, joined, point_at, rectangle, region_union, reverse}
 import transform.{bent, compose, rotate, scale, transformed, translate}
@@ -8,6 +8,10 @@ import assertions.assert
 import "options.huak" as opt
 import "model.huak" as model
 import "curves.huak" as curves
+
+// Fletcher mark geometry used by the bus shorthand.
+slash_size_ratio := 4.9/10
+slash_angle := 60deg
 
 export struct MarkObject
     content:object
@@ -25,6 +29,8 @@ export fn arrows(spec:string) -> list
     if spec == "-|>" then return [model.mark("solid")] end
     if spec == "<|-" then return [model.mark("solid", 0, true)] end
     if spec == "<|-|>" then return [model.mark("solid", 0, true), model.mark("solid")] end
+    if spec == "-/-|>" then return [model.mark("slash", 0.5, false, {"scale": slash_size_ratio}), model.mark("solid")]
+    end
     if spec == "|->" then return [model.mark("bar", 0), model.mark("head")] end
     if spec == "hook->" then return [model.mark("hook", 0), model.mark("head")] end
     if spec == ">->" then return [model.mark("head", 0), model.mark("head")] end
@@ -77,6 +83,8 @@ export fn render(description:model.MarkDescription, guide:path, ink:color, width
         end
     elseif kind == "straight" then
         object.append(base, draw(path((-size, size/3), (0pt, 0pt), (-size, -size/3)), stroke))
+    elseif kind == "slash" then
+        object.append(base, draw(path((-size*cos(slash_angle), -size*sin(slash_angle)), (size*cos(slash_angle), size*sin(slash_angle))), stroke))
     elseif kind == "solid" or kind == "stealth" or kind == "diamond" or kind == "latex" or kind == "cone" then
         points := [(0pt, 0pt), (-size, size/3), (-size, -size/3)]
         if kind == "stealth" then points = [(0pt, 0pt), (-size, size/2), (-size*0.7, 0pt), (-size, -size/2)] end
@@ -112,7 +120,7 @@ export fn render(description:model.MarkDescription, guide:path, ink:color, width
             object.append(base, draw(path((x-lean, -size/2), (x+lean, size/2)), stroke))
         end
     elseif kind == "cross" then
-        object.append(base, draw(path((-size/2, -size/2), (size/2, size/2)), stroke))
+        object.append(base, draw(path((-size*cos(slash_angle), -size*sin(slash_angle)), (size*cos(slash_angle), size*sin(slash_angle))), stroke))
         object.append(base, draw(path((-size/2, size/2), (size/2, -size/2)), stroke))
     elseif kind == "bracket" then
         object.append(base, draw(path((-size/3, size/2), (0pt, size/2), (0pt, -size/2), (-size/3, -size/2)), stroke))

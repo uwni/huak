@@ -60,8 +60,21 @@ export fn node_size(item:any) -> vec2
         assert(radius > 0pt, "node radius must be positive")
         size = (2*radius, 2*radius)
     end
+    if opt.has(options, "ports") then
+        ports:dict := opt.get(options, "ports", {})
+        count:int := 0
+        if dict_contains(ports, "west") then count = max(count, int(ports["west"])) end
+        if dict_contains(ports, "east") then count = max(count, int(ports["east"])) end
+        assert(count > 0, "node ports must have a positive count")
+        pitch:length := opt.get(options, "port_pitch", 0pt)
+        assert(pitch > 0pt, "node port pitch must be positive")
+        padding:length := opt.get(options, "port_padding", pitch/2)
+        assert(padding >= 0pt, "node port padding must be nonnegative")
+        span := (count-1)*pitch+2*padding
+        size = (size.x, max(size.y, span))
+    end
     size = (opt.get(options, "width", size.x), opt.get(options, "height", size.y))
-    assert(size.x > 0pt and size.y > 0pt, "node dimensions must be positive")
+    assert(size.x > 0pt and size.y > 0pt or item.kind == "enclose", "node dimensions must be positive")
     if kind == "circle" then size = (max(size.x, size.y), max(size.x, size.y)) end
     return size
 end
@@ -202,10 +215,24 @@ export fn anchor(nodes:Geometry, name:string, side:string = "center") -> vec2
     return best
 end
 
+fn port_point(nodes:Geometry, name:string, side:string, index:int) -> vec2
+    item := find(nodes, name)
+    ports:dict := opt.get(item.options, "ports", {})
+    assert(dict_contains(ports, side), "node has no " + side + " ports")
+    count:int := int(ports[side])
+    assert(index >= 0 and index < count, "port index out of range")
+    pitch:length := opt.get(item.options, "port_pitch", 0pt)
+    assert(pitch > 0pt, "node port pitch must be positive")
+    edge := anchor(nodes, name, side)
+    offset := ((count-1)/2-index)*pitch
+    return (edge.x, item.center.y+offset)
+end
+
 export fn ready(coordinate:any, nodes:Geometry) -> bool
     kind:string := coordinate.kind
     if kind == "grid" or kind == "absolute" then return true end
     if kind == "named" then return known(nodes, coordinate.name) end
+    if kind == "port" then return known(nodes, coordinate.name) end
     if kind == "relative" then return ready(coordinate.origin, nodes) end
     if kind == "between" then return ready(coordinate.first, nodes) and ready(coordinate.last, nodes) end
     panic("unknown coordinate kind: " + kind)
@@ -220,6 +247,7 @@ export fn resolve(coordinate:any, nodes:Geometry, cells:list, axes:list) -> vec2
         return axes[0]*cell_position(cells[0], value.x)+axes[1]*cell_position(cells[1], value.y)
     end
     if kind == "named" then return anchor(nodes, coordinate.name, coordinate.anchor) end
+    if kind == "port" then return port_point(nodes, coordinate.name, coordinate.side, coordinate.index) end
     if kind == "relative" then return resolve(coordinate.origin, nodes, cells, axes)+coordinate.delta end
     if kind == "between" then
         return lerp(resolve(coordinate.first, nodes, cells, axes), resolve(coordinate.last, nodes, cells, axes), coordinate.position)

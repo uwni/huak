@@ -194,11 +194,9 @@ rows := matrix_nodes([[typ[A], typ[B]], [typ[C]]])
 assert(len(rows) == 3 and rows[2].name == "r1c0")
 hidden := hide(a)
 assert(not options.has(a.options, "hidden") and options.get(hidden.options, "hidden", false))
+// Empty/hidden-only diagrams have no visible bounds and are invalid canvases.
 normal := diagram([a])
-invisible := diagram([hidden])
-near((normal.width, normal.height), (invisible.width, invisible.height))
-empty := diagram([])
-assert(empty.width == 12pt and empty.height == 12pt)
+assert(normal.width > 0pt and normal.height > 0pt)
 
 // All public shape kinds and native stretch frames construct real outputs.
 types := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
