@@ -1,6 +1,6 @@
-param amount=3
-param dependency_only=4
+param amount = 3
+param dependency_only = 4
 fn amount_value()->int
-return amount+dependency_only
+    return amount+dependency_only
 end
 export amount_value

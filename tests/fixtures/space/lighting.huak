@@ -4,39 +4,39 @@ import math.{PI, abs, sin, norm}
 import geometry.arclength
 import assertions.assert
 
-top := s.orthographic(-90deg,90deg)
+top := s.orthographic(-90deg, 90deg)
 ball := s.sphere(10pt)
-light := (0,0,1)
-full := s.project([ball],top,light:light,spot:30deg)
+light := (0, 0, 1)
+full := s.project([ball], top, light: light, spot: 30deg)
 front := full.visible_faces[0]
 assert(len(front.lobes) == 1 and front.highlight != false)
-assert(full.layers[0].faces[0].highlight == false,"rear sheet has no glint")
+assert(full.layers[0].faces[0].highlight == false, "rear sheet has no glint")
 b := bounds(front.highlight)
-assert(norm(b[0]-(-5pt,-5pt)) < 0.02pt and norm(b[1]-(5pt,5pt)) < 0.02pt,"sphere contour has radius R sin(angle)")
-assert(s.project([ball],top,light:light).visible_faces[0].highlight == false)
-assert(s.project([ball],top,light:(0,0,-1),spot:30deg).visible_faces[0].highlight == false)
+assert(norm(b[0]-(-5pt, -5pt)) < 0.02pt and norm(b[1]-(5pt, 5pt)) < 0.02pt, "sphere contour has radius R sin(angle)")
+assert(s.project([ball], top, light: light).visible_faces[0].highlight == false)
+assert(s.project([ball], top, light: (0, 0, -1), spot: 30deg).visible_faces[0].highlight == false)
 
-plate := s.face(rectangle((0pt,-12pt),12pt,24pt),s.Plane(origin:(0,0,12pt)))
-covered := s.project([ball,plate],top,light:light,spot:30deg)
+plate := s.face(rectangle((0pt, -12pt), 12pt, 24pt), s.Plane(origin: (0, 0, 12pt)))
+covered := s.project([ball, plate], top, light: light, spot: 30deg)
 for f in covered.visible_faces do
     if f.source == 0 then
-        assert(bounds(f.highlight)[1].x < 0.02pt,"foreground plate cuts the glint")
-        assert(norm(f.lobes[0][0]-front.lobes[0][0]) < 0.02pt,"occlusion preserves the gradient center")
+        assert(bounds(f.highlight)[1].x < 0.02pt, "foreground plate cuts the glint")
+        assert(norm(f.lobes[0][0]-front.lobes[0][0]) < 0.02pt, "occlusion preserves the gradient center")
     else
-        assert(f.highlight == f.region,"a fully lit planar face uses its visible boundary")
+        assert(f.highlight == f.region, "a fully lit planar face uses its visible boundary")
     end
 end
 // Isophotes touch the apparent contour. Inserting both as internal edges used
 // to construct a face containing only holes and fail before either exporter.
 levels := []
 for i in 0:15 do levels += [float(i)/16] end
-dense := s.project([transformed(s.sphere(18pt),translate((12pt,0,5pt)))],s.orthographic(-80deg,36deg),light:(-1,-2,3),spot:24deg,isophotes:levels)
+dense := s.project([transformed(s.sphere(18pt), translate((12pt, 0, 5pt)))], s.orthographic(-80deg, 36deg), light: (-1, -2, 3), spot: 24deg, isophotes: levels)
 assert(len(dense.layers) == 2 and len(dense.visible_faces) == 1)
-assert(len(dense.visible_faces[0].shades) == 17,"all sixteen bands and the unlit region survive")
+assert(len(dense.visible_faces[0].shades) == 17, "all sixteen bands and the unlit region survive")
 for layer in dense.layers do
     assert(len(layer.faces) == 1)
-    assert(abs(arclength(layer.faces[0].region)-36pt*PI) < 0.03pt,"lighting preserves both complete sphere sheets")
+    assert(abs(arclength(layer.faces[0].region)-36pt*PI) < 0.03pt, "lighting preserves both complete sphere sheets")
 end
 default drawing picture() do
-    for f in covered.visible_faces do +s.shaded(f,rgb(0.2,0.6,0.55)) end
+    for f in covered.visible_faces do +s.shaded(f, rgb(0.2, 0.6, 0.55)) end
 end

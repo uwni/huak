@@ -1,12 +1,12 @@
 import assertions.assert
 precedence accumulating
-below addition
-above path
-associativity left
+    below addition
+    above path
+    associativity left
 end
 mixfix(sumup) _ sumup _ in accumulating
-fn sumup(a:int,b:int)->int
-if b==0 then return a;end
-return (a+1) sumup (b-1)
+fn sumup(a:int, b:int)->int
+    if b == 0 then return a;end
+    return (a+1) sumup (b-1)
 end
-assert(3 sumup 4==7)
+assert(3 sumup 4 == 7)

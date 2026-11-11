@@ -1,13 +1,13 @@
 import space as s
 import paint.*
 
-profile := rectangle((-32mm,-22mm),64mm,44mm)
+profile := rectangle((-32mm, -22mm), 64mm, 44mm)
 blue := s.face(profile)
-gold := s.face(profile,s.Plane(origin:(4mm,5mm,0),u:(1,0,0.45)))
-view := s.orthographic(-75deg,65deg)
-projection := s.project([blue,gold],view)
+gold := s.face(profile, s.Plane(origin: (4mm, 5mm, 0), u: (1, 0, 0.45)))
+view := s.orthographic(-75deg, 65deg)
+projection := s.project([blue, gold], view)
 param opacity:float = 0.5
-colors := [rgb(0.17,0.39,0.56,opacity),rgb(0.91,0.61,0.24,opacity)]
+colors := [rgb(0.17, 0.39, 0.56, opacity), rgb(0.91, 0.61, 0.24, opacity)]
 
 default drawing picture() do
     for layer in projection.layers do

@@ -1,5 +1,5 @@
 import geometry.{compound, measure, region_union}
-import math.{abs,dot,max,norm,unit}
+import math.{abs, dot, max, norm, unit}
 import object.bounds
 
 // Boolean results orient exterior boundaries positively and holes negatively.
@@ -53,8 +53,8 @@ export struct Flank
 end
 
 export fn continuous(a:Flank, b:Flank) -> bool
-    normal := (-a.direction.y,a.direction.x)
-    return norm(a.b-b.a) < 0.0000001pt and dot(a.direction,b.direction) > 0.9999999999 and abs(dot(b.b-a.b,normal)) < 0.0000001pt
+    normal := (-a.direction.y, a.direction.x)
+    return norm(a.b-b.a) < 0.0000001pt and dot(a.direction, b.direction) > 0.9999999999 and abs(dot(b.b-a.b, normal)) < 0.0000001pt
 end
 
 export struct Outline
@@ -70,7 +70,7 @@ export fn straight_sides(boundary:path) -> Outline
     sides := []
     travel := 0pt
     curves := measure(boundary).curves
-    if len(curves) == 0 then return Outline(sides,travel,0) end
+    if len(curves) == 0 then return Outline(sides, travel, 0) end
     for i in 0:len(curves)-1 do
         c := curves[i]
         start := travel
@@ -79,13 +79,13 @@ export fn straight_sides(boundary:path) -> Outline
         length := norm(chord)
         if length == 0pt or travel-start-length > 0.000001*length then continue end
         direction := unit(chord)
-        normal := (-direction.y,direction.x)
-        if max(abs(dot(c[1]-c[0],normal)),abs(dot(c[2]-c[0],normal))) > 0.0000001pt then continue end
+        normal := (-direction.y, direction.x)
+        if max(abs(dot(c[1]-c[0], normal)), abs(dot(c[2]-c[0], normal))) > 0.0000001pt then continue end
         side := Flank(c[0], c[3], direction, start, travel, i, i+1)
         if len(sides) > 0 then
             prev:Flank := sides[len(sides)-1]
-            if start == prev.finish and continuous(prev,side) then
-                sides[len(sides)-1] = Flank(prev.a,side.b,unit(side.b-prev.a),prev.begin,travel,prev.first,i+1)
+            if start == prev.finish and continuous(prev, side) then
+                sides[len(sides)-1] = Flank(prev.a, side.b, unit(side.b-prev.a), prev.begin, travel, prev.first, i+1)
                 continue
             end
         end

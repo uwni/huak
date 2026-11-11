@@ -1,5 +1,5 @@
-zero:=0
+zero := 0
 fn explode()->float
-return 1/zero
+    return 1/zero
 end
 export explode

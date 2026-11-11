@@ -8,9 +8,9 @@ left := circle with center (40mm, 58mm) radius 22mm
 bottom := circle with center (50mm, 40mm) radius 22mm
 warm := pen(rgb(0.78, 0.18, 0.12), 2.2mm, "round", "round")
 cool := pen(rgb(0.12, 0.35, 0.72), 2.2mm, "round", "round")
-woven := weave(gap:0.8mm) do
-    +draw left with warm crossings [1, -2, ]
-    +draw bottom with cool crossings [-1, 2, ]
+woven := weave(gap: 0.8mm) do
+    +draw left with warm crossings [1, -2,]
+    +draw bottom with cool crossings [-1, 2,]
 end
 
 fn ink_at(ink:path, point:vec2) -> bool
@@ -36,7 +36,7 @@ fn check_crossings(pic:picture)
 end
 
 check_crossings(woven)
-backwards := weave(gap:0.8mm) do
+backwards := weave(gap: 0.8mm) do
     +draw reverse(left) with warm crossings [-1, 2]
     +draw bottom with cool
 end

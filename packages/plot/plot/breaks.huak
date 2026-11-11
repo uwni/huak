@@ -23,27 +23,27 @@ export struct Partition
 end
 
 export fn split(scale:scales.Scale, options:dict, span:length) -> Partition
-    omitted:list := get(options,"breaks",[])
-    if len(omitted)==0 then return Partition(pieces:[Piece(scale:scale,start:0pt,stop:span)]) end
-    assert(scale.kind!="category","axis breaks require a numeric scale")
-    gap:length := get(options,"break_gap",8pt)
-    assert(gap>0pt and len(omitted)*gap<span,"axis break gaps must be positive and fit inside the axis")
+    omitted:list := get(options, "breaks", [])
+    if len(omitted) == 0 then return Partition(pieces: [Piece(scale: scale, start: 0pt, stop: span)]) end
+    assert(scale.kind != "category", "axis breaks require a numeric scale")
+    gap:length := get(options, "break_gap", 8pt)
+    assert(gap > 0pt and len(omitted)*gap < span, "axis break gaps must be positive and fit inside the axis")
     low := scale.low
     intervals := []
     retained := 0.0
     for bounds in omitted do
-        assert(len(bounds)==2,"axis break requires two endpoints")
+        assert(len(bounds) == 2, "axis break requires two endpoints")
         a:float := bounds[0]; b:float := bounds[1]
-        if scale.kind=="log10" then
-            assert(a>0 and b>0,"logarithmic axis breaks must be positive")
+        if scale.kind == "log10" then
+            assert(a > 0 and b > 0, "logarithmic axis breaks must be positive")
             a = math.log10(a); b = math.log10(b)
         end
-        assert(low<a and a<b and b<scale.high,"axis breaks must be ordered, disjoint and strictly inside the limits")
-        intervals += [[low,a]]
+        assert(low < a and a < b and b < scale.high, "axis breaks must be ordered, disjoint and strictly inside the limits")
+        intervals += [[low, a]]
         retained = retained+(a-low)
         low = b
     end
-    intervals += [[low,scale.high]]
+    intervals += [[low, scale.high]]
     retained = retained+(scale.high-low)
     ink_span := span-gap*len(omitted)
     cursor := 0pt; end_of_axis := span; direction := 1
@@ -54,17 +54,17 @@ export fn split(scale:scales.Scale, options:dict, span:length) -> Partition
         part := copy(scale)
         part.low = endpoints[0]; part.high = endpoints[1]
         finish := cursor+direction*ink_span*((part.high-part.low)/retained)
-        if i==len(intervals)-1 then finish = end_of_axis end
-        before := i>0; after := i<len(intervals)-1
+        if i == len(intervals)-1 then finish = end_of_axis end
+        before := i > 0; after := i < len(intervals)-1
         if scale.reversed then
-            before = i<len(intervals)-1; after = i>0
+            before = i < len(intervals)-1; after = i > 0
         end
-        result.pieces += [Piece(scale:part,start:math.min(cursor,finish),stop:math.max(cursor,finish),cut_before:before,cut_after:after)]
-        if i<len(omitted) then
+        result.pieces += [Piece(scale: part, start: math.min(cursor, finish), stop: math.max(cursor, finish), cut_before: before, cut_after: after)]
+        if i < len(omitted) then
             // Advance across a gap only between consecutive pieces. Both
             // neighbors and every decoration share these very same endpoints.
             cursor = finish+direction*gap
-            result.gaps += [Gap(start:math.min(finish,cursor),stop:math.max(finish,cursor))]
+            result.gaps += [Gap(start: math.min(finish, cursor), stop: math.max(finish, cursor))]
         end
     end
     return result
@@ -73,21 +73,21 @@ end
 // Screen distance from the left/bottom end. An omitted value has no position.
 export fn position(parts:list, value:any) -> any
     for part in parts do
-        t := scales.coordinate(part.scale,value)
-        if t>=-1e-14 and t<=1+1e-14 then
-            if t<=0 then return part.start end
-            if t>=1 then return part.stop end
+        t := scales.coordinate(part.scale, value)
+        if t >= -1e-14 and t <= 1+1e-14 then
+            if t <= 0 then return part.start end
+            if t >= 1 then return part.stop end
             return part.start+(part.stop-part.start)*t
         end
     end
     return false
 end
 
-export fn compatible(a:list,b:list) -> bool
-    if len(a)!=len(b) then return false end
+export fn compatible(a:list, b:list) -> bool
+    if len(a) != len(b) then return false end
     for i in 0:len(a)-1 do
-        if len(a[i])!=2 or len(b[i])!=2 then return false end
-        if a[i][0]!=b[i][0] or a[i][1]!=b[i][1] then return false end
+        if len(a[i]) != 2 or len(b[i]) != 2 then return false end
+        if a[i][0] != b[i][0] or a[i][1] != b[i][1] then return false end
     end
     return true
 end

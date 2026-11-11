@@ -1,18 +1,18 @@
 import space as s
 import space.silhouette
 import paint.*
-import geometry.{arclength,subpaths}
+import geometry.{arclength, subpaths}
 import math.{PI, abs, sqrt}
 import assertions.assert
 
 top := s.orthographic(-90deg, 90deg)
 ring := s.torus(30pt, 8pt)
-coil := s.on_surface(ring, (0,0) -- (2*PI,12*PI))
-axis := (-55pt,0,-12pt) -- (55pt,0,-12pt)
-ends := [-55pt,-38pt,-22pt,22pt,38pt,55pt]
+coil := s.on_surface(ring, (0, 0) -- (2*PI, 12*PI))
+axis := (-55pt, 0, -12pt) -- (55pt, 0, -12pt)
+ends := [-55pt, -38pt, -22pt, 22pt, 38pt, 55pt]
 tol := 0.0001pt
-for order in [[ring,coil,axis],[axis,coil,ring]] do
-    projection := s.project(order, top, tolerance:tol, faces:false)
+for order in [[ring, coil, axis], [axis, coil, ring]] do
+    projection := s.project(order, top, tolerance: tol, faces: false)
     axis_index := 0
     front := 0
     back := 0
@@ -32,9 +32,9 @@ for order in [[ring,coil,axis],[axis,coil,ring]] do
     assert(axis_index == 5 and front == 6 and back == 6, "ring visibility")
 end
 
-rect := rectangle((-55pt,-55pt),110pt,110pt)
-floor := s.face(rect,s.Plane(origin:(0,0,-15pt)))
-result := s.project([floor,ring],top)
+rect := rectangle((-55pt, -55pt), 110pt, 110pt)
+floor := s.face(rect, s.Plane(origin: (0, 0, -15pt)))
+result := s.project([floor, ring], top)
 assert(len(result.visible_faces) == 2)
 assert(len(result.layers) == 3, "plate and both sheets of the torus")
 assert(result.layers[0].faces[0].source == 0 and result.layers[1].faces[0].source == 1)
@@ -48,9 +48,9 @@ for face in result.visible_faces do
     end
 end
 flat := s.face(rect)
-tilted := s.face(rect,s.Plane(u:(1,0,0.5)))
-for order in [[flat,tilted],[tilted,flat]] do
-    faces := s.project(order,top).visible_faces
+tilted := s.face(rect, s.Plane(u: (1, 0, 0.5)))
+for order in [[flat, tilted], [tilted, flat]] do
+    faces := s.project(order, top).visible_faces
     assert(len(faces) == 2)
     for face in faces do
         box := bounds(face.region)
@@ -61,24 +61,24 @@ for order in [[flat,tilted],[tilted,flat]] do
         end
     end
 end
-roof := s.face(rectangle((-65pt,-65pt),130pt,130pt),s.Plane(u:(1,0,0.5)))
-for order in [[flat,roof],[roof,flat]] do
+roof := s.face(rectangle((-65pt, -65pt), 130pt, 130pt), s.Plane(u: (1, 0, 0.5)))
+for order in [[flat, roof], [roof, flat]] do
     pieces := 0
-    for line in s.project(order,top,faces:false).lines do
+    for line in s.project(order, top, faces: false).lines do
         box := bounds(line.curve)
         if order[line.source].arguments[2].z == 0 and abs(box[0].y - 55pt) < tol and abs(box[1].y - 55pt) < tol then
             if line.visible then
-                assert(abs(box[0].x + 55pt) < tol and abs(box[1].x) < tol,"front half of piercing edge")
+                assert(abs(box[0].x + 55pt) < tol and abs(box[1].x) < tol, "front half of piercing edge")
             else
-                assert(abs(box[0].x) < tol and abs(box[1].x - 55pt) < tol,"hidden half of piercing edge")
+                assert(abs(box[0].x) < tol and abs(box[1].x - 55pt) < tol, "hidden half of piercing edge")
             end
             pieces = pieces + 1
         end
     end
-    assert(pieces == 2,"edge splits where planes cross")
+    assert(pieces == 2, "edge splits where planes cross")
 end
-for view in [s.orthographic(30deg,38deg),s.orthographic(0deg,0deg),s.perspective(30deg,38deg,300pt)] do
-    lines := s.project([ring,coil],view,faces:false).lines
+for view in [s.orthographic(30deg, 38deg), s.orthographic(0deg, 0deg), s.perspective(30deg, 38deg, 300pt)] do
+    lines := s.project([ring, coil], view, faces: false).lines
     hidden := false
     shown := false
     for line in lines do
@@ -88,30 +88,30 @@ for view in [s.orthographic(30deg,38deg),s.orthographic(0deg,0deg),s.perspective
     end
     assert(hidden and shown)
 end
-prism := s.extrude(rect,(0,0,10pt))
-for view in [s.orthographic(33deg,25deg),s.perspective(33deg,25deg,200pt)] do
-    box := s.project([prism],view).layers
+prism := s.extrude(rect, (0, 0, 10pt))
+for view in [s.orthographic(33deg, 25deg), s.perspective(33deg, 25deg, 200pt)] do
+    box := s.project([prism], view).layers
     assert(len(box) == 2 and len(box[0].faces) == 3 and len(box[1].faces) == 3,
         "both sides of a convex prism retain all six faces")
-    sheets := s.project([ring],view).layers
+    sheets := s.project([ring], view).layers
     assert(len(sheets) == 4, "oblique torus has four surface crossings")
     for sheet in sheets do
         assert(len(sheet.faces) == 1 and sheet.faces[0].face == 0)
     end
 end
-solid := s.revolve(rectangle((10pt,0),5pt,20pt))
-arc := bezier((-70,0,0),(-20,15,0),(20,15,0),(70,0,0))
-assert(len(s.project([prism,solid,arc],s.orthographic(),faces:false).lines) > 0)
+solid := s.revolve(rectangle((10pt, 0), 5pt, 20pt))
+arc := bezier((-70, 0, 0), (-20, 15, 0), (20, 15, 0), (70, 0, 0))
+assert(len(s.project([prism, solid, arc], s.orthographic(), faces: false).lines) > 0)
 
 // The intersection of the first two faces runs along x=0. A third sheet
 // covers only its middle. The two owners and kind survive each visibility cut.
-cover := s.face(rectangle((-8pt,-12pt),16pt,24pt),s.Plane(origin:(0,0,20pt)))
-for view in [top,s.perspective(-90deg,90deg,400pt)] do
+cover := s.face(rectangle((-8pt, -12pt), 16pt, 24pt), s.Plane(origin: (0, 0, 20pt)))
+for view in [top, s.perspective(-90deg, 90deg, 400pt)] do
     cutoff := 12pt
     if view.focus > 0pt then cutoff = cutoff / (1-20pt/view.focus) end
     seen := 0
     hidden := 0
-    for line in s.project([flat,tilted,cover],view,faces:view.focus > 0pt).lines do
+    for line in s.project([flat, tilted, cover], view, faces: view.focus > 0pt).lines do
         if line.kind == "intersection" then
             assert(line.source == 0 and line.other_source == 1)
             box := bounds(line.curve)
@@ -127,17 +127,17 @@ for view in [top,s.perspective(-90deg,90deg,400pt)] do
             assert(line.other_source == -1)
         end
     end
-    assert(seen == 2 and hidden == 1,"two visible ends and one hidden intersection")
+    assert(seen == 2 and hidden == 1, "two visible ends and one hidden intersection")
 end
-for line in s.project([flat,floor,s.face(rect)],top,faces:false).lines do
-    assert(line.kind != "intersection","projected overlap and coincident faces have no section curve")
+for line in s.project([flat, floor, s.face(rect)], top, faces: false).lines do
+    assert(line.kind != "intersection", "projected overlap and coincident faces have no section curve")
 end
 // Both halves of this intersection circle project to the same diameter.
-left_ball := transformed(s.sphere(10pt),translate((-6pt,0,0)))
-right_ball := transformed(s.sphere(10pt),translate((6pt,0,0)))
+left_ball := transformed(s.sphere(10pt), translate((-6pt, 0, 0)))
+right_ball := transformed(s.sphere(10pt), translate((6pt, 0, 0)))
 near_arc := false
 far_arc := false
-for line in s.project([left_ball,right_ball],s.orthographic(-90deg,0deg),tolerance:tol,faces:false).lines do
+for line in s.project([left_ball, right_ball], s.orthographic(-90deg, 0deg), tolerance: tol, faces: false).lines do
     if line.kind == "intersection" then
         box := bounds(line.curve)
         assert(abs(box[0].x) < tol and abs(box[1].x) < tol)
@@ -145,31 +145,31 @@ for line in s.project([left_ball,right_ball],s.orthographic(-90deg,0deg),toleran
         if line.visible then near_arc = true else far_arc = true end
     end
 end
-assert(near_arc and far_arc,"the two spheres hide the rear half of their own section")
+assert(near_arc and far_arc, "the two spheres hide the rear half of their own section")
 // Sharp outline edges of an isometric cube form a regular hexagon. Interior
 // ridges stay in the line list and never contribute to its perimeter.
-iso := s.orthographic(45deg,35.264389682754654deg)
-cube := s.box(10pt,10pt,10pt)
-boundary := s.project([cube],iso).silhouette()
+iso := s.orthographic(45deg, 35.264389682754654deg)
+cube := s.box(10pt, 10pt, 10pt)
+boundary := s.project([cube], iso).silhouette()
 assert(len(subpaths(boundary)) == 1)
 assert(abs(arclength(boundary) - 60pt*sqrt(2/3)) < tol)
-assert(len(subpaths(s.project([cube],iso,faces:false).silhouette())) == 0,"linework alone has no face regions")
-annulus := s.project([ring],top)
-assert(len(subpaths(s.silhouette(annulus))) == 2,"the projected hole has its own boundary")
-tile := rectangle((0,0),10pt,10pt)
-tiles := [s.face(tile),s.face(tile,s.Plane(origin:(5pt,0,1pt))),s.face(tile,s.Plane(origin:(25pt,0,0)))]
-islands := s.project(tiles,top).silhouette()
-assert(len(subpaths(islands)) == 2 and abs(arclength(islands)-90pt) < tol,"overlapping tiles merge and the disjoint tile stays separate")
-for line in s.project([(-5,0,0) -- (5,0,0),(0,-5,1) -- (0,5,1)],top,faces:false).lines do
-    assert(line.kind == "curve" and line.visible,"crossing ink in the image is not a model intersection")
+assert(len(subpaths(s.project([cube], iso, faces: false).silhouette())) == 0, "linework alone has no face regions")
+annulus := s.project([ring], top)
+assert(len(subpaths(s.silhouette(annulus))) == 2, "the projected hole has its own boundary")
+tile := rectangle((0, 0), 10pt, 10pt)
+tiles := [s.face(tile), s.face(tile, s.Plane(origin: (5pt, 0, 1pt))), s.face(tile, s.Plane(origin: (25pt, 0, 0)))]
+islands := s.project(tiles, top).silhouette()
+assert(len(subpaths(islands)) == 2 and abs(arclength(islands)-90pt) < tol, "overlapping tiles merge and the disjoint tile stays separate")
+for line in s.project([(-5, 0, 0) -- (5, 0, 0), (0, -5, 1) -- (0, 5, 1)], top, faces: false).lines do
+    assert(line.kind == "curve" and line.visible, "crossing ink in the image is not a model intersection")
 end
 // The oblique sheets exchange places at x=0 while the flat one stays between them.
-opposite := s.face(rect,s.Plane(u:(1,0,-0.5)))
-for order in [[tilted,flat,opposite],[opposite,flat,tilted]] do
-    layers := s.project(order,top).layers
+opposite := s.face(rect, s.Plane(u: (1, 0, -0.5)))
+for order in [[tilted, flat, opposite], [opposite, flat, tilted]] do
+    layers := s.project(order, top).layers
     assert(len(layers) == 3)
     assert(len(layers[1].faces) == 1 and layers[1].faces[0].source == 1)
-    for rank in [0,2] do
+    for rank in [0, 2] do
         assert(len(layers[rank].faces) == 2)
         for fragment in layers[rank].faces do
             slope := order[fragment.source].arguments[2].z
@@ -184,8 +184,8 @@ for order in [[tilted,flat,opposite],[opposite,flat,tilted]] do
 end
 // This line passes behind two, three, then two sheets. All of it is hidden
 // in an opaque drawing, but its three intervals belong in different layers.
-ink := (-40pt,0,-2pt) -- (40pt,0,-2pt)
-stack := s.project([tilted,flat,opposite,ink],top)
+ink := (-40pt, 0, -2pt) -- (40pt, 0, -2pt)
+stack := s.project([tilted, flat, opposite, ink], top)
 assert(len(stack.layers) == 4 and len(stack.layers[0].faces) == 0)
 sections := 0
 for i in 0:len(stack.layers)-1 do
@@ -202,16 +202,16 @@ for i in 0:len(stack.layers)-1 do
     end
 end
 assert(sections == 3)
-for view in [top,s.perspective(-90deg,90deg,400pt)] do
-    raised := s.face(rect,s.Plane(origin:(0,0,20pt)))
-    levels := s.project([flat,raised,floor],view).layers
+for view in [top, s.perspective(-90deg, 90deg, 400pt)] do
+    raised := s.face(rect, s.Plane(origin: (0, 0, 20pt)))
+    levels := s.project([flat, raised, floor], view).layers
     assert(len(levels) == 3)
     assert(levels[0].faces[0].source == 2 and levels[1].faces[0].source == 0 and levels[2].faces[0].source == 1,
         "fully covered sheets survive in geometric order")
-    coincident := s.project([flat,flat],view).layers
+    coincident := s.project([flat, flat], view).layers
     assert(len(coincident) == 2 and coincident[0].faces[0].source == 1 and coincident[1].faces[0].source == 0)
 end
-colors := [rgb(1,0,0,0.5),rgb(0,1,0,0.5),rgb(0,0,1,0.5)]
+colors := [rgb(1, 0, 0, 0.5), rgb(0, 1, 0, 0.5), rgb(0, 0, 1, 0.5)]
 default drawing picture() do
     for layer in stack.layers do
         for fragment in layer.faces do +fragment.region filled colors[fragment.source] end

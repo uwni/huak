@@ -6,24 +6,24 @@ setup_typst {
     set text(font: "Libertinus Serif", size: 12pt, fill: rgb("#193f43"))
 }
 
-paper := rgb(0.98,0.97,0.94)
-ink := rgb(0.10,0.25,0.26)
-grid_color := rgb(0.72,0.74,0.59)
-copper := rgb(0.92,0.54,0.34)
+paper := rgb(0.98, 0.97, 0.94)
+ink := rgb(0.10, 0.25, 0.26)
+grid_color := rgb(0.72, 0.74, 0.59)
+copper := rgb(0.92, 0.54, 0.34)
 
 // Each specimen uses the same three layers. The grid lies between the two
 // erased objects. Its fine rules remain visible through every footprint.
 fn specimen(caption:text, detail:text, sweep:path, brush:pen) -> picture
     tile := picture()
     drawing tile do
-        band := rectangle((0pt,0pt),190pt,44pt) filled ink
+        band := rectangle((0pt, 0pt), 190pt, 44pt) filled ink
         grid := picture()
         drawing grid do
             for x in 15pt:20pt:185pt do
-                +draw ((x,0pt) -- (x,44pt)) with pen(grid_color,0.7pt)
+                +draw ((x, 0pt) -- (x, 44pt)) with pen(grid_color, 0.7pt)
             end
         end
-        curve := draw bezier((0pt,12pt),(62pt,50pt),(128pt,-8pt),(190pt,32pt)) with pen(copper,2.6pt)
+        curve := draw bezier((0pt, 12pt), (62pt, 50pt), (128pt, -8pt), (190pt, 32pt)) with pen(copper, 2.6pt)
         +band
         +grid
         +curve
@@ -36,45 +36,45 @@ fn specimen(caption:text, detail:text, sweep:path, brush:pen) -> picture
     end
     row := picture()
     drawing row do
-        +caption at (0pt,25pt)
-        +detail at (0pt,12pt)
-        +sample shifted (118pt,0pt)
-        +tile shifted (330pt,0pt)
+        +caption at (0pt, 25pt)
+        +detail at (0pt, 12pt)
+        +sample shifted (118pt, 0pt)
+        +tile shifted (330pt, 0pt)
     end
     return row
 end
 
-straight := (8pt,22pt) -- (182pt,22pt)
-corners := (9pt,12pt) -- (48pt,33pt) -- (89pt,11pt) -- (134pt,33pt) -- (181pt,12pt)
-wave := (9pt,16pt) ~~ (47pt,31pt) ~~ (96pt,13pt) ~~ (140pt,31pt) ~~ (181pt,18pt)
+straight := (8pt, 22pt) -- (182pt, 22pt)
+corners := (9pt, 12pt) -- (48pt, 33pt) -- (89pt, 11pt) -- (134pt, 33pt) -- (181pt, 12pt)
+wave := (9pt, 16pt) ~~ (47pt, 31pt) ~~ (96pt, 13pt) ~~ (140pt, 31pt) ~~ (181pt, 18pt)
 
-dash_dot := pen(ink,4pt,cap:"round",dash:[17pt,9pt,1pt,9pt],dash_phase:4pt)
-chisel := makepen((-7pt,-2pt) -- (-4pt,-4pt) -- (7pt,2pt) -- (5pt,5pt) -- cycle,ink)
-italic := pencircle(12pt,ink).transformed(scale(1,0.25)).transformed(rotate(35deg))
-broken_italic := pen(ink,cap:"butt",dash:[17pt,8pt],dash_phase:3pt,nib:italic)
+dash_dot := pen(ink, 4pt, cap: "round", dash: [17pt, 9pt, 1pt, 9pt], dash_phase: 4pt)
+chisel := makepen((-7pt, -2pt) -- (-4pt, -4pt) -- (7pt, 2pt) -- (5pt, 5pt) -- cycle, ink)
+italic := pencircle(12pt, ink).transformed(scale(1, 0.25)).transformed(rotate(35deg))
+broken_italic := pen(ink, cap: "butt", dash: [17pt, 8pt], dash_phase: 3pt, nib: italic)
 
 // Each stop pairs a fraction of the contour's arc length with a full width.
-pressure := pen(ink,tolerance:0.01pt,profile:[[0,1pt],[0.22,15pt],[0.51,3pt],[0.76,12pt],[1,1pt]])
+pressure := pen(ink, tolerance: 0.01pt, profile: [[0, 1pt], [0.22, 15pt], [0.51, 3pt], [0.76, 12pt], [1, 1pt]])
 
 twist := moving() do
     return (scaling x (1 + t * t) y (1 - t / 2)) followed by (rotation by (135deg * t))
 end
-turning := pen(ink, nib:chisel, motion:twist, tolerance:0.01pt)
+turning := pen(ink, nib: chisel, motion: twist, tolerance: 0.01pt)
 
-page := picture(556pt,412pt)
+page := picture(556pt, 412pt)
 drawing page do
-    +rectangle((0pt,0pt),556pt,412pt) filled paper
-    +typ[#text(size: 24pt)[Selective erasure]] at (18pt,380pt)
-    +typ[#text(size: 9pt)[Only the dark band and copper curve are erased.]] at (18pt,362pt)
-    +typ[#smallcaps[Painted stroke]] at (136pt,336pt)
-    +typ[#smallcaps[Erased stroke]] at (348pt,336pt)
-    +draw ((18pt,330pt) -- (538pt,330pt)) with pen(grid_color,0.65pt)
+    +rectangle((0pt, 0pt), 556pt, 412pt) filled paper
+    +typ[#text(size: 24pt)[Selective erasure]] at (18pt, 380pt)
+    +typ[#text(size: 9pt)[Only the dark band and copper curve are erased.]] at (18pt, 362pt)
+    +typ[#smallcaps[Painted stroke]] at (136pt, 336pt)
+    +typ[#smallcaps[Erased stroke]] at (348pt, 336pt)
+    +draw ((18pt, 330pt) -- (538pt, 330pt)) with pen(grid_color, 0.65pt)
 
-    +specimen(typ[*Dash–dot*],typ[#text(size: 9pt)[Round caps, 4 pt phase]],straight,dash_dot) shifted (18pt,278pt)
-    +specimen(typ[*Faceted nib*],typ[#text(size: 9pt)[Four-sided chisel]],corners,chisel) shifted (18pt,225pt)
-    +specimen(typ[*Hobby spline*],typ[#text(size: 9pt)[Round nib, 6 pt]],wave,pen(ink,6pt,cap:"round")) shifted (18pt,172pt)
-    +specimen(typ[*Italic dashes*],typ[#text(size: 9pt)[Slanted elliptical nib]],wave,broken_italic) shifted (18pt,119pt)
-    +specimen(typ[*Pressure sweep*],typ[#text(size: 9pt)[1 → 15 → 3 → 12 → 1 pt]],wave,pressure) shifted (18pt,66pt)
-    +specimen(typ[*Scale + turn*],typ[#text(size: 9pt)[Chisel rotating 135°]],wave,turning) shifted (18pt,13pt)
+    +specimen(typ[*Dash–dot*], typ[#text(size: 9pt)[Round caps, 4 pt phase]], straight, dash_dot) shifted (18pt, 278pt)
+    +specimen(typ[*Faceted nib*], typ[#text(size: 9pt)[Four-sided chisel]], corners, chisel) shifted (18pt, 225pt)
+    +specimen(typ[*Hobby spline*], typ[#text(size: 9pt)[Round nib, 6 pt]], wave, pen(ink, 6pt, cap: "round")) shifted (18pt, 172pt)
+    +specimen(typ[*Italic dashes*], typ[#text(size: 9pt)[Slanted elliptical nib]], wave, broken_italic) shifted (18pt, 119pt)
+    +specimen(typ[*Pressure sweep*], typ[#text(size: 9pt)[1 → 15 → 3 → 12 → 1 pt]], wave, pressure) shifted (18pt, 66pt)
+    +specimen(typ[*Scale + turn*], typ[#text(size: 9pt)[Chisel rotating 135°]], wave, turning) shifted (18pt, 13pt)
 end
 default page

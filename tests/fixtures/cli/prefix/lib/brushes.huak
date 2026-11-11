@@ -1,6 +1,6 @@
 import paint.{rgb, reverse, draw, fill};import "common.huak" as common
 fn paint(p:path)->object
-return fill(p, rgb(0.2,0.4,0.8))
+    return fill(p, rgb(0.2, 0.4, 0.8))
 end
 mixfix(paint) paint _ in common.command
 export paint

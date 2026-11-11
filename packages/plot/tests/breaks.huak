@@ -3,170 +3,170 @@ import "../plot/breaks.huak" as cuts
 import "../plot/scales.huak" as scales
 import "../plot/render.huak" as renderer
 import assertions.assert
-import object.{append,fill}
+import object.{append, fill}
 import color.rgb
 
 // Three retained decades, each the same physical width after two omissions.
-s := scales.resolve([],"log10",[1,100000],true)
-parts := cuts.split(s,{"breaks":[[10,100],[1000,10000]],"break_gap":10pt},320pt).pieces
-assert(len(parts)==3)
-assert(math.abs(cuts.position(parts,1)-320pt)<0.00001pt and math.abs(cuts.position(parts,100000))<0.00001pt)
-assert(math.abs(cuts.position(parts,10)-220pt)<0.00001pt)
-assert(math.abs(cuts.position(parts,100)-210pt)<0.00001pt)
-assert(cuts.position(parts,50)==false and cuts.position(parts,5000)==false)
+s := scales.resolve([], "log10", [1, 100000], true)
+parts := cuts.split(s, {"breaks": [[10, 100], [1000, 10000]], "break_gap": 10pt}, 320pt).pieces
+assert(len(parts) == 3)
+assert(math.abs(cuts.position(parts, 1)-320pt) < 0.00001pt and math.abs(cuts.position(parts, 100000)) < 0.00001pt)
+assert(math.abs(cuts.position(parts, 10)-220pt) < 0.00001pt)
+assert(math.abs(cuts.position(parts, 100)-210pt) < 0.00001pt)
+assert(cuts.position(parts, 50) == false and cuts.position(parts, 5000) == false)
 
-for reverse in [false,true] do
-    scale := scales.resolve([],"log10",[1,100000],reverse)
-    for width in [3pt,13pt,27pt] do
-        partition := cuts.split(scale,{"breaks":[[10,100],[1000,10000]],"break_gap":width},320pt)
+for reverse in [false, true] do
+    scale := scales.resolve([], "log10", [1, 100000], reverse)
+    for width in [3pt, 13pt, 27pt] do
+        partition := cuts.split(scale, {"breaks": [[10, 100], [1000, 10000]], "break_gap": width}, 320pt)
         pieces := partition.pieces
-        assert(len(pieces)==3 and len(partition.gaps)==2)
-        if reverse then assert(pieces[0].stop==320pt and pieces[2].start==0pt)
-        else assert(pieces[0].start==0pt and pieces[2].stop==320pt) end
+        assert(len(pieces) == 3 and len(partition.gaps) == 2)
+        if reverse then assert(pieces[0].stop == 320pt and pieces[2].start == 0pt)
+        else assert(pieces[0].start == 0pt and pieces[2].stop == 320pt) end
         for i in 0:1 do
             hole := partition.gaps[i]
-            assert(math.abs(hole.stop-hole.start-width)<1e-8pt)
-            if reverse then assert(pieces[i].start==hole.stop and pieces[i+1].stop==hole.start)
-            else assert(pieces[i].stop==hole.start and pieces[i+1].start==hole.stop) end
+            assert(math.abs(hole.stop-hole.start-width) < 1e-8pt)
+            if reverse then assert(pieces[i].start == hole.stop and pieces[i+1].stop == hole.start)
+            else assert(pieces[i].stop == hole.start and pieces[i+1].start == hole.stop) end
         end
         for piece in pieces do
-            assert(math.abs(piece.stop-piece.start-(320pt-2*width)/3)<1e-8pt)
+            assert(math.abs(piece.stop-piece.start-(320pt-2*width)/3) < 1e-8pt)
         end
     end
 end
 
-linked := figure(450pt,360pt)
-a := axis(linked,(0,0)); b := axis(linked,(1,0))
+linked := figure(450pt, 360pt)
+a := axis(linked, (0, 0)); b := axis(linked, (1, 0))
 plotting a do
-    xlim [0,100]
-    breaks "bottom" over [[20,80]] gap 12pt
-    side "top" with {"label":typ[Mirror]}
-    +lines x [0,100] y [1,2]
+    xlim [0, 100]
+    breaks "bottom" over [[20, 80]] gap 12pt
+    side "top" with {"label": typ[Mirror]}
+    +lines x [0, 100] y [1, 2]
 end
-link_x of linked axes [a,b]
+link_x of linked axes [a, b]
 panels := renderer.prepare(linked)
-renderer.layout(linked,panels)
-for side in ["top","bottom"] do assert(len(panels[0].rulers_by_side[side].partition.pieces)==2) end
-assert(len(panels[1].rulers_by_side["bottom"].partition.pieces)==2)
-for value in panels[0].xt do assert(value<=20 or value>=80) end
-assert(math.abs(renderer.point(panels[0],80,1).x-renderer.point(panels[0],20,1).x-12pt)<0.00001pt)
+renderer.layout(linked, panels)
+for side in ["top", "bottom"] do assert(len(panels[0].rulers_by_side[side].partition.pieces) == 2) end
+assert(len(panels[1].rulers_by_side["bottom"].partition.pieces) == 2)
+for value in panels[0].xt do assert(value <= 20 or value >= 80) end
+assert(math.abs(renderer.point(panels[0], 80, 1).x-renderer.point(panels[0], 20, 1).x-12pt) < 0.00001pt)
 
 // Check the exported scene's diagonal strokes against the data coordinates
 // of the four cut endpoints, including an asymmetric break on a reversed x.
-for spacing in [3pt,13pt,27pt] do
-    marks := figure(240pt,200pt)
+for spacing in [3pt, 13pt, 27pt] do
+    marks := figure(240pt, 200pt)
     edge := axis(marks)
     plotting edge do
-        settings {"xlim":[0,100],"ylim":[0,100],"xreverse":true,"xticks":[10,70],"yticks":[8,88],"grid":false,"labels_visible":false}
-        breaks "bottom" over [[10,70]] gap spacing
-        breaks "left" over [[8,88]] gap spacing
+        settings {"xlim": [0, 100], "ylim": [0, 100], "xreverse": true, "xticks": [10, 70], "yticks": [8, 88], "grid": false, "labels_visible": false}
+        breaks "bottom" over [[10, 70]] gap spacing
+        breaks "left" over [[8, 88]] gap spacing
     end
     edges := renderer.prepare(marks)
-    renderer.layout(marks,edges)
+    renderer.layout(marks, edges)
     p := edges[0]
-    expected := [renderer.point(p,10,0),renderer.point(p,70,0),renderer.point(p,100,8),renderer.point(p,100,88)]
-    assert(math.abs(expected[0].x-expected[1].x-spacing)<1e-8pt and math.abs(expected[3].y-expected[2].y-spacing)<1e-8pt)
-    hits := [0,0,0,0]
+    expected := [renderer.point(p, 10, 0), renderer.point(p, 70, 0), renderer.point(p, 100, 8), renderer.point(p, 100, 88)]
+    assert(math.abs(expected[0].x-expected[1].x-spacing) < 1e-8pt and math.abs(expected[3].y-expected[2].y-spacing) < 1e-8pt)
+    hits := [0, 0, 0, 0]
     drawing_of_marks := render marks
     for curve in drawing_of_marks.paths do
-        a := geometry.point_at(curve,0); b := geometry.point_at(curve,len(curve))
-        if a.x!=b.x and a.y!=b.y then
+        a := geometry.point_at(curve, 0); b := geometry.point_at(curve, len(curve))
+        if a.x != b.x and a.y != b.y then
             center := (a+b)/2
             for i in 0:3 do
-                if math.norm(center-expected[i])<1e-8pt then
+                if math.norm(center-expected[i]) < 1e-8pt then
                     hits[i] = hits[i]+1
-                    size := (4pt,8pt)
-                    if i>=2 then size = (8pt,4pt) end
-                    assert(math.norm((math.abs(b.x-a.x),math.abs(b.y-a.y))-size)<1e-8pt)
+                    size := (4pt, 8pt)
+                    if i >= 2 then size = (8pt, 4pt) end
+                    assert(math.norm((math.abs(b.x-a.x), math.abs(b.y-a.y))-size) < 1e-8pt)
                 end
             end
         end
     end
-    for count in hits do assert(count==1,"expected one break mark centered on each spine endpoint") end
+    for count in hits do assert(count == 1, "expected one break mark centered on each spine endpoint") end
 end
 
 // Raw scene paths expose a full shaft hidden behind a mask, even if the
 // rendered image looks identical. Verify each retained path independently.
 fn has_segment(paths:list, a:vec2, b:vec2) -> bool
     for curve in paths do
-        if len(curve)==1 then
-            p := geometry.point_at(curve,0); q := geometry.point_at(curve,1)
-            if math.norm(p-a)<1e-8pt and math.norm(q-b)<1e-8pt then return true end
-            if math.norm(p-b)<1e-8pt and math.norm(q-a)<1e-8pt then return true end
+        if len(curve) == 1 then
+            p := geometry.point_at(curve, 0); q := geometry.point_at(curve, 1)
+            if math.norm(p-a) < 1e-8pt and math.norm(q-b) < 1e-8pt then return true end
+            if math.norm(p-b) < 1e-8pt and math.norm(q-a) < 1e-8pt then return true end
         end
     end
     return false
 end
 
-direct := figure(200pt,200pt,{"margin":0pt,"background":false})
+direct := figure(200pt, 200pt, {"margin": 0pt, "background": false})
 direct_axis := axis(direct)
 plotting direct_axis do
-    settings {"xside":"top","yside":"right","xlim":[0,100],"ylim":[0,100],"xreverse":true,"spines":["top","right","bottom","left"],"ticks_visible":false,"labels_visible":false}
-    side "top" with {"ticks":[5],"minorticks":[4],"minorgrid":true,"arrow":"end","pen":pen(rgb(0,0,0),2pt,dash:[6pt,3pt],dash_phase:1pt)}
-    side "right" with {"ticks":[94],"minorticks":[93],"minorgrid":true}
-    breaks "top" over [[10,70]] gap 13pt
-    breaks "right" over [[8,88]] gap 17pt
+    settings {"xside": "top", "yside": "right", "xlim": [0, 100], "ylim": [0, 100], "xreverse": true, "spines": ["top", "right", "bottom", "left"], "ticks_visible": false, "labels_visible": false}
+    side "top" with {"ticks": [5], "minorticks": [4], "minorgrid": true, "arrow": "end", "pen": pen(rgb(0, 0, 0), 2pt, dash: [6pt, 3pt], dash_phase: 1pt)}
+    side "right" with {"ticks": [94], "minorticks": [93], "minorgrid": true}
+    breaks "top" over [[10, 70]] gap 13pt
+    breaks "right" over [[8, 88]] gap 17pt
 end
 direct_panels := renderer.prepare(direct)
-renderer.layout(direct,direct_panels)
+renderer.layout(direct, direct_panels)
 view := direct_panels[0]
 export segmented := render direct
 paths := segmented.paths
 // Includes both frame edges, major grid lines and minor grid lines.
-for y in [0,93,94,100] do
-    for interval in [[0,10],[70,100]] do
-        assert(has_segment(paths,renderer.point(view,interval[0],y),renderer.point(view,interval[1],y)))
+for y in [0, 93, 94, 100] do
+    for interval in [[0, 10], [70, 100]] do
+        assert(has_segment(paths, renderer.point(view, interval[0], y), renderer.point(view, interval[1], y)))
     end
-    assert(not has_segment(paths,renderer.point(view,0,y),renderer.point(view,100,y)))
+    assert(not has_segment(paths, renderer.point(view, 0, y), renderer.point(view, 100, y)))
 end
-for x in [0,4,5,100] do
-    for interval in [[0,8],[88,100]] do
-        assert(has_segment(paths,renderer.point(view,x,interval[0]),renderer.point(view,x,interval[1])))
+for x in [0, 4, 5, 100] do
+    for interval in [[0, 8], [88, 100]] do
+        assert(has_segment(paths, renderer.point(view, x, interval[0]), renderer.point(view, x, interval[1])))
     end
-    assert(not has_segment(paths,renderer.point(view,x,0),renderer.point(view,x,100)))
+    assert(not has_segment(paths, renderer.point(view, x, 0), renderer.point(view, x, 100)))
 end
 heads := 0
 for curve in paths do
-    if len(curve)==2 then
-        assert(math.norm(geometry.point_at(curve,1)-renderer.point(view,100,100))<1e-8pt)
+    if len(curve) == 2 then
+        assert(math.norm(geometry.point_at(curve, 1)-renderer.point(view, 100, 100)) < 1e-8pt)
         heads = heads+1
     end
 end
-assert(heads==1,"only the outer end of the reversed top spine receives an arrow")
+assert(heads == 1, "only the outer end of the reversed top spine receives an arrow")
 
 // Equal data units on both axes, with a single physical gap reserved on x.
-square_units := figure(300pt,180pt)
+square_units := figure(300pt, 180pt)
 square_axis := axis(square_units)
 plotting square_axis do
-    settings {"equal":true,"xlim":[0,100],"ylim":[0,20]}
-    breaks "bottom" over [[10,90]] gap 13pt
+    settings {"equal": true, "xlim": [0, 100], "ylim": [0, 20]}
+    breaks "bottom" over [[10, 90]] gap 13pt
 end
 square_panels := renderer.prepare(square_units)
-renderer.layout(square_units,square_panels)
+renderer.layout(square_units, square_panels)
 square := square_panels[0]
-unit10 := renderer.point(square,10,10)-renderer.point(square,0,0)
-assert(math.abs(unit10.x-unit10.y)<1e-8pt)
-assert(math.abs(renderer.point(square,90,0).x-renderer.point(square,10,0).x-13pt)<1e-8pt)
+unit10 := renderer.point(square, 10, 10)-renderer.point(square, 0, 0)
+assert(math.abs(unit10.x-unit10.y) < 1e-8pt)
+assert(math.abs(renderer.point(square, 90, 0).x-renderer.point(square, 10, 0).x-13pt) < 1e-8pt)
 
 // Show the transparent chart on an orange page. A white cover would fail
 // the pixel check. Both breaks span pixels 93..110 before the PDF y flip.
-fig := figure(200pt,200pt,{"margin":0pt,"background":false})
+fig := figure(200pt, 200pt, {"margin": 0pt, "background": false})
 ax := axis(fig)
 plotting ax do
-    settings {"xlim":[0,100],"ylim":[0,100],"xticks":[10,90],"yticks":[10,90],"labels_visible":false,"ticks_visible":false}
-    side "left" with {"pen":pen(rgb(0,0,0),2pt)}
-    side "bottom" with {"pen":pen(rgb(0,0,0),2pt)}
-    breaks "bottom" over [[20,80]] gap 17pt
-    breaks "left" over [[20,80]] gap 17pt
-    +band x [0,100] lower [0,0] upper [100,100] styled {"fill":rgb(0,0,1)}
-    +lines x [0,100] y [10,90] styled {"pen":pen(rgb(1,1,1),2pt)}
-    +errorbars x [10] y [50] errors [40] styled {"pen":pen(rgb(0,0.7,0),2pt)}
-    +scatter x [90] y [10] marked (marker "square" sized 6pt) styled {"color":rgb(1,0,0),"pen":false}
-    +scatter x [21] y [10] marked (marker "square" sized 36pt) styled {"color":rgb(1,0,1),"pen":false}
+    settings {"xlim": [0, 100], "ylim": [0, 100], "xticks": [10, 90], "yticks": [10, 90], "labels_visible": false, "ticks_visible": false}
+    side "left" with {"pen": pen(rgb(0, 0, 0), 2pt)}
+    side "bottom" with {"pen": pen(rgb(0, 0, 0), 2pt)}
+    breaks "bottom" over [[20, 80]] gap 17pt
+    breaks "left" over [[20, 80]] gap 17pt
+    +band x [0, 100] lower [0, 0] upper [100, 100] styled {"fill": rgb(0, 0, 1)}
+    +lines x [0, 100] y [10, 90] styled {"pen": pen(rgb(1, 1, 1), 2pt)}
+    +errorbars x [10] y [50] errors [40] styled {"pen": pen(rgb(0, 0.7, 0), 2pt)}
+    +scatter x [90] y [10] marked (marker "square" sized 6pt) styled {"color": rgb(1, 0, 0), "pen": false}
+    +scatter x [21] y [10] marked (marker "square" sized 36pt) styled {"color": rgb(1, 0, 1), "pen": false}
 end
 chart := render fig
-page := picture(200pt,200pt)
-append(page,fill(geometry.rectangle((0pt,0pt),200pt,200pt),rgb(1,0.8,0)))
-append(page,chart)
+page := picture(200pt, 200pt)
+append(page, fill(geometry.rectangle((0pt, 0pt), 200pt, 200pt), rgb(1, 0.8, 0)))
+append(page, chart)
 default page
 print("plot break checks passed")

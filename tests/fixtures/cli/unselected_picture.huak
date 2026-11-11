@@ -1,1 +1,1 @@
-import paint.{path, draw, picture};p:=picture(640, 480); object.append(p, object.draw(path((0,0),(5,5))))
+import paint.{path, draw, picture};p := picture(640, 480); object.append(p, object.draw(path((0, 0), (5, 5))))

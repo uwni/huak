@@ -7,7 +7,7 @@ import "std/weave/render.huak" as render
 
 fn collect(strands:list, curve:path, stroke:any = false, visits:list = [])
     if stroke == false then stroke = pen(rgb(0, 0, 0), 1pt) end
-    strands += [analysis.Strand(curve:curve, stroke:stroke, visits:copy(visits))]
+    strands += [analysis.Strand(curve: curve, stroke: stroke, visits: copy(visits))]
 end
 
 export expand_block weave(gap:length = 1pt, tolerance:length = 0.001pt) -> picture

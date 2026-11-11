@@ -1,6 +1,6 @@
-import object.{append,label,bounds}
-import transform.{transformed,rotate,translate}
-import math.{abs,log10,floor,pow}
+import object.{append, label, bounds}
+import transform.{transformed, rotate, translate}
+import math.{abs, log10, floor, pow}
 import assertions.assert
 
 export fn literal(value:string, size:length = 9pt) -> text
@@ -9,25 +9,25 @@ export fn literal(value:string, size:length = 9pt) -> text
 end
 
 fn power_label(value:float, size:length) -> text
-    assert(value>0,"power10 labels require positive tick values")
+    assert(value > 0, "power10 labels require positive tick values")
     exponent := int(floor(log10(value)+1e-12))
-    coefficient := pow(10,log10(value)-exponent)
+    coefficient := pow(10, log10(value)-exponent)
     typst_expose exponent, coefficient, size
-    if abs(coefficient-1)<1e-10 then
+    if abs(coefficient-1) < 1e-10 then
         return typ[#text(size:huak.size)[$10^(#huak.exponent)$]]
     end
     return typ[#text(size:huak.size)[$#calc.round(huak.coefficient,digits:5) times 10^(#huak.exponent)$]]
 end
 
 export fn number(value:float, size:length = 9pt, format:string = "auto") -> text
-    if format=="power10" then return power_label(value,size) end
+    if format == "power10" then return power_label(value, size) end
     assert(format == "auto" or format == "scientific" or format == "fixed", "unknown tick format")
     scientific := format == "scientific" or (format == "auto" and value != 0 and (abs(value) >= 10000 or abs(value) < 0.001))
     exponent := 0
     mantissa := value
     if scientific and value != 0 then
         exponent = int(floor(log10(abs(value))))
-        mantissa = value/pow(10,exponent)
+        mantissa = value/pow(10, exponent)
     end
     typst_expose value, size, exponent, mantissa
     if scientific then return typ[#text(size:huak.size)[$#calc.round(huak.mantissa,digits:5) times 10^(#huak.exponent)$]] end
@@ -35,14 +35,14 @@ export fn number(value:float, size:length = 9pt, format:string = "auto") -> text
 end
 
 // Alignment uses the rotated native text bounds, including the real baseline.
-export fn place(dst:picture, body:text, point:vec2, anchor:vec2 = (0.5,0.5), angle:angle = 0deg)
-    item := transformed(label(body,(0pt,0pt)),rotate(angle))
+export fn place(dst:picture, body:text, point:vec2, anchor:vec2 = (0.5, 0.5), angle:angle = 0deg)
+    item := transformed(label(body, (0pt, 0pt)), rotate(angle))
     box := bounds(item)
-    origin := (box[0].x+(box[1].x-box[0].x)*anchor.x,box[0].y+(box[1].y-box[0].y)*anchor.y)
-    append(dst,item,translate(point-origin))
+    origin := (box[0].x+(box[1].x-box[0].x)*anchor.x, box[0].y+(box[1].y-box[0].y)*anchor.y)
+    append(dst, item, translate(point-origin))
 end
 
 export fn extent(body:text, angle:angle = 0deg) -> vec2
-    box := bounds(transformed(label(body,(0pt,0pt)),rotate(angle)))
+    box := bounds(transformed(label(body, (0pt, 0pt)), rotate(angle)))
     return box[1]-box[0]
 end

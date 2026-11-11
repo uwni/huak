@@ -29,12 +29,12 @@ drawing plate do
     +typ[One open cubic: self crossing] at (115mm, 92mm)
     +typ[First strand: $+1, -2$; second: $-1, +2$] at (15mm, 20mm)
     +typ[One source path: $-1, +1$] at (115mm, 20mm)
-    +weave(gap:0.8mm) do
+    +weave(gap: 0.8mm) do
         // Positive IDs pass over; negative IDs pass under.
         +draw left with warm crossings [1, -2]
         +draw right with cool crossings [-1, 2]
     end
-    +weave(gap:0.8mm) do
+    +weave(gap: 0.8mm) do
         +draw curl with green crossings [-1, 1]
     end
 end

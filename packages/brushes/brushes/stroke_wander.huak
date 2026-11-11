@@ -14,7 +14,7 @@ struct Wave
 end
 
 fn make_wave(low:length, high:length, minus:length, plus:length) -> Wave
-    return Wave(low*pow(high/low,random()), random()*360deg, 0.12*(random()-0.5), minus, plus)
+    return Wave(low*pow(high/low, random()), random()*360deg, 0.12*(random()-0.5), minus, plus)
 end
 
 // A run can bend freely. Its canonical direction assigns the two edge spectra
@@ -30,9 +30,9 @@ end
 
 fn cuts_on_contour(curves:list) -> list
     cuts := []
-    previous := (0,0)
+    previous := (0, 0)
     previous_forward := false
-    first := (0,0)
+    first := (0, 0)
     first_forward := false
     for i in 0:len(curves)-1 do
         c := curves[i]
@@ -40,32 +40,32 @@ fn cuts_on_contour(curves:list) -> list
         b := c[2]-c[1]
         d := c[3]-c[2]
         entry := a
-        if norm(entry) == 0pt then entry=b end
-        if norm(entry) == 0pt then entry=d end
+        if norm(entry) == 0pt then entry = b end
+        if norm(entry) == 0pt then entry = d end
         if norm(entry) == 0pt then continue end
         exit_dir := d
-        if norm(exit_dir) == 0pt then exit_dir=b end
-        if norm(exit_dir) == 0pt then exit_dir=a end
+        if norm(exit_dir) == 0pt then exit_dir = b end
+        if norm(exit_dir) == 0pt then exit_dir = a end
         u := projection(a)
         v := projection(b)
         w := projection(d)
         if u == 0 and v == 0 and w == 0 then
-            u=a.x/1pt; v=b.x/1pt; w=d.x/1pt
+            u = a.x/1pt; v = b.x/1pt; w = d.x/1pt
         end
         initial := u
-        if initial == 0 then initial=v end
-        if initial == 0 then initial=w end
-        entry=unit(entry)
+        if initial == 0 then initial = v end
+        if initial == 0 then initial = w end
+        entry = unit(entry)
         if norm(previous) == 0 then
-            first=entry; first_forward=initial>0
+            first = entry; first_forward = initial > 0
         else
             // Small tangent changes are common in polygonal sweep output.
-            corner := dot(previous,entry) < cos(30deg)
-            if corner or (initial>0) != previous_forward then cuts += [Cut(i,corner)] end
+            corner := dot(previous, entry) < cos(30deg)
+            if corner or (initial > 0) != previous_forward then cuts += [Cut(i, corner)] end
         end
         // Split where the projected derivative reverses inside one cubic.
         // Its Bernstein coefficients are u, v, w. A double root does not reverse it.
-        if min(u,min(v,w)) < 0 and max(u,max(v,w)) > 0 then
+        if min(u, min(v, w)) < 0 and max(u, max(v, w)) > 0 then
             quadratic := u-2*v+w
             linear := 2*(v-u)
             roots := []
@@ -78,21 +78,21 @@ fn cuts_on_contour(curves:list) -> list
                     if linear < 0 then sign = -1 end
                     q := -(linear+sign*sqrt(disc))/2
                     r := q/quadratic; s := u/q
-                    roots += [min(r,s),max(r,s)]
+                    roots += [min(r, s), max(r, s)]
                 end
             end
             for t in roots do
-                if t > 0 and t < 1 and i+t > i and i+t < i+1 then cuts += [Cut(i+t,false)] end
+                if t > 0 and t < 1 and i+t > i and i+t < i+1 then cuts += [Cut(i+t, false)] end
             end
         end
         terminal := w
-        if terminal == 0 then terminal=v end
-        if terminal == 0 then terminal=u end
-        previous=unit(exit_dir); previous_forward=terminal>0
+        if terminal == 0 then terminal = v end
+        if terminal == 0 then terminal = u end
+        previous = unit(exit_dir); previous_forward = terminal > 0
     end
-    corner := dot(first,previous) < cos(30deg)
+    corner := dot(first, previous) < cos(30deg)
     if first_forward != previous_forward or corner then
-        from_seam := [Cut(0,corner)]
+        from_seam := [Cut(0, corner)]
         from_seam += cuts
         return from_seam
     end
@@ -111,12 +111,12 @@ end
 
 fn displaced(p:vec2, s:Span) -> vec2
     distance := p.x
-    sample := sample_at_length(s.edge,distance)
+    sample := sample_at_length(s.edge, distance)
     length := s.edge.length
     if distance <= 0pt or distance >= length then return sample[1] end
-    fade := min(1,min(distance,length-distance)/s.width)
+    fade := min(1, min(distance, length-distance)/s.width)
     along := s.origin+distance
-    if not s.forward then along=s.origin+length-distance end
+    if not s.forward then along = s.origin+length-distance end
     shift := 0pt
     for w in s.waves do
         amplitude := w.minus
@@ -125,36 +125,36 @@ fn displaced(p:vec2, s:Span) -> vec2
     end
     // A short centered secant gives a continuous normal across the tiny
     // polygon edges of swept nibs. The baseline is the original sampled point.
-    h := min(s.width/32,min(distance,length-distance))
-    direction := sample_at_length(s.edge,distance+h)[1]-sample_at_length(s.edge,distance-h)[1]
+    h := min(s.width/32, min(distance, length-distance))
+    direction := sample_at_length(s.edge, distance+h)[1]-sample_at_length(s.edge, distance-h)[1]
     if norm(direction) == 0pt then return sample[1] end
-    direction=unit(direction)
-    return sample[1]+(-direction.y,direction.x)*(shift*s.amount*fade*fade*(3-2*fade))
+    direction = unit(direction)
+    return sample[1]+(-direction.y, direction.x)*(shift*s.amount*fade*fade*(3-2*fade))
 end
 
 fn wave_piece(guide:path, edge:measure, available:length, waves:list, shortest:length, width:length, amount:float) -> path
     length := edge.length
     if available < 2*shortest or length == 0pt then return guide end
-    a := sample_at_length(edge,0pt)[1]
-    b := sample_at_length(edge,length)[1]
+    a := sample_at_length(edge, 0pt)[1]
+    b := sample_at_length(edge, length)[1]
     chord := b-a
     if norm(chord) == 0pt then return guide end
     forward := projection(chord) > 0 or (projection(chord) == 0 and chord.x >= 0pt)
     axis := unit(chord)
     anchor := a
     across_offset := width/2
-    if not forward then axis=-axis; anchor=b; across_offset=-width/2 end
+    if not forward then axis = -axis; anchor = b; across_offset = -width/2 end
     active := []
     for w in waves do
         if 2*w.period <= available and ((forward and w.minus != 0pt) or (not forward and w.plus != 0pt)) then active += [w] end
     end
     if len(active) == 0 then return guide end
-    context := Span(edge,dot(anchor,axis),dot(anchor,(-axis.y,axis.x))+across_offset,width,forward,active,amount)
-    steps := int(max(2,ceil(4*length/shortest)))
+    context := Span(edge, dot(anchor, axis), dot(anchor, (-axis.y, axis.x))+across_offset, width, forward, active, amount)
+    steps := int(max(2, ceil(4*length/shortest)))
     assert(steps <= 65536, "seal spectrum exceeds the geometry segment limit")
     points := []
-    for i in 0:steps do points += [(length*(i/steps),0pt)] end
-    return mapped(path(points),displaced,context,tolerance: min(width,shortest)*0.0005)
+    for i in 0:steps do points += [(length*(i/steps), 0pt)] end
+    return mapped(path(points), displaced, context, tolerance: min(width, shortest)*0.0005)
 end
 
 fn wave_contour(boundary:path, waves:list, shortest:length, width:length, amount:float) -> path
@@ -163,7 +163,7 @@ fn wave_contour(boundary:path, waves:list, shortest:length, width:length, amount
     if len(cuts) == 0 then return boundary end
     start := 0
     for i in 0:len(cuts)-1 do
-        if cuts[i].corner then start=i; break end
+        if cuts[i].corner then start = i; break end
     end
     result := compound([])
     pieces := []
@@ -174,22 +174,22 @@ fn wave_contour(boundary:path, waves:list, shortest:length, width:length, amount
         a := cuts[i].time
         b := next_cut.time
         guide := boundary
-        if a < b then guide=trimmed(boundary,a,b)
+        if a < b then guide = trimmed(boundary, a, b)
         else
-            guide=trimmed(boundary,a,len(curves))
-            if b > 0 then guide=joined(guide,trimmed(boundary,0,b)) end
+            guide = trimmed(boundary, a, len(curves))
+            if b > 0 then guide = joined(guide, trimmed(boundary, 0, b)) end
         end
         edge := measure(guide)
-        pieces += [[guide,edge]]
+        pieces += [[guide, edge]]
         available = available+edge.length
         // Side changes choose the spectrum; only genuine corners limit the
         // available wavelength. A smooth closed loop uses its full perimeter.
         if next_cut.corner or k == len(cuts)-1 then
             for part in pieces do
-                piece := wave_piece(part[0],part[1],available,waves,shortest,width,amount)
-                if len(result) == 0 then result=piece else result=joined(result,piece) end
+                piece := wave_piece(part[0], part[1], available, waves, shortest, width, amount)
+                if len(result) == 0 then result = piece else result = joined(result, piece) end
             end
-            pieces=[]; available=0pt
+            pieces = []; available = 0pt
         end
     end
     return closed(result)
@@ -210,8 +210,8 @@ export fn stroke_wander(shape:path, width:length, amount:float, spectrum:list) -
         // portion of the plus-edge variance independent of the minus edge.
         rms := width*sqrt(2/3)
         for i in 1:3 do
-            waves += make_wave(low,high,rms*band[2],rms*band[3]*rho)
-            waves += make_wave(low,high,0pt,rms*band[3]*sqrt(1-rho*rho))
+            waves += make_wave(low, high, rms*band[2], rms*band[3]*rho)
+            waves += make_wave(low, high, 0pt, rms*band[3]*sqrt(1-rho*rho))
         end
         if shortest == 0pt or low < shortest then shortest = low end
     end
@@ -222,10 +222,10 @@ export fn stroke_wander(shape:path, width:length, amount:float, spectrum:list) -
     strength := amount
     for attempt in 1:4 do
         parts := []
-        for boundary in boundaries do parts += [wave_contour(boundary,waves,shortest,width,strength)] end
-        candidate := region_union(compound(parts),compound([]))
+        for boundary in boundaries do parts += [wave_contour(boundary, waves, shortest, width, strength)] end
+        candidate := region_union(compound(parts), compound([]))
         contours := subpaths(candidate)
-        if same_contours(contours,boxes,exteriors,width/2) then return candidate end
+        if same_contours(contours, boxes, exteriors, width/2) then return candidate end
         strength = strength/2
     end
     return shape

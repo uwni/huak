@@ -1,5 +1,5 @@
 import "lib/exploding.huak" as broken
 fn outer()->float
-return broken.explode()
+    return broken.explode()
 end
 outer()

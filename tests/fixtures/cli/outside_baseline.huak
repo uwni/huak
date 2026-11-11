@@ -1,9 +1,9 @@
 import paint.{rgb, translate, fill, label, picture};import geometry.compound;import object.outlines;import assertions.assert
-export pic:=picture(100,100)
+export pic := picture(100, 100)
 default pic
-t:=typ[
+t := typ[
 #block(height:1pt)[X]
 ]
-assert(t.baseline>t.height)
-object.append(pic, object.label(t, (20,60)))
-object.append(pic, object.fill(compound(outlines(t).paths), rgb(0,0,0), translate((45,60))))
+assert(t.baseline > t.height)
+object.append(pic, object.label(t, (20, 60)))
+object.append(pic, object.fill(compound(outlines(t).paths), rgb(0, 0, 0), translate((45, 60))))

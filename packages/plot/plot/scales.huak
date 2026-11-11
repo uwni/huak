@@ -1,4 +1,4 @@
-import math.{min,max,abs,ceil,floor,log10,pow}
+import math.{min, max, abs, ceil, floor, log10, pow}
 import collections.get
 import assertions.assert
 
@@ -25,7 +25,7 @@ export fn resolve(values:list, kind:string, limits:any = false, reversed:bool = 
         if value != false then
             n := 0.0
             if kind == "category" then
-                i := index(cats,value)
+                i := index(cats, value)
                 if i < 0 then cats += [value]; i = len(cats)-1 end
                 n = float(i)
             else
@@ -33,13 +33,13 @@ export fn resolve(values:list, kind:string, limits:any = false, reversed:bool = 
                 if kind == "log10" then assert(n > 0, "logarithmic axis requires positive data"); n = log10(n) end
             end
             if not found then low = n; high = n; found = true
-            else low = min(low,n); high = max(high,n) end
+            else low = min(low, n); high = max(high, n) end
         end
     end
-    if kind == "category" then low = -0.5; high = max(0.5,float(len(cats))-0.5)
+    if kind == "category" then low = -0.5; high = max(0.5, float(len(cats))-0.5)
     elseif found then
         pad := (high-low)*0.05
-        if pad == 0 then pad = max(abs(low)*0.05,0.5) end
+        if pad == 0 then pad = max(abs(low)*0.05, 0.5) end
         low = low-pad
         high = high+pad
     end
@@ -53,13 +53,13 @@ export fn resolve(values:list, kind:string, limits:any = false, reversed:bool = 
         end
     end
     assert(low < high, "axis range is not representable")
-    return Scale(kind:kind, low:low, high:high, categories:cats, reversed:reversed)
+    return Scale(kind: kind, low: low, high: high, categories: cats, reversed: reversed)
 end
 
 export fn coordinate(s:Scale, value:any) -> float
     n := 0.0
     if s.kind == "category" then
-        i := index(s.categories,value)
+        i := index(s.categories, value)
         assert(i >= 0, "unknown category")
         n = float(i)
     else
@@ -72,7 +72,7 @@ export fn coordinate(s:Scale, value:any) -> float
 end
 
 export fn numeric_coordinate(s:Scale, value:float) -> float
-    if s.kind != "category" then return coordinate(s,value) end
+    if s.kind != "category" then return coordinate(s, value) end
     t := (value-s.low)/(s.high-s.low)
     if s.reversed then t = 1-t end
     return t
@@ -86,19 +86,19 @@ export fn ticks(s:Scale, count:int = 6, step:any = false) -> list
         spacing = float(step)
         assert(spacing > 0, "tick step must be positive")
     elseif s.kind == "linear" then
-        raw := (s.high-s.low)/max(1,count-1)
-        magnitude := pow(10,floor(log10(raw)))
+        raw := (s.high-s.low)/max(1, count-1)
+        magnitude := pow(10, floor(log10(raw)))
         fraction := raw/magnitude
         unit := 10.0
-        for choice in [10.0,5.0,2.5,2.0,1.0] do if fraction <= choice then unit = choice end end
+        for choice in [10.0, 5.0, 2.5, 2.0, 1.0] do if fraction <= choice then unit = choice end end
         spacing = unit*magnitude
-    else spacing = max(1,ceil((s.high-s.low)/max(1,count-1))) end
+    else spacing = max(1, ceil((s.high-s.low)/max(1, count-1))) end
     first := ceil(s.low/spacing)
     last := floor(s.high/spacing)
     assert(last-first < 2048, "too many ticks; increase tick step")
     for i in int(first):int(last) do
         n := i*spacing
-        if s.kind == "log10" then n = pow(10,n) end
+        if s.kind == "log10" then n = pow(10, n) end
         if n == 0 then n = 0.0 end
         result += [n]
     end
@@ -107,21 +107,21 @@ end
 
 // Multipliers in [1,10) repeat at their actual data positions in each decade.
 export fn decade_ticks(s:Scale, multipliers:list, budget:int = 2048) -> list
-    assert(s.kind=="log10","decade ticks require a log10 scale")
-    assert(len(multipliers)>0,"decade ticks require at least one multiplier")
+    assert(s.kind == "log10", "decade ticks require a log10 scale")
+    assert(len(multipliers) > 0, "decade ticks require at least one multiplier")
     previous := 0.0
     for multiplier in multipliers do
-        assert(multiplier>=1 and multiplier<10 and multiplier>previous,"decade multipliers must increase within [1,10)")
+        assert(multiplier >= 1 and multiplier < 10 and multiplier > previous, "decade multipliers must increase within [1,10)")
         previous = multiplier
     end
     result := []
     for exponent in int(floor(s.low)):int(floor(s.high)) do
         for multiplier in multipliers do
             position := exponent+log10(multiplier)
-            if position>=s.low and position<=s.high then
-                assert(len(result)<budget,"too many decade ticks")
-                if exponent < -308 then result += [pow(10,position)]
-                else result += [pow(10,exponent)*multiplier] end
+            if position >= s.low and position <= s.high then
+                assert(len(result) < budget, "too many decade ticks")
+                if exponent < -308 then result += [pow(10, position)]
+                else result += [pow(10, exponent)*multiplier] end
             end
         end
     end
@@ -132,9 +132,9 @@ export fn minor_ticks(s:Scale, major:list) -> list
     result := []
     if s.kind == "category" then return result end
     if s.kind == "log10" then
-        assert(s.high-s.low<512,"too many logarithmic minor ticks")
-        for value in decade_ticks(s,[2,3,4,5,6,7,8,9],4104) do
-            if index(major,value)<0 then result += [value] end
+        assert(s.high-s.low < 512, "too many logarithmic minor ticks")
+        for value in decade_ticks(s, [2, 3, 4, 5, 6, 7, 8, 9], 4104) do
+            if index(major, value) < 0 then result += [value] end
         end
     else
         for i in 1:len(major)-1 do

@@ -1,2 +1,2 @@
 param missing:int
-export answer:=1
+export answer := 1

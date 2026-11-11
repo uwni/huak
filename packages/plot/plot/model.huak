@@ -43,14 +43,14 @@ end
 export fn figure(width:length = 400pt, height:length = 280pt, options:dict = {}) -> Figure
     assert(width > 0pt and height > 0pt, "figure dimensions must be positive")
     validate(options, ["margin", "gap", "background", "palette", "font_size", "ink", "grid_color", "line_width", "auto_bounds"])
-    return Figure(width:width, height:height, options:copy(options))
+    return Figure(width: width, height: height, options: copy(options))
 end
 
-export fn axis(fig:Figure, cell:vec2 = (0,0), options:dict = {}) -> Axis
+export fn axis(fig:Figure, cell:vec2 = (0, 0), options:dict = {}) -> Axis
     assert(cell.x >= 0 and cell.y >= 0 and cell.x == int(cell.x) and cell.y == int(cell.y), "axis cell requires nonnegative integer row and column")
     for existing in fig.axes do assert(existing.cell != cell, "axis cell is already occupied") end
     validate(options, AXIS_OPTIONS)
-    result := Axis(cell:cell, options:copy(options))
+    result := Axis(cell: cell, options: copy(options))
     fig.axes += [result]
     return result
 end
@@ -59,43 +59,43 @@ export AXIS_OPTIONS := ["title", "xlabel", "ylabel", "xscale", "yscale", "xlim",
 export LAYER_OPTIONS := ["label", "color", "fill", "pen", "width", "dash", "marker", "sizes", "colors", "orientation", "bar_width", "baseline", "stack", "group", "upper", "cap_size", "colormap", "clim", "clip", "xaxis", "yaxis", "arrow", "arrow_size", "align", "legend_line"]
 
 export fn horizontal(side:string) -> bool
-    if side=="top" or side=="bottom" then return true end
-    assert(side=="left" or side=="right","unknown axis side: "+side)
+    if side == "top" or side == "bottom" then return true end
+    assert(side == "left" or side == "right", "unknown axis side: "+side)
     return false
 end
 
 export fn primary(ax:Axis, dimension:string) -> string
-    if dimension=="x" then return get(ax.options,"xside","bottom") end
-    return get(ax.options,"yside","left")
+    if dimension == "x" then return get(ax.options, "xside", "bottom") end
+    return get(ax.options, "yside", "left")
 end
 
 export fn side(ax:Axis, name:string, options:dict)
     horizontal(name)
-    validate(options,["scale","limits","reverse","ticks","labels","step","minorticks","decades","format","label","pen","arrow","arrow_size","grid","minorgrid","tick_direction","tick_size","tick_rotation","ticks_visible","labels_visible","font_size","breaks","break_gap"])
-    ax.sides[name] = merged(get(ax.sides,name,{}),options)
+    validate(options, ["scale", "limits", "reverse", "ticks", "labels", "step", "minorticks", "decades", "format", "label", "pen", "arrow", "arrow_size", "grid", "minorgrid", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "font_size", "breaks", "break_gap"])
+    ax.sides[name] = merged(get(ax.sides, name, {}), options)
 end
 
 export fn remap(ax:Axis, name:string, positions:list, labels:list)
-    assert(len(positions)==len(labels),"tick positions and labels differ in length")
-    side(ax,name,{"ticks":positions,"labels":labels})
+    assert(len(positions) == len(labels), "tick positions and labels differ in length")
+    side(ax, name, {"ticks": positions, "labels": labels})
 end
 
 export fn breaks(ax:Axis, name:string, ranges:list, gap:length = 8pt)
-    side(ax,name,{"breaks":ranges,"break_gap":gap})
+    side(ax, name, {"breaks": ranges, "break_gap": gap})
 end
 
 export fn on_axes(item:Layer, x:string, y:string) -> Layer
-    assert(horizontal(x) and not horizontal(y),"on_axes requires a horizontal x axis and a vertical y axis")
-    return styled(item,{"xaxis":x,"yaxis":y})
+    assert(horizontal(x) and not horizontal(y), "on_axes requires a horizontal x axis and a vertical y axis")
+    return styled(item, {"xaxis": x, "yaxis": y})
 end
 
 export fn arrow(start:vec2, finish:vec2) -> Layer
-    return Layer(kind:"arrow",x:[start.x,finish.x],y:[start.y,finish.y])
+    return Layer(kind: "arrow", x: [start.x, finish.x], y: [start.y, finish.y])
 end
 
 export fn arrowed(item:Layer, ends:string) -> Layer
-    assert(item.kind=="lines" or item.kind=="arrow" or item.kind=="vline" or item.kind=="hline","arrowed requires a line or arrow layer")
-    return styled(item,{"arrow":ends})
+    assert(item.kind == "lines" or item.kind == "arrow" or item.kind == "vline" or item.kind == "hline", "arrowed requires a line or arrow layer")
+    return styled(item, {"arrow": ends})
 end
 
 export fn configure(ax:Axis, options:dict) -> Axis
@@ -113,14 +113,14 @@ export fn styled(item:any, options:dict) -> any
 end
 
 export fn named(item:Layer, body:text) -> Layer
-    return styled(item, {"label":body})
+    return styled(item, {"label": body})
 end
 export fn marked(item:Layer, symbol:Marker) -> Layer
-    return styled(item, {"marker":symbol})
+    return styled(item, {"marker": symbol})
 end
 export fn sized(symbol:Marker, size:length) -> Marker
     assert(size > 0pt, "marker size must be positive")
-    return styled(symbol, {"size":size})
+    return styled(symbol, {"size": size})
 end
 
 export fn insert(target:Axis, item:Layer)
@@ -130,10 +130,10 @@ end
 export fn lines(x:list, y:list, options:dict = {}) -> Layer
     assert(len(x) == len(y), "x and y lengths differ")
     validate(options, LAYER_OPTIONS)
-    return Layer(kind:"lines", x:x, y:y, options:copy(options))
+    return Layer(kind: "lines", x: x, y: y, options: copy(options))
 end
 export fn scatter(x:list, y:list, options:dict = {}) -> Layer
-    result := lines(x,y,options)
+    result := lines(x, y, options)
     result.kind = "scatter"
     return result
 end

@@ -1,1 +1,1 @@
-import paint.{picture};export p:=picture(40,30)
+import paint.{picture};export p := picture(40, 30)

@@ -1,5 +1,5 @@
 import assertions.assert
-param amount=9
+param amount = 9
 import "lib/settings.huak" as settings
-assert(settings.amount_value()==7)
+assert(settings.amount_value() == 7)
 print(amount)

@@ -1,4 +1,4 @@
 import "common.huak" as common
-fn shifted(a:int,k:int)->int;return a+k;end
+fn shifted(a:int, k:int)->int;return a+k;end
 mixfix(shifted) _ shifted _ in common.transform
 export shifted

@@ -23,7 +23,7 @@ fn partition(first:float, last:float) -> float
 end
 
 fn sections(strand:analysis.Strand, visits:list, tolerance:length) -> Sections
-    if len(visits) == 0 then return Sections(original:[], remaining:[]) end
+    if len(visits) == 0 then return Sections(original: [], remaining: []) end
     contours := contour_ranges(strand.curve)
     ranges := []
     wraps := []
@@ -71,7 +71,7 @@ fn sections(strand:analysis.Strand, visits:list, tolerance:length) -> Sections
         owner:int := wraps[j][0]
         original[owner] = region_union(original[owner], coverage[count+j], tolerance)
     end
-    return Sections(original:original, remaining:copy(original))
+    return Sections(original: original, remaining: copy(original))
 end
 
 export fn compose(plan:analysis.Plan, gap:length, tolerance:length) -> picture

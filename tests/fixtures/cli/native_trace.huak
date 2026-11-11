@@ -1,5 +1,5 @@
 fn broken() -> text
-return typ[
+    return typ[
 #text(unknown_native_value)
 ]
 end

@@ -1,20 +1,20 @@
 import drawing.drawing
 import math.{sin, abs};import paint.{circle, label, picture};import text.width;import math.PI as pi;import paint.{draw};import assertions.assert
-param radius:length=1cm
-param angle:angle=90deg
-assert(1cm==10mm)
-assert(2pi rad==360deg)
-assert(2 pi rad==(2*pi) rad)
-assert(radius==20mm)
-assert(angle==360deg)
-assert((1cm,0).x==10mm)
-assert(abs(sin(90deg)-1)<1e-12)
-export pic:=picture(8cm,5cm)
+param radius:length = 1cm
+param angle:angle = 90deg
+assert(1cm == 10mm)
+assert(2pi rad == 360deg)
+assert(2 pi rad == (2*pi) rad)
+assert(radius == 20mm)
+assert(angle == 360deg)
+assert((1cm, 0).x == 10mm)
+assert(abs(sin(90deg)-1) < 1e-12)
+export pic := picture(8cm, 5cm)
 default pic
-curve:=circle((3cm,2cm),radius)
+curve := circle((3cm, 2cm), radius)
 drawing pic do;+draw curve;end
-caption:=typ[
+caption := typ[
 Native units Ω $x^2$
 ]
-object.append(pic, object.label(caption, (5mm,4cm)))
-assert(width(caption)>1mm)
+object.append(pic, object.label(caption, (5mm, 4cm)))
+assert(width(caption) > 1mm)

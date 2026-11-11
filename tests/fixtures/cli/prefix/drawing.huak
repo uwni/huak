@@ -1,26 +1,26 @@
 import drawing.drawing
 import paint.{circle, bounds, draw, label, picture};import paint.{fill};import assertions.assert
 import "lib/brushes.huak" as brushes
-export first:=picture(120,80)
-export second:=picture(90,60)
+export first := picture(120, 80)
+export second := picture(90, 60)
 default first
-target:=first
-curve:=circle((20,20),8)
+target := first
+curve := circle((20, 20), 8)
 fn select()->picture;print("target");return target;end
 fn marked()->path;print("curve");return curve;end
 drawing select() do
-+draw marked()
-drawing second do
-+fill curve
+    +draw marked()
+    drawing second do
+        +fill curve
+    end
+    target = second
+    draw brushes.mirrored curve
+    brushes.paint curve
+    object.append(second, draw(curve))
 end
-target=second
-draw brushes.mirrored curve
-brushes.paint curve
-object.append(second, draw(curve))
-end
-assert(first.bounds()[0].x<20pt)
-object.append(second,brushes.paint(curve))
-caption:=typ[
+assert(first.bounds()[0].x < 20pt)
+object.append(second, brushes.paint(curve))
+caption := typ[
 Prefix drawing Ω $x^2$
 ]
-object.append(first, object.label(caption, (5,65)))
+object.append(first, object.label(caption, (5, 65)))

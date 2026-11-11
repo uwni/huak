@@ -1,8 +1,8 @@
 import assertions.assert
-assert(negated 2^3+4==-4)
-assert(negated negated 3==3)
-assert(padded 1+2==103)
-assert(negated(4)==4.negated())
+assert(negated 2^3+4 == -4)
+assert(negated negated 3 == 3)
+assert(padded 1+2 == 103)
+assert(negated(4) == 4.negated())
 mixfix(negated) negated _ in unary
 mixfix(padded) padded _ in path
 fn negated(x:float)->float;return -x;end

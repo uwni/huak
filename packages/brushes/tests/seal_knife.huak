@@ -7,7 +7,7 @@ import "../brushes.huak".{seal_edge, seal_knife}
 // Check the actual untextured boundary against the normal at each endpoint.
 fn has_flat_cap(shape:path, point:vec2, tangent:vec2, width:length) -> bool
     t := math.unit(tangent)
-    offset := (-t.y,t.x)*width/2
+    offset := (-t.y, t.x)*width/2
     for c in geometry.measure(shape).curves do
         if math.norm(c[0]-(point-offset)) < 0.002pt and math.norm(c[3]-(point+offset)) < 0.002pt then return true end
         if math.norm(c[3]-(point-offset)) < 0.002pt and math.norm(c[0]-(point+offset)) < 0.002pt then return true end
@@ -15,33 +15,33 @@ fn has_flat_cap(shape:path, point:vec2, tangent:vec2, width:length) -> bool
     return false
 end
 
-oblique := geometry.bezier((0pt,0pt),(8pt,6pt),(14pt,13pt),(20pt,5pt))
-flat := seal_knife(oblique,4pt,"zhuwen",density: 0,corner_scale: 0,cap: "butt")
-assert(has_flat_cap(flat,(0pt,0pt),(8,6),4pt), "entry face follows the initial normal")
-assert(has_flat_cap(flat,(20pt,5pt),(6,-8),4pt), "exit face follows the final normal")
-zero_round := seal_knife(oblique,4pt,"zhuwen",density: 0,corner_scale: 0,cap_roundness: 0)
-assert(len(region_xor(flat,zero_round)) == 0, "zero cap rounding gives the butt footprint")
-partial := seal_knife(path((0pt,0pt),(16pt,12pt)),4pt,"zhuwen",density: 0,corner_scale: 0,cap_roundness: 0.5)
-for end_sample in [[(0pt,0pt),(-0.8,-0.6)],[(16pt,12pt),(0.8,0.6)]] do
+oblique := geometry.bezier((0pt, 0pt), (8pt, 6pt), (14pt, 13pt), (20pt, 5pt))
+flat := seal_knife(oblique, 4pt, "zhuwen", density: 0, corner_scale: 0, cap: "butt")
+assert(has_flat_cap(flat, (0pt, 0pt), (8, 6), 4pt), "entry face follows the initial normal")
+assert(has_flat_cap(flat, (20pt, 5pt), (6, -8), 4pt), "exit face follows the final normal")
+zero_round := seal_knife(oblique, 4pt, "zhuwen", density: 0, corner_scale: 0, cap_roundness: 0)
+assert(len(region_xor(flat, zero_round)) == 0, "zero cap rounding gives the butt footprint")
+partial := seal_knife(path((0pt, 0pt), (16pt, 12pt)), 4pt, "zhuwen", density: 0, corner_scale: 0, cap_roundness: 0.5)
+for end_sample in [[(0pt, 0pt), (-0.8, -0.6)], [(16pt, 12pt), (0.8, 0.6)]] do
     tip := end_sample[0]
     out := end_sample[1]
-    normal := (-out.y,out.x)
-    for side in [-1,1] do
+    normal := (-out.y, out.x)
+    for side in [-1, 1] do
         flat_end := tip+normal*(side*0.8pt)
-        assert(len(region_difference(circle(flat_end+out*0.97pt,0.01pt),partial)) == 0, "flat middle reaches the cap radius")
-        assert(len(region_intersection(circle(flat_end+out*1.03pt,0.01pt),partial)) == 0, "flat middle stops at the cap radius")
-        assert(len(region_intersection(circle(tip+normal*(side*1.8pt)+out*0.9pt,0.01pt),partial)) == 0, "round off both corners")
+        assert(len(region_difference(circle(flat_end+out*0.97pt, 0.01pt), partial)) == 0, "flat middle reaches the cap radius")
+        assert(len(region_intersection(circle(flat_end+out*1.03pt, 0.01pt), partial)) == 0, "flat middle stops at the cap radius")
+        assert(len(region_intersection(circle(tip+normal*(side*1.8pt)+out*0.9pt, 0.01pt), partial)) == 0, "round off both corners")
     end
 end
-square := seal_knife(oblique,4pt,"baiwen",chip_size: 0,corner_scale: 0,cap: "square")
-assert(has_flat_cap(square,(-1.6pt,-1.2pt),(8,6),4pt), "square entry extends half a width")
-assert(has_flat_cap(square,(21.2pt,3.4pt),(6,-8),4pt), "square exit extends along the final tangent")
+square := seal_knife(oblique, 4pt, "baiwen", chip_size: 0, corner_scale: 0, cap: "square")
+assert(has_flat_cap(square, (-1.6pt, -1.2pt), (8, 6), 4pt), "square entry extends half a width")
+assert(has_flat_cap(square, (21.2pt, 3.4pt), (6, -8), 4pt), "square exit extends along the final tangent")
 
 // A closed guide has no caps. The flat blade turns at the closing seam too.
-rim := rectangle((2.6pt,2.6pt),94.8pt,94.8pt)
-plain_rim := seal_knife(rim,2.2pt,"zhuwen",chip_size: 0,corner_scale: 0,cap: "butt")
+rim := rectangle((2.6pt, 2.6pt), 94.8pt, 94.8pt)
+plain_rim := seal_knife(rim, 2.2pt, "zhuwen", chip_size: 0, corner_scale: 0, cap: "butt")
 assert(len(subpaths(plain_rim)) == 2, "a rotating blade leaves the frame open inside")
-assert(len(region_difference(circle((2.2pt,2.2pt),0.1pt),plain_rim)) == 0, "cover the outer turn at the seam")
+assert(len(region_difference(circle((2.2pt, 2.2pt), 0.1pt), plain_rim)) == 0, "cover the outer turn at the seam")
 
 fn smooth_stroke(curve:path, width:length) -> path
     return seal_knife(curve, width, "zhuwen", chip_size: 0, corner_scale: 0)
@@ -50,7 +50,7 @@ end
 line := path((0pt, 0pt), (75pt, 0pt))
 base := smooth_stroke(line, 8pt)
 round_box := bounds(base)
-assert(math.norm(round_box[0]-(-4pt,-4pt)) < 0.001pt and math.norm(round_box[1]-(79pt,4pt)) < 0.001pt, "round caps extend by the radius")
+assert(math.norm(round_box[0]-(-4pt, -4pt)) < 0.001pt and math.norm(round_box[1]-(79pt, 4pt)) < 0.001pt, "round caps extend by the radius")
 seed(1701)
 red := seal_knife(line, 8pt, "zhuwen")
 seed(1701)
@@ -162,71 +162,71 @@ album := seal_knife(line, 8pt, "zhuwen", imprint_mix: 1, imprint_source: "album"
 assert(len(region_xor(default_paper, album)) > 0 and len(region_difference(album, base)) == 0)
 
 // With chipping disabled, convex corners lose area and concave corners gain it.
-for mode in ["zhuwen","baiwen"] do
+for mode in ["zhuwen", "baiwen"] do
     loss := false
     gain := false
     for s in 10:14 do
         seed(s)
         corners := seal_edge(letter, 4pt, mode, density: 0)
-        loss = loss or len(region_difference(letter,corners)) > 0
-        gain = gain or len(region_difference(corners,letter)) > 0
+        loss = loss or len(region_difference(letter, corners)) > 0
+        gain = gain or len(region_difference(corners, letter)) > 0
         assert(len(subpaths(corners)) == 2)
         seed(s)
-        assert(len(region_xor(corners,seal_edge(letter,4pt,mode,density: 0))) == 0)
+        assert(len(region_xor(corners, seal_edge(letter, 4pt, mode, density: 0))) == 0)
     end
     assert(loss and gain, "sample both sides of a counter")
 end
-assert(len(region_xor(letter,seal_edge(letter,4pt,"zhuwen",density: 0,corner_scale: 0))) == 0)
-loop_base := smooth_stroke(loop,4pt)
+assert(len(region_xor(letter, seal_edge(letter, 4pt, "zhuwen", density: 0, corner_scale: 0))) == 0)
+loop_base := smooth_stroke(loop, 4pt)
 cut_outer := false
 filled_inner := false
 for s in 12:16 do
     seed(s)
-    chamfered := seal_knife(loop,4pt,"zhuwen",chip_size: 0,corner_scale: 3)
-    cut_outer = cut_outer or len(region_difference(loop_base,chamfered)) > 0
-    filled_inner = filled_inner or len(region_difference(chamfered,loop_base)) > 0
+    chamfered := seal_knife(loop, 4pt, "zhuwen", chip_size: 0, corner_scale: 3)
+    cut_outer = cut_outer or len(region_difference(loop_base, chamfered)) > 0
+    filled_inner = filled_inner or len(region_difference(chamfered, loop_base)) > 0
 end
 assert(cut_outer and filled_inner, "both sides of a centerline stroke support bevels")
-circle_face := circle((10pt,10pt),6pt)
-assert(len(region_xor(circle_face,seal_edge(circle_face,3pt,"zhuwen",density: 0))) == 0, "smooth curves have no tips to bevel")
+circle_face := circle((10pt, 10pt), 6pt)
+assert(len(region_xor(circle_face, seal_edge(circle_face, 3pt, "zhuwen", density: 0))) == 0, "smooth curves have no tips to bevel")
 seed(42)
-wavy := seal_knife(line,8pt,"zhuwen",density: 0,wander: 1)
+wavy := seal_knife(line, 8pt, "zhuwen", density: 0, wander: 1)
 seed(42)
-assert(len(region_xor(wavy,seal_knife(line,8pt,"zhuwen",density: 0,wander: 1))) == 0)
+assert(len(region_xor(wavy, seal_knife(line, 8pt, "zhuwen", density: 0, wander: 1))) == 0)
 seed(43)
-assert(len(region_xor(wavy,seal_knife(line,8pt,"zhuwen",density: 0,wander: 1))) > 0)
-assert(len(region_difference(wavy,base)) > 0 and len(region_difference(base,wavy)) > 0)
-assert(len(subpaths(wavy)) == 1 and len(subpaths(seal_edge(letter,4pt,"baiwen",density: 0,wander: 1))) == 2)
+assert(len(region_xor(wavy, seal_knife(line, 8pt, "zhuwen", density: 0, wander: 1))) > 0)
+assert(len(region_difference(wavy, base)) > 0 and len(region_difference(base, wavy)) > 0)
+assert(len(subpaths(wavy)) == 1 and len(subpaths(seal_edge(letter, 4pt, "baiwen", density: 0, wander: 1))) == 2)
 
 // A one-sided spectrum changes thickness while the opposite straight edge
 // and the endpoints stay in place. Exclude wavelengths too long for a side.
-bar := rectangle((0pt,0pt),80pt,8pt)
-one_side := [[2,3,0.12,0,0]]
+bar := rectangle((0pt, 0pt), 80pt, 8pt)
+one_side := [[2, 3, 0.12, 0, 0]]
 seed(16)
-variable := seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: one_side)
-change := region_xor(bar,variable)
+variable := seal_edge(bar, 8pt, "zhuwen", density: 0, corner_scale: 0, wander: 1, spectrum: one_side)
+change := region_xor(bar, variable)
 assert(len(change) > 0)
-assert(len(region_intersection(change,rectangle((-1pt,4pt),82pt,12pt))) == 0)
-assert(len(region_xor(bar,seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 0,spectrum: one_side))) == 0)
-assert(len(region_xor(bar,seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: [[8,10,0.5,0.5,1]]))) == 0)
+assert(len(region_intersection(change, rectangle((-1pt, 4pt), 82pt, 12pt))) == 0)
+assert(len(region_xor(bar, seal_edge(bar, 8pt, "zhuwen", density: 0, corner_scale: 0, wander: 0, spectrum: one_side))) == 0)
+assert(len(region_xor(bar, seal_edge(bar, 8pt, "zhuwen", density: 0, corner_scale: 0, wander: 1, spectrum: [[8, 10, 0.5, 0.5, 1]]))) == 0)
 seed(16)
-other_side := seal_edge(bar,8pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: [[2,3,0,0.12,0]])
-assert(len(region_xor(other_side,bar)) > 0 and len(region_intersection(region_xor(other_side,bar),rectangle((-1pt,-8pt),82pt,12pt))) == 0)
+other_side := seal_edge(bar, 8pt, "zhuwen", density: 0, corner_scale: 0, wander: 1, spectrum: [[2, 3, 0, 0.12, 0]])
+assert(len(region_xor(other_side, bar)) > 0 and len(region_intersection(region_xor(other_side, bar), rectangle((-1pt, -8pt), 82pt, 12pt))) == 0)
 
 // The whole smooth loop admits two periods even when neither half does.
 seed(63)
-ring_wave := seal_edge(circle_face,3pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: [[5,5.5,0.08,0.08,0]])
-assert(len(subpaths(ring_wave)) == 1 and len(region_difference(circle_face,ring_wave)) > 0 and len(region_difference(ring_wave,circle_face)) > 0)
-assert(len(region_difference(circle((10pt,10pt),5pt),ring_wave)) == 0)
+ring_wave := seal_edge(circle_face, 3pt, "zhuwen", density: 0, corner_scale: 0, wander: 1, spectrum: [[5, 5.5, 0.08, 0.08, 0]])
+assert(len(subpaths(ring_wave)) == 1 and len(region_difference(circle_face, ring_wave)) > 0 and len(region_difference(ring_wave, circle_face)) > 0)
+assert(len(region_difference(circle((10pt, 10pt), 5pt), ring_wave)) == 0)
 
 // Curved open strokes have the same two independently adjustable edges.
-bow := geometry.bezier((0pt,0pt),(20pt,14pt),(40pt,-8pt),(60pt,4pt))
-original := seal_knife(bow,4pt,"zhuwen",density: 0,corner_scale: 0,cap: "butt")
+bow := geometry.bezier((0pt, 0pt), (20pt, 14pt), (40pt, -8pt), (60pt, 4pt))
+original := seal_knife(bow, 4pt, "zhuwen", density: 0, corner_scale: 0, cap: "butt")
 seed(16)
-curved := seal_knife(bow,4pt,"zhuwen",density: 0,corner_scale: 0,wander: 1,spectrum: one_side,cap: "butt")
-delta := region_xor(original,curved)
-center := geometry.point_at(bow,0.5)
-dir := math.unit(geometry.tangent_at(bow,0.5))
-left := (-dir.y,dir.x)*2pt
-assert(len(region_intersection(delta,circle(center-left,1pt))) > 0, "the selected curved edge wanders")
-assert(len(region_intersection(delta,circle(center+left,1pt))) == 0, "the other curved edge follows the design")
+curved := seal_knife(bow, 4pt, "zhuwen", density: 0, corner_scale: 0, wander: 1, spectrum: one_side, cap: "butt")
+delta := region_xor(original, curved)
+center := geometry.point_at(bow, 0.5)
+dir := math.unit(geometry.tangent_at(bow, 0.5))
+left := (-dir.y, dir.x)*2pt
+assert(len(region_intersection(delta, circle(center-left, 1pt))) > 0, "the selected curved edge wanders")
+assert(len(region_intersection(delta, circle(center+left, 1pt))) == 0, "the other curved edge follows the design")

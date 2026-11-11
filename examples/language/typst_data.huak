@@ -15,5 +15,5 @@ default plate
 
 drawing plate do
     +typ[#huak.title: #huak.count] at (8mm, 32mm)
-    +draw (8mm,20mm)--(100mm, 20mm)
+    +draw (8mm, 20mm)--(100mm, 20mm)
 end

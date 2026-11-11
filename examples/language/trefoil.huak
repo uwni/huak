@@ -19,7 +19,7 @@ bc := bezier(b, b+(-dx, dy), c+(dx, dy), c)
 ca := bezier(c, c+(-dx, -dy), a+(-44mm, 0mm), a)
 knot := closed(ab & bc & ca)
 
-woven := weave(gap:1mm) do
+woven := weave(gap: 1mm) do
     +draw knot with ink crossings [1, -2, 3, -1, 2, -3]
 end
 

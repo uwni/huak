@@ -1,7 +1,7 @@
 fn inner() -> float
-return 1 / 0
+    return 1 / 0
 end
 fn outer() -> float
-return inner()
+    return inner()
 end
 outer()

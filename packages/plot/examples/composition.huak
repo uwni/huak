@@ -1,14 +1,14 @@
 import "../plot.huak".*
 fig := figure with width 14cm height 9cm
-ax := axis of fig at (0,0)
+ax := axis of fig at (0, 0)
 plotting ax do
     title typ[Area, reference lines and annotation]
     xlabel typ[Position $x$]
     ylabel typ[Value]
-    +area x [0,1,2,3,4] y [1,3,2,4,1] styled {"fill":color.rgb(0,0.45,0.7,0.25)} named typ[Area]
-    +hline 2 styled {"dash":[3pt,2pt]} named typ[Threshold]
-    +vline 3 styled {"color":color.rgb(0.5,0.5,0.5)}
-    +annotate(3,4,typ[Peak]) styled {"clip":false}
+    +area x [0, 1, 2, 3, 4] y [1, 3, 2, 4, 1] styled {"fill": color.rgb(0, 0.45, 0.7, 0.25)} named typ[Area]
+    +hline 2 styled {"dash": [3pt, 2pt]} named typ[Threshold]
+    +vline 3 styled {"color": color.rgb(0.5, 0.5, 0.5)}
+    +annotate(3, 4, typ[Peak]) styled {"clip": false}
     legend "outside-bottom"
 end
 default render fig

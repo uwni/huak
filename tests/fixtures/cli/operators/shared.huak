@@ -1,6 +1,6 @@
 import assertions.assert
 import "lib/scaling.huak" as scaleops
 import "lib/shifting.huak" as shiftops
-assert(10 scaleops.scaled 2 shiftops.shifted 3==23)
-assert(scaleops.scaled(10,2)==10 scaleops.scaled 2)
-assert(shiftops.shifted(scaleops.scaled(10,2),3)==23)
+assert(10 scaleops.scaled 2 shiftops.shifted 3 == 23)
+assert(scaleops.scaled(10, 2) == 10 scaleops.scaled 2)
+assert(shiftops.shifted(scaleops.scaled(10, 2), 3) == 23)

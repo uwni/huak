@@ -57,9 +57,9 @@ export fn analyze(strands:list, tolerance:length) -> Plan
     for i in 0:len(rows)-1 do
         row:list := rows[i]
         id := i+1
-        first := Passage(strand:row[1], contour:row[2], time:row[3], crossing:id, over:false)
-        second := Passage(strand:row[4], contour:row[5], time:row[6], crossing:id, over:true)
-        crossings += [Crossing(first:first, second:second)]
+        first := Passage(strand: row[1], contour: row[2], time: row[3], crossing: id, over: false)
+        second := Passage(strand: row[4], contour: row[5], time: row[6], crossing: id, over: true)
+        crossings += [Crossing(first: first, second: second)]
         insert(visits[first.strand], first)
         insert(visits[second.strand], second)
     end
@@ -87,5 +87,5 @@ export fn analyze(strands:list, tolerance:length) -> Plan
         end
         assert(crossing.first.over != crossing.second.over, "weave crossing " + str(i+1) + " needs one over passage and one under passage")
     end
-    return Plan(strands:strands, crossings:crossings, visits:visits)
+    return Plan(strands: strands, crossings: crossings, visits: visits)
 end

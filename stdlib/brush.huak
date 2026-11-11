@@ -57,7 +57,7 @@ fn rainbow(curve:path, width:length, steps:int) -> object
     if axis != false then
         stops := []
         for i in 0:5 do stops += rainbow_color(float(i)/5) end
-        drawing result do +linear_stroke(curve,axis[0],axis[1],stops,pen(stops[0],width,"round","round")) end
+        drawing result do +linear_stroke(curve, axis[0], axis[1], stops, pen(stops[0], width, "round", "round")) end
         return result
     end
     samples := sample_path(curve, steps)

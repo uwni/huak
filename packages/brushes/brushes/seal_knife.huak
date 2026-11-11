@@ -50,13 +50,13 @@ fn apply_masks(base:path, masks:list, inward:bool, boxes:list, exteriors:int, to
         if inward then result = region_difference(base, cuts)
         else result = region_union(base, cuts) end
         if len(contour_ranges(result)) == len(boxes) then
-            if same_contours(subpaths(result),boxes,exteriors,tolerance) then return result end
+            if same_contours(subpaths(result), boxes, exteriors, tolerance) then return result end
         end
         if len(masks) == 1 then return base end
     end
     mid := int(len(masks) / 2)
-    first := apply_masks(base, masks[0:mid-1], inward, boxes, exteriors,tolerance)
-    return apply_masks(first, masks[mid:], inward, boxes, exteriors,tolerance)
+    first := apply_masks(base, masks[0:mid-1], inward, boxes, exteriors, tolerance)
+    return apply_masks(first, masks[mid:], inward, boxes, exteriors, tolerance)
 end
 
 fn corner_masks(boundary:path, width:length, strength:float, law:samples.Distribution, cuts:list, fills:list)
@@ -66,8 +66,8 @@ fn corner_masks(boundary:path, width:length, strength:float, law:samples.Distrib
     if len(sides) < 2 then return end
     first:Flank := sides[0]
     last:Flank := sides[len(sides)-1]
-    if last.finish == travel and first.begin == 0pt and continuous(last,first) then
-        sides[0] = Flank(last.a,first.b,unit(first.b-last.a),last.begin-travel,first.finish,last.first,first.end_time)
+    if last.finish == travel and first.begin == 0pt and continuous(last, first) then
+        sides[0] = Flank(last.a, first.b, unit(first.b-last.a), last.begin-travel, first.finish, last.first, first.end_time)
         sides = sides[0:len(sides)-2]
     end
     arms := []
@@ -83,13 +83,13 @@ fn corner_masks(boundary:path, width:length, strength:float, law:samples.Distrib
         if gap > width then continue end
         u := a.direction
         v := b.direction
-        angle_cos := dot(u,v)
+        angle_cos := dot(u, v)
         if abs(angle_cos) > cos(80deg) then continue end
         turn := u.x*v.y-u.y*v.x
         delta := b.a-a.b
         along := (delta.x*v.y-delta.y*v.x)/turn
         back := (u.x*delta.y-u.y*delta.x)/turn
-        if min(along,back) < -0.00001pt then continue end
+        if min(along, back) < -0.00001pt then continue end
         convex := turn > 0
         depth := samples.corner_depth(law, convex)*strength
         if depth == 0pt then continue end
@@ -97,7 +97,7 @@ fn corner_masks(boundary:path, width:length, strength:float, law:samples.Distrib
         // The CSV measures displacement along the angle bisector. Convert it
         // to a distance along each arm and leave room for neighboring corners.
         leg := min(depth/sqrt((1-angle_cos)/2), 0.7*width)
-        leg = min(leg, 0.45*min(norm(tip-a.a),norm(b.b-tip)))
+        leg = min(leg, 0.45*min(norm(tip-a.a), norm(b.b-tip)))
         mask := path([tip-u*leg, tip, tip+v*leg], true)
         if convex then cuts += [mask] else fills += [mask] end
     end
@@ -145,8 +145,8 @@ fn carve(base:path, width:length, mode:string, chip_size:float, density:float, i
         if len(cuts)+len(fills) > 0 then
             exteriors := exterior_count(boundaries)
             boxes := contour_boxes(boundaries)
-            nominal = apply_masks(nominal, cuts, true, boxes, exteriors,width)
-            nominal = apply_masks(nominal, fills, false, boxes, exteriors,width)
+            nominal = apply_masks(nominal, cuts, true, boxes, exteriors, width)
+            nominal = apply_masks(nominal, fills, false, boxes, exteriors, width)
             boundaries = subpaths(nominal)
         end
     end
@@ -190,37 +190,37 @@ fn carve(base:path, width:length, mode:string, chip_size:float, density:float, i
             if len(mask) > 0 then masks += [mask] end
         end
     end
-    return apply_masks(nominal, masks, mode == "zhuwen", contour_boxes(boundaries), exterior_count(boundaries),width*chip_size)
+    return apply_masks(nominal, masks, mode == "zhuwen", contour_boxes(boundaries), exterior_count(boundaries), width*chip_size)
 end
 
 fn round_cap(sample:list, radius:length, rounding:float) -> path
     center := sample[1]
-    if rounding == 1 then return geometry.circle(center,radius) end
+    if rounding == 1 then return geometry.circle(center, radius) end
     r := radius*rounding
     tangent := sample[2]
-    half_flat := (-tangent.y,tangent.x)*(radius-r)
-    return stroke_path((center-half_flat) -- (center+half_flat),2*r,"round","round")
+    half_flat := (-tangent.y, tangent.x)*(radius-r)
+    return stroke_path((center-half_flat) -- (center+half_flat), 2*r, "round", "round")
 end
 
 fn knife_outline(curve:path, width:length, cap:string, cap_roundness:float) -> path
     assert(cap == "butt" or cap == "round" or cap == "square", "unknown seal knife cap")
     assert(cap_roundness >= 0 and cap_roundness <= 1, "cap_roundness must be in [0, 1]")
     radius := width / 2
-    blade := makepen((-radius,0pt) -- (radius,0pt) -- cycle)
-    knife := pen(rgb(0,0,0), nib:blade, motion:along_normal(corner:"rotate"))
+    blade := makepen((-radius, 0pt) -- (radius, 0pt) -- cycle)
+    knife := pen(rgb(0, 0, 0), nib: blade, motion: along_normal(corner: "rotate"))
     guides := []
     caps := []
     for part in subpaths(curve) do
         edge := measure(part)
         if edge.length == 0pt then
             // A stationary dot has no direction. Use the requested cap's stamp.
-            if cap != "butt" then caps += [stroke_path(part,width,cap,"round")] end
+            if cap != "butt" then caps += [stroke_path(part, width, cap, "round")] end
             continue
         end
         if (cap == "square" or (cap == "round" and cap_roundness > 0)) and not contour_ranges(part)[0][2] then
-            ends := samples_at_length(edge,[0pt,edge.length])
+            ends := samples_at_length(edge, [0pt, edge.length])
             if cap == "round" then
-                for sample in ends do caps += [round_cap(sample,radius,cap_roundness)] end
+                for sample in ends do caps += [round_cap(sample, radius, cap_roundness)] end
             else
                 a := ends[0][1]
                 b := ends[1][1]
@@ -229,13 +229,13 @@ fn knife_outline(curve:path, width:length, cap:string, cap_roundness:float) -> p
         end
         guides += [part]
     end
-    base := stroke_outline(compound(guides),knife)
+    base := stroke_outline(compound(guides), knife)
     if len(caps) == 0 then return base end
-    return region_union(base,compound(caps))
+    return region_union(base, compound(caps))
 end
 
 export fn seal_knife(curve:path, width:length, mode:string, chip_size:float = 0.40, density:float = 1.25, imprint_mix:float = 0.5, imprint_source:string = "qingtian", corner_scale:float = 1, wander:float = 0, spectrum:list = [], cap:string = "round", cap_roundness:float = 1) -> path
-    return carve(knife_outline(curve,width,cap,cap_roundness), width, mode, chip_size, density, imprint_mix, imprint_source, corner_scale, wander, spectrum)
+    return carve(knife_outline(curve, width, cap, cap_roundness), width, mode, chip_size, density, imprint_mix, imprint_source, corner_scale, wander, spectrum)
 end
 
 // For an existing filled letter or the outline from a custom chisel nib,

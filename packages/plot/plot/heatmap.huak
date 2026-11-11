@@ -1,72 +1,72 @@
 import collections.get
-import math.{min,max,floor}
+import math.{min, max, floor}
 import color.rgb
 import assertions.assert
-import "model.huak".{Layer,validate,LAYER_OPTIONS}
+import "model.huak".{Layer, validate, LAYER_OPTIONS}
 
 export fn heatmap(values:list, xedges:list = [], yedges:list = [], options:dict = {}) -> Layer
-    validate(options,LAYER_OPTIONS)
-    return Layer(kind:"heatmap",data:{"values":values,"xedges":xedges,"yedges":yedges},options:copy(options))
+    validate(options, LAYER_OPTIONS)
+    return Layer(kind: "heatmap", data: {"values": values, "xedges": xedges, "yedges": yedges}, options: copy(options))
 end
 
 // RGB stops, interpolated in sRGB. Values are explicit and reproducible.
 export fn colormap(name:string = "sequential") -> list
-    if name=="sequential" then return [[0.267,0.005,0.329],[0.23,0.322,0.546],[0.128,0.567,0.551],[0.369,0.789,0.383],[0.993,0.906,0.144]] end
-    assert(name=="diverging","unknown colormap")
-    return [[0.23,0.30,0.75],[0.865,0.865,0.865],[0.706,0.016,0.15]]
+    if name == "sequential" then return [[0.267, 0.005, 0.329], [0.23, 0.322, 0.546], [0.128, 0.567, 0.551], [0.369, 0.789, 0.383], [0.993, 0.906, 0.144]] end
+    assert(name == "diverging", "unknown colormap")
+    return [[0.23, 0.30, 0.75], [0.865, 0.865, 0.865], [0.706, 0.016, 0.15]]
 end
 
 export fn color_at(stops:list, position:float) -> color
-    assert(len(stops)>=2,"colormap requires at least two RGB stops")
-    t := min(1,max(0,position))*(len(stops)-1)
-    i := min(int(floor(t)),len(stops)-2)
+    assert(len(stops) >= 2, "colormap requires at least two RGB stops")
+    t := min(1, max(0, position))*(len(stops)-1)
+    i := min(int(floor(t)), len(stops)-2)
     f := t-i
     a := stops[i]; b := stops[i+1]
-    assert(len(a)==3 and len(b)==3,"colormap stops require three channels")
-    return rgb(a[0]*(1-f)+b[0]*f,a[1]*(1-f)+b[1]*f,a[2]*(1-f)+b[2]*f)
+    assert(len(a) == 3 and len(b) == 3, "colormap stops require three channels")
+    return rgb(a[0]*(1-f)+b[0]*f, a[1]*(1-f)+b[1]*f, a[2]*(1-f)+b[2]*f)
 end
 
 fn edges(supplied:list, count:int) -> list
     result := copy(supplied)
-    if len(result)==0 then for i in 0:count do result += [float(i)] end end
-    assert(len(result)==count+1,"heatmap edges do not match matrix dimensions")
-    for i in 1:len(result)-1 do assert(result[i]>result[i-1],"heatmap edges must increase") end
+    if len(result) == 0 then for i in 0:count do result += [float(i)] end end
+    assert(len(result) == count+1, "heatmap edges do not match matrix dimensions")
+    for i in 1:len(result)-1 do assert(result[i] > result[i-1], "heatmap edges must increase") end
     return result
 end
 
 export fn prepare(item:Layer) -> Layer
     values:list := item.data["values"]
     rows := len(values); columns := 0
-    if rows>0 then columns = len(values[0]) end
-    xs := edges(item.data["xedges"],columns)
-    ys := edges(item.data["yedges"],rows)
+    if rows > 0 then columns = len(values[0]) end
+    xs := edges(item.data["xedges"], columns)
+    ys := edges(item.data["yedges"], rows)
     x := []; y := []; x1 := []; y1 := []; z := []
     low := 0.0; high := 1.0
     for row in 0:rows-1 do
-        assert(len(values[row])==columns,"heatmap matrix must be rectangular")
+        assert(len(values[row]) == columns, "heatmap matrix must be rectangular")
         for column in 0:columns-1 do
             value:any := values[row][column]
-            if value!=false then
+            if value != false then
                 n:float := value
-                if len(z)==0 then low = n; high = n else low = min(low,n); high = max(high,n) end
+                if len(z) == 0 then low = n; high = n else low = min(low, n); high = max(high, n) end
                 x += [xs[column]]; x1 += [xs[column+1]]
                 y += [ys[row]]; y1 += [ys[row+1]]; z += [n]
             end
         end
     end
-    if low==high then
-        pad := max(0.5,math.abs(low)*0.05)
+    if low == high then
+        pad := max(0.5, math.abs(low)*0.05)
         low = low-pad; high = high+pad
     end
-    limits:list := get(item.options,"clim",[low,high])
-    assert(len(limits)==2 and limits[0]<limits[1],"color limits must be increasing")
-    stops:list := get(item.options,"colormap",colormap())
+    limits:list := get(item.options, "clim", [low, high])
+    assert(len(limits) == 2 and limits[0] < limits[1], "color limits must be increasing")
+    stops:list := get(item.options, "colormap", colormap())
     for stop in stops do
-        assert(len(stop)==3,"colormap stops require three channels")
-        for channel in stop do assert(channel>=0 and channel<=1,"colormap channel must be in 0..1") end
+        assert(len(stop) == 3, "colormap stops require three channels")
+        for channel in stop do assert(channel >= 0 and channel <= 1, "colormap channel must be in 0..1") end
     end
-    assert(len(stops)>=2,"colormap requires at least two stops")
-    return Layer(kind:"cells",x:x,y:y,data:{"x1":x1,"y1":y1,"z":z,"clim":limits,"colormap":stops,"xextent":xs,"yextent":ys},options:item.options)
+    assert(len(stops) >= 2, "colormap requires at least two stops")
+    return Layer(kind: "cells", x: x, y: y, data: {"x1": x1, "y1": y1, "z": z, "clim": limits, "colormap": stops, "xextent": xs, "yextent": ys}, options: item.options)
 end
 
 export fn normalized(item:Layer, value:float) -> float

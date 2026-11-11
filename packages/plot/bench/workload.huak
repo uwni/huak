@@ -5,8 +5,8 @@ param batch:int = 1
 
 fn make_chart(kind:string, count:int) -> picture
     f := figure with width 400pt height 280pt
-    a := axis of f at (0,0)
-    if kind=="heatmap" then
+    a := axis of f at (0, 0)
+    if kind == "heatmap" then
         rows := []
         for y in 0:99 do
             row := []
@@ -18,7 +18,7 @@ fn make_chart(kind:string, count:int) -> picture
         x := []; y := []
         for i in 0:count-1 do x += [float(i)]; y += [math.sin(i*1deg)] end
         plotting a do
-            if kind=="scatter" then +scatter x x y y
+            if kind == "scatter" then +scatter x x y y
             else +lines x x y y end
         end
     end
@@ -26,5 +26,5 @@ fn make_chart(kind:string, count:int) -> picture
 end
 
 plots := []
-for i in 1:batch do plots += [make_chart(kind,count)] end
+for i in 1:batch do plots += [make_chart(kind, count)] end
 default plots[0]

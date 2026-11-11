@@ -2,22 +2,22 @@ import math.{abs};import paint.{label, picture, append};import assertions.assert
 setup_typst {
 set text(size:8pt)
 }
-before:=typ[
+before := typ[
 Module Ω
 ]
 import "lib/typography.huak" as typography
-after:=typ[
+after := typ[
 Module Ω
 ]
-assert(abs(before.width-after.width)<0.000001pt)
-child:=typography.make_caption()
-assert(child.width>2.9*before.width)
-assert(abs(child.width-typography.caption.width)<0.000001pt)
-last:=typ[
+assert(abs(before.width-after.width) < 0.000001pt)
+child := typography.make_caption()
+assert(child.width > 2.9*before.width)
+assert(abs(child.width-typography.caption.width) < 0.000001pt)
+last := typ[
 Module Ω
 ]
-assert(abs(before.width-last.width)<0.000001pt)
-export page:=picture(320,180)
+assert(abs(before.width-last.width) < 0.000001pt)
+export page := picture(320, 180)
 page.append(copy(typography.tile))
-object.append(page, object.label(before, (5,110))); object.append(page, object.label(child, (5,160)))
+object.append(page, object.label(before, (5, 110))); object.append(page, object.label(child, (5, 160)))
 default page

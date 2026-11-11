@@ -1,2 +1,2 @@
 import paint.{picture};print("shared initialized")
-export canvas:=picture(70,35)
+export canvas := picture(70, 35)

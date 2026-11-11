@@ -1,15 +1,15 @@
 import paint.{translate, scale, transformed};precedence transform
-below addition
-above path
-associativity left
+    below addition
+    above path
+    associativity left
 end
-fn scaled(p:path,k:float)->path
-return transformed(p,scale(k))
+fn scaled(p:path, k:float)->path
+    return transformed(p, scale(k))
 end
 mixfix(scaled) _ scaled _ in transform
 export scaled
-fn shifted(p:path,offset:vec2)->path
-return transformed(p,translate(offset))
+fn shifted(p:path, offset:vec2)->path
+    return transformed(p, translate(offset))
 end
 mixfix(shifted) _ shifted _ in transform
 export shifted

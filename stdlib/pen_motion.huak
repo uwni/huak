@@ -1,24 +1,24 @@
 // Motion values are ordinary, ordered lists of immutable track specifications.
 // Each scalar ramp is linear in the fraction of arc length of one contour.
-fn ramp(a:any,b:any) -> list
-    return [[0,a],[1,b]]
+fn ramp(a:any, b:any) -> list
+    return [[0, a], [1, b]]
 end
 mixfix(ramp) varying from _ to _ in unary
 export ramp
 
-fn scaling(x:any,y:any) -> list
-    return [["scale_x",x],["scale_y",y]]
+fn scaling(x:any, y:any) -> list
+    return [["scale_x", x], ["scale_y", y]]
 end
 mixfix(scaling) scaling x _ y _ in unary
 export scaling
 
 fn rotation(angle:any) -> list
-    return [["rotate",angle]]
+    return [["rotate", angle]]
 end
 mixfix(rotation) rotation by _ in unary
 export rotation
 
-fn then_motion(first:list,second:list) -> list
+fn then_motion(first:list, second:list) -> list
     result := copy(first)
     result += second
     return result
@@ -29,22 +29,22 @@ export then_motion
 // Local +x follows the original curve's tangent, +y its left normal.
 fn path_frame(corner:string = "strict") -> list
     if corner == "strict" then return [["path_frame"]] end
-    return [["path_frame",corner]]
+    return [["path_frame", corner]]
 end
 export path_frame
 
 fn along_normal(corner:string = "strict") -> list
-    return then_motion(rotation(90deg),path_frame(corner))
+    return then_motion(rotation(90deg), path_frame(corner))
 end
 export along_normal
 
 // Arithmetic in this lexical block constructs scalar expressions for the
 // motion. The ordinary arithmetic outside the block keeps its usual meaning.
-fn add_expr(a:any,b:any) -> list return ["+",a,b] end
-fn sub_expr(a:any,b:any) -> list return ["-",a,b] end
-fn mul_expr(a:any,b:any) -> list return ["*",a,b] end
-fn div_expr(a:any,b:any) -> list return ["/",a,b] end
-fn negate_expr(a:any) -> list return ["*",-1,a] end
+fn add_expr(a:any, b:any) -> list return ["+", a, b] end
+fn sub_expr(a:any, b:any) -> list return ["-", a, b] end
+fn mul_expr(a:any, b:any) -> list return ["*", a, b] end
+fn div_expr(a:any, b:any) -> list return ["/", a, b] end
+fn negate_expr(a:any) -> list return ["*", -1, a] end
 
 export expand_block moving()
     t := ["progress"]

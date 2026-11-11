@@ -1,4 +1,4 @@
 precedence transforms
-associativity left
+    associativity left
 end
 export transforms

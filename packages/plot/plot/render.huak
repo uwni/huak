@@ -1,10 +1,10 @@
-import math.{min,max,ceil}
+import math.{min, max, ceil}
 import collections.get
 import assertions.assert
 import color.rgb
 import geometry.{rectangle}
-import object.{append,draw,fill,clip as clip_picture}
-import "model.huak".{Figure,Axis,Layer,horizontal,primary}
+import object.{append, draw, fill, clip as clip_picture}
+import "model.huak".{Figure, Axis, Layer, horizontal, primary}
 import "rulers.huak" as rulers
 import "arrows.huak" as arrows
 import "breaks.huak" as cuts
@@ -24,14 +24,14 @@ export struct Panel
     rulers_by_side:dict = {}
     x_piece:any = false
     y_piece:any = false
-    origin:vec2 = (0pt,0pt)
-    size:vec2 = (1pt,1pt)
+    origin:vec2 = (0pt, 0pt)
+    size:vec2 = (1pt, 1pt)
     left:length = 0pt
     right:length = 0pt
     top:length = 0pt
     bottom:length = 0pt
     legends:list = []
-    legend_size:vec2 = (0pt,0pt)
+    legend_size:vec2 = (0pt, 0pt)
     color_layer:any = false
     color_ticks:list = []
     color_labels:list = []
@@ -44,44 +44,44 @@ export struct Panel
 end
 
 export fn palette(fig:Figure) -> list
-    colors:list := get(fig.options,"palette",[rgb(0,0.45,0.7),rgb(0.85,0.33,0.1),rgb(0,0.6,0.5),rgb(0.8,0.47,0.65),rgb(0.9,0.6,0),rgb(0.35,0.7,0.9)])
-    assert(len(colors)>0,"palette must not be empty")
+    colors:list := get(fig.options, "palette", [rgb(0, 0.45, 0.7), rgb(0.85, 0.33, 0.1), rgb(0, 0.6, 0.5), rgb(0.8, 0.47, 0.65), rgb(0.9, 0.6, 0), rgb(0.35, 0.7, 0.9)])
+    assert(len(colors) > 0, "palette must not be empty")
     return colors
 end
 
 fn collect(layers:list, axis:string) -> list
     result := []
     for item in layers do
-        categories:list := get(item.data,"categories",[])
-        category_dimension:string := get(item.data,"category_dimension","")
-        if item.kind=="cells" then
+        categories:list := get(item.data, "categories", [])
+        category_dimension:string := get(item.data, "category_dimension", "")
+        if item.kind == "cells" then
             result += item.data[axis+"extent"]
-        elseif len(categories)>0 and category_dimension==axis then
+        elseif len(categories) > 0 and category_dimension == axis then
             result += categories
-        elseif item.kind=="hline" then
-            if axis=="y" then result += item.y end
-        elseif item.kind=="vline" then
-            if axis=="x" then result += item.x end
+        elseif item.kind == "hline" then
+            if axis == "y" then result += item.y end
+        elseif item.kind == "vline" then
+            if axis == "x" then result += item.x end
         else
             for i in 0:len(item.x)-1 do
-                present := item.x[i]!=false and item.y[i]!=false
-                if item.kind=="band" or item.kind=="area" then present = present and item.data["upper"][i]!=false end
+                present := item.x[i] != false and item.y[i] != false
+                if item.kind == "band" or item.kind == "area" then present = present and item.data["upper"][i] != false end
                 if present then
                     if axis == "x" then result += [item.x[i]] else result += [item.y[i]] end
-                    if item.kind=="rectangles" or item.kind=="segments" then
+                    if item.kind == "rectangles" or item.kind == "segments" then
                         result += [item.data[axis+"1"][i]]
-                    elseif item.kind=="band" or item.kind=="area" then
+                    elseif item.kind == "band" or item.kind == "area" then
                         upper:any := item.data["upper"][i]
-                        if axis=="y" and upper!=false then result += [upper] end
-                    elseif item.kind=="errorbars" then
+                        if axis == "y" and upper != false then result += [upper] end
+                    elseif item.kind == "errorbars" then
                         lower:any := item.data["errors"][i]
-                        upper:list := get(item.options,"upper",item.data["errors"])
-                        assert(len(upper)==len(item.x),"upper errors length differs from data")
-                        if lower!=false and upper[i]!=false then
-                            assert(lower>=0 and upper[i]>=0,"error magnitudes must be nonnegative")
-                            horizontal := get(item.options,"orientation","vertical")=="horizontal"
-                            if axis=="x" and horizontal then result += [item.x[i]-lower,item.x[i]+upper[i]] end
-                            if axis=="y" and not horizontal then result += [item.y[i]-lower,item.y[i]+upper[i]] end
+                        upper:list := get(item.options, "upper", item.data["errors"])
+                        assert(len(upper) == len(item.x), "upper errors length differs from data")
+                        if lower != false and upper[i] != false then
+                            assert(lower >= 0 and upper[i] >= 0, "error magnitudes must be nonnegative")
+                            horizontal := get(item.options, "orientation", "vertical") == "horizontal"
+                            if axis == "x" and horizontal then result += [item.x[i]-lower, item.x[i]+upper[i]] end
+                            if axis == "y" and not horizontal then result += [item.y[i]-lower, item.y[i]+upper[i]] end
                         end
                     end
                 end
@@ -92,10 +92,10 @@ fn collect(layers:list, axis:string) -> list
 end
 
 fn layers_for(layers:list, ax:Axis, dimension:string, side:string) -> list
-    fallback := primary(ax,dimension)
+    fallback := primary(ax, dimension)
     selected := []
     for layer in layers do
-        if get(layer.options,dimension+"axis",fallback)==side then selected += [layer] end
+        if get(layer.options, dimension+"axis", fallback) == side then selected += [layer] end
     end
     return selected
 end
@@ -105,19 +105,19 @@ end
 fn prepare_layers(ax:Axis, sides:dict) -> list
     groups := {}
     ordered := []
-    primary_x := primary(ax,"x"); primary_y := primary(ax,"y")
+    primary_x := primary(ax, "x"); primary_y := primary(ax, "y")
     for i in 0:len(ax.layers)-1 do
         layer := ax.layers[i]
-        x:string := get(layer.options,"xaxis",primary_x)
-        y:string := get(layer.options,"yaxis",primary_y)
-        assert(horizontal(x) and not horizontal(y),"invalid layer axis orientation")
-        assert(dict_contains(sides,x) and dict_contains(sides,y),"layer uses an undeclared axis side")
+        x:string := get(layer.options, "xaxis", primary_x)
+        y:string := get(layer.options, "yaxis", primary_y)
+        assert(horizontal(x) and not horizontal(y), "invalid layer axis orientation")
+        assert(dict_contains(sides, x) and dict_contains(sides, y), "layer uses an undeclared axis side")
         key := x+"/"+y
-        if not dict_contains(groups,key) then
+        if not dict_contains(groups, key) then
             settings := {}
-            if dict_contains(sides[x],"scale") then settings["xscale"] = sides[x]["scale"] end
-            if dict_contains(sides[y],"scale") then settings["yscale"] = sides[y]["scale"] end
-            groups[key] = {"layers":[],"indices":[],"settings":settings}
+            if dict_contains(sides[x], "scale") then settings["xscale"] = sides[x]["scale"] end
+            if dict_contains(sides[y], "scale") then settings["yscale"] = sides[y]["scale"] end
+            groups[key] = {"layers": [], "indices": [], "settings": settings}
         end
         group := groups[key]
         group["layers"] += [layer]
@@ -126,7 +126,7 @@ fn prepare_layers(ax:Axis, sides:dict) -> list
     end
     for key in keys(groups) do
         group := groups[key]
-        for item in statistics.prepare(group["layers"],group["settings"],group["indices"]) do
+        for item in statistics.prepare(group["layers"], group["settings"], group["indices"]) do
             i:int := item.options["series_index"]
             ordered[i] += [item]
         end
@@ -139,44 +139,44 @@ end
 export fn prepare(fig:Figure) -> list
     panels := []
     for ax in fig.axes do
-        x := primary(ax,"x"); y := primary(ax,"y")
-        assert(horizontal(x) and not horizontal(y),"invalid primary axis orientation")
+        x := primary(ax, "x"); y := primary(ax, "y")
+        assert(horizontal(x) and not horizontal(y), "invalid primary axis orientation")
         sides := {}
-        names := [x,y]
+        names := [x, y]
         names += keys(ax.sides)
-        for side in names do sides[side] = rulers.options(ax,side) end
-        layers := prepare_layers(ax,sides)
+        for side in names do sides[side] = rulers.options(ax, side) end
+        layers := prepare_layers(ax, sides)
         resolved := {}
         for side in keys(sides) do
             dim := "y"
             if horizontal(side) then dim = "x" end
-            selected := layers_for(layers,ax,dim,side)
+            selected := layers_for(layers, ax, dim, side)
             opts := sides[side]
             kind := "linear"
             for layer in selected do
-                if get(layer.data,"category_dimension","")==dim then kind = "category" end
+                if get(layer.data, "category_dimension", "") == dim then kind = "category" end
             end
-            scale := scales.resolve(collect(selected,dim),get(opts,"scale",kind),get(opts,"limits",false),get(opts,"reverse",false))
-            resolved[side] = rulers.Ruler(side:side,scale:scale,options:opts)
+            scale := scales.resolve(collect(selected, dim), get(opts, "scale", kind), get(opts, "limits", false), get(opts, "reverse", false))
+            resolved[side] = rulers.Ruler(side: side, scale: scale, options: opts)
         end
-        panels += [Panel(source:ax,layers:layers,x:resolved[x].scale,y:resolved[y].scale,rulers_by_side:resolved)]
+        panels += [Panel(source: ax, layers: layers, x: resolved[x].scale, y: resolved[y].scale, rulers_by_side: resolved)]
     end
     for panel in panels do
-        panel.x = shared_scale(fig,panels,panel,"x",fig.xlinks)
-        panel.y = shared_scale(fig,panels,panel,"y",fig.ylinks)
+        panel.x = shared_scale(fig, panels, panel, "x", fig.xlinks)
+        panel.y = shared_scale(fig, panels, panel, "y", fig.ylinks)
         ax := panel.source
-        panel.rulers_by_side[primary(ax,"x")].scale = panel.x
-        panel.rulers_by_side[primary(ax,"y")].scale = panel.y
+        panel.rulers_by_side[primary(ax, "x")].scale = panel.x
+        panel.rulers_by_side[primary(ax, "y")].scale = panel.y
         for side in keys(ax.sides) do
             dim := "y"; inherited := panel.y
             if horizontal(side) then dim = "x"; inherited = panel.x end
             ruler := panel.rulers_by_side[side]
-            if side!=primary(ax,dim) and not dict_contains(ruler.options,"scale") and not dict_contains(ruler.options,"limits") and len(layers_for(panel.layers,ax,dim,side))==0 then
+            if side != primary(ax, dim) and not dict_contains(ruler.options, "scale") and not dict_contains(ruler.options, "limits") and len(layers_for(panel.layers, ax, dim, side)) == 0 then
                 ruler.scale = copy(inherited)
-                ruler.scale.reversed = get(ruler.options,"reverse",inherited.reversed)
-                original := panel.rulers_by_side[primary(ax,dim)]
-                for key in ["breaks","break_gap"] do
-                    if not dict_contains(ruler.options,key) and dict_contains(original.options,key) then ruler.options[key] = original.options[key] end
+                ruler.scale.reversed = get(ruler.options, "reverse", inherited.reversed)
+                original := panel.rulers_by_side[primary(ax, dim)]
+                for key in ["breaks", "break_gap"] do
+                    if not dict_contains(ruler.options, key) and dict_contains(original.options, key) then ruler.options[key] = original.options[key] end
                 end
             end
         end
@@ -189,9 +189,9 @@ fn connected(source:Axis, groups:list, count:int) -> list
     for iteration in 0:count-1 do
         for group in groups do
             overlap := false
-            for member in group do if scales.index(members,member)>=0 then overlap = true end end
+            for member in group do if scales.index(members, member) >= 0 then overlap = true end end
             if overlap then
-                for member in group do if scales.index(members,member)<0 then members += [member] end end
+                for member in group do if scales.index(members, member) < 0 then members += [member] end end
             end
         end
     end
@@ -199,55 +199,55 @@ fn connected(source:Axis, groups:list, count:int) -> list
 end
 
 fn shared_scale(fig:Figure, panels:list, panel:Panel, dimension:string, groups:list) -> scales.Scale
-    members := connected(panel.source,groups,len(fig.axes))
-    if len(members)==1 then
-        if dimension=="x" then return panel.x else return panel.y end
+    members := connected(panel.source, groups, len(fig.axes))
+    if len(members) == 1 then
+        if dimension == "x" then return panel.x else return panel.y end
     end
-    reference := panel.rulers_by_side[primary(panel.source,dimension)]
+    reference := panel.rulers_by_side[primary(panel.source, dimension)]
     kind := reference.scale.kind
     limits:any := false
     breaks:any := false; gap:any := false
     values := []
     for other in panels do
-        if scales.index(members,other.source)>=0 then
-            side := primary(other.source,dimension)
+        if scales.index(members, other.source) >= 0 then
+            side := primary(other.source, dimension)
             ruler := other.rulers_by_side[side]
-            if dict_contains(ruler.options,"breaks") then
+            if dict_contains(ruler.options, "breaks") then
                 ranges := ruler.options["breaks"]
-                if breaks!=false then assert(cuts.compatible(breaks,ranges),"shared axes have conflicting breaks") end
+                if breaks != false then assert(cuts.compatible(breaks, ranges), "shared axes have conflicting breaks") end
                 breaks = ranges
             end
-            if dict_contains(ruler.options,"break_gap") then
-                if gap!=false then assert(gap==ruler.options["break_gap"],"shared axes have conflicting break gaps") end
+            if dict_contains(ruler.options, "break_gap") then
+                if gap != false then assert(gap == ruler.options["break_gap"], "shared axes have conflicting break gaps") end
                 gap = ruler.options["break_gap"]
             end
-            assert(ruler.scale.kind==kind,"shared axes must use the same scale")
-            candidate:any := get(ruler.options,"limits",false)
+            assert(ruler.scale.kind == kind, "shared axes must use the same scale")
+            candidate:any := get(ruler.options, "limits", false)
             if candidate != false then
-                if limits != false then assert(candidate[0]==limits[0] and candidate[1]==limits[1],"shared axes have conflicting limits") end
+                if limits != false then assert(candidate[0] == limits[0] and candidate[1] == limits[1], "shared axes have conflicting limits") end
                 limits = candidate
             end
-            values += collect(layers_for(other.layers,other.source,dimension,side),dimension)
+            values += collect(layers_for(other.layers, other.source, dimension, side), dimension)
         end
     end
-    if breaks!=false then reference.options["breaks"] = breaks end
-    if gap!=false then reference.options["break_gap"] = gap end
-    return scales.resolve(values,kind,limits,reference.scale.reversed)
+    if breaks != false then reference.options["breaks"] = breaks end
+    if gap != false then reference.options["break_gap"] = gap end
+    return scales.resolve(values, kind, limits, reference.scale.reversed)
 end
 
 export fn point(panel:Panel, x:any, y:any) -> vec2
-    result := affine_point(panel,x,y)
-    for dim in ["x","y"] do
-        partition := panel.rulers_by_side[primary(panel.source,dim)].partition
-        if len(partition.gaps)>0 then
-            if dim=="x" then
-                distance:any := cuts.position(partition.pieces,x)
-                assert(distance!=false,"point outside retained x intervals")
-                result = (panel.origin.x+distance,result.y)
+    result := affine_point(panel, x, y)
+    for dim in ["x", "y"] do
+        partition := panel.rulers_by_side[primary(panel.source, dim)].partition
+        if len(partition.gaps) > 0 then
+            if dim == "x" then
+                distance:any := cuts.position(partition.pieces, x)
+                assert(distance != false, "point outside retained x intervals")
+                result = (panel.origin.x+distance, result.y)
             else
-                distance:any := cuts.position(partition.pieces,y)
-                assert(distance!=false,"point outside retained y intervals")
-                result = (result.x,panel.origin.y+distance)
+                distance:any := cuts.position(partition.pieces, y)
+                assert(distance != false, "point outside retained y intervals")
+                result = (result.x, panel.origin.y+distance)
             end
         end
     end
@@ -257,86 +257,86 @@ end
 // Project the whole geometry onto the affine extension of this tile. Native
 // clipping then finds the actual crossings, including lines with both ends outside.
 fn affine_point(panel:Panel, x:any, y:any) -> vec2
-    return panel.origin+(panel.size.x*scales.coordinate(panel.x,x),panel.size.y*scales.coordinate(panel.y,y))
+    return panel.origin+(panel.size.x*scales.coordinate(panel.x, x), panel.size.y*scales.coordinate(panel.y, y))
 end
 
 fn raw_value(scale:scales.Scale, item:Layer, value:float, dimension:string, row:int) -> float
-    if scale.kind=="category" and get(item.data,"category_dimension","")==dimension then
+    if scale.kind == "category" and get(item.data, "category_dimension", "") == dimension then
         cats:list := item.data["categories"]
         local:int := item.data["category_indices"][row]
-        assert(local>=0 and local<len(cats),"category geometry exceeds its cell")
-        mapped := scales.index(scale.categories,cats[local])
-        assert(mapped>=0,"unknown shared category")
+        assert(local >= 0 and local < len(cats), "category geometry exceeds its cell")
+        mapped := scales.index(scale.categories, cats[local])
+        assert(mapped >= 0, "unknown shared category")
         return float(mapped)+value-local
     end
     return value
 end
 
 fn raw_point(panel:Panel, item:Layer, x:float, y:float, row:int) -> vec2
-    return panel.origin+(panel.size.x*scales.numeric_coordinate(panel.x,raw_value(panel.x,item,x,"x",row)),panel.size.y*scales.numeric_coordinate(panel.y,raw_value(panel.y,item,y,"y",row)))
+    return panel.origin+(panel.size.x*scales.numeric_coordinate(panel.x, raw_value(panel.x, item, x, "x", row)), panel.size.y*scales.numeric_coordinate(panel.y, raw_value(panel.y, item, y, "y", row)))
 end
 
 fn measure(panel:Panel, fig:Figure, available:vec2)
     opts := panel.source.options
-    size:length := get(opts,"font_size",get(fig.options,"font_size",9pt))
+    size:length := get(opts, "font_size", get(fig.options, "font_size", 9pt))
     panel.left = 10pt; panel.right = 10pt; panel.bottom = 10pt; panel.top = 10pt
     for side in keys(panel.rulers_by_side) do
         r := panel.rulers_by_side[side]
         span := available.y; shared:any := false
         if horizontal(side) then span = available.x end
-        if side==primary(panel.source,"x") then shared = panel.shared_x end
-        if side==primary(panel.source,"y") then shared = panel.shared_y end
-        rulers.measure(r,span,size,shared)
-        if side=="left" then panel.left = r.depth
-        elseif side=="right" then panel.right = r.depth
-        elseif side=="bottom" then panel.bottom = r.depth
+        if side == primary(panel.source, "x") then shared = panel.shared_x end
+        if side == primary(panel.source, "y") then shared = panel.shared_y end
+        rulers.measure(r, span, size, shared)
+        if side == "left" then panel.left = r.depth
+        elseif side == "right" then panel.right = r.depth
+        elseif side == "bottom" then panel.bottom = r.depth
         else panel.top = r.depth end
     end
-    panel.xt = panel.rulers_by_side[primary(panel.source,"x")].ticks
-    panel.yt = panel.rulers_by_side[primary(panel.source,"y")].ticks
-    if get(opts,"title",false)!=false then panel.top = panel.top+opts["title"].height+6pt end
-    position:string := get(opts,"legend","none")
-    assert(scales.index(["none","top-right","top-left","bottom-right","bottom-left","outside-right","outside-bottom"],position)>=0,"unknown legend position")
+    panel.xt = panel.rulers_by_side[primary(panel.source, "x")].ticks
+    panel.yt = panel.rulers_by_side[primary(panel.source, "y")].ticks
+    if get(opts, "title", false) != false then panel.top = panel.top+opts["title"].height+6pt end
+    position:string := get(opts, "legend", "none")
+    assert(scales.index(["none", "top-right", "top-left", "bottom-right", "bottom-left", "outside-right", "outside-bottom"], position) >= 0, "unknown legend position")
     panel.legends = []
     legend_width := 0pt; legend_height := 0pt
     for i in 0:len(panel.layers)-1 do
         item := panel.layers[i]
-        body:any := get(item.options,"label",false)
+        body:any := get(item.options, "label", false)
         if body != false then
             panel.legends += [i]
-            legend_width = max(legend_width,body.width+36pt)
-            legend_height = max(legend_height,body.height+7pt)
+            legend_width = max(legend_width, body.width+36pt)
+            legend_height = max(legend_height, body.height+7pt)
         end
     end
-    columns:int := get(opts,"legend_columns",1)
-    assert(columns>0,"legend columns must be positive")
-    panel.legend_size = (legend_width*columns+8pt,legend_height*ceil(float(len(panel.legends))/columns)+8pt)
+    columns:int := get(opts, "legend_columns", 1)
+    assert(columns > 0, "legend columns must be positive")
+    panel.legend_size = (legend_width*columns+8pt, legend_height*ceil(float(len(panel.legends))/columns)+8pt)
     panel.legend_right = 0pt; panel.legend_bottom = 0pt
-    if len(panel.legends)>0 then
-        if position=="outside-right" then panel.legend_right = panel.legend_size.x+6pt end
-        if position=="outside-bottom" then panel.legend_bottom = panel.legend_size.y+6pt end
+    if len(panel.legends) > 0 then
+        if position == "outside-right" then panel.legend_right = panel.legend_size.x+6pt end
+        if position == "outside-bottom" then panel.legend_bottom = panel.legend_size.y+6pt end
     end
     panel.color_layer = false; panel.color_ticks = []; panel.color_labels = []
     panel.color_right = 0pt; panel.color_bottom = 0pt
-    colorbar:any := get(opts,"colorbar",false)
-    if colorbar!=false then
-        assert(colorbar=="right" or colorbar=="bottom","colorbar position must be right or bottom")
+    colorbar:any := get(opts, "colorbar", false)
+    if colorbar != false then
+        assert(colorbar == "right" or colorbar == "bottom", "colorbar position must be right or bottom")
         for item in panel.layers do
-            if item.kind=="cells" then
-                assert(panel.color_layer==false,"colorbar requires exactly one heatmap per axis")
+            if item.kind == "cells" then
+                assert(panel.color_layer == false, "colorbar requires exactly one heatmap per axis")
                 panel.color_layer = item
             end
         end
-        assert(panel.color_layer!=false,"colorbar requires a heatmap")
+        assert(panel.color_layer != false, "colorbar requires a heatmap")
         limits := panel.color_layer.data["clim"]
-        panel.color_ticks = scales.ticks(scales.resolve(limits,"linear",limits),4)
+        panel.color_ticks = scales.ticks(scales.resolve(limits, "linear", limits), 4)
         max_width := 0pt; max_height := 0pt
         for value in panel.color_ticks do
-            body := labels.number(value,size)
+            body := labels.number(value, size)
             panel.color_labels += [body]
-            max_width = max(max_width,body.width); max_height = max(max_height,body.height)
+            max_width = max(max_width, body.width); max_height = max(max_height, body.height)
         end
-        if colorbar=="right" then panel.color_right = 28pt+max_width
+        if colorbar == "right" then panel.color_right = 28pt+max_width
         else panel.color_bottom = 28pt+max_height end
     end
     panel.right = panel.right+panel.legend_right+panel.color_right
@@ -347,31 +347,31 @@ end
 
 fn share_ticks(panels:list, groups:list, dimension:string)
     for target in panels do
-        group := connected(target.source,groups,len(panels))
-        if len(group)>1 then
+        group := connected(target.source, groups, len(panels))
+        if len(group) > 1 then
             selected:any := false
             explicit:any := false
             for panel in panels do
-                if scales.index(group,panel.source)>=0 then
+                if scales.index(group, panel.source) >= 0 then
                     ticks := panel.xt
-                    if dimension=="y" then ticks = panel.yt end
-                    opts := panel.rulers_by_side[primary(panel.source,dimension)].options
-                    supplied:any := get(opts,"ticks",false)
-                    if supplied==false and (dict_contains(opts,"step") or dict_contains(opts,"decades")) then supplied = ticks end
-                    if supplied!=false then
-                        if explicit!=false then
-                            assert(len(explicit)==len(supplied),"shared axes have conflicting ticks")
-                            for i in 0:len(explicit)-1 do assert(explicit[i]==supplied[i],"shared axes have conflicting ticks") end
+                    if dimension == "y" then ticks = panel.yt end
+                    opts := panel.rulers_by_side[primary(panel.source, dimension)].options
+                    supplied:any := get(opts, "ticks", false)
+                    if supplied == false and (dict_contains(opts, "step") or dict_contains(opts, "decades")) then supplied = ticks end
+                    if supplied != false then
+                        if explicit != false then
+                            assert(len(explicit) == len(supplied), "shared axes have conflicting ticks")
+                            for i in 0:len(explicit)-1 do assert(explicit[i] == supplied[i], "shared axes have conflicting ticks") end
                         end
                         explicit = supplied
                     end
-                    if selected==false or len(ticks)<len(selected) then selected = ticks end
+                    if selected == false or len(ticks) < len(selected) then selected = ticks end
                 end
             end
-            if explicit!=false then selected = explicit end
+            if explicit != false then selected = explicit end
             for panel in panels do
-                if scales.index(group,panel.source)>=0 then
-                    if dimension=="x" then panel.xt = selected; panel.shared_x = selected
+                if scales.index(group, panel.source) >= 0 then
+                    if dimension == "x" then panel.xt = selected; panel.shared_x = selected
                     else panel.yt = selected; panel.shared_y = selected end
                 end
             end
@@ -381,40 +381,40 @@ end
 
 export fn layout(fig:Figure, panels:list)
     rows := 1; cols := 1
-    for panel in panels do rows = max(rows,int(panel.source.cell.x)+1); cols = max(cols,int(panel.source.cell.y)+1) end
-    margin:length := get(fig.options,"margin",0pt)
-    gap:length := get(fig.options,"gap",16pt)
-    assert(margin >= 0pt and gap >= 0pt,"figure spacing must be nonnegative")
-    cell := ((fig.width-2*margin-(cols-1)*gap)/cols,(fig.height-2*margin-(rows-1)*gap)/rows)
-    for panel in panels do measure(panel,fig,cell) end
-    if len(fig.xlinks)>0 or len(fig.ylinks)>0 then
-        share_ticks(panels,fig.xlinks,"x"); share_ticks(panels,fig.ylinks,"y")
-        for panel in panels do measure(panel,fig,cell) end
+    for panel in panels do rows = max(rows, int(panel.source.cell.x)+1); cols = max(cols, int(panel.source.cell.y)+1) end
+    margin:length := get(fig.options, "margin", 0pt)
+    gap:length := get(fig.options, "gap", 16pt)
+    assert(margin >= 0pt and gap >= 0pt, "figure spacing must be nonnegative")
+    cell := ((fig.width-2*margin-(cols-1)*gap)/cols, (fig.height-2*margin-(rows-1)*gap)/rows)
+    for panel in panels do measure(panel, fig, cell) end
+    if len(fig.xlinks) > 0 or len(fig.ylinks) > 0 then
+        share_ticks(panels, fig.xlinks, "x"); share_ticks(panels, fig.ylinks, "y")
+        for panel in panels do measure(panel, fig, cell) end
     end
     for panel in panels do
         left := panel.left; right := panel.right; top := panel.top; bottom := panel.bottom
         for other in panels do
-            if other.source.cell.y == panel.source.cell.y then left = max(left,other.left); right = max(right,other.right) end
-            if other.source.cell.x == panel.source.cell.x then top = max(top,other.top); bottom = max(bottom,other.bottom) end
+            if other.source.cell.y == panel.source.cell.y then left = max(left, other.left); right = max(right, other.right) end
+            if other.source.cell.x == panel.source.cell.x then top = max(top, other.top); bottom = max(bottom, other.bottom) end
         end
         panel.left = left; panel.right = right; panel.top = top; panel.bottom = bottom
-        panel.size = cell-(left+right,top+bottom)
-        assert(panel.size.x > 10pt and panel.size.y > 10pt,"figure is too small for axis labels")
-        panel.origin = (margin+panel.source.cell.y*(cell.x+gap)+left,fig.height-margin-(panel.source.cell.x+1)*cell.y-panel.source.cell.x*gap+bottom)
-        if get(panel.source.options,"equal",false) then
-            assert(panel.x.kind=="linear" and panel.y.kind=="linear","equal aspect requires linear axes")
+        panel.size = cell-(left+right, top+bottom)
+        assert(panel.size.x > 10pt and panel.size.y > 10pt, "figure is too small for axis labels")
+        panel.origin = (margin+panel.source.cell.y*(cell.x+gap)+left, fig.height-margin-(panel.source.cell.x+1)*cell.y-panel.source.cell.x*gap+bottom)
+        if get(panel.source.options, "equal", false) then
+            assert(panel.x.kind == "linear" and panel.y.kind == "linear", "equal aspect requires linear axes")
             ranges := []; gaps := []
-            for dim in ["x","y"] do
-                r := panel.rulers_by_side[primary(panel.source,dim)]
+            for dim in ["x", "y"] do
+                r := panel.rulers_by_side[primary(panel.source, dim)]
                 visible := 0.0
                 for piece in r.partition.pieces do visible = visible+(piece.scale.high-piece.scale.low) end
                 spacing := 0pt
                 for hole in r.partition.gaps do spacing = spacing+(hole.stop-hole.start) end
                 ranges += [visible]; gaps += [spacing]
             end
-            unit := min((panel.size.x-gaps[0])/ranges[0],(panel.size.y-gaps[1])/ranges[1])
-            assert(unit>0pt,"axis break gaps must fit inside the axis")
-            fitted := (unit*ranges[0]+gaps[0],unit*ranges[1]+gaps[1])
+            unit := min((panel.size.x-gaps[0])/ranges[0], (panel.size.y-gaps[1])/ranges[1])
+            assert(unit > 0pt, "axis break gaps must fit inside the axis")
+            fitted := (unit*ranges[0]+gaps[0], unit*ranges[1]+gaps[1])
             panel.origin = panel.origin+(panel.size-fitted)/2
             panel.size = fitted
         end
@@ -422,283 +422,283 @@ export fn layout(fig:Figure, panels:list)
             r := panel.rulers_by_side[side]
             span := panel.size.y
             if horizontal(side) then span = panel.size.x end
-            r.partition = cuts.split(r.scale,r.options,span)
+            r.partition = cuts.split(r.scale, r.options, span)
         end
     end
 end
 
 fn segment(dst:picture, a:vec2, b:vec2, ink:pen)
-    append(dst,draw(path(a,b),ink))
+    append(dst, draw(path(a, b), ink))
 end
 
 fn decorations(dst:picture, panel:Panel, fig:Figure, foreground:bool)
     opts := panel.source.options
     o := panel.origin; s := panel.size
-    ink := pen(get(fig.options,"ink",rgb(0.15,0.15,0.15)),0.6pt)
-    grid := pen(get(fig.options,"grid_color",rgb(0.88,0.88,0.88)),0.4pt)
-    spines:list := get(opts,"spines",keys(panel.rulers_by_side))
+    ink := pen(get(fig.options, "ink", rgb(0.15, 0.15, 0.15)), 0.6pt)
+    grid := pen(get(fig.options, "grid_color", rgb(0.88, 0.88, 0.88)), 0.4pt)
+    spines:list := get(opts, "spines", keys(panel.rulers_by_side))
     for side in keys(panel.rulers_by_side) do
         cross := "x"
         if horizontal(side) then cross = "y" end
-        pieces := panel.rulers_by_side[primary(panel.source,cross)].partition.pieces
-        rulers.paint(dst,panel.rulers_by_side[side],o,s,ink,grid,foreground,scales.index(spines,side)>=0,pieces)
+        pieces := panel.rulers_by_side[primary(panel.source, cross)].partition.pieces
+        rulers.paint(dst, panel.rulers_by_side[side], o, s, ink, grid, foreground, scales.index(spines, side) >= 0, pieces)
     end
     if foreground then
         // A spine can also be a bare frame edge without a scale or ticks.
         for side in spines do
             horizontal(side)
-            if not dict_contains(panel.rulers_by_side,side) then
+            if not dict_contains(panel.rulers_by_side, side) then
                 dim := "x"; start := o
                 if not horizontal(side) then dim = "y" end
-                if side=="top" then start = o+(0pt,s.y) end
-                if side=="right" then start = o+(s.x,0pt) end
-                frame := copy(panel.rulers_by_side[primary(panel.source,dim)])
+                if side == "top" then start = o+(0pt, s.y) end
+                if side == "right" then start = o+(s.x, 0pt) end
+                frame := copy(panel.rulers_by_side[primary(panel.source, dim)])
                 frame.side = side
                 frame.options = {}
-                rulers.spine(dst,frame,start,ink)
+                rulers.spine(dst, frame, start, ink)
             end
         end
-        if get(opts,"title",false)!=false then labels.place(dst,opts["title"],(o.x+s.x/2,o.y+s.y+panel.top-3pt),(0.5,1)) end
+        if get(opts, "title", false) != false then labels.place(dst, opts["title"], (o.x+s.x/2, o.y+s.y+panel.top-3pt), (0.5, 1)) end
     end
 end
 
 fn legend(dst:picture, panel:Panel, fig:Figure)
-    position:string := get(panel.source.options,"legend","none")
-    if position=="none" or len(panel.legends)==0 then return end
+    position:string := get(panel.source.options, "legend", "none")
+    if position == "none" or len(panel.legends) == 0 then return end
     o := panel.origin; s := panel.size; size := panel.legend_size
-    p := o+s-size-(5pt,5pt)
-    if position=="top-left" then p = (o.x+5pt,o.y+s.y-size.y-5pt) end
-    if position=="bottom-left" then p = o+(5pt,5pt) end
-    if position=="bottom-right" then p = (o.x+s.x-size.x-5pt,o.y+5pt) end
-    if position=="outside-right" then p = (o.x+s.x+panel.right-panel.legend_right,o.y+s.y-size.y) end
-    if position=="outside-bottom" then p = (o.x,o.y-panel.bottom+2pt) end
-    if get(fig.options,"background",rgb(1,1,1)) != false then
-        append(dst,fill(rectangle(p,size.x,size.y),rgb(1,1,1,0.94)))
+    p := o+s-size-(5pt, 5pt)
+    if position == "top-left" then p = (o.x+5pt, o.y+s.y-size.y-5pt) end
+    if position == "bottom-left" then p = o+(5pt, 5pt) end
+    if position == "bottom-right" then p = (o.x+s.x-size.x-5pt, o.y+5pt) end
+    if position == "outside-right" then p = (o.x+s.x+panel.right-panel.legend_right, o.y+s.y-size.y) end
+    if position == "outside-bottom" then p = (o.x, o.y-panel.bottom+2pt) end
+    if get(fig.options, "background", rgb(1, 1, 1)) != false then
+        append(dst, fill(rectangle(p, size.x, size.y), rgb(1, 1, 1, 0.94)))
     end
     colors := palette(fig)
-    columns:int := get(panel.source.options,"legend_columns",1)
+    columns:int := get(panel.source.options, "legend_columns", 1)
     rows := int(ceil(float(len(panel.legends))/columns))
     height := (size.y-8pt)/rows
     for j in 0:len(panel.legends)-1 do
         i:int := panel.legends[j]
         item := panel.layers[i]
-        ink := get(item.options,"color",colors[get(item.options,"series_index",i)%len(colors)])
-        at := p+(4pt+(j%columns)*(size.x-8pt)/columns,size.y-4pt-(int(j/columns)+0.5)*height)
-        stroke := get(item.options,"pen",pen(ink,get(item.options,"width",get(fig.options,"line_width",1.2pt)),dash:get(item.options,"dash",[])))
+        ink := get(item.options, "color", colors[get(item.options, "series_index", i)%len(colors)])
+        at := p+(4pt+(j%columns)*(size.x-8pt)/columns, size.y-4pt-(int(j/columns)+0.5)*height)
+        stroke := get(item.options, "pen", pen(ink, get(item.options, "width", get(fig.options, "line_width", 1.2pt)), dash: get(item.options, "dash", [])))
         // legend_line=false keeps only the marker and label of an entry.
-        if get(item.options,"legend_line",true) then
-            if item.kind=="arrow" or item.kind=="lines" or item.kind=="hline" or item.kind=="vline" then
+        if get(item.options, "legend_line", true) then
+            if item.kind == "arrow" or item.kind == "lines" or item.kind == "hline" or item.kind == "vline" then
                 ends := "none"
-                if item.kind=="arrow" then ends = "end" end
-                arrows.stroke(dst,[at+(2pt,0pt),at+(22pt,0pt)],stroke,get(item.options,"arrow",ends),get(item.options,"arrow_size",6pt))
-            elseif item.kind=="errorbars" then
-                a := at+(12pt,-5pt); b := at+(12pt,5pt); cap := (3pt,0pt)
-                if get(item.options,"orientation","vertical")=="horizontal" then a = at+(3pt,0pt); b = at+(21pt,0pt); cap = (0pt,3pt) end
-                segment(dst,a,b,stroke); segment(dst,a-cap,a+cap,stroke); segment(dst,b-cap,b+cap,stroke)
-            elseif item.kind!="scatter" and item.kind!="annotation" then
-                shape := rectangle(at+(2pt,-3pt),20pt,6pt)
-                interior:any := get(item.options,"fill",ink)
-                if interior!=false then append(dst,fill(shape,interior)) end
-                if get(item.options,"pen",false)!=false then append(dst,draw(shape,stroke)) end
+                if item.kind == "arrow" then ends = "end" end
+                arrows.stroke(dst, [at+(2pt, 0pt), at+(22pt, 0pt)], stroke, get(item.options, "arrow", ends), get(item.options, "arrow_size", 6pt))
+            elseif item.kind == "errorbars" then
+                a := at+(12pt, -5pt); b := at+(12pt, 5pt); cap := (3pt, 0pt)
+                if get(item.options, "orientation", "vertical") == "horizontal" then a = at+(3pt, 0pt); b = at+(21pt, 0pt); cap = (0pt, 3pt) end
+                segment(dst, a, b, stroke); segment(dst, a-cap, a+cap, stroke); segment(dst, b-cap, b+cap, stroke)
+            elseif item.kind != "scatter" and item.kind != "annotation" then
+                shape := rectangle(at+(2pt, -3pt), 20pt, 6pt)
+                interior:any := get(item.options, "fill", ink)
+                if interior != false then append(dst, fill(shape, interior)) end
+                if get(item.options, "pen", false) != false then append(dst, draw(shape, stroke)) end
             end
         end
-        symbol:any := get(item.options,"marker",false)
-        if item.kind=="scatter" and symbol==false then symbol = markers.marker() end
-        if symbol!=false then symbol = markers.inherited(symbol,item.options) end
-        if symbol!=false then markers.paint(dst,symbol,markers.prepare(symbol,ink),at+(12pt,0pt),ink) end
-        labels.place(dst,item.options["label"],at+(28pt,0pt),(0,0.5))
+        symbol:any := get(item.options, "marker", false)
+        if item.kind == "scatter" and symbol == false then symbol = markers.marker() end
+        if symbol != false then symbol = markers.inherited(symbol, item.options) end
+        if symbol != false then markers.paint(dst, symbol, markers.prepare(symbol, ink), at+(12pt, 0pt), ink) end
+        labels.place(dst, item.options["label"], at+(28pt, 0pt), (0, 0.5))
     end
 end
 
 // A point centered in an omitted interval must not leave the edge of a
 // marker or a text label in a neighboring retained interval.
 fn retained(panel:Panel, p:vec2) -> bool
-    if panel.x_piece!=false then
-        if panel.x_piece.cut_before and p.x<panel.origin.x-1e-8pt then return false end
-        if panel.x_piece.cut_after and p.x>panel.origin.x+panel.size.x+1e-8pt then return false end
+    if panel.x_piece != false then
+        if panel.x_piece.cut_before and p.x < panel.origin.x-1e-8pt then return false end
+        if panel.x_piece.cut_after and p.x > panel.origin.x+panel.size.x+1e-8pt then return false end
     end
-    if panel.y_piece!=false then
-        if panel.y_piece.cut_before and p.y<panel.origin.y-1e-8pt then return false end
-        if panel.y_piece.cut_after and p.y>panel.origin.y+panel.size.y+1e-8pt then return false end
+    if panel.y_piece != false then
+        if panel.y_piece.cut_before and p.y < panel.origin.y-1e-8pt then return false end
+        if panel.y_piece.cut_after and p.y > panel.origin.y+panel.size.y+1e-8pt then return false end
     end
     return true
 end
 
 fn directed_stroke(dst:picture, panel:Panel, points:list, stroke:pen, ends:string, size:length)
     effective := ends
-    if ends!="none" and len(points)>1 and (panel.x_piece!=false or panel.y_piece!=false) then
-        first := retained(panel,points[0]); last := retained(panel,points[len(points)-1])
-        effective = arrows.visible_ends(ends,first,last)
+    if ends != "none" and len(points) > 1 and (panel.x_piece != false or panel.y_piece != false) then
+        first := retained(panel, points[0]); last := retained(panel, points[len(points)-1])
+        effective = arrows.visible_ends(ends, first, last)
     end
-    arrows.stroke(dst,points,stroke,effective,size)
+    arrows.stroke(dst, points, stroke, effective, size)
 end
 
 fn series(dst:picture, panel:Panel, item:Layer, ink:color, width:length)
-    stroke := get(item.options,"pen",pen(ink,get(item.options,"width",width),dash:get(item.options,"dash",[])))
-    symbol:any := get(item.options,"marker",false)
+    stroke := get(item.options, "pen", pen(ink, get(item.options, "width", width), dash: get(item.options, "dash", [])))
+    symbol:any := get(item.options, "marker", false)
     if item.kind == "scatter" and symbol == false then symbol = markers.marker() end
-    if symbol!=false then symbol = markers.inherited(symbol,item.options) end
-    sizes:list := get(item.options,"sizes",[])
-    colors:list := get(item.options,"colors",[])
-    assert(len(sizes)==0 or len(sizes)==len(item.x),"marker sizes length differs from data")
-    assert(len(colors)==0 or len(colors)==len(item.x),"marker colors length differs from data")
-    shape := path((0pt,0pt),(1pt,0pt))
-    if symbol != false then shape = markers.prepare(symbol,ink) end
+    if symbol != false then symbol = markers.inherited(symbol, item.options) end
+    sizes:list := get(item.options, "sizes", [])
+    colors:list := get(item.options, "colors", [])
+    assert(len(sizes) == 0 or len(sizes) == len(item.x), "marker sizes length differs from data")
+    assert(len(colors) == 0 or len(colors) == len(item.x), "marker colors length differs from data")
+    shape := path((0pt, 0pt), (1pt, 0pt))
+    if symbol != false then shape = markers.prepare(symbol, ink) end
     points := []
     // Stroke first; markers stay above the line, including hollow symbols.
-    if item.kind=="lines" then
-        ends:string := get(item.options,"arrow","none")
-        head_size:length := get(item.options,"arrow_size",6pt)
+    if item.kind == "lines" then
+        ends:string := get(item.options, "arrow", "none")
+        head_size:length := get(item.options, "arrow_size", 6pt)
         for i in 0:len(item.x)-1 do
-            if item.x[i]==false or item.y[i]==false then
-                directed_stroke(dst,panel,points,stroke,ends,head_size)
+            if item.x[i] == false or item.y[i] == false then
+                directed_stroke(dst, panel, points, stroke, ends, head_size)
                 points = []
-            else points += [affine_point(panel,item.x[i],item.y[i])] end
+            else points += [affine_point(panel, item.x[i], item.y[i])] end
         end
-        directed_stroke(dst,panel,points,stroke,ends,head_size)
+        directed_stroke(dst, panel, points, stroke, ends, head_size)
     end
-    if symbol==false then return end
+    if symbol == false then return end
     for i in 0:len(item.x)-1 do
         if item.x[i] == false or item.y[i] == false then
             // Explicit missing samples do not create marker instances.
         else
-            p := affine_point(panel,item.x[i],item.y[i])
-            if (panel.x_piece==false and panel.y_piece==false) or retained(panel,p) then
+            p := affine_point(panel, item.x[i], item.y[i])
+            if (panel.x_piece == false and panel.y_piece == false) or retained(panel, p) then
                 color := ink
-                if len(colors)>0 then color = colors[i] end
+                if len(colors) > 0 then color = colors[i] end
                 geometry := shape
-                if len(sizes)>0 then geometry = markers.prepare(symbol,color,sizes[i]) end
-                markers.paint(dst,symbol,geometry,p,color)
+                if len(sizes) > 0 then geometry = markers.prepare(symbol, color, sizes[i]) end
+                markers.paint(dst, symbol, geometry, p, color)
             end
         end
     end
 end
 
 fn paint_layer(dst:picture, panel:Panel, item:Layer, ink:color, width:length)
-    if item.kind=="lines" or item.kind=="scatter" then series(dst,panel,item,ink,width); return end
-    stroke := get(item.options,"pen",pen(ink,get(item.options,"width",width),dash:get(item.options,"dash",[])))
-    interior:any := get(item.options,"fill",ink)
-    if item.kind=="rectangles" or item.kind=="segments" or item.kind=="cells" then
+    if item.kind == "lines" or item.kind == "scatter" then series(dst, panel, item, ink, width); return end
+    stroke := get(item.options, "pen", pen(ink, get(item.options, "width", width), dash: get(item.options, "dash", [])))
+    interior:any := get(item.options, "fill", ink)
+    if item.kind == "rectangles" or item.kind == "segments" or item.kind == "cells" then
         for i in 0:len(item.x)-1 do
-            a := raw_point(panel,item,item.x[i],item.y[i],i)
-            b := raw_point(panel,item,item.data["x1"][i],item.data["y1"][i],i)
-            if item.kind=="segments" then segment(dst,a,b,stroke)
+            a := raw_point(panel, item, item.x[i], item.y[i], i)
+            b := raw_point(panel, item, item.data["x1"][i], item.data["y1"][i], i)
+            if item.kind == "segments" then segment(dst, a, b, stroke)
             else
-                shape := rectangle((min(a.x,b.x),min(a.y,b.y)),math.abs(b.x-a.x),math.abs(b.y-a.y))
+                shape := rectangle((min(a.x, b.x), min(a.y, b.y)), math.abs(b.x-a.x), math.abs(b.y-a.y))
                 fill_ink:any := interior
-                if item.kind=="cells" then fill_ink = heat.color_at(item.data["colormap"],heat.normalized(item,item.data["z"][i])) end
-                if fill_ink!=false then append(dst,fill(shape,fill_ink)) end
-                if get(item.options,"pen",false)!=false then append(dst,draw(shape,stroke)) end
+                if item.kind == "cells" then fill_ink = heat.color_at(item.data["colormap"], heat.normalized(item, item.data["z"][i])) end
+                if fill_ink != false then append(dst, fill(shape, fill_ink)) end
+                if get(item.options, "pen", false) != false then append(dst, draw(shape, stroke)) end
             end
         end
-    elseif item.kind=="raw_scatter" then
-        symbol := get(item.options,"marker",markers.marker("circle",{"size":3pt}))
-        symbol = markers.inherited(symbol,item.options)
-        shape := markers.prepare(symbol,ink)
+    elseif item.kind == "raw_scatter" then
+        symbol := get(item.options, "marker", markers.marker("circle", {"size": 3pt}))
+        symbol = markers.inherited(symbol, item.options)
+        shape := markers.prepare(symbol, ink)
         for i in 0:len(item.x)-1 do
-            p := raw_point(panel,item,item.x[i],item.y[i],i)
-            if retained(panel,p) then markers.paint(dst,symbol,shape,p,ink) end
+            p := raw_point(panel, item, item.x[i], item.y[i], i)
+            if retained(panel, p) then markers.paint(dst, symbol, shape, p, ink) end
         end
-    elseif item.kind=="arrow" then
-        endpoints := [affine_point(panel,item.x[0],item.y[0]),affine_point(panel,item.x[1],item.y[1])]
-        directed_stroke(dst,panel,endpoints,stroke,get(item.options,"arrow","end"),get(item.options,"arrow_size",6pt))
-    elseif item.kind=="hline" or item.kind=="vline" then
+    elseif item.kind == "arrow" then
+        endpoints := [affine_point(panel, item.x[0], item.y[0]), affine_point(panel, item.x[1], item.y[1])]
+        directed_stroke(dst, panel, endpoints, stroke, get(item.options, "arrow", "end"), get(item.options, "arrow_size", 6pt))
+    elseif item.kind == "hline" or item.kind == "vline" then
         a := panel.origin; b := panel.origin+panel.size
         piece:any := panel.x_piece; reversed := panel.x.reversed
-        if item.kind=="hline" then
-            y := a.y+panel.size.y*scales.coordinate(panel.y,item.y[0])
-            a = (a.x,y); b = (b.x,y)
+        if item.kind == "hline" then
+            y := a.y+panel.size.y*scales.coordinate(panel.y, item.y[0])
+            a = (a.x, y); b = (b.x, y)
         else
-            x := a.x+panel.size.x*scales.coordinate(panel.x,item.x[0])
-            a = (x,a.y); b = (x,b.y)
+            x := a.x+panel.size.x*scales.coordinate(panel.x, item.x[0])
+            a = (x, a.y); b = (x, b.y)
             piece = panel.y_piece; reversed = panel.y.reversed
         end
-        if not retained(panel,(a+b)/2) then return end
-        endpoints := [a,b]
-        if reversed then endpoints = [b,a] end
-        ends:string := get(item.options,"arrow","none")
-        if piece!=false then
-            if reversed then ends = arrows.visible_ends(ends,not piece.cut_after,not piece.cut_before)
-            else ends = arrows.visible_ends(ends,not piece.cut_before,not piece.cut_after) end
+        if not retained(panel, (a+b)/2) then return end
+        endpoints := [a, b]
+        if reversed then endpoints = [b, a] end
+        ends:string := get(item.options, "arrow", "none")
+        if piece != false then
+            if reversed then ends = arrows.visible_ends(ends, not piece.cut_after, not piece.cut_before)
+            else ends = arrows.visible_ends(ends, not piece.cut_before, not piece.cut_after) end
         end
-        arrows.stroke(dst,endpoints,stroke,ends,get(item.options,"arrow_size",6pt))
-    elseif item.kind=="annotation" then
-        p := affine_point(panel,item.x[0],item.y[0])
-        alignment:string := get(item.options,"align","center")
-        anchor:vec2 := (0.5,0.5)
-        if alignment=="left" then anchor = (0,0.5)
-        elseif alignment=="right" then anchor = (1,0.5)
-        elseif alignment!="center" then panic("unknown annotation align: "+alignment) end
-        if retained(panel,p) then labels.place(dst,item.data["body"],p,anchor) end
-    elseif item.kind=="errorbars" then
-        upper:list := get(item.options,"upper",item.data["errors"])
-        assert(len(upper)==len(item.x),"upper errors length differs from data")
-        orientation:string := get(item.options,"orientation","vertical")
-        assert(orientation=="vertical" or orientation=="horizontal","unknown errorbar orientation")
-        cap:length := get(item.options,"cap_size",5pt)
-        assert(cap>=0pt,"error cap size must be nonnegative")
+        arrows.stroke(dst, endpoints, stroke, ends, get(item.options, "arrow_size", 6pt))
+    elseif item.kind == "annotation" then
+        p := affine_point(panel, item.x[0], item.y[0])
+        alignment:string := get(item.options, "align", "center")
+        anchor:vec2 := (0.5, 0.5)
+        if alignment == "left" then anchor = (0, 0.5)
+        elseif alignment == "right" then anchor = (1, 0.5)
+        elseif alignment != "center" then panic("unknown annotation align: "+alignment) end
+        if retained(panel, p) then labels.place(dst, item.data["body"], p, anchor) end
+    elseif item.kind == "errorbars" then
+        upper:list := get(item.options, "upper", item.data["errors"])
+        assert(len(upper) == len(item.x), "upper errors length differs from data")
+        orientation:string := get(item.options, "orientation", "vertical")
+        assert(orientation == "vertical" or orientation == "horizontal", "unknown errorbar orientation")
+        cap:length := get(item.options, "cap_size", 5pt)
+        assert(cap >= 0pt, "error cap size must be nonnegative")
         for i in 0:len(item.x)-1 do
             low:any := item.data["errors"][i]
-            if item.x[i]!=false and item.y[i]!=false and low!=false and upper[i]!=false then
-                assert(low>=0 and upper[i]>=0,"error magnitudes must be nonnegative")
-                a := (0pt,0pt); b := (0pt,0pt); delta := (cap/2,0pt)
-                if orientation=="vertical" then a = affine_point(panel,item.x[i],item.y[i]-low); b = affine_point(panel,item.x[i],item.y[i]+upper[i])
-                else a = affine_point(panel,item.x[i]-low,item.y[i]); b = affine_point(panel,item.x[i]+upper[i],item.y[i]); delta = (0pt,cap/2) end
-                segment(dst,a,b,stroke); segment(dst,a-delta,a+delta,stroke); segment(dst,b-delta,b+delta,stroke)
+            if item.x[i] != false and item.y[i] != false and low != false and upper[i] != false then
+                assert(low >= 0 and upper[i] >= 0, "error magnitudes must be nonnegative")
+                a := (0pt, 0pt); b := (0pt, 0pt); delta := (cap/2, 0pt)
+                if orientation == "vertical" then a = affine_point(panel, item.x[i], item.y[i]-low); b = affine_point(panel, item.x[i], item.y[i]+upper[i])
+                else a = affine_point(panel, item.x[i]-low, item.y[i]); b = affine_point(panel, item.x[i]+upper[i], item.y[i]); delta = (0pt, cap/2) end
+                segment(dst, a, b, stroke); segment(dst, a-delta, a+delta, stroke); segment(dst, b-delta, b+delta, stroke)
             end
         end
-        if get(item.options,"marker",false)!=false then
+        if get(item.options, "marker", false) != false then
             centers := copy(item); centers.kind = "scatter"
-            series(dst,panel,centers,ink,width)
+            series(dst, panel, centers, ink, width)
         end
-    elseif item.kind=="band" or item.kind=="area" then
+    elseif item.kind == "band" or item.kind == "area" then
         lower := []; upper := []
         for i in 0:len(item.x) do
-            missing := i==len(item.x)
-            if not missing then missing = item.x[i]==false or item.y[i]==false or item.data["upper"][i]==false end
+            missing := i == len(item.x)
+            if not missing then missing = item.x[i] == false or item.y[i] == false or item.data["upper"][i] == false end
             if missing then
-                if len(lower)>1 then
+                if len(lower) > 1 then
                     for j in len(upper)-1:-1:0 do lower += [upper[j]] end
-                    if interior!=false then append(dst,fill(path(lower,true),interior)) end
+                    if interior != false then append(dst, fill(path(lower, true), interior)) end
                 end
                 lower = []; upper = []
             else
-                if item.kind=="band" then assert(item.y[i]<=item.data["upper"][i],"band lower bound exceeds upper bound") end
-                lower += [affine_point(panel,item.x[i],item.y[i])]
-                upper += [affine_point(panel,item.x[i],item.data["upper"][i])]
+                if item.kind == "band" then assert(item.y[i] <= item.data["upper"][i], "band lower bound exceeds upper bound") end
+                lower += [affine_point(panel, item.x[i], item.y[i])]
+                upper += [affine_point(panel, item.x[i], item.data["upper"][i])]
             end
         end
     else panic("unknown plot layer: "+item.kind) end
 end
 
 fn colorbar(dst:picture, panel:Panel)
-    if panel.color_layer==false then return end
+    if panel.color_layer == false then return end
     item := panel.color_layer
-    vertical := panel.source.options["colorbar"]=="right"
-    origin := panel.origin+(panel.size.x+panel.right-panel.legend_right-panel.color_right+4pt,0pt)
-    size := (10pt,panel.size.y)
-    if not vertical then origin = (panel.origin.x,panel.origin.y-panel.bottom+panel.legend_bottom+20pt); size = (panel.size.x,10pt) end
+    vertical := panel.source.options["colorbar"] == "right"
+    origin := panel.origin+(panel.size.x+panel.right-panel.legend_right-panel.color_right+4pt, 0pt)
+    size := (10pt, panel.size.y)
+    if not vertical then origin = (panel.origin.x, panel.origin.y-panel.bottom+panel.legend_bottom+20pt); size = (panel.size.x, 10pt) end
     for i in 0:127 do
-        p := origin+(0pt,size.y*i/128)
-        extent := (size.x,size.y/128)
-        if not vertical then p = origin+(size.x*i/128,0pt); extent = (size.x/128,size.y) end
-        if i<127 then
-            if vertical then extent = extent+(0pt,min(1pt,size.y*(127-i)/128))
-            else extent = extent+(min(1pt,size.x*(127-i)/128),0pt) end
+        p := origin+(0pt, size.y*i/128)
+        extent := (size.x, size.y/128)
+        if not vertical then p = origin+(size.x*i/128, 0pt); extent = (size.x/128, size.y) end
+        if i < 127 then
+            if vertical then extent = extent+(0pt, min(1pt, size.y*(127-i)/128))
+            else extent = extent+(min(1pt, size.x*(127-i)/128), 0pt) end
         end
-        append(dst,fill(rectangle(p,extent.x,extent.y),heat.color_at(item.data["colormap"],float(i)/127)))
+        append(dst, fill(rectangle(p, extent.x, extent.y), heat.color_at(item.data["colormap"], float(i)/127)))
     end
-    stroke := pen(rgb(0.2,0.2,0.2),0.5pt)
+    stroke := pen(rgb(0.2, 0.2, 0.2), 0.5pt)
     for i in 0:len(panel.color_ticks)-1 do
-        t := heat.normalized(item,panel.color_ticks[i])
+        t := heat.normalized(item, panel.color_ticks[i])
         if vertical then
-            p := origin+(size.x,size.y*t)
-            segment(dst,p,p+(3pt,0pt),stroke)
-            labels.place(dst,panel.color_labels[i],p+(5pt,0pt),(0,0.5))
+            p := origin+(size.x, size.y*t)
+            segment(dst, p, p+(3pt, 0pt), stroke)
+            labels.place(dst, panel.color_labels[i], p+(5pt, 0pt), (0, 0.5))
         else
-            p := origin+(size.x*t,0pt)
-            segment(dst,p,p-(0pt,3pt),stroke)
-            labels.place(dst,panel.color_labels[i],p-(0pt,5pt),(0.5,1))
+            p := origin+(size.x*t, 0pt)
+            segment(dst, p, p-(0pt, 3pt), stroke)
+            labels.place(dst, panel.color_labels[i], p-(0pt, 5pt), (0.5, 1))
         end
     end
 end
@@ -709,69 +709,69 @@ fn paint_intervals(dst:picture, fig:Figure, panel:Panel, item:Layer, xr:rulers.R
             view := copy(panel)
             view.x = xp.scale; view.y = yp.scale
             view.x_piece = xp; view.y_piece = yp
-            view.origin = panel.origin+(xp.start,yp.start)
-            view.size = (xp.stop-xp.start,yp.stop-yp.start)
-            low := view.origin; high := panel.origin+(xp.stop,yp.stop)
+            view.origin = panel.origin+(xp.start, yp.start)
+            view.size = (xp.stop-xp.start, yp.stop-yp.start)
+            low := view.origin; high := panel.origin+(xp.stop, yp.stop)
             if not clip then
-                if not xp.cut_before then low = (0pt,low.y) end
-                if not xp.cut_after then high = (fig.width,high.y) end
-                if not yp.cut_before then low = (low.x,0pt) end
-                if not yp.cut_after then high = (high.x,fig.height) end
+                if not xp.cut_before then low = (0pt, low.y) end
+                if not xp.cut_after then high = (fig.width, high.y) end
+                if not yp.cut_before then low = (low.x, 0pt) end
+                if not yp.cut_after then high = (high.x, fig.height) end
             end
             tile := picture()
-            clip_picture(tile,rectangle(low,high.x-low.x,high.y-low.y))
-            append(dst,tile)
-            paint_layer(tile,view,item,ink,width)
+            clip_picture(tile, rectangle(low, high.x-low.x, high.y-low.y))
+            append(dst, tile)
+            paint_layer(tile, view, item, ink, width)
         end
     end
 end
 
 export fn render(fig:Figure) -> picture
     panels := prepare(fig)
-    layout(fig,panels)
+    layout(fig, panels)
     // auto_bounds crops the output to the drawn content instead of the figure.
     dst := block
-        if get(fig.options,"auto_bounds",false) then return picture() end
-        return picture(fig.width,fig.height)
+        if get(fig.options, "auto_bounds", false) then return picture() end
+        return picture(fig.width, fig.height)
     end
-    background:any := get(fig.options,"background",rgb(1,1,1))
-    if background != false then append(dst,fill(rectangle((0pt,0pt),fig.width,fig.height),background)) end
+    background:any := get(fig.options, "background", rgb(1, 1, 1))
+    if background != false then append(dst, fill(rectangle((0pt, 0pt), fig.width, fig.height), background)) end
     colors := palette(fig)
     for panel in panels do
-        decorations(dst,panel,fig,false)
+        decorations(dst, panel, fig, false)
         clipped_group:any := false
         for i in 0:len(panel.layers)-1 do
             item:Layer := panel.layers[i]
-            is_clipped:bool := get(item.options,"clip",true)
-            xr := panel.rulers_by_side[get(item.options,"xaxis",primary(panel.source,"x"))]
-            yr := panel.rulers_by_side[get(item.options,"yaxis",primary(panel.source,"y"))]
-            ink := get(item.options,"color",colors[get(item.options,"series_index",i)%len(colors)])
-            width:length := get(fig.options,"line_width",1.2pt)
-            if len(xr.partition.gaps)>0 or len(yr.partition.gaps)>0 then
-                paint_intervals(dst,fig,panel,item,xr,yr,ink,width,is_clipped)
+            is_clipped:bool := get(item.options, "clip", true)
+            xr := panel.rulers_by_side[get(item.options, "xaxis", primary(panel.source, "x"))]
+            yr := panel.rulers_by_side[get(item.options, "yaxis", primary(panel.source, "y"))]
+            ink := get(item.options, "color", colors[get(item.options, "series_index", i)%len(colors)])
+            width:length := get(fig.options, "line_width", 1.2pt)
+            if len(xr.partition.gaps) > 0 or len(yr.partition.gaps) > 0 then
+                paint_intervals(dst, fig, panel, item, xr, yr, ink, width, is_clipped)
                 clipped_group = false
                 continue
             end
             target := dst
             if is_clipped then
-                if clipped_group==false then
+                if clipped_group == false then
                     clipped_group = picture()
-                    clip_picture(clipped_group,rectangle(panel.origin,panel.size.x,panel.size.y))
-                    append(dst,clipped_group)
+                    clip_picture(clipped_group, rectangle(panel.origin, panel.size.x, panel.size.y))
+                    append(dst, clipped_group)
                 end
                 target = clipped_group
             else clipped_group = false end
             view := panel
-            if dict_contains(item.options,"xaxis") or dict_contains(item.options,"yaxis") then
+            if dict_contains(item.options, "xaxis") or dict_contains(item.options, "yaxis") then
                 view = copy(panel)
                 view.x = xr.scale
                 view.y = yr.scale
             end
-            paint_layer(target,view,item,ink,width)
+            paint_layer(target, view, item, ink, width)
         end
-        decorations(dst,panel,fig,true)
-        legend(dst,panel,fig)
-        colorbar(dst,panel)
+        decorations(dst, panel, fig, true)
+        legend(dst, panel, fig)
+        colorbar(dst, panel)
     end
     return dst
 end

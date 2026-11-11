@@ -1,24 +1,24 @@
 import drawing.drawing
-import math.{sqrt,min};import paint.{circle, reverse, bounds, draw, picture, append};import assertions.assert
+import math.{sqrt, min};import paint.{circle, reverse, bounds, draw, picture, append};import assertions.assert
 mixfix(sqrt) sqrt _ in unary
 mixfix(reverse) reverse _ in unary
 mixfix(min) _ min _ in addition
-assert(sqrt 16==4)
-assert(3 min 7==min(3,7))
+assert(sqrt 16 == 4)
+assert(3 min 7 == min(3, 7))
 fn same(dst:picture)->picture;return dst;end
 mixfix(same) same _ in unary
-fn overlay(dst:object,src:object)->object
-append(dst, copy(src))
-return dst
+fn overlay(dst:object, src:object)->object
+    append(dst, copy(src))
+    return dst
 end
 mixfix(overlay) _ overlay _ in path
-first:=picture(640, 480); second:=picture(640, 480)
-curve:=circle((10,10),4)
+first := picture(640, 480); second := picture(640, 480)
+curve := circle((10, 10), 4)
 object.append(second, draw(curve))
 drawing first do
-assert(same first==first)
-+draw reverse curve
-copy(second)
+    assert(same first == first)
+    +draw reverse curve
+    copy(second)
 end
-assert((first overlay second)==first)
-assert(first.bounds()==second.bounds())
+assert((first overlay second) == first)
+assert(first.bounds() == second.bounds())

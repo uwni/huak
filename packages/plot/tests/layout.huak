@@ -5,54 +5,54 @@ import "../plot/heatmap.huak" as heat
 import "../plot/scales.huak" as scales
 
 fig := figure with width 480pt height 360pt
-a := axis of fig at (0,0)
-b := axis of fig at (1,0)
+a := axis of fig at (0, 0)
+b := axis of fig at (1, 0)
 plotting a do
-    settings {"xscale":"log10","tick_rotation":45deg}
-    +lines x [1,10,false,100] y [0,1,100,2]
+    settings {"xscale": "log10", "tick_rotation": 45deg}
+    +lines x [1, 10, false, 100] y [0, 1, 100, 2]
 end
 plotting b do
     xscale "log10"
-    +scatter x [10,1000] y [1,2]
+    +scatter x [10, 1000] y [1, 2]
 end
-link_x of fig axes [a,b]
+link_x of fig axes [a, b]
 panels := renderer.prepare(fig)
-renderer.layout(fig,panels)
-assert(panels[0].origin.x==panels[1].origin.x)
-assert(panels[0].size.x==panels[1].size.x)
-assert(panels[0].x.low==panels[1].x.low and panels[0].x.high==panels[1].x.high)
-assert(len(panels[0].xt)==len(panels[1].xt))
-assert(panels[0].y.high<3)
-for i in 0:len(panels[0].xt)-1 do assert(panels[0].xt[i]==panels[1].xt[i]) end
-cells := heat.prepare(heatmap([[0,1],[false,3]],options:{"clim":[0,3]}))
-assert(len(cells.x)==3)
-assert(cells.x[0]==0 and cells.y[0]==0 and cells.x[2]==1 and cells.y[2]==1)
-assert(heat.normalized(cells,0)==0 and heat.normalized(cells,3)==1)
+renderer.layout(fig, panels)
+assert(panels[0].origin.x == panels[1].origin.x)
+assert(panels[0].size.x == panels[1].size.x)
+assert(panels[0].x.low == panels[1].x.low and panels[0].x.high == panels[1].x.high)
+assert(len(panels[0].xt) == len(panels[1].xt))
+assert(panels[0].y.high < 3)
+for i in 0:len(panels[0].xt)-1 do assert(panels[0].xt[i] == panels[1].xt[i]) end
+cells := heat.prepare(heatmap([[0, 1], [false, 3]], options: {"clim": [0, 3]}))
+assert(len(cells.x) == 3)
+assert(cells.x[0] == 0 and cells.y[0] == 0 and cells.x[2] == 1 and cells.y[2] == 1)
+assert(heat.normalized(cells, 0) == 0 and heat.normalized(cells, 3) == 1)
 constant_cells := heat.prepare(heatmap([[1e100]]))
-assert(math.abs(heat.normalized(constant_cells,1e100)-0.5)<1e-12)
-for magnitude in [1e-100,1e-12,1e12,1e100] do
-    scale := scales.resolve([magnitude,2*magnitude],"linear")
-    assert(scale.low<scale.high and scales.coordinate(scale,1.5*magnitude)>0)
+assert(math.abs(heat.normalized(constant_cells, 1e100)-0.5) < 1e-12)
+for magnitude in [1e-100, 1e-12, 1e12, 1e100] do
+    scale := scales.resolve([magnitude, 2*magnitude], "linear")
+    assert(scale.low < scale.high and scales.coordinate(scale, 1.5*magnitude) > 0)
 end
 empty := figure with width 200pt height 160pt
-e := axis of empty at (0,0)
+e := axis of empty at (0, 0)
 plotting e do +lines x [] y []; +hist []; +scatter x [false] y [false] end
 blank := render empty
-assert(blank.width==200pt and blank.height==160pt)
+assert(blank.width == 200pt and blank.height == 160pt)
 // A missing upper band sample contributes neither endpoint to auto limits.
-gaps := figure(240pt,180pt)
+gaps := figure(240pt, 180pt)
 gap_axis := axis(gaps)
-plotting gap_axis do +band x [0,1,2] lower [0,100,0] upper [1,false,1] end
-assert(renderer.prepare(gaps)[0].y.high<2)
+plotting gap_axis do +band x [0, 1, 2] lower [0, 100, 0] upper [1, false, 1] end
+assert(renderer.prepare(gaps)[0].y.high < 2)
 // Exact category-cell edges stay attached to their category after sharing.
-categories := figure(480pt,240pt)
-c1 := axis(categories,(0,0)); c2 := axis(categories,(0,1))
-plotting c1 do +bar categories ["A","B"] values [1,2] styled {"bar_width":1} end
-plotting c2 do +boxplot categories ["B","A"] samples [[0,1,2],[1,2,3]] styled {"bar_width":1} end
-link_x of categories axes [c1,c2]
+categories := figure(480pt, 240pt)
+c1 := axis(categories, (0, 0)); c2 := axis(categories, (0, 1))
+plotting c1 do +bar categories ["A", "B"] values [1, 2] styled {"bar_width": 1} end
+plotting c2 do +boxplot categories ["B", "A"] samples [[0, 1, 2], [1, 2, 3]] styled {"bar_width": 1} end
+link_x of categories axes [c1, c2]
 category_picture := render categories
-assert(category_picture.width==480pt)
+assert(category_picture.width == 480pt)
 export first := render fig
 export second := render fig
-assert(len(a.layers)==1 and len(b.layers)==1)
+assert(len(a.layers) == 1 and len(b.layers) == 1)
 print("plot layout checks passed")

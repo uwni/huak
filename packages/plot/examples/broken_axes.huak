@@ -1,24 +1,24 @@
 import "../plot.huak".*
 
 fig := figure with width 19cm height 9cm
-bars := axis of fig at (0,0)
-response := axis of fig at (0,1)
+bars := axis of fig at (0, 0)
+response := axis of fig at (0, 1)
 
 plotting bars do
     title typ[One large observation]
     ylabel typ[Counts]
-    ylim [0,100]
-    breaks "left" over [[8,88]] gap 13pt
-    +bar categories ["A","B","C"] values [3,6,97]
+    ylim [0, 100]
+    breaks "left" over [[8, 88]] gap 13pt
+    +bar categories ["A", "B", "C"] values [3, 6, 97]
 end
 
 plotting response do
     title typ[Two frequency windows]
-    side "bottom" with {"scale":"log10","limits":[1,10000],"decades":[1],"format":"power10","minorticks":true,"label":typ[Frequency (Hz)]}
-    breaks "bottom" over [[10,1000]] gap 16pt
-    side "left" with {"limits":[0,1],"label":typ[Response]}
-    +lines x [1,5,9,2000,5000,10000] y [0.1,0.35,0.3,0.8,0.7,0.9] marked (marker "circle" sized 4pt)
-    +hline 0.5 styled {"color":color.rgb(0.65,0.3,0.1),"dash":[3pt,2pt]}
+    side "bottom" with {"scale": "log10", "limits": [1, 10000], "decades": [1], "format": "power10", "minorticks": true, "label": typ[Frequency (Hz)]}
+    breaks "bottom" over [[10, 1000]] gap 16pt
+    side "left" with {"limits": [0, 1], "label": typ[Response]}
+    +lines x [1, 5, 9, 2000, 5000, 10000] y [0.1, 0.35, 0.3, 0.8, 0.7, 0.9] marked (marker "circle" sized 4pt)
+    +hline 0.5 styled {"color": color.rgb(0.65, 0.3, 0.1), "dash": [3pt, 2pt]}
 end
 
 default render fig

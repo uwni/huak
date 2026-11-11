@@ -21,49 +21,49 @@ export fn cylinder(radius:length, height:length) -> shape
     return Shape("cylinder", [radius, height])
 end
 
-export fn cone(base:length, height:length, top:length=0pt) -> shape
+export fn cone(base:length, height:length, top:length = 0pt) -> shape
     return Shape("cone", [base, top, height])
 end
 
-export fn on_surface(surface:shape, uv:path, face:int=0) -> shape
+export fn on_surface(surface:shape, uv:path, face:int = 0) -> shape
     return Shape("surface_curve", [surface, uv, face])
 end
 
 export struct Plane
-    origin:vec3 = (0,0,0)
-    u:vec3 = (1,0,0)
-    v:vec3 = (0,1,0)
+    origin:vec3 = (0, 0, 0)
+    u:vec3 = (1, 0, 0)
+    v:vec3 = (0, 1, 0)
 end
 
-export fn profile(curve:path, plane:Plane=Plane()) -> shape
+export fn profile(curve:path, plane:Plane = Plane()) -> shape
     return Shape("profile", [curve, plane.origin, plane.u, plane.v])
 end
 
-export fn face(profile:any, plane:Plane=Plane()) -> shape
+export fn face(profile:any, plane:Plane = Plane()) -> shape
     return Shape("face", [profile, plane.origin, plane.u, plane.v])
 end
 
-export fn extrude(profile:any, displacement:vec3, plane:Plane=Plane()) -> shape
+export fn extrude(profile:any, displacement:vec3, plane:Plane = Plane()) -> shape
     return Shape("extrude", [profile, plane.origin, plane.u, plane.v, displacement])
 end
 
 // The default meridian uses radius and height as its two coordinates.
-export fn revolve(profile:any, angle:angle=360deg, axis:vec3=(0,0,1), center:vec3=(0,0,0), plane:Plane=Plane(v:(0,0,1))) -> shape
+export fn revolve(profile:any, angle:angle = 360deg, axis:vec3 = (0, 0, 1), center:vec3 = (0, 0, 0), plane:Plane = Plane(v: (0, 0, 1))) -> shape
     return Shape("revolve", [profile, plane.origin, plane.u, plane.v, center, axis, angle])
 end
 
 export fn box(width:length, depth:length, height:length) -> shape
     assert(width > 0pt and depth > 0pt and height > 0pt, "box dimensions must be positive")
-    return extrude(rectangle((0pt,0pt),width,depth),(0pt,0pt,height))
+    return extrude(rectangle((0pt, 0pt), width, depth), (0pt, 0pt, height))
 end
 
 export fn sweep(profile:any, guide:any) -> shape
-    return Shape("sweep",[profile,guide])
+    return Shape("sweep", [profile, guide])
 end
 
-export fn loft(sections:list, solid:bool=false) -> shape
-    if solid then return Shape("solid_loft",sections) end
-    return Shape("loft",sections)
+export fn loft(sections:list, solid:bool = false) -> shape
+    if solid then return Shape("solid_loft", sections) end
+    return Shape("loft", sections)
 end
 
 export struct Camera
@@ -72,7 +72,7 @@ export struct Camera
     focus:length
 end
 
-export fn orthographic(azimuth:angle=35deg, elevation:angle=30deg) -> Camera
+export fn orthographic(azimuth:angle = 35deg, elevation:angle = 30deg) -> Camera
     return Camera(azimuth, elevation, 0pt)
 end
 
@@ -123,36 +123,36 @@ end
 
 // Palette choice is independent of the geometric light and gleam boundaries.
 fn tone(ink:color, level:float) -> color
-    if level < 0 then return rgb(ink.r*(1+level),ink.g*(1+level),ink.b*(1+level),ink.a) end
-    return rgb(ink.r+(1-ink.r)*level,ink.g+(1-ink.g)*level,ink.b+(1-ink.b)*level,ink.a)
+    if level < 0 then return rgb(ink.r*(1+level), ink.g*(1+level), ink.b*(1+level), ink.a) end
+    return rgb(ink.r+(1-ink.r)*level, ink.g+(1-ink.g)*level, ink.b+(1-ink.b)*level, ink.a)
 end
 
 export fn shaded(face:VisibleFace, ink:color) -> picture
     result := picture()
     assert(len(face.shades) > 0, "shaded needs a projection with a directional light")
     for shade in face.shades do
-        append(result,fill(shade.region,tone(ink,-0.58+0.91*shade.diffuse)))
+        append(result, fill(shade.region, tone(ink, -0.58+0.91*shade.diffuse)))
     end
     if face.highlight != false then
         if len(face.lobes) == 0 then
-            append(result,fill(face.highlight,tone(ink,0.70)))
+            append(result, fill(face.highlight, tone(ink, 0.70)))
             return result
         end
         spots := picture()
-        disk := circle((0pt,0pt),1pt)
+        disk := circle((0pt, 0pt), 1pt)
         for ellipse in face.lobes do
             center := ellipse[0]
             u := ellipse[1]
             v := ellipse[2]
-            glint := radial_fill(disk,(0pt,0pt),1pt,rgb(1,1,1,ink.a*0.88),rgb(1,1,1,0))
-            append(spots,glint,matrix(u.x,u.y,v.x,v.y,center.x,center.y))
+            glint := radial_fill(disk, (0pt, 0pt), 1pt, rgb(1, 1, 1, ink.a*0.88), rgb(1, 1, 1, 0))
+            append(spots, glint, matrix(u.x, u.y, v.x, v.y, center.x, center.y))
         end
-        append(result,clipped(spots,face.highlight))
+        append(result, clipped(spots, face.highlight))
     end
     return result
 end
 
-export fn project(shapes:list, view:Camera, tolerance:length=0.01pt, faces:bool=true, light:any=false, spot:angle=0deg, isophotes:list=[0,0.25,0.5,0.75]) -> Projection
+export fn project(shapes:list, view:Camera, tolerance:length = 0.01pt, faces:bool = true, light:any = false, spot:angle = 0deg, isophotes:list = [0, 0.25, 0.5, 0.75]) -> Projection
     lines := []
     result := project_scene(shapes, view.azimuth, view.elevation, view.focus, tolerance, faces, light, spot, isophotes)
     layers := []
@@ -165,7 +165,7 @@ export fn project(shapes:list, view:Camera, tolerance:length=0.01pt, faces:bool=
     end
     for row in result[1] do
         shades := []
-        for band in row[4] do shades += [Shade(band[0],band[1])] end
+        for band in row[4] do shades += [Shade(band[0], band[1])] end
         layers[count-1-row[3]].faces += [VisibleFace(row[0], row[1], row[2], shades, row[5], row[6])]
     end
     front := []

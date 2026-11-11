@@ -1,6 +1,6 @@
-import paint.picture;import picture.canvas;original:=picture(30,20)
+import paint.picture;import picture.canvas;original := picture(30, 20)
 default original
-original.canvas(80,40)
-export detail:=picture(120,60)
-original=picture(200,100)
+original.canvas(80, 40)
+export detail := picture(120, 60)
+original = picture(200, 100)
 export original

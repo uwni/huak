@@ -12,7 +12,7 @@ end
 end
 */
 }
-export pic:=picture(240, 100)
+export pic := picture(240, 100)
 default pic
 object.append(pic, object.fill(rectangle((0, 0), 240, 100), rgb(1, 1, 1)))
 t := typ[

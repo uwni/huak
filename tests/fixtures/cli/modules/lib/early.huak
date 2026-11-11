@@ -1,6 +1,6 @@
-param amount=3
+param amount = 3
 export amount
 fn answer()->int
-return 42
+    return 42
 end
 export answer

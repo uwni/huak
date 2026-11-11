@@ -1,5 +1,5 @@
 precedence command
-below path
-above logical_or
+    below path
+    above logical_or
 end
 export command

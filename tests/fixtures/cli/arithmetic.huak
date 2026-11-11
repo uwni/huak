@@ -4,17 +4,17 @@ param scale: float = 1.5
 param enabled: bool = true
 param title: string = "default"
 fn twice(x: int) -> int
-return 2 * x
+    return 2 * x
 end
 fn text(value: string) -> string
-return value
+    return value
 end
 assert(text(title) == title)
 sum := 0
 for i in 1:count do
-sum = sum + twice(i)
+    sum = sum + twice(i)
 end
 if enabled then
-print(title); print(sum)
-print(scale)
+    print(title); print(sum)
+    print(scale)
 end

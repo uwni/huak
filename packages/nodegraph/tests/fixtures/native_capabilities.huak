@@ -3,19 +3,19 @@ import geometry.{intersection_times, sample_at_length}
 import object.region
 import math.abs
 import assertions.assert
-curve:=bezier((0pt,0pt),(0pt,0pt),(0pt,0pt),(10pt,0pt))
+curve := bezier((0pt, 0pt), (0pt, 0pt), (0pt, 0pt), (10pt, 0pt))
 assert(len(closed(curve)) == 2 and len(curve) == 1, "closing must preserve its source")
-times:=intersection_times(path((0pt,0pt),(10pt,0pt)),path((5pt,-1pt),(5pt,1pt)))
+times := intersection_times(path((0pt, 0pt), (10pt, 0pt)), path((5pt, -1pt), (5pt, 1pt)))
 assert(len(times) == 1 and abs(times[0].x-0.5) < 1e-8 and abs(times[0].y-0.5) < 1e-8)
-callback:=math.sin
-assert(callback(0deg)==0)
-sample:=sample_at_length(curve,5pt,0.00001pt)
+callback := math.sin
+assert(callback(0deg) == 0)
+sample := sample_at_length(curve, 5pt, 0.00001pt)
 assert(abs(sample[1].x-5pt) < 0.001pt and sample[3] > 0.79 and sample[3] < 0.80)
-source:=picture()
-drawing source do +fill(rectangle((0pt,0pt),20pt,20pt),rgb(1,0,0)) end
-mask:=picture()
-drawing mask do +fill(circle((10pt,10pt),4pt),rgb(0,0,0)) end
+source := picture()
+drawing source do +fill(rectangle((0pt, 0pt), 20pt, 20pt), rgb(1, 0, 0)) end
+mask := picture()
+drawing mask do +fill(circle((10pt, 10pt), 4pt), rgb(0, 0, 0)) end
 assert(len(region(mask)) > 0)
-export result :=picture(20pt,20pt)
+export result := picture(20pt, 20pt)
 default result
-append(result,cut(source,mask))
+append(result, cut(source, mask))

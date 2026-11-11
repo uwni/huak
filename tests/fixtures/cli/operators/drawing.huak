@@ -1,12 +1,12 @@
 import paint.{rgb, circle, bounds, fill, label, picture};import assertions.assert
 import "lib/geometry.huak" as transforms
-base:=circle((0,0),5)
-curve:=base transforms.scaled 2 transforms.shifted (20,30)
-assert(curve.bounds()==transforms.shifted(transforms.scaled(base,2),(20,30)).bounds())
-export pic:=picture(120,80)
+base := circle((0, 0), 5)
+curve := base transforms.scaled 2 transforms.shifted (20, 30)
+assert(curve.bounds() == transforms.shifted(transforms.scaled(base, 2), (20, 30)).bounds())
+export pic := picture(120, 80)
 default pic
-object.append(pic, object.fill(curve, rgb(0.2,0.4,0.7)))
-caption:=typ[
+object.append(pic, object.fill(curve, rgb(0.2, 0.4, 0.7)))
+caption := typ[
 Infix Ω $x^2$
 ]
-object.append(pic, object.label(caption, (5,65)))
+object.append(pic, object.label(caption, (5, 65)))
