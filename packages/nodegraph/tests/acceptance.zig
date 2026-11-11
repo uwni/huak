@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(init.io, "target/nodegraph/acceptance");
     const probe = try check.write("no-std-dependency.huak", "import \"std/nodegraph.huak\".*\n");
     try contains(try check.huak(&.{ "check", probe }, false), "unknown standard library module");
-    for ([_][]const u8{ "regression", "api", "mark_trim", "filled_marks", "relative_snap", "offset", "shapes", "shift", "mark_inherit", "defocus", "mark_extrude", "cylinder", "brace_shape", "ports", "snap_priority", "mark_props", "label_anchor" }) |name| {
+    for ([_][]const u8{ "regression", "api", "mark_trim", "filled_marks", "relative_snap", "grid_snap", "offset", "shapes", "shift", "mark_inherit", "defocus", "mark_extrude", "cylinder", "brace_shape", "ports", "bus", "snap_priority", "mark_props", "label_anchor" }) |name| {
         const output = try check.huak(&.{ "run", try check.fmt("tests/fixtures/{s}.huak", .{name}) }, true);
         try contains(output, "checks passed");
     }
@@ -31,6 +31,14 @@ pub fn main(init: std.process.Init) !void {
     _ = try check.tool(&.{ "rsvg-convert", "-w", "1000", "-o", try check.path("arrow-tip.png"), try check.path("arrow-tip.svg") });
     try number(try check.tool(&.{ "magick", try check.path("arrow-tip.png"), "-crop", "30x30+366+289", "+repage", "-background", "white", "-alpha", "remove", "-fx", "max(r-b,0)", "-format", "%[fx:mean]", "info:" }), 0);
     _ = try check.huak(&.{ "run", "examples/scene.huak", "--output=target/nodegraph/acceptance/scene-example.svg" }, true);
+    // The README quick start runs verbatim. Saved one level below the package
+    // root, its "../nodegraph.huak" import resolves as the README describes.
+    const readme = try check.read("README.md");
+    const fence = "```huak\n";
+    const quick_start = (std.mem.indexOf(u8, readme, fence) orelse return error.MissingReadmeExample) + fence.len;
+    const quick_end = quick_start + (std.mem.indexOf(u8, readme[quick_start..], "```") orelse return error.MissingReadmeExample);
+    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "target/readme-quick-start.huak", .data = readme[quick_start..quick_end] });
+    _ = try check.huak(&.{ "run", "target/readme-quick-start.huak", "--output=target/nodegraph/acceptance/readme-quick-start.svg" }, true);
 
     const before_gallery = check.exports;
     for ([_]struct { script: []const u8, names: []const []const u8 }{
@@ -87,7 +95,7 @@ pub fn main(init: std.process.Init) !void {
     }) |sample| try check.alpha("transparency.png", sample.x, sample.y, sample.alpha);
 
     // Same invalid inputs and diagnostics as the former external driver.
-    for ([_][3][]const u8{
+    const negative_cases = [_][3][]const u8{
         .{ "duplicate-name", "geometry([node(\"a\",grid(0,0),typ[A]),node(\"a\",grid(1,0),typ[B])])", "duplicate diagram object name" },
         .{ "unknown-option", "node(\"a\",grid(0,0),typ[A],{\"raduis\": 10pt})", "unknown nodegraph option: raduis" },
         .{ "duplicate-option", "node(\"a\",grid(0,0),typ[A],{\"width\": 10pt, \"width\": 20pt})", "duplicate dictionary key" },
@@ -108,7 +116,12 @@ pub fn main(init: std.process.Init) !void {
         .{ "label-position", "diagram([edge(absolute((0pt,0pt)),absolute((100pt,0pt)),{\"label\": typ[bad], \"label_pos\": 2})])", "position must be in" },
         .{ "gap-string-index", "source:=\"hook->\"; character:=source[0]", "index" },
         .{ "gap-gradient", "paint:=gradient(rgb(1,0,0),rgb(0,0,1))", "unknown function" },
-    }) |case| {
+        .{ "port-side", "node(\"a\",grid(0,0),typ[A],{\"ports\": {\"north\": 3}, \"port_pitch\": 10pt})", "node port side must be west or east: north" },
+        .{ "port-pitch", "node(\"a\",grid(0,0),typ[A],{\"ports\": {\"west\": 3}})", "node port pitch must be positive" },
+        .{ "port-height", "geometry([node(\"a\",grid(0,0),typ[A],{\"ports\": {\"west\": 4}, \"port_pitch\": 10pt, \"height\": 20pt})])", "node height must contain its ports" },
+        .{ "port-index", "geometry([node(\"a\",absolute((0pt,0pt)),typ[A],{\"ports\": {\"west\": 2}, \"port_pitch\": 10pt}),edge(port(\"a\",\"west\",5),absolute((-40pt,0pt)))])", "port index out of range" },
+    };
+    for (negative_cases) |case| {
         const file = try check.write(try check.fmt("{s}.huak", .{case[0]}), try check.fmt("import paint.rgb\nimport math.*\nimport \"../../../nodegraph.huak\".*\n{s}\n", .{case[1]}));
         const message = try check.huak(&.{ "run", file }, false);
         _ = try check.write(try check.fmt("{s}.stderr", .{case[0]}), message);
@@ -129,7 +142,7 @@ pub fn main(init: std.process.Init) !void {
         .nativePdfText = true,
         .transparentClearance = true,
         .crossingStressObjects = 131,
-        .negativeCases = 18,
+        .negativeCases = negative_cases.len,
         .nativeCapabilityChecks = 5,
         .capabilityProbes = 2,
     }, .{ .whitespace = .indent_2 }));

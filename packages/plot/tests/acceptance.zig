@@ -50,6 +50,14 @@ pub fn main(init: std.process.Init) !void {
     }
     _ = try check.process(&.{ "pdftoppm", "-r", "72", "-singlefile", "target/acceptance/breaks.pdf", "target/acceptance/breaks" }, true);
     try verifyBreaks(try check.read("target/acceptance/breaks.ppm"));
+    try contains(try check.huak(&.{ "run", "tests/options.huak", "--output=legend_sample=target/acceptance/legend-sample.svg", "--output=legend_bare=target/acceptance/legend-bare.svg" }, true), "plot option checks passed");
+    // legend_line=false removes exactly the legend sample: one line for the
+    // red series and the three errorbar strokes for the blue one.
+    const legend_sample = try check.read("target/acceptance/legend-sample.svg");
+    const legend_bare = try check.read("target/acceptance/legend-bare.svg");
+    for ([_]struct { stroke: []const u8, sample: usize }{ .{ .stroke = "stroke=\"#ff0000\"", .sample = 1 }, .{ .stroke = "stroke=\"#0000ff\"", .sample = 3 } }) |series| {
+        if (std.mem.count(u8, legend_sample, series.stroke) != std.mem.count(u8, legend_bare, series.stroke) + series.sample) return error.WrongLegendSample;
+    }
     const cases = [_]struct { source: []const u8, expected: []const u8 }{
         .{ .source = "a:=axis(f); plotting a do xlim [0,10]; breaks \"bottom\" over [[2,6],[5,8]] end; render(f)", .expected = "ordered, disjoint" },
         .{ .source = "a:=axis(f); plotting a do xlim [0,10]; breaks \"bottom\" over [[2,6]] gap 400pt end; render(f)", .expected = "fit inside" },
@@ -61,6 +69,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .source = "a:=axis(f); plotting a do side \"bottom\" with {\"decades\":[1,2,5]} end; render(f)", .expected = "require a log10 scale" },
         .{ .source = "a:=axis(f); plotting a do side \"bottom\" with {\"scale\":\"log10\",\"decades\":[1,10]} end; render(f)", .expected = "decade multipliers" },
         .{ .source = "a:=axis(f); plotting a do side \"left\" with {\"arrow\":\"middle\"} end; render(f)", .expected = "unknown arrow ends" },
+        .{ .source = "a:=axis(f); plotting a do +annotate(0.5,0.5,typ[note]) styled {\"align\":\"middle\"} end; render(f)", .expected = "unknown annotation align" },
         .{ .source = "lines([1],[1,2])", .expected = "lengths differ" },
         .{ .source = "marker(\"bogus\")", .expected = "unknown marker" },
         .{ .source = "marker(\"circle\") sized -1pt", .expected = "positive" },
@@ -85,7 +94,7 @@ pub fn main(init: std.process.Init) !void {
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = try check.fmt("import \"../../plot.huak\".*\nf:=figure(400pt,300pt)\n{s}\n", .{case.source}) });
         try contains(try check.huak(&.{ "run", path }, false), case.expected);
     }
-    std.debug.print("Plot acceptance passed: 5 numerical/DSL suites, {d} galleries, {d} SVG/PDF gallery exports, repeated/parallel equality, native PDF text, clipping/marker/axis/arrow/break raster contracts, {d} negative cases.\n", .{ examples.len, examples.len * 4, cases.len });
+    std.debug.print("Plot acceptance passed: 6 numerical/DSL suites, {d} galleries, {d} SVG/PDF gallery exports, repeated/parallel equality, native PDF text, clipping/marker/axis/arrow/break raster contracts, {d} negative cases.\n", .{ examples.len, examples.len * 4, cases.len });
 }
 
 const Check = struct {

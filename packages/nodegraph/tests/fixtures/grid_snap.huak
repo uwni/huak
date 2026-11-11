@@ -1,0 +1,22 @@
+// Grid and between endpoints snap to the outlines of the nodes they reach.
+// Relative endpoints and ports stay exact anchors (relative_snap, ports).
+import paint.*
+import object.bounds
+import assertions.assert
+import "../../nodegraph.huak" as nodegraph
+
+a := nodegraph.node("a", nodegraph.grid(0, 0), typ[A], {"width": 20pt, "height": 20pt})
+b := nodegraph.node("b", nodegraph.grid(1, 0), typ[B], {"width": 20pt, "height": 20pt})
+link := nodegraph.edge(nodegraph.grid(0, 0), nodegraph.grid(1, 0), {"name": "link"})
+cells := nodegraph.geometry([a, b, link])
+first := nodegraph.anchor(cells, "a")
+last := nodegraph.anchor(cells, "b")
+box := bounds(nodegraph.route(cells, "link"))
+assert(box[0].x > first.x+9pt and box[1].x < last.x-9pt, "grid endpoints must snap to node outlines")
+
+c := nodegraph.node("c", nodegraph.absolute((0pt, 0pt)), typ[C], {"width": 20pt, "height": 20pt})
+d := nodegraph.node("d", nodegraph.absolute((100pt, 0pt)), typ[D], {"width": 20pt, "height": 20pt})
+middle := nodegraph.edge(nodegraph.between(nodegraph.named("c"), nodegraph.named("d"), 0), nodegraph.named("d"), {"name": "middle"})
+span := bounds(nodegraph.route(nodegraph.geometry([c, d, middle]), "middle"))
+assert(span[0].x > 9pt, "between endpoints must snap to node outlines")
+print("grid snap checks passed")

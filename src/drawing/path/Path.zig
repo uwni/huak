@@ -232,24 +232,43 @@ pub fn copyView(self: *const Path, a: std.mem.Allocator) !Path {
 
 /// An oriented circular arc, approximated by cubic spans of at most 90 degrees.
 pub fn arc(allocator: std.mem.Allocator, center: Point, radius: f64, start: f64, sweep: f64) !Path {
-    if (!std.math.isFinite(start) or !std.math.isFinite(sweep) or !std.math.isFinite(radius) or
-        radius <= 0 or sweep == 0 or @abs(sweep) > 2 * std.math.pi) return error.InvalidParameter;
+    try validateArc(radius, start, sweep);
     var path = Path.init(allocator);
     errdefer path.deinit();
-    const count: usize = @intFromFloat(@ceil(@abs(sweep) / (std.math.pi / 2.0)));
+    try path.segments.ensureTotalCapacityPrecise(allocator, 1 + arcSpans(sweep));
+    try path.moveTo(center.add((Point{ .x = @cos(start), .y = @sin(start) }).scale(radius)));
+    try path.appendArc(center, radius, start, sweep);
+    return path;
+}
+
+/// Cubic spans that `appendArc` uses for `sweep`: at most a quarter turn each.
+pub fn arcSpans(sweep: f64) usize {
+    return @intFromFloat(@ceil(@abs(sweep) / (std.math.pi / 2.0)));
+}
+
+/// Continue the current subpath along an oriented circular arc around
+/// `center`. The current point is the arc start, at angle `start`; each span
+/// uses the standard endpoint-exact kappa, so the curve stays editable cubics.
+pub fn appendArc(self: *Path, center: Point, radius: f64, start: f64, sweep: f64) !void {
+    try validateArc(radius, start, sweep);
+    if (!self.open) return error.InvalidPath;
+    const count = arcSpans(sweep);
     const step = sweep / @as(f64, @floatFromInt(count));
     const k = radius * (4.0 / 3.0) * @tan(step / 4);
     var angle = start;
     var radial: Point = .{ .x = @cos(angle), .y = @sin(angle) };
-    try path.moveTo(center.add(radial.scale(radius)));
     for (0..count) |_| {
-        const c1 = path.current.?.add(.{ .x = -radial.y * k, .y = radial.x * k });
+        const c1 = self.current.?.add(.{ .x = -radial.y * k, .y = radial.x * k });
         angle += step;
         radial = .{ .x = @cos(angle), .y = @sin(angle) };
         const end = center.add(radial.scale(radius));
-        try path.cubicTo(c1, end.add(.{ .x = radial.y * k, .y = -radial.x * k }), end);
+        try self.cubicTo(c1, end.add(.{ .x = radial.y * k, .y = -radial.x * k }), end);
     }
-    return path;
+}
+
+fn validateArc(radius: f64, start: f64, sweep: f64) error{InvalidParameter}!void {
+    if (!std.math.isFinite(start) or !std.math.isFinite(sweep) or !std.math.isFinite(radius) or
+        radius <= 0 or sweep == 0 or @abs(sweep) > 2 * std.math.pi) return error.InvalidParameter;
 }
 /// Split at every move, preserving contour order, exact geometry, winding
 /// and open/closed state, including move-only contours. This does not group
@@ -582,6 +601,21 @@ pub fn contourRanges(self: Path, allocator: std.mem.Allocator) ![]ContourRange {
         }
     }
     return contours.toOwnedSlice(allocator);
+}
+
+test "appendArc continues the current point exactly as arc constructs it" {
+    var whole = try Path.arc(std.testing.allocator, .{ .x = 3, .y = -2 }, 5, 0.25, -2.5);
+    defer whole.deinit();
+    try std.testing.expectEqual(@as(usize, 1 + arcSpans(-2.5)), whole.segments.items.len);
+    try std.testing.expectEqual(whole.segments.items.len, whole.segments.capacity);
+
+    var continued = Path.init(std.testing.allocator);
+    defer continued.deinit();
+    try std.testing.expectError(error.InvalidPath, continued.appendArc(.{ .x = 3, .y = -2 }, 5, 0.25, -2.5));
+    try continued.moveTo(whole.segments.items[0].move);
+    try continued.appendArc(.{ .x = 3, .y = -2 }, 5, 0.25, -2.5);
+    try std.testing.expectEqualSlices(Segment, whole.segments.items, continued.segments.items);
+    try std.testing.expectError(error.InvalidParameter, continued.appendArc(.zero, 0, 0, 1));
 }
 
 test "contour ranges distinguish CLOSE from an open return to the start" {

@@ -1,0 +1,67 @@
+// Figure and layer options: margins, cropping to drawn content, annotation
+// alignment and legend samples.
+import assertions.assert
+import math.abs
+import color.rgb
+import object.bounds
+import "../plot.huak".*
+import "../plot/render.huak" as renderer
+
+BARE := {"xticks":[],"yticks":[],"labels_visible":false,"ticks_visible":false,"grid":false,"spines":[],"xlim":[0,1],"ylim":[0,1]}
+
+fn note(align:string, figure_options:dict) -> picture
+    fig := figure(200pt,200pt,figure_options)
+    ax := axis of fig at (0,0)
+    plotting ax do
+        settings BARE
+        +annotate(0.5,0.5,typ[note]) styled {"align":align}
+    end
+    return render fig
+end
+
+// Alignment pins the text's left edge, center or right edge to the anchor.
+plain := {"background":false}
+left := bounds(note("left",plain))
+center := bounds(note("center",plain))
+right := bounds(note("right",plain))
+anchor := (center[0].x+center[1].x)/2
+assert(abs(left[0].x-anchor)<0.01pt and abs(right[1].x-anchor)<0.01pt,"annotation align must pin the matching text edge")
+assert(left[1].x>anchor+5pt and right[0].x<anchor-5pt,"aligned text must extend away from its anchor")
+
+// A figure keeps its canvas unless auto_bounds crops it to the drawn content.
+fixed := note("center",plain)
+assert(fixed.width==200pt and fixed.height==200pt,"a figure keeps its canvas by default")
+cropped := note("center",{"background":false,"auto_bounds":true})
+assert(cropped.width<50pt and cropped.height<30pt,"auto_bounds must crop to the drawn content")
+
+// The margin insets every panel on each side; the default is no margin.
+fn panel(options:dict) -> any
+    fig := figure(200pt,200pt,options)
+    ax := axis of fig at (0,0)
+    plotting ax do
+        settings BARE
+        +lines x [0,1] y [0,1]
+    end
+    panels := renderer.prepare(fig)
+    renderer.layout(fig,panels)
+    return panels[0]
+end
+flush := panel({})
+inset := panel({"margin":20pt})
+assert(abs(inset.origin.x-flush.origin.x-20pt)<0.001pt and abs(flush.size.x-inset.size.x-40pt)<0.001pt,"margin must inset panels on every side")
+
+// legend_line=false keeps an entry's label but drops its line sample. The
+// acceptance driver counts each series color in both exports.
+fn legend(sample:bool) -> picture
+    fig := figure(200pt,160pt,{"background":false})
+    ax := axis of fig at (0,0)
+    plotting ax do
+        settings {"legend":"top-left"}
+        +lines([0,1],[0,1]) styled {"color":rgb(1,0,0),"label":typ[line],"legend_line":sample}
+        +errorbars([0.5],[0.5],[0.1]) styled {"color":rgb(0,0,1),"label":typ[error],"legend_line":sample}
+    end
+    return render fig
+end
+export legend_sample := legend(true)
+export legend_bare := legend(false)
+print("plot option checks passed")

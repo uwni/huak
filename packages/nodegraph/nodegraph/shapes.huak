@@ -1,23 +1,18 @@
 // Diagram shape policy; curves, transformations and offsets use native geometry.
 import math.{abs, atan2, max, min, sin, tan}
 import object.{append, label}
-import geometry.{circle, offset, rectangle, region_union}
+import geometry.{circle, fillet, rectangle, region_union}
 import transform.{compose, rotate, scale, transformed, translate}
-import pen.stroke_path
 import assertions.assert
 import "options.huak" as opt
 
-export fn rounded_rect(center:vec2, size:vec2, radius:length) -> path
-    r := min(radius, min(size.x, size.y)/2)
-    if r <= 0pt then return rectangle(center-size/2, size.x, size.y) end
-    x := size.x/2-r
-    y := size.y/2-r
-    if x == 0pt and y == 0pt then return circle(center, r) end
-    if x == 0pt or y == 0pt then
-        return stroke_path(path(center-(x, y), center+(x, y)), 2*r, "round", "round")
-    end
-    // Native region offset rounds and closes the rectangle.
-    return offset(rectangle(center-(x, y), 2*x, 2*y), r, "round")
+// Native fillet keeps exact cubic arcs. A radius of half the shorter side is
+// its own limit case: a pill, or a circle for a square.
+fn rounded_box(center:vec2, size:vec2, radius:length) -> path
+    corner := min(radius, min(size.x, size.y)/2)
+    box := rectangle(center-size/2, size.x, size.y)
+    if corner <= 0pt then return box end
+    return fillet(box, corner)
 end
 
 export fn ellipse_shape(center:vec2, size:vec2, factor:float = 1) -> path
@@ -44,10 +39,10 @@ export fn shape_outline(kind:string, center:vec2, size:vec2, radius:length = 0pt
     h := size.y/2
     fit:float := opt.get(options, "fit", 0.8)
     angle:angle := opt.get(options, "angle", 20deg)
-    if kind == "rect" then return rounded_rect(center, size, radius) end
+    if kind == "rect" then return rounded_box(center, size, radius) end
     if kind == "circle" then return circle(center, max(w, h)) end
     if kind == "ellipse" then return ellipse_shape(center, size, opt.get(options, "scale", 1)) end
-    if kind == "pill" then return rounded_rect(center, size, min(w, h)) end
+    if kind == "pill" then return rounded_box(center, size, min(w, h)) end
     points := []
     if kind == "diamond" then
         x := w*(1+opt.get(options, "fit", 0.5))

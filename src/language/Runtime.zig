@@ -987,12 +987,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (hasArgument(args, 2)) value.cap = std.meta.stringToEnum(DisplayList.Cap, try string(args[2])) orelse return error.InvalidPen;
             if (hasArgument(args, 3)) value.join = std.meta.stringToEnum(DisplayList.Join, try string(args[3])) orelse return error.InvalidPen;
             if (hasArgument(args, 4)) value.miter_limit = try numeric(args[4]);
-            if (hasArgument(args, 5)) {
-                const input = try sequence(args[5]);
-                const dash = try own.alloc(f64, input.len);
-                for (input, dash) |item, *out| out.* = try lengthPoints(item);
-                value.dash = dash;
-            }
+            if (hasArgument(args, 5)) value.dash = try lengths(own, try sequence(args[5]));
             if (hasArgument(args, 6)) value.dash_phase = try lengthPoints(args[6]);
             if (hasArgument(args, 7)) {
                 // The source contributes only immutable nib geometry;
@@ -1219,10 +1214,9 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (position_values.len != width_values.len) return error.InvalidProfile;
             const positions = try self.gpa.alloc(f64, position_values.len);
             defer self.gpa.free(positions);
-            const widths = try self.gpa.alloc(f64, width_values.len);
-            defer self.gpa.free(widths);
             for (positions, position_values) |*out, value| out.* = try numeric(value);
-            for (widths, width_values) |*out, value| out.* = try lengthPoints(value);
+            const widths = try lengths(self.gpa, width_values);
+            defer self.gpa.free(widths);
             var options: regions.Options = .{};
             if (hasArgument(args, 3)) options.cap = std.meta.stringToEnum(regions.Cap, try string(args[3])) orelse return error.InvalidCap;
             if (hasArgument(args, 4)) options.join = std.meta.stringToEnum(regions.Join, try string(args[4])) orelse return error.InvalidJoin;
@@ -1329,38 +1323,30 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         },
         .fillet => {
             const source = try self.path(args[0]);
-            var scalar: [1]f64 = undefined;
-            var list: ?[]f64 = null;
-            defer if (list) |values| a.free(values);
-            const radii: []const f64 = if (args[1] == .list) blk: {
-                const values = try sequence(args[1]);
-                // A list is per-vertex; one-element lists would be ambiguous
-                // with the scalar form, so require the scalar form instead.
-                if (values.len < 2) return error.InvalidRadii;
-                const converted = try a.alloc(f64, values.len);
-                errdefer a.free(converted);
-                for (values, converted) |value, *out| out.* = try lengthPoints(value);
-                list = converted;
-                break :blk converted;
-            } else blk: {
-                scalar[0] = try lengthPoints(args[1]);
-                break :blk &scalar;
+            var uniform: [1]f64 = undefined;
+            const listed = types.sequence(args[1]);
+            const radii: []const f64 = if (listed) |values| try lengths(self.gpa, values) else blk: {
+                uniform[0] = try lengthPoints(args[1]);
+                break :blk &uniform;
             };
-            const converted = path_fillet.fillet(own, source, radii) catch |err| {
+            defer if (listed != null) self.gpa.free(radii);
+            const rounded = path_fillet.fillet(own, self.gpa, source, radii) catch |err| {
                 switch (err) {
-                    error.InvalidRadii => self.native_message = "fillet radii must be one value or one per vertex",
+                    error.InvalidRadii => self.native_message = "fillet radii must be finite, nonnegative, and one value or one per vertex",
                     error.OpenPath => self.native_message = "fillet requires a closed polygon",
                     error.CurvedSegment => self.native_message = "fillet requires line segments only",
                     error.MultipleContours => self.native_message = "fillet requires exactly one contour",
                     error.InvalidPath, error.TooFewVertices => self.native_message = "fillet requires a polygon with at least three vertices",
                     error.NonFinite => self.native_message = "fillet requires finite polygon coordinates",
                     error.RadiusTooLarge => self.native_message = "fillet radius is too large for adjacent edges",
-                    error.DegeneratePolygon, error.DegenerateCorner => self.native_message = "fillet requires a nondegenerate polygon",
+                    error.DegeneratePolygon => self.native_message = "fillet requires a nondegenerate polygon",
+                    error.DegenerateCorner => self.native_message = "fillet cannot round a vertex where an edge reverses onto the previous one",
                     else => {},
                 }
                 return err;
             };
-            return self.pathResult(converted);
+            // Paths are immutable values: an unchanged polygon keeps its handle.
+            return if (rounded) |result| self.pathResult(result) else args[0];
         },
         .offset => {
             var options: regions.Options = .{};
@@ -1739,6 +1725,14 @@ fn lengthResult(v: f64) !Value {
 
 pub fn lengthPoints(v: Value) !f64 {
     return if (v == .quantity) units.toPoints(v.quantity) else numeric(v);
+}
+
+/// Native points for a list of lengths, in one allocation owned by the caller.
+fn lengths(allocator: std.mem.Allocator, values: []const Value) ![]f64 {
+    const result = try allocator.alloc(f64, values.len);
+    errdefer allocator.free(result);
+    for (values, result) |value, *out| out.* = try lengthPoints(value);
+    return result;
 }
 
 fn sampleAtLength(measure: Measure, distance: Value) !Measure.Sample {

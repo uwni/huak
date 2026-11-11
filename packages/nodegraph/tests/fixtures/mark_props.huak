@@ -1,4 +1,6 @@
-import paint.{rgb, path, bounds}
+import paint.{rgb, path, bounds, circle}
+import object.region
+import geometry.region_intersection
 import assertions.assert
 import "../../nodegraph.huak".*
 import "../../nodegraph/marks.huak" as marks
@@ -12,3 +14,14 @@ origin_edge := edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), {"marks": [mar
 pa := bounds(diagram([plain_edge]))
 pb := bounds(diagram([origin_edge]))
 assert(pb[1].x > pa[1].x+2pt, "tip_origin must move the mark")
+
+// A cross is two symmetric diagonals; a slash is one stroke rising at 60deg.
+guide := path((-100pt, 0pt), (100pt, 0pt))
+cross := bounds(marks.render(model.mark("cross", 0.5), guide, rgb(0, 0, 0), 1pt, 20pt).content)
+cross_width := cross[1].x-cross[0].x
+cross_height := cross[1].y-cross[0].y
+assert(cross_width-cross_height < 0.001pt and cross_height-cross_width < 0.001pt, "cross mark must be symmetric")
+slash := region(marks.render(model.mark("slash", 0.5), guide, rgb(0, 0, 0), 1pt, 20pt).content, 0.01pt)
+assert(len(bounds(region_intersection(slash, circle((5pt, 8.66pt), 0.2pt), 0.01pt))) == 2, "slash must rise to the right")
+assert(len(bounds(region_intersection(slash, circle((-5pt, 8.66pt), 0.2pt), 0.01pt))) == 0, "slash must not mirror into a cross")
+print("cross and slash checks passed")

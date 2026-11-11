@@ -13,7 +13,7 @@ end
 export shapes := diagram(nodes)
 default shapes
 
-types = ["head", "doublehead", "triplehead", "harpoon", "straight", "solid", "stealth", "latex", "cone", "circle", "square", "diamond", "bar", "doublebar", "triplebar", "cross", "bracket", "parenthesis", "hook", "hooks", "n", "n?", "n!", "1", "1?", "1!", "crowfoot"]
+types = ["head", "doublehead", "triplehead", "harpoon", "straight", "solid", "stealth", "latex", "cone", "circle", "square", "diamond", "bar", "doublebar", "triplebar", "cross", "slash", "bracket", "parenthesis", "hook", "hooks", "n", "n?", "n!", "1", "1?", "1!", "crowfoot"]
 items := []
 i = 0
 for title in types do

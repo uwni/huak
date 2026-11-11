@@ -120,7 +120,7 @@ export fn render(description:model.MarkDescription, guide:path, ink:color, width
             object.append(base, draw(path((x-lean, -size/2), (x+lean, size/2)), stroke))
         end
     elseif kind == "cross" then
-        object.append(base, draw(path((-size*cos(slash_angle), -size*sin(slash_angle)), (size*cos(slash_angle), size*sin(slash_angle))), stroke))
+        object.append(base, draw(path((-size/2, -size/2), (size/2, size/2)), stroke))
         object.append(base, draw(path((-size/2, size/2), (size/2, -size/2)), stroke))
     elseif kind == "bracket" then
         object.append(base, draw(path((-size/3, size/2), (0pt, size/2), (0pt, -size/2), (-size/3, -size/2)), stroke))

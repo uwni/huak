@@ -46,11 +46,11 @@ fn snapped(curve:path, coordinate:any, objects:layout.Geometry, from_start:bool)
         if target.kind == "edge" or coordinate.anchor != "center" or opt.get(target.options, "snap", true) == false then return endpoint end
         return snap_time(curve, target, from_start)
     end
-    // Relative coordinates are exact anchors (for example a device port);
-    // only absolute endpoints search nearby nodes.
-    if coordinate.kind != "absolute" then return endpoint end
-    // Absolute endpoints also snap to nearby nodes. Highest numeric snap
-    // priority wins; false disables a node.
+    // Relative coordinates and ports are exact anchors (for example a device
+    // pin); they never search nearby nodes.
+    if coordinate.kind == "relative" or coordinate.kind == "port" then return endpoint end
+    // Grid, between and absolute endpoints snap to nearby nodes. Highest
+    // numeric snap priority wins; false disables a node.
     selected := endpoint
     best_distance := 1e300
     best_priority := -1e300

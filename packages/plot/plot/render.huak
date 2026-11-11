@@ -485,19 +485,22 @@ fn legend(dst:picture, panel:Panel, fig:Figure)
         ink := get(item.options,"color",colors[get(item.options,"series_index",i)%len(colors)])
         at := p+(4pt+(j%columns)*(size.x-8pt)/columns,size.y-4pt-(int(j/columns)+0.5)*height)
         stroke := get(item.options,"pen",pen(ink,get(item.options,"width",get(fig.options,"line_width",1.2pt)),dash:get(item.options,"dash",[])))
-        if (item.kind=="arrow" or item.kind=="lines" or item.kind=="hline" or item.kind=="vline") and get(item.options,"legend_line",true) then
-            ends := "none"
-            if item.kind=="arrow" then ends = "end" end
-            arrows.stroke(dst,[at+(2pt,0pt),at+(22pt,0pt)],stroke,get(item.options,"arrow",ends),get(item.options,"arrow_size",6pt))
-        elseif item.kind=="errorbars" then
-            a := at+(12pt,-5pt); b := at+(12pt,5pt); cap := (3pt,0pt)
-            if get(item.options,"orientation","vertical")=="horizontal" then a = at+(3pt,0pt); b = at+(21pt,0pt); cap = (0pt,3pt) end
-            segment(dst,a,b,stroke); segment(dst,a-cap,a+cap,stroke); segment(dst,b-cap,b+cap,stroke)
-        elseif item.kind!="scatter" and item.kind!="annotation" and get(item.options,"legend_line",true) then
-            shape := rectangle(at+(2pt,-3pt),20pt,6pt)
-            interior:any := get(item.options,"fill",ink)
-            if interior!=false then append(dst,fill(shape,interior)) end
-            if get(item.options,"pen",false)!=false then append(dst,draw(shape,stroke)) end
+        // legend_line=false keeps only the marker and label of an entry.
+        if get(item.options,"legend_line",true) then
+            if item.kind=="arrow" or item.kind=="lines" or item.kind=="hline" or item.kind=="vline" then
+                ends := "none"
+                if item.kind=="arrow" then ends = "end" end
+                arrows.stroke(dst,[at+(2pt,0pt),at+(22pt,0pt)],stroke,get(item.options,"arrow",ends),get(item.options,"arrow_size",6pt))
+            elseif item.kind=="errorbars" then
+                a := at+(12pt,-5pt); b := at+(12pt,5pt); cap := (3pt,0pt)
+                if get(item.options,"orientation","vertical")=="horizontal" then a = at+(3pt,0pt); b = at+(21pt,0pt); cap = (0pt,3pt) end
+                segment(dst,a,b,stroke); segment(dst,a-cap,a+cap,stroke); segment(dst,b-cap,b+cap,stroke)
+            elseif item.kind!="scatter" and item.kind!="annotation" then
+                shape := rectangle(at+(2pt,-3pt),20pt,6pt)
+                interior:any := get(item.options,"fill",ink)
+                if interior!=false then append(dst,fill(shape,interior)) end
+                if get(item.options,"pen",false)!=false then append(dst,draw(shape,stroke)) end
+            end
         end
         symbol:any := get(item.options,"marker",false)
         if item.kind=="scatter" and symbol==false then symbol = markers.marker() end
@@ -726,8 +729,11 @@ end
 export fn render(fig:Figure) -> picture
     panels := prepare(fig)
     layout(fig,panels)
-    dst := picture()
-    if not get(fig.options,"auto_bounds",false) then dst = picture(fig.width,fig.height) end
+    // auto_bounds crops the output to the drawn content instead of the figure.
+    dst := block
+        if get(fig.options,"auto_bounds",false) then return picture() end
+        return picture(fig.width,fig.height)
+    end
     background:any := get(fig.options,"background",rgb(1,1,1))
     if background != false then append(dst,fill(rectangle((0pt,0pt),fig.width,fig.height),background)) end
     colors := palette(fig)

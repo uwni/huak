@@ -46,6 +46,15 @@ export struct LayoutResult
 end
 
 export fn node_size(item:any) -> vec2
+    size := requested_size(item)
+    assert(size.x > 0pt and size.y > 0pt, "node dimensions must be positive")
+    return size
+end
+
+// Size requested by a body, shape and options. Enclosures use it only as a
+// lower bound around their members, so it may be empty for them. Port options
+// are validated when the node is described.
+fn requested_size(item:any) -> vec2
     body:text := item.body
     options:dict := item.options
     inset:length := opt.get(options, "inset", 6pt)
@@ -60,21 +69,19 @@ export fn node_size(item:any) -> vec2
         assert(radius > 0pt, "node radius must be positive")
         size = (2*radius, 2*radius)
     end
+    // Ports sit at a fixed pitch centered on the node; padding keeps the
+    // outermost ports off the corners of a port-sized node.
+    reach := 0pt
     if opt.has(options, "ports") then
         ports:dict := opt.get(options, "ports", {})
-        count:int := 0
-        if dict_contains(ports, "west") then count = max(count, int(ports["west"])) end
-        if dict_contains(ports, "east") then count = max(count, int(ports["east"])) end
-        assert(count > 0, "node ports must have a positive count")
+        rows:int := 0
+        for side in ports.keys() do rows = max(rows, int(ports[side])) end
         pitch:length := opt.get(options, "port_pitch", 0pt)
-        assert(pitch > 0pt, "node port pitch must be positive")
-        padding:length := opt.get(options, "port_padding", pitch/2)
-        assert(padding >= 0pt, "node port padding must be nonnegative")
-        span := (count-1)*pitch+2*padding
-        size = (size.x, max(size.y, span))
+        reach = (rows-1)*pitch
+        size = (size.x, max(size.y, reach+2*opt.get(options, "port_padding", pitch/2)))
     end
     size = (opt.get(options, "width", size.x), opt.get(options, "height", size.y))
-    assert(size.x > 0pt and size.y > 0pt or item.kind == "enclose", "node dimensions must be positive")
+    if reach > 0pt then assert(size.y >= reach, "node height must contain its ports") end
     if kind == "circle" then size = (max(size.x, size.y), max(size.x, size.y)) end
     return size
 end
@@ -221,8 +228,8 @@ fn port_point(nodes:Geometry, name:string, side:string, index:int) -> vec2
     assert(dict_contains(ports, side), "node has no " + side + " ports")
     count:int := int(ports[side])
     assert(index >= 0 and index < count, "port index out of range")
+    // node() has validated the pitch of every port column.
     pitch:length := opt.get(item.options, "port_pitch", 0pt)
-    assert(pitch > 0pt, "node port pitch must be positive")
     edge := anchor(nodes, name, side)
     offset := ((count-1)/2-index)*pitch
     return (edge.x, item.center.y+offset)
@@ -231,8 +238,7 @@ end
 export fn ready(coordinate:any, nodes:Geometry) -> bool
     kind:string := coordinate.kind
     if kind == "grid" or kind == "absolute" then return true end
-    if kind == "named" then return known(nodes, coordinate.name) end
-    if kind == "port" then return known(nodes, coordinate.name) end
+    if kind == "named" or kind == "port" then return known(nodes, coordinate.name) end
     if kind == "relative" then return ready(coordinate.origin, nodes) end
     if kind == "between" then return ready(coordinate.first, nodes) and ready(coordinate.last, nodes) end
     panic("unknown coordinate kind: " + kind)
@@ -309,7 +315,7 @@ export fn nodes(items:list, options:dict) -> LayoutResult
                         high = (max(high.x, box[1].x), max(high.y, box[1].y))
                     end
                     padding:length := opt.get(item.options, "inset", 6pt)
-                    requested := node_size(item)
+                    requested := requested_size(item)
                     body:text := item.body
                     // Reserve a title row above the members in the group's
                     // local axes. Empty bodies preserve the member-only box.

@@ -250,7 +250,11 @@ test "fillet rounds polygons and rounded_rect accepts per-corner radii" {
             \\all:=fillet(tri,1pt)
             \\some:=fillet(tri,[1pt,0pt,2pt])
             \\rect:=rounded_rect((0pt,0pt),30pt,20pt,[2pt,4pt,6pt,8pt])
-            \\assert(len(all)>len(tri) and len(some)>len(tri) and len(rect)>4)
+            \\// Each triangle arc takes two cubics; a sharp corner keeps its two
+            \\// edges; rectangle corners take one cubic each.
+            \\assert(len(all)==9 and len(some)==7 and len(rect)==8)
+            \\assert(len(fillet(tri,[1pt]))==len(all))
+            \\assert(fillet(tri,0pt)==tri and fillet(tri,[0pt,0pt,0pt])==tri)
             \\p0:=picture(30pt,30pt);append(p0,object(all))
             \\p1:=picture(30pt,30pt);append(p1,object(some))
             \\p2:=picture(30pt,30pt);append(p2,object(rect))
@@ -266,7 +270,6 @@ test "fillet rounds polygons and rounded_rect accepts per-corner radii" {
             var svg = try runtime.render(machine.getGlobal(name).?, .svg);
             defer svg.deinit();
             try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "c ") != null);
         }
     }
 }

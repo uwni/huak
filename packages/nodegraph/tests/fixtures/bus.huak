@@ -1,0 +1,24 @@
+// The circuit bus preset scales its stroke and marks from the rule width: a
+// slash marks the middle, a solid head the end, and the label sits left.
+import paint.*
+import text.height
+import assertions.assert
+import "../../nodegraph.huak" as nodegraph
+import "../../nodegraph/render.huak" as render
+
+fn same(a:length, b:length) -> bool
+    return a-b < 1e-9pt and b-a < 1e-9pt
+end
+
+rule := 0.4pt
+body := typ[8]
+options := nodegraph.bus_options(rule, 10pt, rgb(0, 0, 0), body)
+marks:list := options["marks"]
+assert(len(marks) == 2 and marks[0].kind == "slash" and marks[0].position == 0.5 and marks[1].kind == "solid", "bus marks are a middle slash and a solid head")
+assert(same(options["thickness"], 2.2*rule) and same(options["mark_size"], 11*rule), "bus stroke and marks scale with the rule")
+assert(options["label_side"] == "left" and same(options["label_sep"], 5pt), "bus label sits half an em left of the line")
+resolved := nodegraph.geometry([nodegraph.edge(nodegraph.absolute((0pt, 0pt)), nodegraph.absolute((100pt, 0pt)), options)]).objects[0]
+box := bounds(render.edge_object(resolved).content)
+// Left of a rightward line is above it; only the marks reach below.
+assert(box[1].y > 5pt+height(body)-0.5pt and box[0].y > -3pt, "bus label must sit left of the line")
+print("bus checks passed")

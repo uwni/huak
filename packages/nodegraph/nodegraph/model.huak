@@ -134,7 +134,20 @@ export fn node(name:string, position:any, body:text, options:dict = {}) -> NodeD
     opt.validate(options, ["shape", "width", "height", "radius", "inset", "outset", "fill", "stroke", "thickness", "corner_radius", "extrude", "rotate", "layer", "hidden", "floating", "snap", "outline", "shape_options", "defocus", "ports", "port_pitch", "port_padding"])
     shape_options:dict := opt.get(options, "shape_options", {})
     opt.validate(shape_options, ["angle", "fit", "dir", "flip", "aspect", "truncate", "tilt", "rings", "scale", "sep", "font_size"])
+    if opt.has(options, "ports") then validate_ports(options) end
     return NodeDescription(name: name, position: position, body: body, options: options)
+end
+
+// A port column gives the number of evenly pitched pins on a west or east side.
+fn validate_ports(options:dict)
+    ports:dict := opt.get(options, "ports", {})
+    assert(len(ports.keys()) > 0, "node ports need a west or east column")
+    for side in ports.keys() do
+        assert(side == "west" or side == "east", "node port side must be west or east: " + side)
+        assert(int(ports[side]) > 0, "node port counts must be positive")
+    end
+    assert(opt.get(options, "port_pitch", 0pt) > 0pt, "node port pitch must be positive")
+    assert(opt.get(options, "port_padding", 0pt) >= 0pt, "node port padding must be nonnegative")
 end
 
 export fn enclose(name:string, members:list, body:text, options:dict = {}) -> EnclosureDescription

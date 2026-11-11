@@ -1,11 +1,11 @@
 // Node-and-arrow diagrams expressed entirely in Huak source.
 import geometry.{circle, compound}
-import object.{append, bounds, draw, outlines}
+import object.draw
 import color.rgb
 import assertions.assert
 import "nodegraph/model.huak".{GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, BetweenCoordinate, AutomaticCoordinate, PortCoordinate, NodeDescription, EnclosureDescription, EdgeDescription, MarkDescription, grid, absolute, named, relative, polar, between, automatic, shift, node, enclose, edge, connect, hide, mark, port}
 import "nodegraph/marks.huak".arrows
-import "nodegraph/shapes.huak".{shape_outline, rounded_rect, ellipse_shape, stretched_glyph}
+import "nodegraph/shapes.huak".{shape_outline, ellipse_shape, stretched_glyph}
 import "nodegraph/options.huak" as opt
 import "nodegraph/layout.huak" as layout
 import "nodegraph/edges.huak" as edges
@@ -299,4 +299,4 @@ export GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, 
 export NodeDescription, EnclosureDescription, EdgeDescription, MarkDescription
 export grid, absolute, named, relative, polar, between, automatic, shift, port
 export node, enclose, edge, connect, hide, mark, arrows
-export shape_outline, rounded_rect, ellipse_shape, stretched_glyph
+export shape_outline, ellipse_shape, stretched_glyph

@@ -2,6 +2,7 @@
 pub const geometry = @import("geometry.zig");
 pub const Path = @import("path/Path.zig");
 pub const path_construct = @import("path/construct.zig");
+pub const path_fillet = @import("path/fillet.zig");
 pub const Measure = @import("path/Measure.zig");
 pub const transform = @import("transform/root.zig");
 pub const crossings = @import("path/crossings.zig");

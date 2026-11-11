@@ -1,7 +1,7 @@
 // Paint policy. Each output object is clipped at most once against later
 // clearances, avoiding a clip nesting depth proportional to diagram size.
 import math.{abs, atan2, cos, dot, floor, max, min, norm, sin, unit}
-import object.{append, draw, fill, outlines}
+import object.{append, draw, fill}
 import transform.{apply, compose, rotate, transformed, translate}
 import geometry.{arclength, compound, intersection_times, offset, point_at, rectangle, region_union, sample_at_length, tangent_at, trimmed}; import object.{bounds}
 import color.rgb
@@ -280,17 +280,37 @@ end
 export fn compose_objects(objects:list, margin:length = 0pt) -> picture
     assert(margin >= 0pt, "diagram margin must be nonnegative")
     ordered := by_layer(objects)
-    // Unbounded picture: Huak derives the output page from the actual object bounds.
-    result := picture()
-    shift := translate((margin, margin))
+    // The canvas covers every non-floating object plus the margin. Floating
+    // objects (debug overlays, floating hidden items) never size the canvas,
+    // and an empty diagram is still a valid minimal canvas.
+    has_bounds := false
+    low := (0pt, 0pt)
+    high := (0pt, 0pt)
+    for i in 0:len(ordered)-1 do
+        if not ordered[i].floating then
+            box := bounds(ordered[i].content)
+            if len(box) > 0 then
+                if not has_bounds then low = box[0]; high = box[1]; has_bounds = true
+                else
+                    low = (min(low.x, box[0].x), min(low.y, box[0].y))
+                    high = (max(high.x, box[1].x), max(high.y, box[1].y))
+                end
+            end
+        end
+    end
+    // Objects keep their layout coordinates; one placement moves them all
+    // onto the canvas instead of one per object.
+    content := picture()
     for i in 0:len(ordered)-1 do
         source:object := ordered[i].content
         holes := []
         for j in i+1:len(ordered)-1 do
-            if len(ordered[j].clearance) > 0 then holes += [ordered[j].clearance] end
+            if len(ordered[j].clearance) > 0 then holes += ordered[j].clearance end
         end
         if len(holes) > 0 then source = cut(source, compound(holes)) end
-        append(result, copy(source), shift)
+        append(content, copy(source))
     end
+    result := picture(max(1pt, high.x-low.x+2*margin), max(1pt, high.y-low.y+2*margin))
+    append(result, content, translate((margin, margin)-low))
     return result
 end

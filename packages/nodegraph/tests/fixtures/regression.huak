@@ -194,9 +194,24 @@ rows := matrix_nodes([[typ[A], typ[B]], [typ[C]]])
 assert(len(rows) == 3 and rows[2].name == "r1c0")
 hidden := hide(a)
 assert(not options.has(a.options, "hidden") and options.get(hidden.options, "hidden", false))
-// Empty/hidden-only diagrams have no visible bounds and are invalid canvases.
+// Hidden items keep their layout box. Floating items and debug overlays never
+// size the canvas, the margin adds whitespace on every side, and an empty
+// diagram is still a valid minimal canvas.
 normal := diagram([a])
 assert(normal.width > 0pt and normal.height > 0pt)
+invisible := diagram([hidden])
+near((normal.width, normal.height), (invisible.width, invisible.height))
+far := node("far", absolute((500pt, 0pt)), typ[F])
+floating := diagram([a, hide(far, true)])
+near((normal.width, normal.height), (floating.width, floating.height))
+debugged := diagram([a], {"debug": true})
+near((normal.width, normal.height), (debugged.width, debugged.height))
+padded := diagram([a], {"margin": 6pt})
+near((padded.width, padded.height), (normal.width+12pt, normal.height+12pt))
+empty := diagram([], {"margin": 6pt})
+assert(empty.width == 12pt and empty.height == 12pt)
+bare := diagram([])
+assert(bare.width == 1pt and bare.height == 1pt)
 
 // All public shape kinds and native stretch frames construct real outputs.
 types := ["rect", "circle", "ellipse", "pill", "parallelogram", "trapezium", "diamond", "triangle", "house", "chevron", "hexagon", "octagon", "cylinder"]
