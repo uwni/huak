@@ -185,7 +185,7 @@ fn render_geometry(objects:layout.Geometry, options:dict) -> picture
                 end
             end
         end
-        pictures += [render.PaintedObject(content: debug, clearance: compound([]), layer: 1000000, floating: true)]
+        pictures += [render.PaintedObject(content: debug, clearance: compound([]), layer: 1000000, off_canvas: true)]
     end
     return render.compose_objects(pictures, opt.get(options, "margin", 0pt))
 end

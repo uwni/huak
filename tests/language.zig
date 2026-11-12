@@ -2437,6 +2437,54 @@ test "exposed data respects local shadowing aliases block restoration and module
     }
 }
 
+test "exposed data in template call bodies matches ordinary reads" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    // Huak assertions check the ordinary reads; Typst assertions check that the
+    // same template parameters and locals reach the request, also in a function.
+    const source =
+        \\import assertions.assert
+        \\expand_block foo(width:length = 2pt)
+        \\    a := 1
+        \\    ...
+        \\end
+        \\expand_block bar(gap:length = 1pt)
+        \\    c := 3
+        \\    foo do
+        \\        e := "five"
+        \\        ...
+        \\    end
+        \\end
+        \\gap := 9pt
+        \\caption := typ[placeholder]
+        \\bar do
+        \\    assert(gap == 1pt and c == 3 and width == 2pt and a == 1 and e == "five")
+        \\    typst_expose gap, c, width, a, e
+        \\    caption = typ[#assert.eq(huak.gap, 1pt)#assert.eq(huak.c, 3)#assert.eq(huak.width, 2pt)#assert.eq(huak.a, 1)#assert.eq(huak.e, "five")#huak.e]
+        \\end
+        \\fn framed()->text
+        \\    result := typ[placeholder]
+        \\    bar do
+        \\        typst_expose gap
+        \\        result = typ[#assert.eq(huak.gap, 1pt)#huak.gap]
+        \\    end
+        \\    return result
+        \\end
+        \\framed_caption := framed()
+    ;
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compileModulesOptimized(&library, source, &.{}, optimize);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+        try t.expect(machine.getGlobal("caption") != null);
+        try t.expect(machine.getGlobal("framed_caption") != null);
+    }
+}
+
 test "exposed data batches preserve earlier native errors before later length conversion failure" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();

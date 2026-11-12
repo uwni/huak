@@ -45,6 +45,11 @@ pub const Diagnostic = source.Diagnostic;
 const Symbol = struct { index: u32, kind: Type, readonly: bool = false, inferable: bool = false, available_after: usize = 0 };
 const Names = std.StringHashMapUnmanaged(Symbol);
 const Binding = struct { symbol: Symbol, local: bool, declaration: usize = 0, module: ?u32 = null, initializer: ?u32 = null };
+/// A `typst_expose` name resolved where its declaration compiles, which may be
+/// inside a template expansion. Its environment is the declaring module.
+const Exposure = struct { binding: Binding, environment: *Environment, name: []const u8, span: Span };
+const unreadable_exposure = "typst_expose requires a readable Huak variable, found '{s}'";
+const unsupported_exposure = "typst_expose supports numeric, bool, string, length, and color values; '{s}' has type {s}";
 const CallableTarget = struct { target: CallTarget, module: ?u32 = null, initializer: ?u32 = null };
 const CallTarget = @FieldType(bc.Export, "target");
 const ExpressionDefault = struct { expression: *ast.Expr, function: u32, kind: Type, span: Span };
@@ -96,6 +101,8 @@ const Context = struct {
     return_block: ?*ReturnBlock = null,
     expansion: ?*Expansion = null,
     insertion: ?*Expansion = null,
+    /// Checked after this body is compiled, when forward types are inferred.
+    exposures: std.ArrayList(Exposure) = .empty,
 
     fn init(compiler: *Compiler, entry: bool, result: Type) Context {
         return .{ .compiler = compiler, .code = .init(compiler.allocator), .local_types = .init(compiler.allocator), .loops = .init(compiler.allocator), .entry = entry, .result = result };
@@ -1031,9 +1038,13 @@ const Compiler = struct {
                 if (!context.entry or context.block_depth != 1) return self.fail(span, "setup_typst must be at script top level", .{});
                 _ = try context.emit(.setup_typst, try self.addConstant(.{ .string = block[1 .. block.len - 1] }, span), 0, span);
             },
-            // Exposure is lexical metadata, not an evaluated statement. Its
-            // declarations are validated after forward value types are known.
-            .typst_expose => {},
+            // Exposure is lexical metadata, not an evaluated statement. Names
+            // resolve here, where template bodies still see the expansion's
+            // locals; types are checked once forward declarations are inferred.
+            .typst_expose => |names| for (names) |name| {
+                const binding = context.resolve(name.name, name.span) orelse return self.fail(name.span, unreadable_exposure, .{name.name});
+                try context.exposures.append(self.build.syntax_allocator, .{ .binding = binding, .environment = self.environment, .name = name.name, .span = name.span });
+            },
             .return_value => |value| {
                 if (context.entry and context.return_block == null) return self.fail(span, "return is only valid inside a function or block", .{});
                 const actual = if (value) |expression| try self.compileExpression(context, expression) else blk: {
@@ -1522,33 +1533,38 @@ const Compiler = struct {
         return kind;
     }
 
-    fn exposedBinding(self: *Compiler, context: *Context, name: []const u8, span: Span) !Binding {
-        const binding = context.resolve(name, span) orelse return self.fail(span, "typst_expose requires a readable Huak variable, found '{s}'", .{name});
-        switch (binding.symbol.kind) {
-            // Any/scalar bindings receive the same check on their actual value
-            // when captured. Forward declarations need not be initialized yet.
-            .any, .scalar, .quantity, .int, .number, .boolean, .string, .length, .color => return binding,
-            else => return self.fail(span, "typst_expose supports numeric, bool, string, length, and color values; '{s}' has type {s}", .{ name, self.typeName(binding.symbol.kind) }),
-        }
+    /// Any/scalar bindings receive the same check on their actual value when
+    /// captured. Forward declarations need not be initialized yet.
+    fn exposable(kind: Type) bool {
+        return switch (kind) {
+            .any, .scalar, .quantity, .int, .number, .boolean, .string, .length, .color => true,
+            else => false,
+        };
     }
 
-    fn validateTypstExposures(self: *Compiler, context: *Context, body: []const *ast.Stmt) !void {
-        const Visitor = struct {
-            compiler: *Compiler,
-            context: *Context,
-            pub fn enter(visitor: *@This(), node: ast.Node) !bool {
-                if (node == .statement) switch (node.statement.value) {
-                    .function, .structure, .expand_block => return false,
-                    .typst_expose => |names| for (names) |name| {
-                        _ = try visitor.compiler.exposedBinding(visitor.context, name.name, name.span);
-                    },
-                    else => {},
-                };
-                return true;
-            }
-        };
-        var visitor: Visitor = .{ .compiler = self, .context = context };
-        try ast.walkStatements(&visitor, body);
+    fn exposedBinding(self: *Compiler, context: *Context, name: []const u8, span: Span) !Binding {
+        const binding = context.resolve(name, span) orelse return self.fail(span, unreadable_exposure, .{name});
+        if (!exposable(binding.symbol.kind)) return self.fail(span, unsupported_exposure, .{ name, self.typeName(binding.symbol.kind) });
+        return binding;
+    }
+
+    /// Checks the declarations recorded while compiling this body against the
+    /// types inferred for the whole body. Diagnostics name the declaring module.
+    fn checkTypstExposures(self: *Compiler, context: *Context) !void {
+        const current = self.environment;
+        defer self.environment = current;
+        for (context.exposures.items) |exposure| {
+            const binding = exposure.binding;
+            const kind = if (binding.local)
+                context.local_types.items[binding.symbol.index]
+            else if (binding.module != null)
+                binding.symbol.kind
+            else
+                exposure.environment.globals.get(exposure.name).?.kind;
+            if (exposable(kind)) continue;
+            self.environment = exposure.environment;
+            return self.fail(exposure.span, unsupported_exposure, .{ exposure.name, self.typeName(kind) });
+        }
     }
 
     fn compileTypstCaptures(self: *Compiler, context: *Context, span: Span) !u32 {
@@ -2260,7 +2276,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
     }
     try compiler.collectLocals(&entry, unit.script.statements);
     try compiler.compileStatements(&entry, unit.script.statements);
-    try compiler.validateTypstExposures(&entry, unit.script.statements);
+    try compiler.checkTypstExposures(&entry);
     const finish = Span{ .start = unit.source_text.len, .end = unit.source_text.len };
     if (module_index == 0) {
         _ = try entry.emit(.halt, 0, 0, finish);
@@ -2280,7 +2296,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         }
         try compiler.collectLocals(&context, function.body);
         try compiler.compileStatements(&context, function.body);
-        try compiler.validateTypstExposures(&context, function.body);
+        try compiler.checkTypstExposures(&context);
         if (result != .unit and !definitelyReturns(function.body)) return compiler.fail(statement.span, "function '{s}' may finish without returning {s}", .{ function.name, compiler.typeName(result) });
         try context.constant(.unit, statement.span);
         _ = try context.emit(.return_value, 0, 0, statement.span);
@@ -2293,6 +2309,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         try ast.walk(&declarations, .{ .expression = default.expression });
         const actual = try compiler.compileExpression(&context, default.expression);
         try compiler.require(default.kind, actual, default.expression.span);
+        try compiler.checkTypstExposures(&context);
         _ = try context.emit(.return_value, 0, 0, default.span);
         const index = default.function - compiler.function_base;
         compiler.output.items[index].code = try context.code.toOwnedSlice();
@@ -4353,6 +4370,87 @@ test "Typst exposures reject unknown function and non-data variables without req
         var diagnostic: ?Diagnostic = null;
         try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, fixture.input, "exposure-errors.huak", .{}, &diagnostic));
         try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), fixture.message) != null);
+    }
+}
+
+/// The last content request reads every exposed name from a local slot.
+fn expectLocalCaptures(program: bc.Program, function: bc.Function, names: []const []const u8) !void {
+    var request: ?usize = null;
+    for (function.code, 0..) |instruction, position| {
+        if (instruction.op == .typst) request = position;
+    }
+    const position = request orelse return error.TestExpectedTypstRequest;
+    const count = function.code[position].b;
+    try std.testing.expectEqual(names.len, count);
+    const inputs = function.code[position - count * 2 .. position];
+    for (names, 0..) |name, capture| {
+        try std.testing.expectEqualStrings(name, program.constants[inputs[capture * 2].a].string);
+        try std.testing.expectEqual(bc.Op.load_local, inputs[capture * 2 + 1].op);
+    }
+}
+
+test "Typst exposures in template call bodies resolve like ordinary reads" {
+    // The body sees template parameters and locals, including the parameter
+    // that shadows a caller global and names forwarded by a nested insertion.
+    const forwarded =
+        \\expand_block foo(width:length = 2pt)
+        \\    a := 1
+        \\    ...
+        \\end
+        \\expand_block bar(gap:length = 1pt)
+        \\    c := 3
+        \\    foo do
+        \\        e := 5
+        \\        ...
+        \\    end
+        \\end
+        \\gap := 9pt
+        \\bar do
+        \\    typst_expose gap, c, width, a, e
+        \\    caption := typ[]
+        \\end
+    ;
+    var program = try exposedCompile(std.testing.allocator, forwarded, false);
+    defer program.deinit();
+    try expectLocalCaptures(program, program.functions[0], &.{ "gap", "c", "width", "a", "e" });
+    var optimized = try exposedCompile(std.testing.allocator, forwarded, true);
+    optimized.deinit();
+    const Resolver = struct {
+        fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
+            if (!std.mem.eql(u8, path, "frames")) return error.UnknownModule;
+            return .{ .name = "frames.huak", .source = "export expand_block frame(gap:length = 1pt)\n    inner := 3\n    ...\nend\nexport expand_block broken()\n    typst_expose missing\n    ...\nend\n" };
+        }
+    };
+    var marker: u8 = 0;
+    const options: CompileOptions = .{ .optimize = false, .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } }, .import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } } };
+    var diagnostic: ?Diagnostic = null;
+    var imported = try compile(std.testing.allocator, "import \"frames\".frame\ngap := 9pt\nfn caption()->text\n    result := typ[]\n    frame do\n        typst_expose gap, inner\n        result = typ[]\n    end\n    return result\nend", "frames-root.huak", options, &diagnostic);
+    defer imported.deinit();
+    var function: ?bc.Function = null;
+    for (imported.functions) |candidate| if (std.mem.eql(u8, candidate.name, "caption")) {
+        function = candidate;
+    };
+    try expectLocalCaptures(imported, function.?, &.{ "gap", "inner" });
+
+    const Failure = struct { input: []const u8, message: []const u8, file: []const u8 = "exposure-template.huak", line: usize, column: usize };
+    const failures = [_]Failure{
+        // An invoked template validates the declarations in its own body,
+        // and an imported template reports them in its defining module.
+        .{ .input = "expand_block frame()\n    typst_expose missing\n    ...\nend\nframe do\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .line = 2, .column = 18 },
+        .{ .input = "import \"frames\".broken\nbroken do\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .file = "frames.huak", .line = 6, .column = 18 },
+        .{ .input = "expand_block frame()\n    items := [1]\n    ...\nend\nframe do\n    typst_expose items\nend", .message = "typst_expose supports numeric, bool, string, length, and color values; 'items' has type list", .line = 6, .column = 18 },
+        // Forward declarations are checked with their inferred types.
+        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose later\n    later := [1]\nend", .message = "typst_expose supports numeric, bool, string, length, and color values; 'later' has type list", .line = 5, .column = 18 },
+        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose missing\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .line = 5, .column = 18 },
+    };
+    for (failures) |failure| {
+        var detail: ?Diagnostic = null;
+        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, failure.input, "exposure-template.huak", options, &detail));
+        try std.testing.expectEqualStrings(failure.message, detail.?.text());
+        try std.testing.expectEqualStrings(failure.file, detail.?.fileName().?);
+        const position = detail.?.position("");
+        try std.testing.expectEqual(failure.line, position.line);
+        try std.testing.expectEqual(failure.column, position.column);
     }
 }
 

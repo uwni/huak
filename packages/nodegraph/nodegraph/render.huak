@@ -16,11 +16,20 @@ import "model.huak" as model
 import "layout.huak" as layout
 import "edges.huak" as edges
 
+// off_canvas marks an object that never sizes the canvas: a hidden floating
+// item or the debug overlay.
 export struct PaintedObject
     content:object
     clearance:path
     layer:float
-    floating:bool
+    off_canvas:bool
+end
+
+// Floating keeps an item out of the grid. A hidden floating item takes no
+// room at all, but a visible one is still drawn, so it must stay on the
+// canvas rather than be cut off at its edge.
+fn stays_off_canvas(options:dict) -> bool
+    return opt.get(options, "floating", false) and opt.get(options, "hidden", false)
 end
 
 struct LabelPlacement
@@ -95,7 +104,7 @@ export fn node_object(item:layout.ResolvedNode) -> PaintedObject
         painted := node_object(visible)
         result = invisible(painted.content)
     end
-    return PaintedObject(content: result, clearance: compound([]), layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
+    return PaintedObject(content: result, clearance: compound([]), layer: opt.get(options, "layer", 0), off_canvas: stays_off_canvas(options))
 end
 
 fn label_position(curve:path, body:text, options:dict) -> LabelPlacement
@@ -193,7 +202,7 @@ export fn edge_object(item:edges.ResolvedEdge) -> PaintedObject
         visible.options = opt.setting(options, "hidden", false)
         painted := edge_object(visible)
         result = invisible(painted.content)
-        return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
+        return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), off_canvas: stays_off_canvas(options))
     end
     extrude:list := opt.get(options, "extrude", [0pt])
     masks := []
@@ -257,7 +266,7 @@ export fn edge_object(item:edges.ResolvedEdge) -> PaintedObject
     append(result, shaft)
     append(result, decorations)
     if len(below) > 0 then clearance = compound(below) end
-    return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), floating: opt.get(options, "floating", false))
+    return PaintedObject(content: result, clearance: clearance, layer: opt.get(options, "layer", 0), off_canvas: stays_off_canvas(options))
 end
 
 fn by_layer(objects:list) -> list
@@ -280,14 +289,14 @@ end
 export fn compose_objects(objects:list, margin:length = 0pt) -> picture
     assert(margin >= 0pt, "diagram margin must be nonnegative")
     ordered := by_layer(objects)
-    // The canvas covers every non-floating object plus the margin. Floating
-    // objects (debug overlays, floating hidden items) never size the canvas,
-    // and an empty diagram is still a valid minimal canvas.
+    // The canvas covers every drawn object plus the margin. Hidden floating
+    // items and the debug overlay never size it, and an empty diagram is
+    // still a valid minimal canvas.
     has_bounds := false
     low := (0pt, 0pt)
     high := (0pt, 0pt)
     for i in 0:len(ordered)-1 do
-        if not ordered[i].floating then
+        if not ordered[i].off_canvas then
             box := bounds(ordered[i].content)
             if len(box) > 0 then
                 if not has_bounds then low = box[0]; high = box[1]; has_bounds = true

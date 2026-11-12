@@ -28,9 +28,11 @@ end
 default d.picture
 ```
 
-The canvas covers every non-floating object; the `margin` option (default
-`0pt`) adds whitespace on every side. Hidden objects keep their layout box,
-while floating objects such as the debug overlay never size the canvas. Grid,
+The canvas covers every drawn object; the `margin` option (default `0pt`)
+adds whitespace on every side. A `floating` node takes no grid cell, but a
+visible one is still drawn in full and sizes the canvas. Hidden objects keep
+their layout box; hidden floating items and the debug overlay never size the
+canvas. Grid,
 `between` and absolute edge endpoints snap to the outline of the node they
 reach; `relative` endpoints and ports are exact anchors.
 
