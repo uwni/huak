@@ -70,7 +70,8 @@ pub fn run(ctx: *h.Harness) !void {
             transforms += 1;
             try t.expectEqualStrings("translate", element.attr("type").?);
             try t.expectEqualStrings("0;0.37;1", element.attr("keyTimes").?);
-            try t.expectEqualStrings("linear", element.attr("calcMode").?);
+            // Linear is animateTransform's default calcMode.
+            try t.expect(element.attr("calcMode") == null);
         }
     }
     try t.expectEqual(@as(usize, 1), transforms);

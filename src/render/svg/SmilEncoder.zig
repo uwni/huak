@@ -1,5 +1,6 @@
 //! SVG animation elements. XML syntax and escaping belong to zig-xml; these
 //! routines only format SVG attribute values from validated animation tracks.
+//! Numbers follow Typst's SVG policy, and SMIL defaults stay implicit.
 const std = @import("std");
 const animation = @import("../../animation/root.zig");
 const DisplayList = @import("../../drawing/DisplayList.zig");
@@ -33,32 +34,43 @@ fn attribute(self: *SmilEncoder, name: []const u8, comptime format: []const u8, 
     try self.xml.attribute(name, self.value.written());
 }
 
-fn common(self: *SmilEncoder, track: *const animation.Track, scene: *const animation.Animation, keys: anytype) !void {
-    try self.xml.attribute("begin", "0s");
-    try self.attribute("dur", "{d}s", .{scene.duration_seconds});
-    try self.xml.attribute("repeatCount", if (scene.repeat) "indefinite" else "1");
-    try self.xml.attribute("fill", "freeze");
-    try self.xml.attribute("calcMode", switch (track.easing) {
-        .linear => "linear",
-        .discrete => "discrete",
-        .spline => "spline",
-    });
-    self.value.clearRetainingCapacity();
-    for (keys, 0..) |key, i| {
-        if (i != 0) try self.value.writer.writeByte(';');
-        try self.value.writer.print("{d}", .{key.time});
+/// animate and animateTransform default to linear interpolation between
+/// evenly spaced keys. animateMotion defaults to paced timing, and its
+/// keyPoints require explicit keyTimes.
+const Element = enum { animate, motion };
+
+fn common(self: *SmilEncoder, track: *const animation.Track, scene: *const animation.Animation, keys: anytype, element: Element) !void {
+    try self.playback(scene);
+    const linear = element == .animate and track.easing == .linear;
+    if (!linear) try self.xml.attribute("calcMode", @tagName(track.easing));
+    // Discrete keys end at time 1, while discrete SMIL's implicit spacing ends
+    // at (n-1)/n, so only linear keys can match the default.
+    if (!linear or !evenlySpaced(keys)) {
+        self.value.clearRetainingCapacity();
+        for (keys, 0..) |key, i| {
+            if (i != 0) try self.value.writer.writeByte(';');
+            try self.value.writer.print("{d}", .{number(key.time)});
+        }
+        try self.xml.attribute("keyTimes", self.value.written());
     }
-    try self.xml.attribute("keyTimes", self.value.written());
     if (track.easing == .spline) {
         const spline = track.easing.spline;
         self.value.clearRetainingCapacity();
         for (0..keys.len - 1) |i| {
             if (i != 0) try self.value.writer.writeByte(';');
-            try self.value.writer.print("{d} {d} {d} {d}", .{ spline.x1, spline.y1, spline.x2, spline.y2 });
+            try self.value.writer.print("{d} {d} {d} {d}", .{ number(spline.x1), number(spline.y1), number(spline.x2), number(spline.y2) });
         }
         try self.xml.attribute("keySplines", self.value.written());
     }
     try self.xml.elementEndEmpty();
+}
+
+/// Animations begin at time 0 by default. A loop never ends, so only a single
+/// run needs `fill="freeze"` to hold its last value.
+fn playback(self: *SmilEncoder, scene: *const animation.Animation) !void {
+    const seconds = number(scene.duration_seconds);
+    try self.attribute("dur", "{d}s", .{if (seconds > 0) seconds else scene.duration_seconds});
+    if (scene.repeat) try self.xml.attribute("repeatCount", "indefinite") else try self.xml.attribute("fill", "freeze");
 }
 
 pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const animation.Animation) !void {
@@ -66,7 +78,7 @@ pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const 
     switch (track.property) {
         .translate, .scale => |keys| {
             const kind = if (track.property == .translate) "translate" else "scale";
-            try self.attribute("transform", "{s}({d} {d})", .{ kind, keys[0].value.x, keys[0].value.y });
+            try self.attribute("transform", "{s}({d} {d})", .{ kind, number(keys[0].value.x), number(keys[0].value.y) });
             if (constant(keys)) return;
             try self.xml.elementStart("animateTransform");
             try self.xml.attribute("attributeName", "transform");
@@ -74,13 +86,13 @@ pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const 
             self.value.clearRetainingCapacity();
             for (keys, 0..) |key, i| {
                 if (i != 0) try self.value.writer.writeByte(';');
-                try self.value.writer.print("{d} {d}", .{ key.value.x, key.value.y });
+                try self.value.writer.print("{d} {d}", .{ number(key.value.x), number(key.value.y) });
             }
             try self.xml.attribute("values", self.value.written());
-            try self.common(track, scene, keys);
+            try self.common(track, scene, keys, .animate);
         },
         .rotate => |rotation| {
-            try self.attribute("transform", "rotate({d} {d} {d})", .{ try degrees(rotation.keys[0].value), rotation.center.x, rotation.center.y });
+            try self.attribute("transform", "rotate({d} {d} {d})", .{ number(try degrees(rotation.keys[0].value)), number(rotation.center.x), number(rotation.center.y) });
             if (constant(rotation.keys)) return;
             try self.xml.elementStart("animateTransform");
             try self.xml.attribute("attributeName", "transform");
@@ -88,13 +100,13 @@ pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const 
             self.value.clearRetainingCapacity();
             for (rotation.keys, 0..) |key, i| {
                 if (i != 0) try self.value.writer.writeByte(';');
-                try self.value.writer.print("{d} {d} {d}", .{ try degrees(key.value), rotation.center.x, rotation.center.y });
+                try self.value.writer.print("{d} {d} {d}", .{ number(try degrees(key.value)), number(rotation.center.x), number(rotation.center.y) });
             }
             try self.xml.attribute("values", self.value.written());
-            try self.common(track, scene, rotation.keys);
+            try self.common(track, scene, rotation.keys, .animate);
         },
         .opacity => |keys| {
-            try self.attribute("opacity", "{d}", .{keys[0].value});
+            try self.attribute("opacity", "{d}", .{number(keys[0].value)});
             if (!constant(keys)) try self.scalar(track, scene, "opacity", keys);
         },
         .motion => |motion| {
@@ -105,7 +117,7 @@ pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const 
                 .auto_reverse => pose.angle + std.math.pi,
             };
             if (!pose.position.isFinite() or !std.math.isFinite(angle)) return error.NonFinite;
-            try self.attribute("transform", "translate({d} {d}) rotate({d})", .{ pose.position.x, pose.position.y, try degrees(angle) });
+            try self.attribute("transform", "translate({d} {d}) rotate({d})", .{ number(pose.position.x), number(pose.position.y), number(try degrees(angle)) });
             if (constant(motion.keys)) return;
             // Motion is supplemental; replace only our fallback transform
             // during playback, preserving the marked object's transform.
@@ -115,10 +127,7 @@ pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const 
             try self.xml.attribute("additive", "replace");
             try self.xml.attribute("values", "0 0;0 0");
             try self.xml.attribute("calcMode", "discrete");
-            try self.xml.attribute("begin", "0s");
-            try self.attribute("dur", "{d}s", .{scene.duration_seconds});
-            try self.xml.attribute("repeatCount", if (scene.repeat) "indefinite" else "1");
-            try self.xml.attribute("fill", "freeze");
+            try self.playback(scene);
             try self.xml.elementEndEmpty();
             try self.xml.elementStart("animateMotion");
             self.value.clearRetainingCapacity();
@@ -132,10 +141,10 @@ pub fn wrapper(self: *SmilEncoder, track: *const animation.Track, scene: *const 
             self.value.clearRetainingCapacity();
             for (motion.keys, 0..) |key, i| {
                 if (i != 0) try self.value.writer.writeByte(';');
-                try self.value.writer.print("{d}", .{key.value});
+                try self.value.writer.print("{d}", .{number(key.value)});
             }
             try self.xml.attribute("keyPoints", self.value.written());
-            try self.common(track, scene, motion.keys);
+            try self.common(track, scene, motion.keys, .motion);
         },
         else => unreachable,
     }
@@ -147,10 +156,10 @@ fn scalar(self: *SmilEncoder, track: *const animation.Track, scene: *const anima
     self.value.clearRetainingCapacity();
     for (keys, 0..) |key, i| {
         if (i != 0) try self.value.writer.writeByte(';');
-        try self.value.writer.print("{d}", .{key.value});
+        try self.value.writer.print("{d}", .{number(key.value)});
     }
     try self.xml.attribute("values", self.value.written());
-    try self.common(track, scene, keys);
+    try self.common(track, scene, keys, .animate);
 }
 
 pub fn basePaint(self: *SmilEncoder, property: *const animation.Property) !void {
@@ -160,9 +169,9 @@ pub fn basePaint(self: *SmilEncoder, property: *const animation.Property) !void 
             self.value.clearRetainingCapacity();
             try color(&self.value.writer, keys[0].value);
             try self.xml.attribute(name, self.value.written());
-            try self.attribute(if (property.* == .fill) "fill-opacity" else "stroke-opacity", "{d}", .{keys[0].value.a});
+            try self.attribute(if (property.* == .fill) "fill-opacity" else "stroke-opacity", "{d}", .{number(keys[0].value.a)});
         },
-        .stroke_width => |keys| try self.attribute("stroke-width", "{d}", .{keys[0].value}),
+        .stroke_width => |keys| try self.attribute("stroke-width", "{d}", .{number(keys[0].value)}),
         .path => |keys| {
             self.value.clearRetainingCapacity();
             try pathData(&self.value.writer, keys[0].value);
@@ -193,7 +202,7 @@ pub fn paintAnimation(self: *SmilEncoder, track: *const animation.Track, scene: 
                     try color(&self.value.writer, key.value);
                 }
                 try self.xml.attribute("values", self.value.written());
-                try self.common(track, scene, keys);
+                try self.common(track, scene, keys, .animate);
             }
             if (!alpha_constant) {
                 try self.xml.elementStart("animate");
@@ -201,10 +210,10 @@ pub fn paintAnimation(self: *SmilEncoder, track: *const animation.Track, scene: 
                 self.value.clearRetainingCapacity();
                 for (keys, 0..) |key, i| {
                     if (i != 0) try self.value.writer.writeByte(';');
-                    try self.value.writer.print("{d}", .{key.value.a});
+                    try self.value.writer.print("{d}", .{number(key.value.a)});
                 }
                 try self.xml.attribute("values", self.value.written());
-                try self.common(track, scene, keys);
+                try self.common(track, scene, keys, .animate);
             }
         },
         .stroke_width => |keys| if (!constant(keys)) try self.scalar(track, scene, "stroke-width", keys),
@@ -218,7 +227,7 @@ pub fn paintAnimation(self: *SmilEncoder, track: *const animation.Track, scene: 
                 try pathData(&self.value.writer, key.value);
             }
             try self.xml.attribute("values", self.value.written());
-            try self.common(track, scene, keys);
+            try self.common(track, scene, keys, .animate);
         },
         else => unreachable,
     }
@@ -233,6 +242,22 @@ fn pathConstant(keys: []const animation.PathKey) bool {
     }
     return true;
 }
+/// Whether the written key times equal linear SMIL's implicit i/(n-1) spacing.
+fn evenlySpaced(keys: anytype) bool {
+    if (keys.len < 2) return false;
+    const intervals: f64 = @floatFromInt(keys.len - 1);
+    for (keys, 0..) |key, index| {
+        if (number(key.time) != number(@as(f64, @floatFromInt(index)) / intervals)) return false;
+    }
+    return true;
+}
+/// Typst's SVG number policy: round to nine decimal places and print the
+/// shortest form, with -0 as 0. Values too large to scale keep their digits.
+fn number(value: f64) f64 {
+    const scaled = @round(value * 1e9) / 1e9;
+    const rounded = if (std.math.isFinite(scaled)) scaled else value;
+    return if (rounded == 0) 0 else rounded;
+}
 fn degrees(value: f64) !f64 {
     const result = value * (180.0 / std.math.pi);
     if (!std.math.isFinite(result)) return error.NonFinite;
@@ -246,9 +271,29 @@ fn color(out: *std.Io.Writer, value: DisplayList.Color) !void {
 }
 fn pathData(out: *std.Io.Writer, segments: []const Path.Segment) !void {
     for (segments) |segment| switch (segment) {
-        .move => |point| try out.print("M {d} {d} ", .{ point.x, point.y }),
-        .line => |point| try out.print("L {d} {d} ", .{ point.x, point.y }),
-        .cubic => |curve| try out.print("C {d} {d} {d} {d} {d} {d} ", .{ curve.c1.x, curve.c1.y, curve.c2.x, curve.c2.y, curve.end.x, curve.end.y }),
+        .move => |point| try out.print("M {d} {d} ", .{ number(point.x), number(point.y) }),
+        .line => |point| try out.print("L {d} {d} ", .{ number(point.x), number(point.y) }),
+        .cubic => |curve| try out.print("C {d} {d} {d} {d} {d} {d} ", .{ number(curve.c1.x), number(curve.c1.y), number(curve.c2.x), number(curve.c2.y), number(curve.end.x), number(curve.end.y) }),
         .close => try out.writeAll("Z "),
     };
+}
+
+test "numbers follow Typst's SVG precision and SMIL defaults stay implicit" {
+    try std.testing.expectEqual(@as(f64, 0.309740584), number(0.30974058379240427));
+    try std.testing.expectEqual(@as(f64, 0), number(-0.0000000001));
+    try std.testing.expect(!std.math.signbit(number(-0.0)));
+    try std.testing.expectEqual(@as(f64, 1e300), number(1e300));
+    const even = [_]animation.ScalarKey{ .{ .time = 0, .value = 0 }, .{ .time = 1.0 / 3.0, .value = 1 }, .{ .time = 2.0 / 3.0, .value = 0 }, .{ .time = 1, .value = 1 } };
+    try std.testing.expect(evenlySpaced(&even));
+    // An accumulated 0.6000000000000001 writes the same digits as 3/5.
+    var accumulated: [6]animation.ScalarKey = undefined;
+    var time: f64 = 0;
+    for (&accumulated, 0..) |*key, index| {
+        key.* = .{ .time = if (index == accumulated.len - 1) 1 else time, .value = 0 };
+        time += 0.2;
+    }
+    try std.testing.expect(accumulated[3].time != 3.0 / 5.0);
+    try std.testing.expect(evenlySpaced(&accumulated));
+    const shifted = [_]animation.ScalarKey{ .{ .time = 0, .value = 0 }, .{ .time = 0.37, .value = 1 }, .{ .time = 1, .value = 0 } };
+    try std.testing.expect(!evenlySpaced(&shifted));
 }

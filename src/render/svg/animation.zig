@@ -435,7 +435,9 @@ test "paint and compatible d morph animate the instance path and establish stati
     try t.expect(std.mem.indexOf(u8, result, "d=\"M 0 0 L 10 10 Z \"><animate") != null);
     try t.expect(std.mem.indexOf(u8, result, "attributeName=\"d\" values=\"M 0 0 L 10 10 Z ;M 0 0 L 30 20 Z ") != null);
     try t.expect(std.mem.indexOf(u8, result, "keySplines=\"0.3 0 0.7 1\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "repeatCount=\"1\"") != null);
+    // A single run is SMIL's default; holding its last value needs freeze.
+    try t.expect(std.mem.indexOf(u8, result, "repeatCount") == null);
+    try t.expect(std.mem.indexOf(u8, result, "fill=\"freeze\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "<defs><path id='glyph' d='M0 0L1 1'/></defs>") != null);
 }
 
@@ -712,13 +714,13 @@ test "interleaved target tracks preserve the original SVG byte order" {
         "</defs>" ++
         "<g id=\"huak-object-7\">" ++
         "<g transform=\"translate(0 0)\">" ++
-        "<animateTransform attributeName=\"transform\" type=\"translate\" values=\"0 0;2 3\" begin=\"0s\" dur=\"2s\" repeatCount=\"indefinite\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>" ++
+        "<animateTransform attributeName=\"transform\" type=\"translate\" values=\"0 0;2 3\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "<g transform=\"rotate(0 0 0)\">" ++
-        "<animateTransform attributeName=\"transform\" type=\"rotate\" values=\"0 0 0;180 0 0\" begin=\"0s\" dur=\"2s\" repeatCount=\"indefinite\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>" ++
+        "<animateTransform attributeName=\"transform\" type=\"rotate\" values=\"0 0 0;180 0 0\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "<g data-typst-label='libtypst-object-7' transform='translate(5 6)'>" ++
         "<path  d='M0 0L10 0Z' fill=\"rgb(0,0,0)\" fill-opacity=\"1\" stroke=\"rgb(0,0,0)\" stroke-opacity=\"1\">" ++
-        "<animate attributeName=\"fill\" values=\"rgb(0,0,0);rgb(255,0,0)\" begin=\"0s\" dur=\"2s\" repeatCount=\"indefinite\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>" ++
-        "<animate attributeName=\"stroke\" values=\"rgb(0,0,0);rgb(0,0,255)\" begin=\"0s\" dur=\"2s\" repeatCount=\"indefinite\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>" ++
+        "<animate attributeName=\"fill\" values=\"rgb(0,0,0);rgb(255,0,0)\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
+        "<animate attributeName=\"stroke\" values=\"rgb(0,0,0);rgb(0,0,255)\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "</path>" ++
         "</g>" ++
         "</g>" ++
@@ -726,9 +728,9 @@ test "interleaved target tracks preserve the original SVG byte order" {
         "</g>" ++
         "<g id=\"huak-object-9\">" ++
         "<g opacity=\"0\">" ++
-        "<animate attributeName=\"opacity\" values=\"0;1\" begin=\"0s\" dur=\"2s\" repeatCount=\"indefinite\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>" ++
+        "<animate attributeName=\"opacity\" values=\"0;1\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "<g transform=\"scale(1 1)\">" ++
-        "<animateTransform attributeName=\"transform\" type=\"scale\" values=\"1 1;2 2\" begin=\"0s\" dur=\"2s\" repeatCount=\"indefinite\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>" ++
+        "<animateTransform attributeName=\"transform\" type=\"scale\" values=\"1 1;2 2\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "<g data-typst-label='libtypst-object-9'>" ++
         "<use href='#glyph'/>" ++
         "</g>" ++
@@ -739,6 +741,36 @@ test "interleaved target tracks preserve the original SVG byte order" {
     const output = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 2, .tracks = &tracks });
     defer t.allocator.free(output);
     try t.expectEqualStrings(expected, output);
+}
+
+test {
+    _ = SmilEncoder;
+}
+
+test "SMIL timing omits defaults and numbers follow Typst's SVG precision" {
+    // Evenly spaced linear keys, begin at 0, linear calcMode and the freeze of
+    // an endless loop are all SMIL defaults.
+    var keys: [26]a.ScalarKey = undefined;
+    for (&keys, 0..) |*key, index| key.* = .{ .time = @as(f64, @floatFromInt(index)) / 25.0, .value = if (index % 2 == 0) 0.30974058379240427 else 0.1 };
+    const looped = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 60, .tracks = &.{.{ .target = 9, .property = .{ .opacity = &keys } }} });
+    defer t.allocator.free(looped);
+    try t.expect(std.mem.indexOf(u8, looped, "<g opacity=\"0.309740584\"><animate attributeName=\"opacity\" values=\"0.309740584;0.1;0.309740584;") != null);
+    try t.expect(std.mem.indexOf(u8, looped, ";0.1\" dur=\"60s\" repeatCount=\"indefinite\"/>") != null);
+    for ([_][]const u8{ "keyTimes", "calcMode", "begin", "fill=\"freeze\"" }) |omitted| try t.expect(std.mem.indexOf(u8, looped, omitted) == null);
+    // Uneven, discrete and motion timing stay explicit, as does the freeze of
+    // a single run.
+    const route = [_]Path.Segment{ .{ .move = .zero }, .{ .line = .{ .x = 10, .y = 0 } } };
+    const explicit = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 2, .repeat = false, .tracks = &.{
+        .{ .target = 7, .property = .{ .translate = &.{ .{ .time = 0, .value = .zero }, .{ .time = 0.37, .value = .{ .x = 1, .y = 0 } }, .{ .time = 1, .value = .{ .x = 2, .y = 0 } } } } },
+        .{ .target = 9, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0 }, .{ .time = 0.5, .value = 1 }, .{ .time = 1, .value = 0 } } }, .easing = .discrete },
+        .{ .target = 9, .property = .{ .motion = .{ .path = &route } } },
+    } });
+    defer t.allocator.free(explicit);
+    try t.expect(std.mem.indexOf(u8, explicit, "values=\"0 0;1 0;2 0\" dur=\"2s\" fill=\"freeze\" keyTimes=\"0;0.37;1\"/>") != null);
+    try t.expect(std.mem.indexOf(u8, explicit, "values=\"0;1;0\" dur=\"2s\" fill=\"freeze\" calcMode=\"discrete\" keyTimes=\"0;0.5;1\"/>") != null);
+    try t.expect(std.mem.indexOf(u8, explicit, "keyPoints=\"0;1\" dur=\"2s\" fill=\"freeze\" calcMode=\"linear\" keyTimes=\"0;1\"/>") != null);
+    try t.expect(std.mem.indexOf(u8, explicit, "repeatCount") == null);
+    try t.expect(std.mem.indexOf(u8, explicit, "begin") == null);
 }
 
 test "animation semantic errors precede SVG parsing and allocation failure" {
