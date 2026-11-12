@@ -32,4 +32,4 @@ function resolveExecutable(folder, settings = {}, platform = process.platform) {
     return { command: executablePath(folder, settings.executablePath, 'huak', platform), args: libraryArgs(folder, settings, platform), options: folder ? { cwd: folder } : undefined };
 }
 
-module.exports = { resolveServer, resolveExecutable };
+module.exports = { resolveServer, resolveExecutable, configuredPath };

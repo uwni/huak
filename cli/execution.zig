@@ -36,7 +36,20 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, backends: language.Runt
         };
         font.* = .{ .data = bytes };
     }
-    var runtime = try language.Runtime.initWithBackends(allocator, std.heap.c_allocator, backends, .{ .font_sources = fonts, .use_bundled_fonts = options.bundled_fonts, .inputs = inputs });
+    // Discovery skips a missing directory; name a mistyped --font-path instead.
+    for (options.font_dirs) |font_dir| {
+        const directory = std.Io.Dir.cwd().openDir(io, font_dir, .{}) catch |err| {
+            return report.fail("huak: cannot open font directory '{s}': {s}", .{ font_dir, @errorName(err) });
+        };
+        directory.close(io);
+    }
+    var runtime = try language.Runtime.initWithBackends(allocator, std.heap.c_allocator, backends, .{
+        .font_sources = fonts,
+        .font_dirs = options.font_dirs,
+        .system_fonts = options.system_fonts,
+        .use_bundled_fonts = options.bundled_fonts,
+        .inputs = inputs,
+    });
     defer runtime.deinit();
     machine.host = runtime.host();
     var workers: language.tasks.Executor = .{ .allocator = allocator, .io = io, .runtime = &runtime, .jobs = options.jobs };

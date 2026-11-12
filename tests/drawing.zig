@@ -24,7 +24,7 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     var unchanged = try enabled.exportPdf();
     defer unchanged.deinit();
     try t.expectEqualSlices(u8, normal_pdf.bytes(), unchanged.bytes());
-    try t.expect(library.default_context == null);
+    try t.expect(library.shared_context == null);
 
     var engine = try library.createEngine();
     defer engine.deinit();

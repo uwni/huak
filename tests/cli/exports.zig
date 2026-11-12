@@ -50,6 +50,17 @@ pub fn run(ctx: *h.Harness) !void {
     try h.contains(bad_font.stderr, "InvalidArgument");
     try h.contains(bad_font.stderr, "font source");
     try ctx.absent("invalid-font.svg");
+    // A recursively scanned font directory supplies the only font, so the
+    // exported text proves libtypst discovered and loaded it.
+    try ctx.temporary.dir.createDirPath(t.io, "font-dir/nested");
+    try ctx.write("font-dir/nested/serif.otf", @embedFile("../fixtures/fonts/LibertinusSerif-Regular.otf"));
+    _ = try ctx.command("run", drawing, &.{ "--font-path", try ctx.path("font-dir"), "--no-bundled-fonts", "--output", "pic=font-dir.pdf" }, true);
+    try h.contains(try ctx.pdfText("font-dir.pdf", false), "CLI selectable text");
+    const missing_dir = try ctx.command("run", drawing, &.{ "--font-path", try ctx.path("missing-fonts"), "--output", "pic=missing-font-dir.svg" }, false);
+    try h.contains(missing_dir.stderr, "cannot open font directory");
+    try ctx.absent("missing-font-dir.svg");
+    _ = try ctx.command("run", drawing, &.{ "--system-fonts", "--output", "pic=system-fonts.svg" }, true);
+    _ = try ctx.svg("system-fonts.svg");
     const animation = try ctx.fixture("animation");
     _ = try ctx.command("run", animation, &.{ "--output", "animation.svg" }, true);
     const animated = try ctx.svg("animation.svg");

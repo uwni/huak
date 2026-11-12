@@ -104,6 +104,21 @@
             ]
           },
           "description": "Script parameters for preview and export. Restart an open preview to apply changes."
+        },
+        "huak.preview.fontPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Font directories, scanned with their subdirectories, for preview and export (--font-path). Relative paths and ${workspaceFolder} resolve against the workspace folder. Restart an open preview to apply changes."
+        },
+        "huak.preview.systemFonts": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "description": "Also use the fonts installed on the system for preview and export (--system-fonts). Restart an open preview to apply changes."
         }
       }
     },

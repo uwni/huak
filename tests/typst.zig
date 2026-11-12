@@ -282,6 +282,36 @@ test "custom font bytes are copied and retained by independent text frames" {
     try testing.expectError(error.InvalidArgument, library.createEngineWithOptions(&.{ .font_sources = &.{.{ .data = "invalid font bytes" }} }));
 }
 
+test "font directories and system fonts are discovered by libtypst" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var temporary = testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDirPath(testing.io, "fonts/nested");
+    try temporary.dir.writeFile(testing.io, .{ .sub_path = "fonts/nested/serif.otf", .data = font_fixture });
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const length = try temporary.dir.realPath(testing.io, &buffer);
+    const directory = try std.fs.path.join(testing.allocator, &.{ buffer[0..length], "fonts" });
+    defer testing.allocator.free(directory);
+    // Without bundled fonts the scanned directory supplies the only face.
+    var scanned = try library.createEngineWithOptions(&.{ .font_dirs = &.{directory}, .use_bundled_fonts = false });
+    defer scanned.deinit();
+    var metrics: [1]typst.Metrics = undefined;
+    var layout = try scanned.layoutContent(&.{.{ .source = "Discovered font" }}, &metrics, null);
+    defer layout.deinit();
+    try testing.expect(metrics[0].width > 0);
+    // Another configuration gets its own context; repeating one, as watch
+    // rebuilds do, reuses it instead of scanning the system again.
+    var default = try library.createEngine();
+    defer default.deinit();
+    var system = try library.createEngineWithOptions(&.{ .system_fonts = true });
+    defer system.deinit();
+    try testing.expect(system.handle != default.handle);
+    var again = try library.createEngineWithOptions(&.{ .system_fonts = true });
+    defer again.deinit();
+    try testing.expect(again.handle == system.handle);
+}
+
 test "Huak context disables plugins and has no implicit filesystem or clock" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();

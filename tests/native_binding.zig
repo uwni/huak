@@ -130,10 +130,25 @@ test "invalid native requests return per-call diagnostics and allow recovery" {
     defer functions.diagnostics_release(diagnostics);
     var context: ?*c.TypstContext = null;
     defer functions.context_release(context);
-    const invalid = c.TypstContextOptions{ .struct_size = 1, .flags = 0, .fonts = null, .font_count = 0, .files = null, .file_count = 0, .inputs_json = binding.str("") };
+    const invalid = c.TypstContextOptions{ .struct_size = 1, .flags = 0, .fonts = null, .font_count = 0, .files = null, .file_count = 0, .inputs_json = binding.str(""), .font_dirs = null, .font_dir_count = 0 };
     try t.expectEqual(@as(c.TypstStatus, c.TYPST_INVALID_ARGUMENT), functions.context_create(&invalid, &context, &diagnostics));
     try t.expect(context == null);
     try t.expect(functions.diagnostics_count(diagnostics) > 0);
+    functions.diagnostics_release(diagnostics);
+    diagnostics = null;
+    // An ABI 1.3 host's record ends before font_dirs. The library must not
+    // read past struct_size, so this invalid UTF-8 directory is never seen.
+    const malformed = [_]c.TypstStr{.{ .data = "\xff", .len = 1 }};
+    var older = std.mem.zeroes(c.TypstContextOptions);
+    older.struct_size = @offsetOf(c.TypstContextOptions, "font_dirs");
+    older.font_dirs = &malformed;
+    older.font_dir_count = malformed.len;
+    var compatible: ?*c.TypstContext = null;
+    defer functions.context_release(compatible);
+    try check(&functions, functions.context_create(&older, &compatible, &diagnostics), &diagnostics);
+    older.struct_size = @sizeOf(c.TypstContextOptions);
+    try t.expectEqual(@as(c.TypstStatus, c.TYPST_INVALID_UTF8), functions.context_create(&older, &context, &diagnostics));
+    try t.expect(context == null);
     functions.diagnostics_release(diagnostics);
     diagnostics = null;
     try check(&functions, functions.context_create(null, &context, &diagnostics), &diagnostics);

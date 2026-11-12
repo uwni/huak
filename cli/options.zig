@@ -10,6 +10,8 @@ pub const Options = struct {
     script: ?[]const u8 = null,
     library: ?[]const u8 = null,
     fonts: []const []const u8 = &.{},
+    font_dirs: []const []const u8 = &.{},
+    system_fonts: bool = false,
     bundled_fonts: bool = true,
     parameters: []const Parameter = &.{},
     outputs: []const Output = &.{},
@@ -30,11 +32,13 @@ const params = clap.parseParamsComptime(
     \\-j, --jobs <N>         Maximum parallel jobs; defaults to available CPUs.
     \\--libtypst <PATH>       Load the native libtypst dynamic library.
     \\--font <PATH>...        Load a TTF, OTF or TTC font.
+    \\--font-path <DIR>...    Use the fonts in a directory and its subdirectories.
+    \\--system-fonts          Also use the fonts installed on the system.
     \\--no-bundled-fonts      Disable bundled fonts.
     \\--json                  Emit watch build events as JSON Lines.
     \\<FILE>                  Script to compile or execute.
 );
-const Option = enum { param, output, jobs, libtypst, font, @"no-bundled-fonts", json, file };
+const Option = enum { param, output, jobs, libtypst, font, @"font-path", @"system-fonts", @"no-bundled-fonts", json, file };
 // Assign typed IDs once at comptime; runtime parsing never rematches names.
 const option_params = blk: {
     @setEvalBranchQuota(2000);
@@ -90,6 +94,8 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, diagnostic:
     errdefer parameters.deinit();
     var fonts: std.array_list.Managed([]const u8) = .init(allocator);
     errdefer fonts.deinit();
+    var font_dirs: std.array_list.Managed([]const u8) = .init(allocator);
+    errdefer font_dirs.deinit();
     var outputs: std.array_list.Managed(Output) = .init(allocator);
     errdefer outputs.deinit();
     var parser: clap.streaming.Clap(Option, clap.args.SliceIterator) = .{ .params = &option_params, .iter = &iterator, .diagnostic = &detail };
@@ -120,6 +126,10 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, diagnostic:
             .@"no-bundled-fonts" => {
                 if (!result.bundled_fonts) return fail(allocator, diagnostic, "duplicate option '--{s}'", .{name});
                 result.bundled_fonts = false;
+            },
+            .@"system-fonts" => {
+                if (result.system_fonts) return fail(allocator, diagnostic, "duplicate option '--{s}'", .{name});
+                result.system_fonts = true;
             },
             .param => {
                 const at = std.mem.indexOfScalar(u8, value, '=') orelse return fail(allocator, diagnostic, "parameter must use NAME=VALUE: '{s}'", .{value});
@@ -159,6 +169,10 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, diagnostic:
                 if (value.len == 0) return fail(allocator, diagnostic, "empty value for '--{s}'", .{name});
                 try fonts.append(value);
             },
+            .@"font-path" => {
+                if (value.len == 0) return fail(allocator, diagnostic, "empty value for '--{s}'", .{name});
+                try font_dirs.append(value);
+            },
         }
     }
     if (result.script == null) return fail(allocator, diagnostic, "missing script path", .{});
@@ -166,6 +180,8 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, diagnostic:
     errdefer allocator.free(result.parameters);
     result.fonts = try fonts.toOwnedSlice();
     errdefer allocator.free(result.fonts);
+    result.font_dirs = try font_dirs.toOwnedSlice();
+    errdefer allocator.free(result.font_dirs);
     result.outputs = try outputs.toOwnedSlice();
     return result;
 }
@@ -204,7 +220,7 @@ test "run flags preserve literal strings and repeated font paths" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var diagnostic: ?[]const u8 = null;
-    const options = try parse(arena.allocator(), &.{ "run", "drawing.huak", "--param", "count=200", "--param=title=\"); panic(\"x\")", "--param", "empty=", "--output", "out.pdf", "--output=detail=more=detail.svg", "--output=detail=other.pdf", "--libtypst=custom.dylib", "--font", "one.ttf", "--font=two.otf", "--no-bundled-fonts" }, &diagnostic);
+    const options = try parse(arena.allocator(), &.{ "run", "drawing.huak", "--param", "count=200", "--param=title=\"); panic(\"x\")", "--param", "empty=", "--output", "out.pdf", "--output=detail=more=detail.svg", "--output=detail=other.pdf", "--libtypst=custom.dylib", "--font", "one.ttf", "--font=two.otf", "--font-path", "fonts", "--font-path=more fonts", "--system-fonts", "--no-bundled-fonts" }, &diagnostic);
     try std.testing.expectEqual(Command.run, options.command);
     try std.testing.expectEqualStrings("drawing.huak", options.script.?);
     try std.testing.expectEqualStrings("custom.dylib", options.library.?);
@@ -214,6 +230,9 @@ test "run flags preserve literal strings and repeated font paths" {
     try std.testing.expectEqualStrings("detail", options.outputs[1].name);
     try std.testing.expectEqualStrings("more=detail.svg", options.outputs[1].path);
     try std.testing.expectEqual(@as(usize, 2), options.fonts.len);
+    try std.testing.expectEqual(@as(usize, 2), options.font_dirs.len);
+    try std.testing.expectEqualStrings("more fonts", options.font_dirs[1]);
+    try std.testing.expect(options.system_fonts);
     try std.testing.expectEqualStrings("\"); panic(\"x\")", options.parameters[1].value);
     try std.testing.expectEqualStrings("", options.parameters[2].value);
     try std.testing.expect(!options.bundled_fonts);
@@ -254,6 +273,9 @@ test "command grammar rejects unknown duplicate and incomplete arguments" {
     try rejected(&.{ "run", "a.huak", "--output=one=a.svg", "--output=two=a.svg" }, "duplicate output path");
     try rejected(&.{ "check", "a.huak", "--output=a.svg" }, "only valid with run");
     try rejected(&.{ "run", "a.huak", "--no-bundled-fonts", "--no-bundled-fonts" }, "duplicate option");
+    try rejected(&.{ "run", "a.huak", "--system-fonts", "--system-fonts" }, "duplicate option '--system-fonts'");
+    try rejected(&.{ "run", "a.huak", "--font-path=" }, "empty value for '--font-path'");
+    try rejected(&.{ "check", "a.huak", "--system-fonts" }, "only valid with run");
     try rejected(&.{ "run", "a.huak", "--libtypst=one", "--libtypst", "two" }, "duplicate option '--libtypst'");
     try rejected(&.{ "check", "a.huak", "--param", "a=1" }, "only valid with run");
     try rejected(&.{ "--", "run" }, "unknown command");
@@ -267,6 +289,7 @@ test "arguments preserve owned lists and attached option-like values" {
     const options = try parse(allocator, &.{ "run", "--libtypst=--syntax-library", "--font=--font.ttf", "--param=label=--literal", "--output=--drawing.svg", "--", "-drawing.huak" }, &diagnostic);
     defer allocator.free(options.parameters);
     defer allocator.free(options.fonts);
+    defer allocator.free(options.font_dirs);
     defer allocator.free(options.outputs);
     try std.testing.expect(diagnostic == null);
     try std.testing.expectEqualStrings("-drawing.huak", options.script.?);

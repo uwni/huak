@@ -54,6 +54,9 @@ pub const Options = struct {
     /// Configuration bytes are copied during Runtime.init. Library is borrowed
     /// at a stable address until Runtime and every exported result are freed.
     font_sources: []const typst.FontSource = &.{},
+    /// Font directories and system fonts are discovered by libtypst.
+    font_dirs: []const []const u8 = &.{},
+    system_fonts: bool = false,
     use_bundled_fonts: bool = true,
     inputs: []const typst.Input = &.{},
 
@@ -147,11 +150,14 @@ pub fn initWithBackends(allocator: std.mem.Allocator, scene_allocator: std.mem.A
     for (fonts, options.font_sources) |*out, in| {
         out.* = .{ .data = try a.dupe(u8, in.data) };
     }
+    const font_dirs = try a.alloc([]const u8, options.font_dirs.len);
+    for (font_dirs, options.font_dirs) |*out, in| out.* = try a.dupe(u8, in);
     const inputs = try a.alloc(typst.Input, options.inputs.len);
     for (inputs, options.inputs) |*out, in| {
         out.* = .{ .key = try a.dupe(u8, in.key), .value = try a.dupe(u8, in.value) };
     }
     result.options.font_sources = fonts;
+    result.options.font_dirs = font_dirs;
     result.options.inputs = inputs;
     return result;
 }
@@ -279,6 +285,8 @@ fn engineRef(self: *Runtime) !*typst.Engine {
     if (self.engine == null) {
         const options: typst.EngineOptions = .{
             .font_sources = self.options.font_sources,
+            .font_dirs = self.options.font_dirs,
+            .system_fonts = self.options.system_fonts,
             .use_bundled_fonts = self.options.use_bundled_fonts,
             .inputs = self.options.inputs,
         };

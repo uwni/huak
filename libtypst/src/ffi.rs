@@ -216,7 +216,8 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_NATIVE_SCENE
             | TYPST_CAP_TEXT_OUTLINE
             | TYPST_CAP_LAYOUT_BINDINGS
-            | TYPST_CAP_PDF_IMPORT,
+            | TYPST_CAP_PDF_IMPORT
+            | crate::context::FONT_DISCOVERY,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),
     }) {
@@ -250,13 +251,16 @@ pub unsafe extern "C" fn typst_context_create(
         call(diagnostics, || {
             output(out)?;
             let config: TypstContextOptions = options(config)?;
-            if config.flags & !(TYPST_CONTEXT_NO_BUILTIN_FONTS | TYPST_CONTEXT_DISABLE_PLUGINS) != 0
-            {
+            if config.flags & !crate::context::CONTEXT_FLAGS != 0 {
                 return Err(Error::unsupported("unknown context flags"));
             }
             let fonts = values(config.fonts, config.font_count, "fonts")?
                 .iter()
                 .map(|font| Ok(values(font.data.data, font.data.len, "font bytes")?.to_vec()))
+                .collect::<Result<Vec<_>, Error>>()?;
+            let font_dirs = values(config.font_dirs, config.font_dir_count, "font directories")?
+                .iter()
+                .map(|dir| Ok(std::path::PathBuf::from(text(*dir, "font directory")?)))
                 .collect::<Result<Vec<_>, Error>>()?;
             let files = values(config.files, config.file_count, "files")?
                 .iter()
@@ -268,7 +272,8 @@ pub unsafe extern "C" fn typst_context_create(
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
             let inputs = text(config.inputs_json, "inputs JSON")?;
-            let context = crate::context::Context::new(fonts, files, inputs, config.flags)?;
+            let context =
+                crate::context::Context::new(fonts, font_dirs, files, inputs, config.flags)?;
             out.write(owned(TypstContext { inner: context }));
             Ok(Report::default())
         })

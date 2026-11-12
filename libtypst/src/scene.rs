@@ -425,9 +425,14 @@ mod tests {
 
     #[test]
     fn pdf_import_uses_native_decoding_and_owns_its_page() {
-        let context =
-            crate::context::Context::new(vec![], vec![], "", TYPST_CONTEXT_NO_BUILTIN_FONTS)
-                .unwrap();
+        let context = crate::context::Context::new(
+            vec![],
+            vec![],
+            vec![],
+            "",
+            TYPST_CONTEXT_NO_BUILTIN_FONTS,
+        )
+        .unwrap();
         let frame = Frame::hard(Size::new(Abs::pt(50.0), Abs::pt(30.0)));
         let bytes = crate::export::pdf(&crate::export::from_frame(&frame), None).unwrap();
         assert!(Scene::from_pdf(&context, b"not a PDF", 0).is_err());
@@ -529,7 +534,7 @@ mod tests {
 
     #[test]
     fn native_frame_owns_text_after_layout_scene_and_context_owners_drop() {
-        let context = crate::context::Context::new(vec![], vec![], "", 0).unwrap();
+        let context = crate::context::Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let (layout, _) = context
             .layout(
                 "Owned café $x^2$",

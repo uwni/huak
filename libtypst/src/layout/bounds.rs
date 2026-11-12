@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn overflow_shapes_images_and_transforms_keep_native_bounds() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let (text, _) = context
             .layout(
                 "#box(width: 1pt, height: 20pt)[#text(size: 20pt)[WWW]]",

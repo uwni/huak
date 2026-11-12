@@ -48,7 +48,11 @@ pub const Library = struct {
     image_path: ?[:0]const u8 = null,
     capabilities: ?u64 = null,
     resources_mutex: std.Io.Mutex = .init,
-    default_context: ?*c.TypstContext = null,
+    /// Context of the most recent engine configuration and its fingerprint.
+    /// Repeating a configuration, as watch rebuilds do, reuses its fonts and
+    /// any scanned font directories instead of discovering them again.
+    shared_context: ?*c.TypstContext = null,
+    shared_options: u64 = 0,
     diagnostic_mutex: std.Io.Mutex = .init,
     has_diagnostics: std.atomic.Value(bool) = .init(false),
     diagnostics: std.AutoHashMapUnmanaged(std.Thread.Id, []u8) = .empty,
@@ -84,7 +88,7 @@ pub const Library = struct {
         return info.capabilities & feature == feature;
     }
     pub fn deinit(self: *Library) void {
-        self.functions.context_release(self.default_context);
+        self.functions.context_release(self.shared_context);
         var messages = self.diagnostics.valueIterator();
         while (messages.next()) |message| a.free(message.*);
         self.diagnostics.deinit(a);

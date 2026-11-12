@@ -13,14 +13,38 @@ handle: ?*c.TypstContext,
 poisoned: std.atomic.Value(bool) = .init(false),
 
 pub fn init(library: *api.Library, options: api.EngineOptions) api.Error!Engine {
-    if (options.font_sources.len == 0 and options.use_bundled_fonts and options.inputs.len == 0) {
-        std.Io.Threaded.mutexLockUncancelable(&library.resources_mutex);
-        defer std.Io.Threaded.mutexUnlock(&library.resources_mutex);
-        if (library.default_context == null) library.default_context = try createContext(library, options);
-        library.functions.context_retain(library.default_context);
-        return .{ .library = library, .handle = library.default_context };
+    const key = fingerprint(options);
+    std.Io.Threaded.mutexLockUncancelable(&library.resources_mutex);
+    defer std.Io.Threaded.mutexUnlock(&library.resources_mutex);
+    if (library.shared_context == null or library.shared_options != key) {
+        const created = try createContext(library, options);
+        library.functions.context_release(library.shared_context);
+        library.shared_context = created;
+        library.shared_options = key;
     }
-    return .{ .library = library, .handle = try createContext(library, options) };
+    library.functions.context_retain(library.shared_context);
+    return .{ .library = library, .handle = library.shared_context };
+}
+
+/// Identifies a complete configuration; each field is length-prefixed.
+fn fingerprint(options: api.EngineOptions) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(&.{ @intFromBool(options.system_fonts), @intFromBool(options.use_bundled_fonts) });
+    hasher.update(std.mem.asBytes(&options.font_sources.len));
+    for (options.font_sources) |font| bytes(&hasher, font.data);
+    hasher.update(std.mem.asBytes(&options.font_dirs.len));
+    for (options.font_dirs) |dir| bytes(&hasher, dir);
+    hasher.update(std.mem.asBytes(&options.inputs.len));
+    for (options.inputs) |input| {
+        bytes(&hasher, input.key);
+        bytes(&hasher, input.value);
+    }
+    return hasher.final();
+}
+
+fn bytes(hasher: *std.hash.Wyhash, data: []const u8) void {
+    hasher.update(std.mem.asBytes(&data.len));
+    hasher.update(data);
 }
 pub fn deinit(self: *Engine) void {
     self.library.functions.context_release(self.handle);
@@ -56,14 +80,20 @@ fn createContext(library: *api.Library, options: api.EngineOptions) api.Error!*c
     const fonts = try a.alloc(c.TypstFontSource, options.font_sources.len);
     defer a.free(fonts);
     for (fonts, options.font_sources) |*font, source| font.* = .{ .data = binding.binary(source.data) };
+    const dirs = try a.alloc(c.TypstStr, options.font_dirs.len);
+    defer a.free(dirs);
+    for (dirs, options.font_dirs) |*dir, path| dir.* = binding.str(path);
     const inputs = try inputsJson(library, options.inputs);
     defer a.free(inputs);
     var config = std.mem.zeroes(c.TypstContextOptions);
     config.struct_size = @sizeOf(c.TypstContextOptions);
     config.flags = c.TYPST_CONTEXT_DISABLE_PLUGINS;
     if (!options.use_bundled_fonts) config.flags |= c.TYPST_CONTEXT_NO_BUILTIN_FONTS;
+    if (options.system_fonts) config.flags |= c.TYPST_CONTEXT_SYSTEM_FONTS;
     config.fonts = fonts.ptr;
     config.font_count = fonts.len;
+    config.font_dirs = dirs.ptr;
+    config.font_dir_count = dirs.len;
     config.inputs_json = binding.str(inputs);
     var output: ?*c.TypstContext = null;
     errdefer library.functions.context_release(output);

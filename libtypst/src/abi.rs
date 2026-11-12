@@ -7,7 +7,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0003;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0004;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -16,6 +16,9 @@ pub const TYPST_CAP_TEXT_OUTLINE: u64 = 8;
 pub const TYPST_CAP_LAYOUT_BINDINGS: u64 = 16;
 /// Import a PDF page as a retained native scene.
 pub const TYPST_CAP_PDF_IMPORT: u64 = 32;
+/// Font directories and TYPST_CONTEXT_SYSTEM_FONTS, discovered by typst-kit.
+/// Builds without a file system, such as Wasm, do not report it.
+pub const TYPST_CAP_FONT_DISCOVERY: u64 = 64;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;
@@ -28,6 +31,9 @@ pub const TYPST_VALUE_LENGTH: u32 = 7;
 pub const TYPST_VALUE_COLOR: u32 = 8;
 pub const TYPST_CONTEXT_NO_BUILTIN_FONTS: u32 = 1;
 pub const TYPST_CONTEXT_DISABLE_PLUGINS: u32 = 2;
+/// Add the fonts installed on the system, as found by typst-kit. Requires
+/// TYPST_CAP_FONT_DISCOVERY; they are read when first used.
+pub const TYPST_CONTEXT_SYSTEM_FONTS: u32 = 4;
 pub const TYPST_SYNTAX_MARKUP: u32 = 0;
 pub const TYPST_SYNTAX_CODE: u32 = 1;
 pub const TYPST_SYNTAX_MATH: u32 = 2;
@@ -132,6 +138,10 @@ pub struct TypstContextOptions {
     pub file_count: usize,
     /// JSON object made available as Typst sys.inputs, using upstream decoding.
     pub inputs_json: TypstStr,
+    /// Directories that typst-kit scans recursively for fonts. Fonts are read
+    /// when first used. Requires TYPST_CAP_FONT_DISCOVERY.
+    pub font_dirs: *const TypstStr,
+    pub font_dir_count: usize,
 }
 impl Default for TypstContextOptions {
     fn default() -> Self {
@@ -143,6 +153,8 @@ impl Default for TypstContextOptions {
             files: std::ptr::null(),
             file_count: 0,
             inputs_json: TypstStr::default(),
+            font_dirs: std::ptr::null(),
+            font_dir_count: 0,
         }
     }
 }

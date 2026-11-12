@@ -7,6 +7,10 @@ pub const FontSource = struct { data: []const u8 };
 pub const Input = struct { key: []const u8, value: []const u8 };
 pub const EngineOptions = struct {
     font_sources: []const FontSource = &.{},
+    /// Directories libtypst scans recursively; their fonts load on first use.
+    font_dirs: []const []const u8 = &.{},
+    /// Also use the fonts installed on the system, as libtypst discovers them.
+    system_fonts: bool = false,
     use_bundled_fonts: bool = true,
     inputs: []const Input = &.{},
 };

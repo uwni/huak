@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65539
+#define TYPST_ABI_VERSION 65540
 
 #define TYPST_CAP_PDF 1
 
@@ -28,6 +28,12 @@
  * Import a PDF page as a retained native scene.
  */
 #define TYPST_CAP_PDF_IMPORT 32
+
+/**
+ * Font directories and TYPST_CONTEXT_SYSTEM_FONTS, discovered by typst-kit.
+ * Builds without a file system, such as Wasm, do not report it.
+ */
+#define TYPST_CAP_FONT_DISCOVERY 64
 
 #define TYPST_VALUE_NONE 0
 
@@ -53,6 +59,12 @@
 #define TYPST_CONTEXT_NO_BUILTIN_FONTS 1
 
 #define TYPST_CONTEXT_DISABLE_PLUGINS 2
+
+/**
+ * Add the fonts installed on the system, as found by typst-kit. Requires
+ * TYPST_CAP_FONT_DISCOVERY; they are read when first used.
+ */
+#define TYPST_CONTEXT_SYSTEM_FONTS 4
 
 #define TYPST_SYNTAX_MARKUP 0
 
@@ -202,6 +214,12 @@ typedef struct TypstContextOptions {
    * JSON object made available as Typst sys.inputs, using upstream decoding.
    */
   struct TypstStr inputs_json;
+  /**
+   * Directories that typst-kit scans recursively for fonts. Fonts are read
+   * when first used. Requires TYPST_CAP_FONT_DISCOVERY.
+   */
+  const struct TypstStr *font_dirs;
+  size_t font_dir_count;
 } TypstContextOptions;
 
 typedef struct TypstColor {

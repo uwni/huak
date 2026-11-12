@@ -3,14 +3,16 @@ const vscode = require('vscode');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { resolveExecutable } = require('./server');
+const { resolveExecutable, configuredPath } = require('./server');
 
 function rendererFor(uri) {
     const folder = vscode.workspace.getWorkspaceFolder(uri) || vscode.workspace.workspaceFolders?.[0];
     const settings = vscode.workspace.getConfiguration('huak', uri);
     const renderer = resolveExecutable(folder?.uri.fsPath, { executablePath: settings.get('executablePath'), libtypstPath: settings.get('libtypstPath') });
+    const fonts = settings.get('preview.fontPaths', []).map(directory => `--font-path=${configuredPath(directory, folder?.uri.fsPath)}`);
+    if (settings.get('preview.systemFonts', false)) fonts.push('--system-fonts');
     const parameters = Object.entries(settings.get('preview.parameters', {})).map(([key, value]) => `--param=${key}=${value}`);
-    return { ...renderer, args: [uri.fsPath, ...renderer.args, ...parameters] };
+    return { ...renderer, args: [uri.fsPath, ...renderer.args, ...fonts, ...parameters] };
 }
 
 function renderFile(renderer, name, file, token) {

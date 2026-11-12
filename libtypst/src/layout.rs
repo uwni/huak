@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn lexical_bindings_use_native_types_and_keep_strings_as_data() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let title = "Café Ω \"quoted\"\n#panic(\"must stay data\")";
         let scope = data(&[
             ("count", i64::MIN.into_value()),
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn request_bindings_share_setup_scope_and_do_not_stale_cache_or_context() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let source = "#greeting";
         let setup = "let greeting = payload.title; set text(size: payload.size, fill: payload.ink)";
         let first = data(&[
@@ -332,6 +332,7 @@ mod tests {
     #[test]
     fn request_bindings_stay_local_to_all_syntax_modes_and_imports() {
         let context = Context::new(
+            vec![],
             vec![],
             vec![("child.typ".into(), b"#payload.title".to_vec())],
             "",
@@ -372,7 +373,7 @@ mod tests {
 
     #[test]
     fn binding_errors_keep_native_setup_and_body_source_ranges() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         for (setup, body, expected) in [
             ("", "#payload.missing", "source.typ"),
             ("let label = payload.missing", "#label", "setup.typ"),
@@ -402,7 +403,7 @@ mod tests {
 
     #[test]
     fn markup_code_math_and_native_styles_produce_real_frames() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         for (syntax, source) in [
             (
                 TYPST_SYNTAX_MARKUP,
@@ -429,7 +430,7 @@ mod tests {
 
     #[test]
     fn region_wrapping_and_expansion_use_native_layout() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let source = "A paragraph with enough words to wrap into several lines in a narrow region.";
         let narrow = TypstLayoutOptions {
             width_pt: 80.0,
@@ -466,7 +467,7 @@ mod tests {
 
     #[test]
     fn independent_concurrent_requests_share_resources_and_outputs_outlive_context() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let layouts = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..4)
                 .map(|index| {
@@ -507,7 +508,7 @@ mod tests {
 
     #[test]
     fn failed_layouts_keep_request_diagnostics_and_do_not_poison_resources() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         for syntax in [TYPST_SYNTAX_MARKUP, TYPST_SYNTAX_CODE, TYPST_SYNTAX_MATH] {
             let options = TypstLayoutOptions {
                 syntax,
@@ -536,7 +537,7 @@ mod tests {
 
     #[test]
     fn standalone_layout_rejects_queries_that_require_document_convergence() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         for source in [
             "#context counter(page).get().repr()",
             "#context query(heading).len()",

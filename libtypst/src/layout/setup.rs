@@ -101,7 +101,7 @@ mod tests {
     use crate::{abi::*, context::Context};
     #[test]
     fn setup_scope_and_styles_apply_to_each_syntax_without_comment_concatenation() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         for (syntax, source, reference) in [
             (
                 TYPST_SYNTAX_MARKUP,
@@ -155,7 +155,7 @@ mod tests {
     }
     #[test]
     fn independent_setup_and_body_diagnostics_keep_their_native_byte_ranges() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         for (setup, body, expected) in [
             ("let title = missing_setup", "text", "preamble"),
             ("let title = [valid]", "#missing_body", "source"),
@@ -184,7 +184,8 @@ mod tests {
     }
     #[test]
     fn native_zero_regions_and_optional_plugin_policy_are_explicit() {
-        let context = Context::new(vec![], vec![], "", TYPST_CONTEXT_DISABLE_PLUGINS).unwrap();
+        let context =
+            Context::new(vec![], vec![], vec![], "", TYPST_CONTEXT_DISABLE_PLUGINS).unwrap();
         let options = TypstLayoutOptions {
             flags: TYPST_BOUND_X | TYPST_EXPAND_X,
             ..Default::default()
@@ -196,7 +197,7 @@ mod tests {
                 .layout(source, "source", &Default::default(), 0)
                 .is_err());
         }
-        let ordinary = Context::new(vec![], vec![], "", 0).unwrap();
+        let ordinary = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         assert!(ordinary
             .layout("#repr(type(plugin))", "source", &Default::default(), 0)
             .is_ok());

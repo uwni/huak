@@ -37,6 +37,7 @@ mod tests {
     fn documents_compile_imports_inputs_and_multiple_pages() {
         let context = Context::new(
             vec![],
+            vec![],
             vec![
                 ("parts/title.typ".into(), b"#let title = [Imported title]".to_vec()),
                 ("icon.svg".into(), br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><rect width="12" height="8" fill="#2966cc"/></svg>"##.to_vec()),
@@ -62,7 +63,7 @@ mod tests {
 
     #[test]
     fn a_failed_document_does_not_poison_later_jobs() {
-        let context = Context::new(vec![], vec![], "", 0).unwrap();
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
         let failure = context.compile("#unknown_value", "broken.typ");
         assert!(failure.is_err());
         let (document, _) = context.compile("Recovered", "valid.typ").unwrap();
