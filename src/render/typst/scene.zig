@@ -305,13 +305,16 @@ const Builder = struct {
         if (gradient) |value| if (value.* == .mesh_fill) {
             if (!self.pdf_mesh) return error.MeshRequiresPdf;
             if (!try self.library.supports(c.TYPST_CAP_PDF_IMPORT)) return error.Unsupported;
-            const encoded = try mesh_pdf.encode(self.arena.child_allocator, value.mesh_fill, path_, style_.fill_rule == c.TYPST_FILL_EVENODD);
-            defer mesh_pdf.release(encoded.buffer);
-            if (self.image_context == null) self.image_context = try typst.Engine.init(self.library, .{});
+            const scratch = self.arena.child_allocator;
+            const encoded = try mesh_pdf.encode(scratch, value.mesh_fill, path_.segments[0..path_.segment_count], style_.fill_rule == c.TYPST_FILL_EVENODD);
+            defer scratch.free(encoded.pdf);
+            // The import does not depend on fonts, files or inputs; borrowing
+            // the current context keeps the typesetter's configuration cached.
+            if (self.image_context == null) self.image_context = try typst.Engine.initAny(self.library);
             var image: ?*c.TypstScene = null;
             var diagnostics: ?*c.TypstDiagnostics = null;
             defer self.library.functions.diagnostics_release(diagnostics);
-            const status = self.library.functions.scene_from_pdf(self.image_context.?.handle, .{ .data = encoded.buffer.data, .len = encoded.buffer.len }, 0, &image, &diagnostics);
+            const status = self.library.functions.scene_from_pdf(self.image_context.?.handle, .{ .data = encoded.pdf.ptr, .len = encoded.pdf.len }, 0, &image, &diagnostics);
             try self.library.check(status, diagnostics);
             const scene_ = image orelse return error.InvalidResult;
             self.children.append(self.arena.allocator(), scene_) catch |err| {

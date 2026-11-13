@@ -75,7 +75,6 @@ fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const engine = engineModule(b, public, "huak", .{ .root_source_file = b.path("src/huak.zig"), .target = target, .optimize = optimize, .imports = &.{ native, loader, .{ .name = "xml_parser", .module = xml }, standard_library, csv } });
     const projection: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("src/drawing/space/projection.h"), .target = target, .optimize = optimize });
     engine.module.addImport("space_c", projection.mod);
-    @import("src/render/pdf/build.zig").link(b, engine.module, target, optimize);
     return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml };
 }
 

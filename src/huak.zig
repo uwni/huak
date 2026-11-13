@@ -22,6 +22,7 @@ test {
     _ = core;
     _ = backend;
     _ = @import("render/typst/pen.zig");
+    _ = @import("render/pdf/mesh.zig");
     _ = render;
     _ = language;
     _ = worker;

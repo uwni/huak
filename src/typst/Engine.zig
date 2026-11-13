@@ -13,10 +13,22 @@ handle: ?*c.TypstContext,
 poisoned: std.atomic.Value(bool) = .init(false),
 
 pub fn init(library: *api.Library, options: api.EngineOptions) api.Error!Engine {
+    return shared(library, options, false);
+}
+
+/// For requests whose result does not depend on fonts, files or inputs, such
+/// as PDF page import. Borrows the current context whatever its configuration
+/// and creates the default one only when there is none, so the configuration
+/// cached for typesetting stays in place.
+pub fn initAny(library: *api.Library) api.Error!Engine {
+    return shared(library, .{}, true);
+}
+
+fn shared(library: *api.Library, options: api.EngineOptions, any_configuration: bool) api.Error!Engine {
     const key = fingerprint(options);
     std.Io.Threaded.mutexLockUncancelable(&library.resources_mutex);
     defer std.Io.Threaded.mutexUnlock(&library.resources_mutex);
-    if (library.shared_context == null or library.shared_options != key) {
+    if (library.shared_context == null or (!any_configuration and library.shared_options != key)) {
         const created = try createContext(library, options);
         library.functions.context_release(library.shared_context);
         library.shared_context = created;

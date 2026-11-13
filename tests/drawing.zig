@@ -104,6 +104,34 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     }
 }
 
+test "mesh import borrows the configured typesetting context instead of replacing it" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var engine = try library.createEngineWithOptions(&.{ .inputs = &.{.{ .key = "configured", .value = "yes" }} });
+    defer engine.deinit();
+    const context = library.shared_context;
+    const configuration = library.shared_options;
+    var picture = DisplayList.init(t.allocator);
+    defer picture.deinit();
+    var boundary = try demo.rectangle(t.allocator, .zero, 20, 10);
+    defer boundary.deinit();
+    try picture.addPath(boundary, .{ .fill = .black, .gradient = &.{ .mesh_fill = .{
+        .vertices = &.{
+            .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0 },
+            .{ .x = 20, .y = 0, .r = 0, .g = 1, .b = 0 },
+            .{ .x = 0, .y = 10, .r = 0, .g = 0, .b = 1 },
+        },
+        .triangles = &.{.{ 0, 1, 2 }},
+    } } }, .{});
+    var document = try backend.submit(t.allocator, &library, &picture, 20, 10, .{ .pdf_mesh = true });
+    defer document.deinit();
+    var pdf = try document.exportPdf();
+    defer pdf.deinit();
+    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 4") != null);
+    try t.expectEqual(context, library.shared_context);
+    try t.expectEqual(configuration, library.shared_options);
+}
+
 test "independent elliptical polygonal and singular pens render through the native backend" {
     const g = @import("huak").core.geometry;
     const Path = @import("huak").core.Path;

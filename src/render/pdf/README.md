@@ -1,29 +1,22 @@
 # Mesh PDF encoding
 
-This Huak backend encodes a single mesh paint and its curved clipping boundary.
-It uses pdf-writer 0.15.0 for Type 4 Gouraud shading and miniz_oxide 0.9.1 for
-compression. Both are locked in Cargo.lock. The result is a PDF 1.4 page in a
-unit square, placed back in scene coordinates by the Typst adapter.
+`mesh.zig` encodes a single mesh paint and its curved clipping boundary as a
+one-page PDF 1.4 graphic: a Type 4 free-form Gouraud shading over the unit
+square, with 32-bit coordinates and 16-bit colors. Vertex alpha uses a PDF
+luminosity soft mask with the same triangulation. Shading records stream
+directly into the Zig standard library's deflate (zlib container), so the
+uncompressed mesh is never held in memory. Level 4 was chosen by measurement:
+on the 162,762-triangle lighting replay it compressed faster and smaller than
+levels 3 and 5 to 7, and smaller than the former Rust encoder's output. The
+page structure is fixed and contains only numbers and names, so no PDF writing
+library is needed.
 
-Ordinary paths and text never pass through this encoder. The Typst adapter
-imports this graphic through libtypst's generic PDF page API and uses the
-existing Typst exporter for the final document. No Typst internals or krilla
-patches are dependencies here. Mesh geometry and lighting are supplied by the
-caller; this module does not compute them.
+Typst has no mesh paint. The Typst adapter imports this graphic through
+libtypst's generic PDF page API, places it back in scene coordinates and uses
+the existing Typst exporter for the final document. Ordinary paths and text
+never pass through this encoder. Mesh geometry and lighting are supplied by the
+caller; this module does not compute them. Meshes retain vector shading; no
+raster image or SVG fallback is generated.
 
-The Rust allocation returned by `huak_mesh_pdf` is borrowed until
-`huak_mesh_pdf_free`. Its capacity travels with the private buffer record so
-returning it does not shrink or copy the PDF. The Zig adapter imports the bytes
-before releasing them. Raw shading streams are released after compression,
-before they are copied into the PDF writer's output buffer.
-This private ABI is rebuilt with Huak; it is separate from libtypst's stable API.
-Vertex alpha uses a PDF luminosity soft mask with the same triangulation.
-Meshes retain vector shading; no raster image or SVG fallback is generated.
-
-`zig build` builds and links the static encoder for the selected target. To
-regenerate its private C header:
-
-```sh
-cargo run --manifest-path src/render/pdf/Cargo.toml --locked \
-  --features headers --bin headers --target-dir target/pdf-mesh
-```
+The returned PDF belongs to the caller's allocator; the adapter frees it after
+libtypst has copied it during import.

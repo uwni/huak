@@ -783,6 +783,8 @@ unsafe fn style<'a>(value: *const TypstStyle) -> Result<PathStyle<'a>, Error> {
 
 /// Imports a zero-based PDF page into a reusable native scene, at its natural
 /// page dimensions in points. Copies the input bytes; the scene can outlive them.
+/// The context only supplies the environment for Typst's decoder: the result
+/// does not depend on its fonts, files or inputs, so any live context will do.
 /// PDF output uses Typst's native PDF embedding, including its format restrictions.
 ///
 /// # Safety
