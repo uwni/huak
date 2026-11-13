@@ -220,6 +220,8 @@ const Builder = struct {
     levels: std.ArrayList(Level) = .empty,
     pdf_mesh: bool = false,
     image_context: ?typst.Engine = null,
+    /// Created on the first mesh paint; every mesh of the document reuses it.
+    mesh_workspace: ?*mesh_pdf.Workspace = null,
 
     fn deinit(self: *Builder) void {
         for (self.children.items) |child| self.library.functions.scene_release(child);
@@ -305,16 +307,23 @@ const Builder = struct {
         if (gradient) |value| if (value.* == .mesh_fill) {
             if (!self.pdf_mesh) return error.MeshRequiresPdf;
             if (!try self.library.supports(c.TYPST_CAP_PDF_IMPORT)) return error.Unsupported;
-            const scratch = self.arena.child_allocator;
-            const encoded = try mesh_pdf.encode(scratch, value.mesh_fill, path_.segments[0..path_.segment_count], style_.fill_rule == c.TYPST_FILL_EVENODD);
-            defer scratch.free(encoded.pdf);
+            const workspace = self.mesh_workspace orelse workspace: {
+                const created = try self.arena.allocator().create(mesh_pdf.Workspace);
+                self.mesh_workspace = created;
+                break :workspace created;
+            };
             // The import does not depend on fonts, files or inputs; borrowing
             // the current context keeps the typesetter's configuration cached.
             if (self.image_context == null) self.image_context = try typst.Engine.initAny(self.library);
+            const scratch = self.arena.child_allocator;
+            const encoded = try mesh_pdf.encode(scratch, workspace, value.mesh_fill, path_.segments[0..path_.segment_count], style_.fill_rule == c.TYPST_FILL_EVENODD);
             var image: ?*c.TypstScene = null;
             var diagnostics: ?*c.TypstDiagnostics = null;
             defer self.library.functions.diagnostics_release(diagnostics);
             const status = self.library.functions.scene_from_pdf(self.image_context.?.handle, .{ .data = encoded.pdf.ptr, .len = encoded.pdf.len }, 0, &image, &diagnostics);
+            // libtypst copied the bytes. Releasing them while they are still
+            // the most recent allocation lets an arena reuse the space.
+            scratch.free(encoded.pdf);
             try self.library.check(status, diagnostics);
             const scene_ = image orelse return error.InvalidResult;
             self.children.append(self.arena.allocator(), scene_) catch |err| {

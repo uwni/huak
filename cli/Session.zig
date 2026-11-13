@@ -64,6 +64,11 @@ pub fn build(self: *Session, report: *Report, observer: ?huak.tooling.Frontend.O
     if (self.options.command == .check) {
         return frontend.check(source, canonical, &diagnostic) catch |err| self.reportCompilationFailure(path, source, &diagnostic, err, report);
     }
+    // Mesh arrays shared by this build's runtime, workers and outputs, on the
+    // same heap as the scene storages execution creates. It is released after
+    // the batch, so each build checks that every picture has let go of them.
+    var meshes: huak.core.DisplayList.MeshStore = .init(std.heap.c_allocator);
+    defer meshes.deinit();
     // The bytecode and VM are released before the output workers start.
     var batch = evaluate: {
         var program = frontend.compile(source, canonical, &diagnostic) catch |err| return self.reportCompilationFailure(path, source, &diagnostic, err, report);
@@ -89,6 +94,7 @@ pub fn build(self: *Session, report: *Report, observer: ?huak.tooling.Frontend.O
         break :evaluate try execution.execute(self.allocator, self.io, .{
             .typst = library,
             .projection = if (self.projection) |backend| backend.vtable else null,
+            .meshes = &meshes,
         }, &program, self.options, path, source, report);
     };
     defer batch.deinit();

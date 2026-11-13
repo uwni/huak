@@ -213,7 +213,7 @@ pub fn fromDisplayList(source: *DisplayList) !Scene {
     if (depth != 0) return error.UnbalancedGroups;
     const wrap: usize = @intFromBool(!single and source.commands.items.len != 1);
     if (maximum + wrap > DisplayList.max_scope_depth) return error.GroupNestingTooDeep;
-    var result: Scene = .{ .storage = .init(source.storage.allocator) };
+    var result: Scene = .{ .storage = .initWithMeshes(source.storage.allocator, source.storage.styles.meshes) };
     errdefer result.deinit();
     try result.nodes.ensureTotalCapacityPrecise(result.storage.allocator, count + wrap);
     try result.links.ensureTotalCapacityPrecise(result.storage.allocator, count + wrap);
@@ -299,8 +299,9 @@ pub fn addPicture(self: *Scene, parent: ?Index, transform: g.Transform, clip: ?*
     return self.commit(parent, index);
 }
 
-pub fn copy(self: *const Scene, allocator: Allocator, index: Index) !Scene {
-    var result: Scene = .{ .storage = .init(allocator) };
+/// The copy shares mesh arrays already held by `meshes`; null copies them.
+pub fn copy(self: *const Scene, allocator: Allocator, meshes: ?*Storage.MeshStore, index: Index) !Scene {
+    var result: Scene = .{ .storage = .initWithMeshes(allocator, meshes) };
     errdefer result.deinit();
     _ = try result.clone(null, self, index, .{});
     return result;
@@ -733,7 +734,7 @@ pub fn takeStorage(self: *Scene) Storage {
     self.nodes.deinit(self.storage.allocator);
     self.nodes = .empty;
     const result = self.storage;
-    self.storage = .init(result.allocator);
+    self.storage = .initWithMeshes(result.allocator, result.styles.meshes);
     self.links.deinit(result.allocator);
     self.links = .empty;
     self.containers.deinit(result.allocator);
@@ -788,7 +789,7 @@ test "excluded child placements validate atomically and copy with their parent" 
     var clipped = try scene.snapshot(a, 0, null);
     defer clipped.deinit();
     try std.testing.expectEqual(@as(usize, 5), clipped.picture.commands.items.len);
-    var cloned = try scene.copy(a, 0);
+    var cloned = try scene.copy(a, null, 0);
     defer cloned.deinit();
     var copy_view = try cloned.snapshot(a, 0, null);
     defer copy_view.deinit();
@@ -888,7 +889,7 @@ test "placement across storage owners preserves identity geometry order and ance
         const original = try source.storage.range((try source.getNode(path)).path.path);
         try std.testing.expectEqual(original.ptr, borrowed.ptr);
         try std.testing.expectEqualDeep(try first.storage.range((try first.getNode(own)).path.path), try view.picture.range(view.picture.commands.items[5].path.path));
-        var independent = try first.copy(a, 0);
+        var independent = try first.copy(a, null, 0);
         defer independent.deinit();
         var copied = try independent.snapshot(a, 0, null);
         defer copied.deinit();

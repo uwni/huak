@@ -12,6 +12,13 @@ const Mesh = @import("../../drawing/style.zig").Gradient.Mesh;
 
 const Segment = typst.c.TypstPathSegment;
 
+/// Deflate state for every stream one caller encodes, about 288 KiB. Allocate
+/// it once per document and use it from one thread at a time.
+pub const Workspace = struct {
+    deflate: flate.Compress,
+    window: [flate.max_window_len]u8,
+};
+
 pub const Encoded = struct {
     /// The complete PDF, owned by the allocator passed to `encode`.
     pdf: []u8,
@@ -19,25 +26,29 @@ pub const Encoded = struct {
     bounds: g.BBox,
 };
 
-/// Inputs are borrowed for the call.
-pub fn encode(allocator: std.mem.Allocator, mesh: Mesh, clip: []const Segment, evenodd: bool) !Encoded {
+/// Inputs are borrowed for the call. Objects and compressed streams go
+/// straight into the returned buffer, which is the only allocation.
+pub fn encode(allocator: std.mem.Allocator, workspace: *Workspace, mesh: Mesh, clip: []const Segment, evenodd: bool) !Encoded {
     const bounds = try vertexBounds(mesh);
     if (clip.len == 0) return error.InvalidPath;
-    const unit: Unit = .{ .origin = bounds.min, .size = bounds.max.sub(bounds.min) };
     const transparent = for (mesh.vertices) |vertex| {
         if (vertex.a != 1) break true;
     } else false;
-    var content: std.Io.Writer.Allocating = .init(allocator);
-    defer content.deinit();
-    writeContent(&content.writer, clip, unit, evenodd, transparent) catch |err| return switch (err) {
+    var pdf = try std.Io.Writer.Allocating.initCapacity(allocator, capacityHint(mesh, clip.len, transparent));
+    errdefer pdf.deinit();
+    const unit: Unit = .{ .origin = bounds.min, .size = bounds.max.sub(bounds.min) };
+    writeDocument(&pdf, workspace, mesh, clip, unit, evenodd, transparent) catch |err| return switch (err) {
         error.WriteFailed => error.OutOfMemory,
         else => |other| other,
     };
-    const color = try shading(allocator, mesh, unit, .rgb);
-    defer allocator.free(color);
-    const alpha: ?[]u8 = if (transparent) try shading(allocator, mesh, unit, .alpha) else null;
-    defer if (alpha) |bytes| allocator.free(bytes);
-    return .{ .pdf = try document(allocator, content.written(), color, alpha), .bounds = bounds };
+    return .{ .pdf = try pdf.toOwnedSlice(), .bounds = bounds };
+}
+
+/// A sizing hint, not a bound: the lighting replay's records deflate to about
+/// 27% of their size. A short hint grows the buffer; the excess is trimmed.
+fn capacityHint(mesh: Mesh, segments: usize, transparent: bool) usize {
+    const record: usize = if (transparent) 15 + 11 else 15;
+    return 2048 +| segments *| 96 +| mesh.triangles.len *| 3 *| record / 4;
 }
 
 /// Storage validates stored paints the same way; `encode` is also usable alone.
@@ -67,6 +78,80 @@ const Unit = struct {
     }
     fn y(self: Unit, value: f64) f64 {
         return (value - self.origin.y) / self.size.y;
+    }
+};
+
+const color_mesh = "/ShadingType 4/ColorSpace/DeviceRGB/BitsPerCoordinate 32/BitsPerComponent 16/BitsPerFlag 8/Decode[0 1 0 1 0 1 0 1 0 1]/Filter/FlateDecode";
+const alpha_mesh = "/ShadingType 4/ColorSpace/DeviceGray/BitsPerCoordinate 32/BitsPerComponent 16/BitsPerFlag 8/Decode[0 1 0 1 0 1]/Filter/FlateDecode";
+const alpha_form = "/Type/XObject/Subtype/Form/BBox[0 0 1 1]/Resources<</Shading<</Alpha 6 0 R>>>>/Group<</Type/Group/S/Transparency/CS/DeviceGray>>";
+const page = "<</Type/Page/Parent 2 0 R/MediaBox[0 0 1 1]/Contents 4 0 R/Resources<</Shading<</Color 5 0 R>>";
+
+fn writeDocument(pdf: *std.Io.Writer.Allocating, workspace: *Workspace, mesh: Mesh, clip: []const Segment, unit: Unit, evenodd: bool, transparent: bool) !void {
+    var objects: Objects = .{ .pdf = pdf };
+    // Type 4 shading needs PDF 1.3; luminosity soft masks need PDF 1.4.
+    try pdf.writer.writeAll("%PDF-1.4\n%\x80\x80\x80\x80\n\n");
+    try objects.dictionary("<</Type/Catalog/Pages 2 0 R>>");
+    try objects.dictionary("<</Type/Pages/Kids[3 0 R]/Count 1>>");
+    try objects.dictionary(if (transparent) page ++ "/ExtGState<</Alpha 8 0 R>>>>>>" else page ++ ">>>>");
+    const content = try objects.beginStream("");
+    try writeContent(&pdf.writer, clip, unit, evenodd, transparent);
+    try objects.endStream(content);
+    const color = try objects.beginStream(color_mesh);
+    try compress(workspace, &pdf.writer, mesh, unit, .rgb);
+    try objects.endStream(color);
+    if (transparent) {
+        const alpha = try objects.beginStream(alpha_mesh);
+        try compress(workspace, &pdf.writer, mesh, unit, .alpha);
+        try objects.endStream(alpha);
+        const form = try objects.beginStream(alpha_form);
+        try pdf.writer.writeAll("/Alpha sh");
+        try objects.endStream(form);
+        try objects.dictionary("<</Type/ExtGState/SMask<</Type/Mask/S/Luminosity/G 7 0 R>>>>");
+    }
+    const xref = pdf.written().len;
+    try pdf.writer.print("xref\n0 {d}\n0000000000 65535 f\r\n", .{objects.count + 1});
+    for (objects.offsets[0..objects.count]) |offset| try pdf.writer.print("{d:0>10} 00000 n\r\n", .{offset});
+    try pdf.writer.print("trailer\n<</Size {d}/Root 1 0 R>>\nstartxref\n{d}\n%%EOF", .{ objects.count + 1, xref });
+}
+
+/// Numbers objects consecutively from 1 and records each offset for the
+/// cross-reference table.
+const Objects = struct {
+    pdf: *std.Io.Writer.Allocating,
+    offsets: [8]usize = undefined,
+    count: usize = 0,
+
+    /// Wide enough for any usize; unused digits remain spaces.
+    const length_width = 20;
+    const Stream = struct { length_at: usize, data_at: usize };
+
+    fn begin(self: *Objects) std.Io.Writer.Error!void {
+        self.offsets[self.count] = self.pdf.written().len;
+        self.count += 1;
+        try self.pdf.writer.print("{d} 0 obj\n", .{self.count});
+    }
+
+    fn dictionary(self: *Objects, text: []const u8) std.Io.Writer.Error!void {
+        try self.begin();
+        try self.pdf.writer.writeAll(text);
+        try self.pdf.writer.writeAll("\nendobj\n\n");
+    }
+
+    /// `entries` are the dictionary's keys other than /Length, which is
+    /// filled in by `endStream` once the data written in between is complete.
+    fn beginStream(self: *Objects, entries: []const u8) std.Io.Writer.Error!Stream {
+        try self.begin();
+        try self.pdf.writer.print("<<{s}/Length ", .{entries});
+        const length_at = self.pdf.written().len;
+        try self.pdf.writer.splatByteAll(' ', length_width);
+        try self.pdf.writer.writeAll(">>\nstream\n");
+        return .{ .length_at = length_at, .data_at = self.pdf.written().len };
+    }
+
+    fn endStream(self: *Objects, stream: Stream) std.Io.Writer.Error!void {
+        const written = self.pdf.written();
+        _ = std.fmt.bufPrint(written[stream.length_at..][0..length_width], "{d}", .{written.len - stream.data_at}) catch unreachable;
+        try self.pdf.writer.writeAll("\nendstream\nendobj\n\n");
     }
 };
 
@@ -111,18 +196,12 @@ const Channel = enum { rgb, alpha };
 
 /// Every triangle corner is an independent record with flag 0; deflate
 /// recovers the repetition of shared vertices. Records stream straight into
-/// the compressor, so the uncompressed mesh is never held in memory.
-fn shading(allocator: std.mem.Allocator, mesh: Mesh, unit: Unit, channel: Channel) ![]u8 {
-    var output = try std.Io.Writer.Allocating.initCapacity(allocator, 1 << 16);
-    errdefer output.deinit();
-    const window = try allocator.alloc(u8, flate.max_window_len);
-    defer allocator.free(window);
-    // The compressor's tables take about 224 KiB; keep them off the stack.
-    const deflate = try allocator.create(flate.Compress);
-    defer allocator.destroy(deflate);
+/// the PDF, so the uncompressed mesh is never held in memory.
+fn compress(workspace: *Workspace, out: *std.Io.Writer, mesh: Mesh, unit: Unit, channel: Channel) std.Io.Writer.Error!void {
     // Measured on the lighting replay mesh: level 4 is both faster and smaller
     // than levels 3 and 5 to 7 for these fixed 15- and 11-byte records.
-    deflate.* = flate.Compress.init(&output.writer, window, .zlib, .level_4) catch return error.OutOfMemory;
+    workspace.deflate = try flate.Compress.init(out, &workspace.window, .zlib, .level_4);
+    const deflate = &workspace.deflate;
     for (mesh.triangles) |triangle| for (triangle) |index| {
         const vertex = mesh.vertices[index];
         var record: [15]u8 = undefined;
@@ -141,76 +220,15 @@ fn shading(allocator: std.mem.Allocator, mesh: Mesh, unit: Unit, channel: Channe
                 break :length 11;
             },
         };
-        deflate.writer.writeAll(record[0..length]) catch return error.OutOfMemory;
+        try deflate.writer.writeAll(record[0..length]);
     };
-    deflate.finish() catch return error.OutOfMemory;
-    return output.toOwnedSlice();
+    try deflate.finish();
 }
 
 /// `value` lies in [0, 1].
 fn quantize(comptime T: type, value: f64) T {
     return @intFromFloat(@round(value * std.math.maxInt(T)));
 }
-
-fn document(allocator: std.mem.Allocator, content: []const u8, color: []const u8, alpha: ?[]const u8) ![]u8 {
-    const streams = content.len + color.len + if (alpha) |bytes| bytes.len else 0;
-    var pdf = try std.Io.Writer.Allocating.initCapacity(allocator, streams + 2048);
-    errdefer pdf.deinit();
-    writeDocument(&pdf, content, color, alpha) catch return error.OutOfMemory;
-    return pdf.toOwnedSlice();
-}
-
-const color_mesh = "/ShadingType 4/ColorSpace/DeviceRGB/BitsPerCoordinate 32/BitsPerComponent 16/BitsPerFlag 8/Decode[0 1 0 1 0 1 0 1 0 1]/Filter/FlateDecode";
-const alpha_mesh = "/ShadingType 4/ColorSpace/DeviceGray/BitsPerCoordinate 32/BitsPerComponent 16/BitsPerFlag 8/Decode[0 1 0 1 0 1]/Filter/FlateDecode";
-const page = "<</Type/Page/Parent 2 0 R/MediaBox[0 0 1 1]/Contents 4 0 R/Resources<</Shading<</Color 5 0 R>>";
-
-fn writeDocument(pdf: *std.Io.Writer.Allocating, content: []const u8, color: []const u8, alpha: ?[]const u8) std.Io.Writer.Error!void {
-    var objects: Objects = .{ .pdf = pdf };
-    // Type 4 shading needs PDF 1.3; luminosity soft masks need PDF 1.4.
-    try pdf.writer.writeAll("%PDF-1.4\n%\x80\x80\x80\x80\n\n");
-    try objects.dictionary("<</Type/Catalog/Pages 2 0 R>>");
-    try objects.dictionary("<</Type/Pages/Kids[3 0 R]/Count 1>>");
-    try objects.dictionary(if (alpha != null) page ++ "/ExtGState<</Alpha 8 0 R>>>>>>" else page ++ ">>>>");
-    try objects.stream("", content);
-    try objects.stream(color_mesh, color);
-    if (alpha) |bytes| {
-        try objects.stream(alpha_mesh, bytes);
-        try objects.stream("/Type/XObject/Subtype/Form/BBox[0 0 1 1]/Resources<</Shading<</Alpha 6 0 R>>>>/Group<</Type/Group/S/Transparency/CS/DeviceGray>>", "/Alpha sh");
-        try objects.dictionary("<</Type/ExtGState/SMask<</Type/Mask/S/Luminosity/G 7 0 R>>>>");
-    }
-    const xref = pdf.written().len;
-    try pdf.writer.print("xref\n0 {d}\n0000000000 65535 f\r\n", .{objects.count + 1});
-    for (objects.offsets[0..objects.count]) |offset| try pdf.writer.print("{d:0>10} 00000 n\r\n", .{offset});
-    try pdf.writer.print("trailer\n<</Size {d}/Root 1 0 R>>\nstartxref\n{d}\n%%EOF", .{ objects.count + 1, xref });
-}
-
-/// Numbers objects consecutively from 1 and records each offset for the
-/// cross-reference table.
-const Objects = struct {
-    pdf: *std.Io.Writer.Allocating,
-    offsets: [8]usize = undefined,
-    count: usize = 0,
-
-    fn begin(self: *Objects) std.Io.Writer.Error!void {
-        self.offsets[self.count] = self.pdf.written().len;
-        self.count += 1;
-        try self.pdf.writer.print("{d} 0 obj\n", .{self.count});
-    }
-
-    fn dictionary(self: *Objects, text: []const u8) std.Io.Writer.Error!void {
-        try self.begin();
-        try self.pdf.writer.writeAll(text);
-        try self.pdf.writer.writeAll("\nendobj\n\n");
-    }
-
-    /// `entries` are the dictionary's keys other than /Length.
-    fn stream(self: *Objects, entries: []const u8, data: []const u8) std.Io.Writer.Error!void {
-        try self.begin();
-        try self.pdf.writer.print("<<{s}/Length {d}>>\nstream\n", .{ entries, data.len });
-        try self.pdf.writer.writeAll(data);
-        try self.pdf.writer.writeAll("\nendstream\nendobj\n\n");
-    }
-};
 
 const testing = std.testing;
 
@@ -238,7 +256,7 @@ fn streamOf(pdf: []const u8, id: u8) ![]const u8 {
     const object = pdf[start..];
     const length_at = (std.mem.indexOf(u8, object, "/Length ") orelse return error.MissingLength) + "/Length ".len;
     const length_end = std.mem.indexOfScalarPos(u8, object, length_at, '>') orelse return error.MissingLength;
-    const length = try std.fmt.parseInt(usize, object[length_at..length_end], 10);
+    const length = try std.fmt.parseInt(usize, std.mem.trimEnd(u8, object[length_at..length_end], " "), 10);
     const data = (std.mem.indexOf(u8, object, ">>\nstream\n") orelse return error.MissingStream) + ">>\nstream\n".len;
     try testing.expectEqualStrings("\nendstream", object[data + length ..][0.."\nendstream".len]);
     return object[data..][0..length];
@@ -254,13 +272,16 @@ fn inflate(compressed: []const u8) ![]u8 {
 }
 
 test "mesh records, clip and soft mask form a self-consistent PDF" {
+    const workspace = try testing.allocator.create(Workspace);
+    defer testing.allocator.destroy(workspace);
     const clip = square(.{ .{ 10, 20 }, .{ 30, 20 }, .{ 30, 60 }, .{ 10, 60 } });
-    const encoded = try encode(testing.allocator, .{ .vertices = &corners, .triangles = &one_triangle }, &clip, true);
+    const encoded = try encode(testing.allocator, workspace, .{ .vertices = &corners, .triangles = &one_triangle }, &clip, true);
     defer testing.allocator.free(encoded.pdf);
     const pdf = encoded.pdf;
     try testing.expectEqualDeep(g.BBox{ .min = .{ .x = 10, .y = 20 }, .max = .{ .x = 30, .y = 60 } }, encoded.bounds);
     try testing.expect(std.mem.startsWith(u8, pdf, "%PDF-1.4\n"));
     try testing.expectEqualStrings("0 0 m\n1 0 l\n1 1 l\n0 1 l\nh\nW*\nn\n/Alpha gs\n/Color sh", try streamOf(pdf, 4));
+    try testing.expectEqualStrings("/Alpha sh", try streamOf(pdf, 7));
 
     const color = try inflate(try streamOf(pdf, 5));
     defer testing.allocator.free(color);
@@ -289,43 +310,61 @@ test "mesh records, clip and soft mask form a self-consistent PDF" {
 }
 
 test "opaque meshes and curved nonzero clips need no soft mask" {
+    const workspace = try testing.allocator.create(Workspace);
+    defer testing.allocator.destroy(workspace);
     var opaque_corners = corners;
     for (&opaque_corners) |*vertex| vertex.a = 1;
     var clip = square(.{ .{ 10, 20 }, .{ 30, 20 }, .{ 30, 60 }, .{ 10, 60 } });
     clip[2] = .{ .kind = typst.c.TYPST_SEGMENT_CUBIC, .reserved = 0, .p1 = .{ .x = 40, .y = 30 }, .p2 = .{ .x = 10 + 20.0 / 3.0, .y = 70 }, .p3 = .{ .x = 30, .y = 60 } };
-    const encoded = try encode(testing.allocator, .{ .vertices = &opaque_corners, .triangles = &one_triangle }, &clip, false);
+    const encoded = try encode(testing.allocator, workspace, .{ .vertices = &opaque_corners, .triangles = &one_triangle }, &clip, false);
     defer testing.allocator.free(encoded.pdf);
     try testing.expectEqualStrings("0 0 m\n1 0 l\n1.5 0.25 0.33333334 1.25 1 1 c\n0 1 l\nh\nW\nn\n/Color sh", try streamOf(encoded.pdf, 4));
     try testing.expect(std.mem.indexOf(u8, encoded.pdf, "/SMask") == null);
     try testing.expect(std.mem.indexOf(u8, encoded.pdf, "xref\n0 6\n") != null);
 }
 
-test "invalid meshes and clips are rejected before any output" {
+test "one workspace serves consecutive encodings identically" {
+    const workspace = try testing.allocator.create(Workspace);
+    defer testing.allocator.destroy(workspace);
     const clip = square(.{ .{ 10, 20 }, .{ 30, 20 }, .{ 30, 60 }, .{ 10, 60 } });
     const mesh: Mesh = .{ .vertices = &corners, .triangles = &one_triangle };
-    try testing.expectError(error.InvalidMesh, encode(testing.allocator, .{ .vertices = corners[0..2], .triangles = &one_triangle }, &clip, false));
-    try testing.expectError(error.InvalidMesh, encode(testing.allocator, .{ .vertices = &corners, .triangles = &.{.{ 0, 1, 3 }} }, &clip, false));
-    var flat = corners;
-    flat[2].y = 20;
-    try testing.expectError(error.InvalidMesh, encode(testing.allocator, .{ .vertices = &flat, .triangles = &one_triangle }, &clip, false));
-    var dim = corners;
-    dim[1].g = 1.5;
-    try testing.expectError(error.InvalidMesh, encode(testing.allocator, .{ .vertices = &dim, .triangles = &one_triangle }, &clip, false));
-    try testing.expectError(error.InvalidPath, encode(testing.allocator, mesh, &.{}, false));
-    var far = clip;
-    far[1].p1.x = 1e300;
-    try testing.expectError(error.InvalidPath, encode(testing.allocator, mesh, &far, false));
-    var unknown = clip;
-    unknown[3].kind = 99;
-    try testing.expectError(error.InvalidPath, encode(testing.allocator, mesh, &unknown, false));
+    const first = try encode(testing.allocator, workspace, mesh, &clip, false);
+    defer testing.allocator.free(first.pdf);
+    const second = try encode(testing.allocator, workspace, mesh, &clip, false);
+    defer testing.allocator.free(second.pdf);
+    try testing.expectEqualSlices(u8, first.pdf, second.pdf);
 }
 
-fn encodeAndRelease(allocator: std.mem.Allocator, clip: []const Segment) !void {
-    const encoded = try encode(allocator, .{ .vertices = &corners, .triangles = &one_triangle }, clip, false);
+test "invalid meshes and clips are rejected before any output" {
+    const workspace = try testing.allocator.create(Workspace);
+    defer testing.allocator.destroy(workspace);
+    const clip = square(.{ .{ 10, 20 }, .{ 30, 20 }, .{ 30, 60 }, .{ 10, 60 } });
+    const mesh: Mesh = .{ .vertices = &corners, .triangles = &one_triangle };
+    try testing.expectError(error.InvalidMesh, encode(testing.allocator, workspace, .{ .vertices = corners[0..2], .triangles = &one_triangle }, &clip, false));
+    try testing.expectError(error.InvalidMesh, encode(testing.allocator, workspace, .{ .vertices = &corners, .triangles = &.{.{ 0, 1, 3 }} }, &clip, false));
+    var flat = corners;
+    flat[2].y = 20;
+    try testing.expectError(error.InvalidMesh, encode(testing.allocator, workspace, .{ .vertices = &flat, .triangles = &one_triangle }, &clip, false));
+    var dim = corners;
+    dim[1].g = 1.5;
+    try testing.expectError(error.InvalidMesh, encode(testing.allocator, workspace, .{ .vertices = &dim, .triangles = &one_triangle }, &clip, false));
+    try testing.expectError(error.InvalidPath, encode(testing.allocator, workspace, mesh, &.{}, false));
+    var far = clip;
+    far[1].p1.x = 1e300;
+    try testing.expectError(error.InvalidPath, encode(testing.allocator, workspace, mesh, &far, false));
+    var unknown = clip;
+    unknown[3].kind = 99;
+    try testing.expectError(error.InvalidPath, encode(testing.allocator, workspace, mesh, &unknown, false));
+}
+
+fn encodeAndRelease(allocator: std.mem.Allocator, workspace: *Workspace, clip: []const Segment) !void {
+    const encoded = try encode(allocator, workspace, .{ .vertices = &corners, .triangles = &one_triangle }, clip, true);
     allocator.free(encoded.pdf);
 }
 
 test "every failed allocation releases the partial encoding" {
+    const workspace = try testing.allocator.create(Workspace);
+    defer testing.allocator.destroy(workspace);
     const clip = square(.{ .{ 10, 20 }, .{ 30, 20 }, .{ 30, 60 }, .{ 10, 60 } });
-    try testing.checkAllAllocationFailures(testing.allocator, encodeAndRelease, .{@as([]const Segment, &clip)});
+    try testing.checkAllAllocationFailures(testing.allocator, encodeAndRelease, .{ workspace, @as([]const Segment, &clip) });
 }

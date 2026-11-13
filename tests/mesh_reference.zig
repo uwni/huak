@@ -4,7 +4,32 @@ const std = @import("std");
 const typst = @import("libtypst");
 const huak = @import("huak");
 const DisplayList = huak.core.DisplayList;
+const Vertex = DisplayList.Gradient.Mesh.Vertex;
 const options = @import("host_options");
+
+/// Vertex indices hashed by the vertex they name, so the set stores only
+/// indices. Lookups compare a candidate's bits with the stored vertex.
+const Corners = struct {
+    vertices: []const Vertex,
+
+    pub fn hash(self: Corners, index: u32) u64 {
+        return std.hash.Wyhash.hash(0, std.mem.asBytes(&self.vertices[index]));
+    }
+    pub fn eql(_: Corners, a: u32, b: u32) bool {
+        return a == b;
+    }
+
+    const Candidate = struct {
+        vertices: []const Vertex,
+
+        pub fn hash(_: Candidate, vertex: Vertex) u64 {
+            return std.hash.Wyhash.hash(0, std.mem.asBytes(&vertex));
+        }
+        pub fn eql(self: Candidate, vertex: Vertex, index: u32) bool {
+            return std.mem.eql(u8, std.mem.asBytes(&vertex), std.mem.asBytes(&self.vertices[index]));
+        }
+    };
+};
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -35,13 +60,27 @@ pub fn main(init: std.process.Init) !void {
                 else => return error.InvalidFixture,
             }
         }
-        const vertices = try init.gpa.alloc(DisplayList.Gradient.Mesh.Vertex, vertex_count);
-        defer init.gpa.free(vertices);
-        for (vertices) |*vertex| vertex.* = .{ .x = try number(&input), .y = height - try number(&input), .r = try number(&input), .g = try number(&input), .b = try number(&input) };
+        // The fixture stores every triangle corner. Equal corners become one
+        // vertex, as a mesh producer emits them; the encoded records are the
+        // same, since the encoder still writes one record per corner.
+        var vertices: std.ArrayList(Vertex) = .empty;
+        defer vertices.deinit(init.gpa);
+        var corners: std.HashMapUnmanaged(u32, void, Corners, std.hash_map.default_max_load_percentage) = .empty;
+        defer corners.deinit(init.gpa);
+        // Each corner adds at most one vertex, so the set never rehashes.
+        try corners.ensureTotalCapacityContext(init.gpa, std.math.cast(u32, vertex_count) orelse return error.InvalidFixture, .{ .vertices = &.{} });
         const triangles = try init.gpa.alloc([3]u32, vertex_count / 3);
         defer init.gpa.free(triangles);
-        for (triangles, 0..) |*triangle, index| triangle.* = .{ @intCast(index * 3), @intCast(index * 3 + 1), @intCast(index * 3 + 2) };
-        try picture.addPath(boundary, .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = vertices, .triangles = triangles } } }, .{});
+        for (0..vertex_count) |corner| {
+            const vertex: Vertex = .{ .x = try number(&input), .y = height - try number(&input), .r = try number(&input), .g = try number(&input), .b = try number(&input) };
+            const slot = corners.getOrPutAssumeCapacityAdapted(vertex, Corners.Candidate{ .vertices = vertices.items });
+            if (!slot.found_existing) {
+                slot.key_ptr.* = @intCast(vertices.items.len);
+                try vertices.append(init.gpa, vertex);
+            }
+            triangles[corner / 3][corner % 3] = slot.key_ptr.*;
+        }
+        try picture.addPath(boundary, .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = vertices.items, .triangles = triangles } } }, .{});
     }
     if (input.buffered().len != 0) return error.TrailingFixtureData;
     var library = try typst.Library.open(options.library_path);

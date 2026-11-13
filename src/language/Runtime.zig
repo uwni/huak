@@ -57,6 +57,10 @@ pub const Output = renderer.Output;
 pub const Backends = struct {
     typst: *typst.Library,
     projection: ?*const @import("../drawing/space/Projection.zig").VTable = null,
+    /// Scene storages attached to one store share mesh arrays. Like the
+    /// library, it stays at a stable address until this Runtime and every
+    /// exported result are freed. Without a store each picture copies meshes.
+    meshes: ?*DisplayList.MeshStore = null,
 };
 pub const Options = struct {
     /// Configuration bytes are copied during Runtime.init. Library is borrowed
@@ -830,7 +834,7 @@ fn transformedObject(self: *Runtime, object: Value, transform: g.Transform) !Val
     var selected = try self.objectSnapshot(object, true);
     defer selected.deinit();
     const copied = copy: {
-        var result = DisplayList.init(self.scene_allocator);
+        var result = DisplayList.initWithMeshes(self.scene_allocator, self.backends.meshes);
         errdefer result.deinit();
         try result.append(&selected.picture, transform);
         break :copy result;
@@ -865,7 +869,7 @@ fn objectStorage(self: *Runtime, curve: ?*const Path) !*SceneOwner {
         // tracks added later count toward the next insertion's budget.
         if (try owner.scene.reserveNode(curve, page_budget -| owner.animation_state.allocatedBytes())) return owner;
     }
-    var fresh: Scene = .{ .storage = .init(self.scene_allocator) };
+    var fresh: Scene = .{ .storage = .initWithMeshes(self.scene_allocator, self.backends.meshes) };
     // Apply the same bounded growth to the first object. A path larger than
     // the entire page may still be stored alone.
     _ = fresh.reserveNode(curve, page_budget) catch |err| {
@@ -980,7 +984,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         .copy => {
             const source = try self.objectValue(args[0], false);
             try self.requireStatic(source);
-            const target = try self.storeScene(try source.owner.scene.copy(self.scene_allocator, source.index));
+            const target = try self.storeScene(try source.owner.scene.copy(self.scene_allocator, self.backends.meshes, source.index));
             return objectHandle(target.scene.object(0));
         },
         .object_exclude => {
@@ -1628,7 +1632,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (size) |value| try validateCanvas(value.x, value.y);
             const owner = try self.gpa.create(SceneOwner);
             errdefer self.gpa.destroy(owner);
-            owner.* = .{ .scene = .{ .storage = .init(self.scene_allocator) }, .owner_index = try self.nextOwnerIndex(), .animation_state = .init(self.gpa) };
+            owner.* = .{ .scene = .{ .storage = .initWithMeshes(self.scene_allocator, self.backends.meshes) }, .owner_index = try self.nextOwnerIndex(), .animation_state = .init(self.gpa) };
             errdefer owner.scene.deinit();
             const index = try owner.scene.addPicture(null, .{}, null);
             (try owner.scene.settings(index)).size = size;

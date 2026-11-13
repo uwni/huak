@@ -9,6 +9,7 @@ pub const Join = style.Join;
 pub const FillRule = style.FillRule;
 pub const Pen = style.Pen;
 pub const Style = style.Style;
+pub const MeshStore = style.Gradient.Mesh.Store;
 /// Metrics are supplied by a typesetter; baseline is measured from frame top
 /// and may lie outside the frame's height.
 pub const Metrics = struct { width: f64, height: f64, baseline: f64 };
@@ -76,7 +77,11 @@ knot_blocks: std.ArrayList(KnotBlock) = .empty,
 knot_bytes: usize = 0,
 
 pub fn init(allocator: std.mem.Allocator) Storage {
-    return .{ .allocator = allocator, .styles = .init(allocator) };
+    return initWithMeshes(allocator, null);
+}
+/// Storages attached to the same store share mesh arrays; see `MeshStore`.
+pub fn initWithMeshes(allocator: std.mem.Allocator, meshes: ?*MeshStore) Storage {
+    return .{ .allocator = allocator, .styles = .initWithMeshes(allocator, meshes) };
 }
 pub fn deinit(self: *Storage) void {
     self.truncateGeometry(0);

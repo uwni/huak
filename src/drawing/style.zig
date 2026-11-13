@@ -1,5 +1,6 @@
 //! Shared drawing styles with copy-on-write updates inside each picture.
 const std = @import("std");
+const builtin = @import("builtin");
 const g = @import("geometry.zig");
 const Nib = @import("pen/nib.zig").Nib;
 const Motion = @import("pen/Motion.zig");
@@ -76,6 +77,11 @@ pub const Gradient = union(enum) {
     pub const Mesh = struct {
         vertices: []const Vertex,
         triangles: []const [3]u32,
+        /// Set by style pools on the values they own: the immutable arrays
+        /// that `vertices` and `triangles` view. Leave it null when building a
+        /// style; the pool copies the arrays once.
+        shared: ?*Shared = null,
+
         pub const Vertex = extern struct {
             x: f64,
             y: f64,
@@ -87,25 +93,121 @@ pub const Gradient = union(enum) {
                 return .{ .r = self.r, .g = self.g, .b = self.b, .a = self.a };
             }
         };
+
+        /// Explicit owner of the mesh arrays a host's pictures share. Pools
+        /// attached to the same store reference one copy of each mesh; any
+        /// other pool copies the arrays for itself. Like an allocator, a store
+        /// stays at a stable address until every pool attached to it is gone;
+        /// `deinit` asserts that no mesh is left. Pools on several threads may
+        /// use one store: it serializes its allocator.
+        pub const Store = struct {
+            allocator: std.mem.Allocator,
+            mutex: std.Io.Mutex = .init,
+            live: std.atomic.Value(usize) = .init(0),
+
+            pub fn init(allocator: std.mem.Allocator) Store {
+                return .{ .allocator = allocator };
+            }
+
+            pub fn deinit(self: *Store) void {
+                std.debug.assert(self.live.load(.acquire) == 0);
+                self.* = undefined;
+            }
+
+            /// Meshes the store currently holds.
+            pub fn count(self: *const Store) usize {
+                return self.live.load(.acquire);
+            }
+        };
+
+        /// Immutable mesh arrays referenced by pool entries. With a store they
+        /// come from the store and are shared by its pools; without one they
+        /// belong to the single pool that copied them.
+        pub const Shared = struct {
+            references: std.atomic.Value(usize),
+            store: ?*Store,
+            allocator: std.mem.Allocator,
+            digest: u64,
+            vertices: []const Vertex,
+            triangles: []const [3]u32,
+
+            fn create(allocator: std.mem.Allocator, store: ?*Store, mesh: Mesh) !*Shared {
+                const digest_ = mesh.digest();
+                const heap = if (store) |owner| owner.allocator else allocator;
+                if (store) |owner| std.Io.Threaded.mutexLockUncancelable(&owner.mutex);
+                defer if (store) |owner| std.Io.Threaded.mutexUnlock(&owner.mutex);
+                const vertices = try heap.dupe(Vertex, mesh.vertices);
+                errdefer heap.free(vertices);
+                const triangles = try heap.dupe([3]u32, mesh.triangles);
+                errdefer heap.free(triangles);
+                const shared = try heap.create(Shared);
+                shared.* = .{ .references = .init(1), .store = store, .allocator = heap, .digest = digest_, .vertices = vertices, .triangles = triangles };
+                if (store) |owner| _ = owner.live.fetchAdd(1, .monotonic);
+                return shared;
+            }
+
+            fn view(self: *Shared) Mesh {
+                return .{ .vertices = self.vertices, .triangles = self.triangles, .shared = self };
+            }
+
+            fn release(self: *Shared) void {
+                if (self.references.fetchSub(1, .acq_rel) != 1) return;
+                const store = self.store;
+                const heap = self.allocator;
+                if (store) |owner| std.Io.Threaded.mutexLockUncancelable(&owner.mutex);
+                defer if (store) |owner| std.Io.Threaded.mutexUnlock(&owner.mutex);
+                heap.free(self.vertices);
+                heap.free(self.triangles);
+                heap.destroy(self);
+                if (store) |owner| _ = owner.live.fetchSub(1, .release);
+            }
+
+            /// Pool entries referencing these arrays, including the caller's.
+            pub fn referenceCount(self: *const Shared) usize {
+                return self.references.load(.acquire);
+            }
+        };
+
+        /// The arrays for a pool attached to `store`, or to none: the same
+        /// arrays when they already belong to that store, a fresh copy
+        /// otherwise.
+        fn pooled(self: Mesh, allocator: std.mem.Allocator, store: ?*Store) !Mesh {
+            if (self.shared) |shared| {
+                if (store != null and shared.store == store) {
+                    _ = shared.references.fetchAdd(1, .monotonic);
+                    return shared.view();
+                }
+            }
+            return (try Shared.create(allocator, store, self)).view();
+        }
+
+        /// Pooled meshes hash once, when their arrays are copied.
+        fn digest(self: Mesh) u64 {
+            if (self.shared) |shared| return shared.digest;
+            const hashBytes = std.hash.Wyhash.hash;
+            return hashBytes(hashBytes(0, bits(self.vertices)), bits(self.triangles));
+        }
+
+        fn eql(a: Mesh, b: Mesh) bool {
+            if (a.shared != null and b.shared != null) {
+                if (a.shared == b.shared) return true;
+                if (a.shared.?.digest != b.shared.?.digest) return false;
+            }
+            return std.mem.eql(u8, bits(a.vertices), bits(b.vertices)) and std.mem.eql(u8, bits(a.triangles), bits(b.triangles));
+        }
     };
 
-    pub fn clone(self: Gradient, allocator: std.mem.Allocator) !Gradient {
+    pub fn clone(self: Gradient, allocator: std.mem.Allocator, meshes: ?*Mesh.Store) !Gradient {
         switch (self) {
-            .mesh_fill => |mesh| {
-                const vertices = try allocator.dupe(Mesh.Vertex, mesh.vertices);
-                errdefer allocator.free(vertices);
-                return .{ .mesh_fill = .{ .vertices = vertices, .triangles = try allocator.dupe([3]u32, mesh.triangles) } };
-            },
+            .mesh_fill => |mesh| return .{ .mesh_fill = try mesh.pooled(allocator, meshes) },
             inline else => |ramp, tag| return @unionInit(Gradient, @tagName(tag), Ramp{ .start = ramp.start, .end = ramp.end, .colors = try allocator.dupe(Color, ramp.colors) }),
         }
     }
 
+    /// Only pooled values, made by `clone`, are released.
     pub fn deinit(self: Gradient, allocator: std.mem.Allocator) void {
         switch (self) {
-            .mesh_fill => |mesh| {
-                allocator.free(mesh.vertices);
-                allocator.free(mesh.triangles);
-            },
+            .mesh_fill => |mesh| mesh.shared.?.release(),
             inline else => |ramp| allocator.free(ramp.colors),
         }
     }
@@ -155,6 +257,8 @@ pub const Style = struct {
 /// to remain frozen, just like the owner's geometry banks.
 pub const Pool = struct {
     allocator: std.mem.Allocator,
+    /// Pools attached to the same store share mesh arrays instead of copying.
+    meshes: ?*Gradient.Mesh.Store = null,
     nodes: std.heap.MemoryPool(Entry) = .empty,
     entries: std.HashMapUnmanaged(*Entry, void, Entry.Context, 80) = .empty,
     data_bytes: usize = 0,
@@ -190,6 +294,10 @@ pub const Pool = struct {
 
     pub fn init(allocator: std.mem.Allocator) Pool {
         return .{ .allocator = allocator };
+    }
+
+    pub fn initWithMeshes(allocator: std.mem.Allocator, meshes: ?*Gradient.Mesh.Store) Pool {
+        return .{ .allocator = allocator, .meshes = meshes };
     }
 
     pub fn deinit(self: *Pool) void {
@@ -278,7 +386,7 @@ pub const Pool = struct {
         if (result.gradient) |paint| {
             const owned = try self.allocator.create(Gradient);
             errdefer self.allocator.destroy(owned);
-            owned.* = try paint.clone(self.allocator);
+            owned.* = try paint.clone(self.allocator, self.meshes);
             result.gradient = owned;
         }
         errdefer self.freeGradient(result);
@@ -320,8 +428,8 @@ const ValueContext = struct {
             h = hashBytes(h, &.{@backingInt(std.meta.activeTag(paint.*))});
             switch (paint.*) {
                 .mesh_fill => |mesh| {
-                    h = hashBytes(h, bits(mesh.vertices));
-                    h = hashBytes(h, bits(mesh.triangles));
+                    const digest = mesh.digest();
+                    h = hashBytes(h, std.mem.asBytes(&digest));
                 },
                 inline else => |ramp| {
                     h = hashBytes(h, bits(&ramp.start));
@@ -354,7 +462,7 @@ const ValueContext = struct {
             const other = b.gradient.?;
             if (std.meta.activeTag(paint.*) != std.meta.activeTag(other.*)) return false;
             switch (paint.*) {
-                .mesh_fill => |mesh| if (!std.mem.eql(u8, bits(mesh.vertices), bits(other.mesh_fill.vertices)) or !std.mem.eql(u8, bits(mesh.triangles), bits(other.mesh_fill.triangles))) return false,
+                .mesh_fill => |mesh| if (!mesh.eql(other.mesh_fill)) return false,
                 inline else => |ramp, tag| {
                     const next = @field(other.*, @tagName(tag));
                     if (!std.mem.eql(u8, bits(&ramp.start), bits(&next.start)) or !std.mem.eql(u8, bits(&ramp.end), bits(&next.end)) or !std.mem.eql(u8, bits(ramp.colors), bits(next.colors))) return false;
@@ -398,7 +506,6 @@ fn bits(value: anytype) []const u8 {
     }
     return if (pointer.size == .slice) std.mem.sliceAsBytes(value) else std.mem.asBytes(value);
 }
-
 fn poolExercise(allocator: std.mem.Allocator) !void {
     var pool = Pool.init(allocator);
     defer pool.deinit();
@@ -460,6 +567,111 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
 test "immutable styles share equal values own slices and preserve float bits across OOM" {
     try poolExercise(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, poolExercise, .{});
+}
+
+const test_mesh = struct {
+    const vertices = [_]Gradient.Mesh.Vertex{
+        .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0 },
+        .{ .x = 1, .y = 0, .r = 0, .g = 1, .b = 0, .a = 0.5 },
+        .{ .x = 0, .y = 1, .r = 0, .g = 0, .b = 1 },
+    };
+    const triangles = [_][3]u32{.{ 0, 1, 2 }};
+    const style: Style = .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &vertices, .triangles = &triangles } } };
+};
+
+test "pools attached to one store share mesh arrays and other pools copy them" {
+    const t = std.testing;
+    var store = Gradient.Mesh.Store.init(t.allocator);
+    defer store.deinit();
+    var second = Pool.initWithMeshes(t.allocator, &store);
+    defer second.deinit();
+    var first = Pool.initWithMeshes(t.allocator, &store);
+    var first_alive = true;
+    defer if (first_alive) first.deinit();
+    const original = try first.intern(&test_mesh.style);
+    const mesh = original.gradient.?.mesh_fill;
+    try t.expect(mesh.vertices.ptr != &test_mesh.vertices);
+    try t.expectEqual(@as(usize, 1), store.count());
+    try t.expectEqual(ValueContext.hash(.{}, &test_mesh.style), ValueContext.hash(.{}, original));
+
+    const copied = try second.intern(original);
+    const shared = copied.gradient.?.mesh_fill;
+    try t.expect(shared.shared.? == mesh.shared.?);
+    try t.expectEqual(mesh.vertices.ptr, shared.vertices.ptr);
+    try t.expectEqual(@as(usize, 2), shared.shared.?.referenceCount());
+    try t.expectEqual(@as(usize, 1), store.count());
+    first.deinit();
+    first_alive = false;
+    try t.expectEqual(@as(usize, 1), shared.shared.?.referenceCount());
+    try t.expectEqual(@as(f64, 0.5), shared.vertices[1].a);
+
+    // A pool without the store, or attached to another one, copies.
+    var local = Pool.init(t.allocator);
+    defer local.deinit();
+    const independent = try local.intern(copied);
+    try t.expect(independent.gradient.?.mesh_fill.shared.? != shared.shared.?);
+    try t.expect(independent.gradient.?.mesh_fill.vertices.ptr != shared.vertices.ptr);
+    try t.expect(ValueContext.eql(.{}, independent, copied));
+    var other_store = Gradient.Mesh.Store.init(t.allocator);
+    defer other_store.deinit();
+    var other = Pool.initWithMeshes(t.allocator, &other_store);
+    defer other.deinit();
+    const foreign = try other.intern(copied);
+    try t.expect(foreign.gradient.?.mesh_fill.shared.? != shared.shared.?);
+    try t.expectEqual(@as(usize, 1), other_store.count());
+    try t.expectEqual(@as(usize, 1), shared.shared.?.referenceCount());
+}
+
+fn storeExercise(allocator: std.mem.Allocator) !void {
+    var store = Gradient.Mesh.Store.init(allocator);
+    defer store.deinit();
+    var first = Pool.initWithMeshes(allocator, &store);
+    defer first.deinit();
+    var second = Pool.initWithMeshes(allocator, &store);
+    defer second.deinit();
+    const original = try first.intern(&test_mesh.style);
+    _ = try second.intern(original);
+}
+
+test "store-attached pools release every partial mesh on allocation failure" {
+    try storeExercise(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, storeExercise, .{});
+}
+
+test "pools on several threads share and create meshes through one store" {
+    if (builtin.single_threaded) return error.SkipZigTest;
+    var store = Gradient.Mesh.Store.init(std.testing.allocator);
+    defer store.deinit();
+    var owner = Pool.initWithMeshes(std.testing.allocator, &store);
+    defer owner.deinit();
+    const original = try owner.intern(&test_mesh.style);
+    const worker = struct {
+        fn run(meshes: *Gradient.Mesh.Store, source: *const Style) !void {
+            var own = test_mesh.vertices;
+            own[0].r = 0.25;
+            for (0..200) |_| {
+                var pool = Pool.initWithMeshes(std.testing.allocator, meshes);
+                defer pool.deinit();
+                const copy = try pool.intern(source);
+                if (copy.gradient.?.mesh_fill.vertices.ptr != source.gradient.?.mesh_fill.vertices.ptr) return error.NotShared;
+                // A new mesh is created and released through the store too.
+                _ = try pool.intern(&.{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &own, .triangles = &test_mesh.triangles } } });
+            }
+        }
+        fn spawn(meshes: *Gradient.Mesh.Store, source: *const Style, failed: *std.atomic.Value(bool)) void {
+            run(meshes, source) catch failed.store(true, .release);
+        }
+    };
+    var failed: std.atomic.Value(bool) = .init(false);
+    {
+        var threads: [8]std.Thread = undefined;
+        var spawned: usize = 0;
+        defer for (threads[0..spawned]) |thread| thread.join();
+        while (spawned < threads.len) : (spawned += 1) threads[spawned] = try std.Thread.spawn(.{}, worker.spawn, .{ &store, original, &failed });
+    }
+    try std.testing.expect(!failed.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 1), original.gradient.?.mesh_fill.shared.?.referenceCount());
+    try std.testing.expectEqual(@as(usize, 1), store.count());
 }
 
 fn replaceExercise(allocator: std.mem.Allocator) !void {

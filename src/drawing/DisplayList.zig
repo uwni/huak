@@ -13,6 +13,7 @@ pub const FillRule = Storage.FillRule;
 pub const Pen = Storage.Pen;
 pub const Style = Storage.Style;
 pub const Gradient = @import("style.zig").Gradient;
+pub const MeshStore = Storage.MeshStore;
 pub const Metrics = Storage.Metrics;
 pub const PathRef = Storage.PathRef;
 pub const Geometry = Storage.Geometry;
@@ -36,6 +37,10 @@ maximum_depth: usize = 0,
 
 pub fn init(allocator: std.mem.Allocator) DisplayList {
     return .{ .storage = .init(allocator) };
+}
+/// Pictures attached to the same store share mesh arrays when copied.
+pub fn initWithMeshes(allocator: std.mem.Allocator, meshes: ?*MeshStore) DisplayList {
+    return .{ .storage = .initWithMeshes(allocator, meshes) };
 }
 pub fn deinit(self: *DisplayList) void {
     self.sources.deinit(self.storage.allocator);
@@ -628,4 +633,37 @@ test "append rejects borrowed subranges of its own allocation before mutation" {
     try std.testing.expectError(error.SelfAppend, destination.append(&view, .{}));
     try std.testing.expectEqual(@as(usize, 1), destination.commands.items.len);
     try std.testing.expectEqualDeep(path.segments.items, destination.storage.segments.items);
+}
+
+test "pictures attached to one mesh store share mesh arrays when appended" {
+    const a = std.testing.allocator;
+    var store = MeshStore.init(a);
+    defer store.deinit();
+    var boundary = try Path.circle(a, .zero, 5);
+    defer boundary.deinit();
+    const vertices = [_]Gradient.Mesh.Vertex{
+        .{ .x = -5, .y = -5, .r = 1, .g = 0, .b = 0 },
+        .{ .x = 5, .y = -5, .r = 0, .g = 1, .b = 0 },
+        .{ .x = 0, .y = 5, .r = 0, .g = 0, .b = 1 },
+    };
+    var source = DisplayList.initWithMeshes(a, &store);
+    defer source.deinit();
+    try source.addPath(boundary, .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &vertices, .triangles = &.{.{ 0, 1, 2 }} } } }, .{});
+    var shared = DisplayList.initWithMeshes(a, &store);
+    defer shared.deinit();
+    try shared.append(&source, .{});
+    var separate = DisplayList.init(a);
+    defer separate.deinit();
+    try separate.append(&source, .{});
+    const meshOf = struct {
+        // Appending wraps the copied commands in a group.
+        fn first(picture: *const DisplayList) ![*]const Gradient.Mesh.Vertex {
+            for (picture.commands.items) |command| if (command == .path) return command.path.style.gradient.?.mesh_fill.vertices.ptr;
+            return error.MissingPath;
+        }
+    }.first;
+    const original = try meshOf(&source);
+    try std.testing.expectEqual(original, try meshOf(&shared));
+    try std.testing.expect(try meshOf(&separate) != original);
+    try std.testing.expectEqual(@as(usize, 1), store.count());
 }
