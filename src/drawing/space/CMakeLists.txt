@@ -29,5 +29,9 @@ add_executable(space_projection_test EXCLUDE_FROM_ALL ../../../tests/space_proje
 target_link_libraries(space_projection_test PRIVATE space_objects)
 add_executable(space_loader EXCLUDE_FROM_ALL ../../../tests/space_loader.cpp)
 target_link_libraries(space_loader PRIVATE ${CMAKE_DL_LIBS})
-add_custom_target(check COMMAND space_projection_test COMMAND space_loader $<TARGET_FILE:huak_space>
+# Linux RUNPATH only reaches the tests' direct dependencies; the SDK's own
+# libraries find each other through the loader path, as OCCT's env.sh sets it.
+set(with_sdk ${CMAKE_COMMAND} -E env "LD_LIBRARY_PATH=${OpenCASCADE_LIBRARY_DIR}:$ENV{LD_LIBRARY_PATH}")
+add_custom_target(check COMMAND ${with_sdk} $<TARGET_FILE:space_projection_test>
+  COMMAND ${with_sdk} $<TARGET_FILE:space_loader> $<TARGET_FILE:huak_space>
   DEPENDS space_projection_test space_loader huak_space)

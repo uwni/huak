@@ -48,7 +48,7 @@ jobs:
             -Doptimize=ReleaseSafe -Dcpu=baseline
           zig-out/bin/huak --help
       - name: Restore OCCT SDK
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         id: occt
         with:
           path: .occt-sdk
@@ -73,6 +73,13 @@ jobs:
             "-DBUILD_ADDITIONAL_TOOLKITS=TKOffset TKHLR"
           cmake --build "$RUNNER_TEMP/occt" --parallel 2
           cmake --install "$RUNNER_TEMP/occt"
+      # Saved right after the build, so a later failing step does not discard it.
+      - name: Save OCCT SDK
+        if: steps.occt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .occt-sdk
+          key: ${{ steps.occt.outputs.cache-primary-key }}
       - name: Build and test the C++ adapter against the native SDK
         run: |
           cmake -S src/drawing/space -B "$RUNNER_TEMP/projection" \
