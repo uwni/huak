@@ -1,7 +1,7 @@
 # Mesh PDF encoding
 
 This Huak backend encodes a single mesh paint and its curved clipping boundary.
-It uses pdf-writer 0.15.0 for Type 4 Gouraud shading and miniz_oxide 0.8.9 for
+It uses pdf-writer 0.15.0 for Type 4 Gouraud shading and miniz_oxide 0.9.1 for
 compression. Both are locked in Cargo.lock. The result is a PDF 1.4 page in a
 unit square, placed back in scene coordinates by the Typst adapter.
 
