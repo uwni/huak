@@ -124,23 +124,32 @@ export fn text_center(dst:object, body:text, center:vec2, angle:angle = 0deg)
     append(dst, local, compose(rotate(angle), translate(center)))
 end
 
-// Stretch uses Typst's own glyph assembly, preserving a native text frame.
-// The optional fill colors the glyph; font_size sets its math font size so the
-// glyph stroke weight matches the caller's figure text.
-export fn stretched_glyph(kind:string, extent:length, side:string = "bottom", fill:any = false, font_size:length = 0pt) -> text
-    assert(extent > 0pt, "stretched glyph extent must be positive")
-    assert(kind == "brace" or kind == "bracket" or kind == "paren", "unknown stretched glyph kind")
-    assert(side == "bottom" or side == "top" or side == "left" or side == "right", "unknown glyph side")
-    typst_expose kind, extent, side, fill, font_size
-    return typ[#{
-        let glyphs = (
+// Typst assembles each glyph at the requested extent. Plain and styled
+// glyphs below share this one definition.
+setup_typst {
+    let stretched-glyph(kind, side, extent, fill) = {
+        let glyph = (
             brace: (bottom: sym.brace.b, top: sym.brace.t, left: sym.brace.l, right: sym.brace.r),
             bracket: (bottom: sym.bracket.b, top: sym.bracket.t, left: sym.bracket.l, right: sym.bracket.r),
             paren: (bottom: sym.paren.b, top: sym.paren.t, left: sym.paren.l, right: sym.paren.r),
-        )
-        let glyph = glyphs.at(huak.kind).at(huak.side)
-        let body = $ stretch(glyph, size: huak.extent) $
-        let styled = if huak.fill == false { body } else { text(fill: huak.fill, body) }
-        if huak.font_size > 0pt { text(size: huak.font_size, styled) } else { styled }
-    }]
+        ).at(kind).at(side)
+        let body = $ stretch(glyph, size: extent) $
+        if fill == false { body } else { text(fill: fill, body) }
+    }
+}
+
+// Stretch uses Typst's own glyph assembly, preserving a native text frame.
+// The optional fill colors the glyph. A style rule applies around it as
+// typst_show does, so the caller's text settings give its stroke weight.
+export fn stretched_glyph(kind:string, extent:length, side:string = "bottom", fill:any = false, style:any = false) -> text
+    assert(extent > 0pt, "stretched glyph extent must be positive")
+    assert(kind == "brace" or kind == "bracket" or kind == "paren", "unknown stretched glyph kind")
+    assert(side == "bottom" or side == "top" or side == "left" or side == "right", "unknown glyph side")
+    typst_expose kind, extent, side, fill
+    if style == false then
+        return typ[#stretched-glyph(huak.kind, huak.side, huak.extent, huak.fill)]
+    else
+        typst_show style
+        return typ[#stretched-glyph(huak.kind, huak.side, huak.extent, huak.fill)]
+    end
 end

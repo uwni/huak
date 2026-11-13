@@ -87,7 +87,8 @@ pub const Headers = struct {
     scopes: []const Scope,
     imports: []const ScopedHeader,
     operators: []const ScopedHeader,
-    typst_exposures: []const ScopedHeader = &.{},
+    /// typst_expose and typst_show statements, in source order.
+    typst_declarations: []const ScopedHeader = &.{},
     records: []const ScopedHeader = &.{},
     expansions: []const ScopedHeader = &.{},
     /// Native-validated block ranges borrow this exact immutable source.
@@ -358,17 +359,20 @@ fn statement(self: *Parser) anyerror!*ast.Stmt {
             const raw = try self.typstBlock('{');
             return self.createStmt(raw.span, .{ .setup_typst = raw.code });
         },
-        .kw_typst_expose => {
+        .kw_typst_expose, .kw_typst_show => {
+            const keyword = self.current.kind;
             try self.advance();
             var names: std.array_list.Managed(ast.ExportName) = .init(self.allocator);
-            const first = try self.expect(.identifier, "expected a Huak variable name after typst_expose");
+            const first = try self.expect(.identifier, if (keyword == .kw_typst_show) "expected a Huak variable name after typst_show" else "expected a Huak variable name after typst_expose");
             try names.append(.{ .name = self.text(first), .span = first.span });
             while (try self.accept(.comma)) {
                 while (self.current.kind == .newline) try self.advance();
                 const next = try self.expect(.identifier, "expected a Huak variable name after ','");
                 try names.append(.{ .name = self.text(next), .span = next.span });
             }
-            return self.createStmt(.join(start, names.items[names.items.len - 1].span), .{ .typst_expose = try names.toOwnedSlice() });
+            const span: source.Span = .join(start, names.items[names.items.len - 1].span);
+            const list = try names.toOwnedSlice();
+            return self.createStmt(span, if (keyword == .kw_typst_show) .{ .typst_show = list } else .{ .typst_expose = list });
         },
         else => {
             const expr = try self.expression(0);
@@ -682,6 +686,7 @@ fn prefix(self: *Parser) anyerror!*ast.Expr {
             const value = try self.typstBlock('[');
             return self.createExpr(value.span, .{ .typst = value.code });
         },
+        .kw_show_rule => return self.showRule(),
         .ellipsis => return self.fail(token.span, "spread expressions are not supported; '...' is only valid as a parameter suffix or block insertion", .{}),
         else => return self.fail(token.span, "expected an expression", .{}),
     }
@@ -987,7 +992,27 @@ fn typstBlock(self: *Parser, opening: u8) anyerror!struct { span: source.Span, c
     return .{ .span = .{ .start = start.start, .end = finish }, .code = self.lexer.source[beginning..finish] };
 }
 
+/// `show_rule parameter => {code}` or `=> [markup]`: a Typst function kept
+/// as its source text. The native Typst parser decides where the block ends.
+fn showRule(self: *Parser) anyerror!*ast.Expr {
+    const keyword = try self.expect(.kw_show_rule, "expected 'show_rule'");
+    const parameter = try self.expect(.identifier, "expected the content parameter name after show_rule");
+    if (self.current.kind != .fat_arrow) return self.fail(self.current.span, "expected '=>' after the show_rule parameter", .{});
+    const text_ = self.lexer.source;
+    var opening = self.lexer.pos;
+    while (opening < text_.len and (text_[opening] == ' ' or text_[opening] == '\t' or text_[opening] == '\r')) opening += 1;
+    if (opening == text_.len or (text_[opening] != '{' and text_[opening] != '['))
+        return self.fail(self.current.span, "expected a Typst code block '{{' or content block '[' after '=>'", .{});
+    const block = try self.typstBlock(text_[opening]);
+    return self.createExpr(.join(keyword.span, block.span), .{ .show_rule = .{ .code = text_[parameter.span.start..block.span.end], .parameter = parameter.span } });
+}
+
 fn parseAnnotation(self: *Parser) !ast.Annotation {
+    if (self.current.kind == .kw_show_rule) {
+        const keyword = self.current;
+        try self.advance();
+        return .{ .name = "show_rule", .span = keyword.span };
+    }
     const first = try self.expect(.identifier, "expected a type name");
     var name = self.text(first);
     var finish = first.span;
@@ -1094,7 +1119,7 @@ const HeaderScanner = struct {
     frames: std.ArrayList(Frame) = .empty,
     imports: std.ArrayList(ScopedHeader) = .empty,
     operators: std.ArrayList(ScopedHeader) = .empty,
-    typst_exposures: std.ArrayList(ScopedHeader) = .empty,
+    typst_declarations: std.ArrayList(ScopedHeader) = .empty,
     records: std.ArrayList(ScopedHeader) = .empty,
     expansions: std.ArrayList(ScopedHeader) = .empty,
     source_blocks: std.ArrayList(source.Span) = .empty,
@@ -1118,7 +1143,7 @@ const HeaderScanner = struct {
             scope.* = draft.value;
             scope.ordinary_names = try draft.names.toOwnedSlice(self.allocator);
         }
-        return .{ .scopes = scopes, .imports = try self.imports.toOwnedSlice(self.allocator), .operators = try self.operators.toOwnedSlice(self.allocator), .typst_exposures = try self.typst_exposures.toOwnedSlice(self.allocator), .records = try self.records.toOwnedSlice(self.allocator), .expansions = try self.expansions.toOwnedSlice(self.allocator), .source_identity = self.parser.lexer.source, .source_blocks = try self.source_blocks.toOwnedSlice(self.allocator) };
+        return .{ .scopes = scopes, .imports = try self.imports.toOwnedSlice(self.allocator), .operators = try self.operators.toOwnedSlice(self.allocator), .typst_declarations = try self.typst_declarations.toOwnedSlice(self.allocator), .records = try self.records.toOwnedSlice(self.allocator), .expansions = try self.expansions.toOwnedSlice(self.allocator), .source_identity = self.parser.lexer.source, .source_blocks = try self.source_blocks.toOwnedSlice(self.allocator) };
     }
 
     fn scanToken(self: *HeaderScanner) anyerror!void {
@@ -1134,8 +1159,13 @@ const HeaderScanner = struct {
                 self.statement_start = false;
                 return;
             },
-            .kw_typst_expose => {
-                try self.typst_exposures.append(self.allocator, .{ .scope = self.active, .statement = try self.parser.statement() });
+            .kw_show_rule => {
+                _ = try self.parser.showRule();
+                self.statement_start = false;
+                return;
+            },
+            .kw_typst_expose, .kw_typst_show => {
+                try self.typst_declarations.append(self.allocator, .{ .scope = self.active, .statement = try self.parser.statement() });
                 self.statement_start = false;
                 return;
             },
@@ -1366,7 +1396,7 @@ const HeaderScanner = struct {
 
 fn startsOperand(kind: Lexer.Kind) bool {
     return Lexer.isOperator(kind) or switch (kind) {
-        .identifier, .integer, .float, .string, .kw_true, .kw_false, .kw_cycle, .minus, .plus, .kw_not, .lparen, .lbracket, .lbrace, .kw_typ, .kw_block => true,
+        .identifier, .integer, .float, .string, .kw_true, .kw_false, .kw_cycle, .minus, .plus, .kw_not, .lparen, .lbracket, .lbrace, .kw_typ, .kw_show_rule, .kw_block => true,
         else => false,
     };
 }
@@ -2639,11 +2669,11 @@ test "Typst exposure declarations retain exact names and lexical header scopes" 
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
     const headers = try scanHeaders(arena.allocator(), input, .{}, &diagnostic);
-    try std.testing.expectEqual(@as(usize, 4), headers.typst_exposures.len);
-    try std.testing.expectEqual(@as(ScopeId, 0), headers.typst_exposures[0].scope);
-    try std.testing.expect(headers.scopes[headers.typst_exposures[1].scope].kind == .function);
-    try std.testing.expect(headers.scopes[headers.typst_exposures[2].scope].kind == .branch);
-    try std.testing.expect(headers.typst_exposures[2].scope != headers.typst_exposures[3].scope);
+    try std.testing.expectEqual(@as(usize, 4), headers.typst_declarations.len);
+    try std.testing.expectEqual(@as(ScopeId, 0), headers.typst_declarations[0].scope);
+    try std.testing.expect(headers.scopes[headers.typst_declarations[1].scope].kind == .function);
+    try std.testing.expect(headers.scopes[headers.typst_declarations[2].scope].kind == .branch);
+    try std.testing.expect(headers.typst_declarations[2].scope != headers.typst_declarations[3].scope);
     var frontend = try Parser.init(arena.allocator(), input, .{}, &diagnostic);
     const script = try frontend.parse();
     const names = script.statements[0].value.typst_expose;
@@ -2654,6 +2684,64 @@ test "Typst exposure declarations retain exact names and lexical header scopes" 
     }
     for ([_][]const u8{ "typst_expose", "typst_expose value,", "typst_expose module.value", "typst_expose 42", "typst_expose value=1" }) |invalid| {
         var broken = try Parser.init(arena.allocator(), invalid, .{}, &diagnostic);
+        try std.testing.expectError(error.LanguageError, broken.parse());
+    }
+}
+
+test "show rules keep opaque Typst code while typst_show shares exposure header scopes" {
+    const Blocks = struct {
+        // Balanced delimiters stand in for the native Typst parser.
+        fn block(_: *anyopaque, input: []const u8) !usize {
+            var depth: usize = 0;
+            for (input, 0..) |byte, index| switch (byte) {
+                '{', '[' => depth += 1,
+                '}', ']' => {
+                    depth -= 1;
+                    if (depth == 0) return index + 1;
+                },
+                else => {},
+            };
+            return error.UnclosedBlock;
+        }
+    };
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var diagnostic: ?source.Diagnostic = null;
+    var context: u8 = 0;
+    const options: Options = .{ .source_parser = .{ .ptr = &context, .vtable = &.{ .block = Blocks.block } } };
+    const input =
+        \\fn style(size:length)->show_rule
+        \\    typst_expose size
+        \\    return show_rule body=>{ end struct Bogus import fake typst_show field; body }
+        \\end
+        \\marked:=show_rule it => [*#it* end]
+        \\typst_show marked,
+        \\    other
+        \\if true then
+        \\    typst_show inside
+        \\end
+    ;
+    const headers = try scanHeaders(arena.allocator(), input, options, &diagnostic);
+    try std.testing.expectEqual(@as(usize, 0), headers.records.len);
+    try std.testing.expectEqual(@as(usize, 0), headers.imports.len);
+    try std.testing.expectEqual(@as(usize, 3), headers.typst_declarations.len);
+    try std.testing.expect(headers.typst_declarations[0].statement.value == .typst_expose);
+    try std.testing.expect(headers.scopes[headers.typst_declarations[0].scope].kind == .function);
+    try std.testing.expectEqual(@as(ScopeId, 0), headers.typst_declarations[1].scope);
+    try std.testing.expect(headers.scopes[headers.typst_declarations[2].scope].kind == .branch);
+    var frontend = try Parser.init(arena.allocator(), input, options, &diagnostic);
+    const script = try frontend.parse();
+    const function = script.statements[0].value.function;
+    try std.testing.expectEqualStrings("show_rule", function.result.?.name);
+    const rule = function.body[1].value.return_value.?.value.show_rule;
+    try std.testing.expectEqualStrings("body=>{ end struct Bogus import fake typst_show field; body }", rule.code);
+    try std.testing.expectEqualStrings("body", input[rule.parameter.start..rule.parameter.end]);
+    try std.testing.expectEqualStrings("it => [*#it* end]", script.statements[1].value.assignment.value.value.show_rule.code);
+    const shown = script.statements[2].value.typst_show;
+    try std.testing.expectEqual(@as(usize, 2), shown.len);
+    try std.testing.expectEqualStrings("other", input[shown[1].span.start..shown[1].span.end]);
+    for ([_][]const u8{ "r:=show_rule", "r:=show_rule body", "r:=show_rule body = {body}", "r:=show_rule body => body", "r:=show_rule (body) => {body}", "r:=show_rule body =>\n{body}", "typst_show", "typst_show rule,", "typst_show 1", "typst_show a.b" }) |invalid| {
+        var broken = try Parser.init(arena.allocator(), invalid, options, &diagnostic);
         try std.testing.expectError(error.LanguageError, broken.parse());
     }
 }
@@ -2798,7 +2886,7 @@ test "record headers ignore fields and opaque Typst while retaining their contai
     try std.testing.expectEqual(@as(usize, 1), headers.scopes[headers.records[1].scope].ordinary_names.len);
     try std.testing.expectEqualStrings("value", headers.scopes[headers.records[1].scope].ordinary_names[0].name);
     try std.testing.expectEqual(@as(usize, 0), headers.imports.len);
-    try std.testing.expectEqual(@as(usize, 0), headers.typst_exposures.len);
+    try std.testing.expectEqual(@as(usize, 0), headers.typst_declarations.len);
     var frontend = try Parser.init(arena.allocator(), input, options, &diagnostic);
     const script = try frontend.parse();
     try std.testing.expectEqualStrings("[end struct Bogus import fake typst_expose field]", script.statements[0].value.structure.fields[1].default.?.value.typst);

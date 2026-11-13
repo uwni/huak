@@ -64,4 +64,55 @@ fn legend(sample:bool) -> picture
 end
 export legend_sample := legend(true)
 export legend_bare := legend(false)
+
+// title_align anchors the title at the plot area's left edge, center or right
+// edge, at the same height.
+fn titled(align:string) -> list
+    fig := figure(200pt, 200pt, {"background": false})
+    ax := axis of fig at (0, 0)
+    plotting ax do
+        settings BARE
+        title typ[Panel title]
+        settings {"title_align": align}
+    end
+    panels := renderer.prepare(fig)
+    renderer.layout(fig, panels)
+    area := panels[0]
+    return [bounds(render fig), area.origin.x, area.origin.x+area.size.x]
+end
+for align in ["left", "center", "right"] do
+    found := titled(align)
+    box := found[0]
+    if align == "left" then assert(abs(box[0].x-found[1]) < 0.01pt, "a left title starts at the plot area's left edge") end
+    if align == "center" then assert(abs((box[0].x+box[1].x)/2-(found[1]+found[2])/2) < 0.01pt, "a centered title is centered over the plot area") end
+    if align == "right" then assert(abs(box[1].x-found[2]) < 0.01pt, "a right title ends at the plot area's right edge") end
+    assert(abs(box[1].y-titled("center")[0][1].y) < 0.01pt, "alignment keeps the title's height")
+end
+
+// tick_style applies a caller's show_rule around the tick text plot typesets.
+// Side options override axis options, which override figure options.
+mono := show_rule body => { set text(font: "DejaVu Sans Mono"); body }
+serif := show_rule body => { set text(font: "Libertinus Serif"); body }
+fn ticks(figure_options:dict, axis_options:dict, bottom:dict) -> list
+    fig := figure(240pt, 200pt, figure_options)
+    ax := axis of fig at (0, 0)
+    plotting ax do
+        settings {"xticks": [0, 0.5, 1], "yticks": [0, 0.5, 1], "xlim": [0, 1], "ylim": [0, 1]}
+        settings axis_options
+        side "bottom" with bottom
+        +heatmap [[1, 2], [3, 4]]
+        colorbar "right"
+    end
+    panels := renderer.prepare(fig)
+    renderer.layout(fig, panels)
+    found := panels[0]
+    return [found.rulers_by_side["bottom"].bodies[1].width, found.rulers_by_side["left"].bodies[1].width, found.color_labels[0].width]
+end
+unstyled := ticks({}, {}, {})
+whole := ticks({"tick_style": mono}, {}, {})
+for i in 0:2 do assert(abs(whole[i]-unstyled[i]) > 0.1pt, "a figure tick style must reach every ruler and the colorbar") end
+on_axis := ticks({}, {"tick_style": mono}, {})
+for i in 0:2 do assert(abs(on_axis[i]-whole[i]) < 0.001pt, "an axis tick style must apply like a figure one") end
+on_side := ticks({"tick_style": mono}, {}, {"tick_style": serif})
+assert(abs(on_side[0]-unstyled[0]) < 0.001pt and abs(on_side[1]-whole[1]) < 0.001pt, "a side tick style must override the figure's")
 print("plot option checks passed")

@@ -63,7 +63,14 @@ pub const Op = enum {
     slice,
     field,
     set_field,
+    /// Typst content constant a and b captured (name, value) pairs -> text. A
+    /// pair with an empty name is a show_rule applied around the content;
+    /// these follow the named pairs, outermost first.
     typst,
+    /// Typst function code constant a and b captured (name, value) pairs -> a
+    /// show_rule snapshotting that data and the module's current setup. The
+    /// span covers exactly the code in its module source.
+    show_rule,
     setup_typst,
     halt,
 };
@@ -84,7 +91,7 @@ pub const Instruction = struct {
         return switch (self.op) {
             .constant, .load_global, .load_local => .{ .consumed = 0, .produced = 1 },
             // Each exposed name is followed by its current value on the stack.
-            .typst => .{ .consumed = std.math.mul(usize, self.b, 2) catch std.math.maxInt(usize), .produced = 1 },
+            .typst, .show_rule => .{ .consumed = std.math.mul(usize, self.b, 2) catch std.math.maxInt(usize), .produced = 1 },
             .store_global, .store_local, .pop, .jump_if_false, .return_value => .{ .consumed = 1, .produced = 0 },
             .list_append => .{ .consumed = 2, .produced = 0 },
             .list_append_items => .{ .consumed = @as(usize, self.a) + 1, .produced = 0 },

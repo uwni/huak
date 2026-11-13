@@ -78,7 +78,7 @@ fn horizontal(byte: u8) bool {
 
 fn spaced(kind: ?Lexer.Kind) bool {
     return switch (kind orelse return false) {
-        .assign, .declare, .plus_assign, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => true,
+        .assign, .declare, .plus_assign, .fat_arrow, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => true,
         else => false,
     };
 }

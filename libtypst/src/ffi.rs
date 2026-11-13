@@ -217,6 +217,7 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_TEXT_OUTLINE
             | TYPST_CAP_LAYOUT_BINDINGS
             | TYPST_CAP_PDF_IMPORT
+            | TYPST_CAP_LAYOUT_TEMPLATES
             | crate::context::FONT_DISCOVERY,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),
@@ -316,6 +317,10 @@ struct Request<'a> {
     setup_code: &'a str,
     setup_source_name: &'a str,
     bindings: typst_core::foundations::Scope,
+    templates: Vec<crate::layout::TemplateSource<'a>>,
+    shows: Vec<typst_core::foundations::Value>,
+    /// Warnings raised while the request's templates were made.
+    warnings: Report,
     flags: u32,
     width_pt: f64,
     height_pt: f64,
@@ -334,19 +339,77 @@ impl Request<'_> {
         }
     }
 }
-unsafe fn request(value: &TypstLayoutRequest) -> Result<Request<'_>, Error> {
+
+/// Template functions are made first, so that bindings and show rules can
+/// refer to them by index.
+unsafe fn request<'a>(
+    context: &crate::context::Context,
+    value: &'a TypstLayoutRequest,
+) -> Result<Request<'a>, Error> {
     let source_name = unsafe { text(value.source_name, "source name")? };
-    let options: TypstLayoutOptions =
-        unsafe { options(value.options) }.map_err(|error| error.with_source(source_name))?;
+    let attribute = |error: Error| error.with_source(source_name);
+    let options: TypstLayoutOptions = unsafe { options(value.options) }.map_err(attribute)?;
+    let named = |name: &'a str, what: &str| {
+        if name.is_empty() {
+            Err(attribute(Error::invalid(format!(
+                "{what} must not be empty"
+            ))))
+        } else {
+            Ok(name)
+        }
+    };
+    let mut templates = Vec::new();
+    let mut functions = Vec::new();
+    let mut warnings = Report::default();
+    let records = unsafe { values(options.templates, options.template_count, "templates") };
+    for record in records.map_err(attribute)? {
+        let setup_code =
+            unsafe { text(record.setup_code, "template setup code") }.map_err(attribute)?;
+        let setup_name = unsafe { text(record.setup_source_name, "template setup source name") };
+        let template = crate::layout::TemplateSource {
+            code: unsafe { text(record.code, "template code") }.map_err(attribute)?,
+            source_name: named(
+                unsafe { text(record.source_name, "template source name") }.map_err(attribute)?,
+                "template source name",
+            )?,
+            setup_code,
+            setup_source_name: if setup_code.is_empty() {
+                ""
+            } else {
+                named(setup_name.map_err(attribute)?, "template setup source name")?
+            },
+        };
+        // Earlier templates are already evaluated; later ones cannot be referenced.
+        let bindings =
+            unsafe { self::value::bindings(record.bindings, record.binding_count, &functions) }
+                .map_err(attribute)?;
+        let (function, report) = context.template(template, bindings)?;
+        warnings.merge(report);
+        templates.push(template);
+        functions.push(function);
+    }
+    let indices =
+        unsafe { values(options.shows, options.show_count, "show rules") }.map_err(attribute)?;
+    let shows = indices
+        .iter()
+        .map(|&index| {
+            functions.get(index).cloned().ok_or_else(|| {
+                attribute(Error::invalid("show rule template index is out of range"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Request {
-        source: unsafe { text(value.source, "source") }
-            .map_err(|error| error.with_source(source_name))?,
-        setup_code: unsafe { text(options.setup_code, "setup code") }
-            .map_err(|error| error.with_source(source_name))?,
+        source: unsafe { text(value.source, "source") }.map_err(attribute)?,
+        setup_code: unsafe { text(options.setup_code, "setup code") }.map_err(attribute)?,
         setup_source_name: unsafe { text(options.setup_source_name, "setup source name") }
-            .map_err(|error| error.with_source(source_name))?,
-        bindings: unsafe { self::value::bindings(options.bindings, options.binding_count) }
-            .map_err(|error| error.with_source(source_name))?,
+            .map_err(attribute)?,
+        bindings: unsafe {
+            self::value::bindings(options.bindings, options.binding_count, &functions)
+        }
+        .map_err(attribute)?,
+        templates,
+        shows,
+        warnings,
         flags: options.flags,
         width_pt: options.width_pt,
         height_pt: options.height_pt,
@@ -374,7 +437,11 @@ pub unsafe extern "C" fn typst_context_layout(
         call(diagnostics, || {
             output(out)?;
             let context = required(context, "context")?;
-            let input = request(required(input, "layout request")?)?;
+            let input = request(&context.inner, required(input, "layout request")?)?;
+            let templates = crate::layout::Templates {
+                sources: &input.templates,
+                shows: &input.shows,
+            };
             let (layout, warnings) = context
                 .inner
                 .layout_with_setup(
@@ -384,11 +451,14 @@ pub unsafe extern "C" fn typst_context_layout(
                     input.setup_code,
                     input.setup_source_name,
                     input.bindings,
+                    templates,
                     usize::MAX,
                 )
                 .map_err(|error| error.with_source(input.source_name))?;
             out.write(owned(TypstLayout { inner: layout }));
-            Ok(warnings)
+            let mut report = input.warnings;
+            report.merge(warnings);
+            Ok(report)
         })
     }
 }
@@ -423,7 +493,7 @@ pub unsafe extern "C" fn typst_context_layout_many(
             let context = required(context, "context")?;
             let requests = values(inputs, count, "layout requests")?
                 .iter()
-                .map(|value| request(value))
+                .map(|value| request(&context.inner, value))
                 .collect::<Vec<_>>();
             let outcomes = requests
                 .into_par_iter()
@@ -431,7 +501,11 @@ pub unsafe extern "C" fn typst_context_layout_many(
                 .map(|(index, input)| {
                     catch_unwind(AssertUnwindSafe(|| {
                         let input = input?;
-                        context
+                        let templates = crate::layout::Templates {
+                            sources: &input.templates,
+                            shows: &input.shows,
+                        };
+                        let (layout, warnings) = context
                             .inner
                             .layout_with_setup(
                                 input.source,
@@ -440,9 +514,13 @@ pub unsafe extern "C" fn typst_context_layout_many(
                                 input.setup_code,
                                 input.setup_source_name,
                                 input.bindings,
+                                templates,
                                 index,
                             )
-                            .map_err(|error| error.with_source(input.source_name))
+                            .map_err(|error| error.with_source(input.source_name))?;
+                        let mut report = input.warnings;
+                        report.merge(warnings);
+                        Ok((layout, report))
                     }))
                     .unwrap_or_else(|payload| Err(panic_error(payload)))
                 })

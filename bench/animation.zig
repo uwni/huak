@@ -66,20 +66,28 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn benchmarks(init: std.process.Init, prepared: *const scene.Prepared, animation: *const a.Animation, static_svg: []const u8) !void {
-    const trials: usize = 100;
-    const started = std.Io.Clock.awake.now(init.io);
-    var consumed: usize = 0;
-    for (0..trials) |_| {
-        const bytes = try native_svg.encodeAnimatedSvg(init.gpa, static_svg, animation);
-        consumed +%= bytes.len;
-        init.gpa.free(bytes);
+    // CSS is the default; marking every track smil measures SMIL alongside.
+    for ([_]bool{ false, true }) |smil| {
+        const encoding = if (smil) "smil" else "css";
+        var tracks = prepared.tracks();
+        for (&tracks) |*track| track.smil = smil;
+        const marked: a.Animation = .{ .duration_seconds = animation.duration_seconds, .tracks = &tracks };
+        const trials: usize = 100;
+        const started = std.Io.Clock.awake.now(init.io);
+        var consumed: usize = 0;
+        for (0..trials) |_| {
+            const bytes = try native_svg.encodeAnimatedSvg(init.gpa, static_svg, &marked);
+            consumed +%= bytes.len;
+            init.gpa.free(bytes);
+        }
+        const packaged = std.Io.Clock.awake.now(init.io);
+        // A changed animation parameter reuses the same static SVG and text.
+        var changed_tracks = tracks;
+        changed_tracks[4].property.scale = &.{ .{ .time = 0, .value = .{ .x = 1, .y = 1 } }, .{ .time = 1, .value = .{ .x = 2, .y = 2 } } };
+        const changed = try native_svg.encodeAnimatedSvg(init.gpa, static_svg, &.{ .duration_seconds = scene.duration, .tracks = &changed_tracks });
+        init.gpa.free(changed);
+        const incremental = std.Io.Clock.awake.now(init.io);
+        std.debug.print("{s}_animated_svg_bytes={d}\n{s}_hot_encode_count={d}\n{s}_hot_encode_total_ms={d:.3}\n{s}_hot_encode_average_ms={d:.3}\n{s}_incremental_track_encode_ms={d:.3}\n", .{ encoding, consumed / trials, encoding, trials, encoding, milliseconds(started, packaged), encoding, milliseconds(started, packaged) / trials, encoding, milliseconds(packaged, incremental) });
     }
-    const packaged = std.Io.Clock.awake.now(init.io);
-    // A changed animation parameter reuses the same static SVG and text.
-    var changed_tracks = prepared.tracks();
-    changed_tracks[4].property.scale = &.{ .{ .time = 0, .value = .{ .x = 1, .y = 1 } }, .{ .time = 1, .value = .{ .x = 2, .y = 2 } } };
-    const changed = try native_svg.encodeAnimatedSvg(init.gpa, static_svg, &.{ .duration_seconds = scene.duration, .tracks = &changed_tracks });
-    init.gpa.free(changed);
-    const incremental = std.Io.Clock.awake.now(init.io);
-    std.debug.print("hot_encode_count={d}\nhot_encode_total_ms={d:.3}\nhot_encode_average_ms={d:.3}\nconsumed_output_bytes={d}\nincremental_track_encode_ms={d:.3}\nbenchmark_peak_rss_bytes={d}\n", .{ trials, milliseconds(started, packaged), milliseconds(started, packaged) / trials, consumed, milliseconds(packaged, incremental), peakRssBytes() });
+    std.debug.print("benchmark_peak_rss_bytes={d}\n", .{peakRssBytes()});
 }

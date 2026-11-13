@@ -1,5 +1,6 @@
-//! Borrowed, renderer-independent animation tracks. Times are normalized to
-//! [0, 1]; lengths and angles use the geometry core's units and radians.
+//! Borrowed animation tracks, renderer-independent except for an SVG encoding
+//! hint. Times are normalized to [0, 1]; lengths and angles use the geometry
+//! core's units and radians.
 const std = @import("std");
 const g = @import("../drawing/geometry.zig");
 const DisplayList = @import("../drawing/DisplayList.zig");
@@ -36,9 +37,25 @@ pub const Track = struct {
     target: u64,
     property: Property,
     easing: Easing = .linear,
+    /// Share of a cycle, in [-1, 1], by which the track runs ahead of the
+    /// timeline. A loop shifts cyclically. A single run with a negative phase
+    /// starts late and shows its first keys until then.
+    phase: f64 = 0,
+    /// An SVG output hint: write this track as SMIL even where the document
+    /// uses CSS animations, for browsers lacking a CSS property such as `d`.
+    smil: bool = false,
+
+    /// Seconds after the document starts at which the track's first cycle
+    /// begins, negative when the track starts partway through a cycle. This is
+    /// SMIL's `begin` and CSS's `animation-delay`.
+    pub fn startSeconds(self: *const Track, scene: *const Animation) f64 {
+        const ahead = if (scene.repeat) self.phase - @floor(self.phase) else self.phase;
+        return if (ahead == 0) 0 else -ahead * scene.duration_seconds;
+    }
 
     /// Validate easing and keyframe values after collection-level target checks.
     pub fn validateProperties(self: *const Track) Error!void {
+        if (!std.math.isFinite(self.phase) or self.phase < -1 or self.phase > 1) return error.InvalidPhase;
         if (self.easing == .spline) {
             const s = self.easing.spline;
             for ([_]f64{ s.x1, s.y1, s.x2, s.y2 }) |value| if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidEasing;
@@ -105,6 +122,7 @@ pub const Animation = struct {
 
 pub const Error = error{
     InvalidTiming,
+    InvalidPhase,
     InvalidTarget,
     InvalidKeys,
     InvalidEasing,
@@ -213,4 +231,25 @@ test "animation validation preserves diagnostic source order" {
         .{ .property = .{ .motion = .{ .path = &.{.{ .move = .zero }}, .keys = &.{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = 2 } } } }, .expected = error.InvalidMotion },
     };
     for (cases) |case| try expectValidationError(case.expected, .{ .duration_seconds = 1, .tracks = &.{.{ .target = 1, .property = case.property }} });
+}
+
+test "phases start tracks partway through a loop or late in a single run" {
+    const keys = [_]ScalarKey{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = 1 } };
+    var track: Track = .{ .target = 1, .property = .{ .opacity = &keys }, .phase = 0.25 };
+    const loop: Animation = .{ .duration_seconds = 4, .tracks = &.{} };
+    const once: Animation = .{ .duration_seconds = 4, .repeat = false, .tracks = &.{} };
+    try std.testing.expectEqual(@as(f64, -1), track.startSeconds(&loop));
+    try std.testing.expectEqual(@as(f64, -1), track.startSeconds(&once));
+    // A loop shifts cyclically; a single run starts a quarter cycle late.
+    track.phase = -0.25;
+    try std.testing.expectEqual(@as(f64, -3), track.startSeconds(&loop));
+    try std.testing.expectEqual(@as(f64, 1), track.startSeconds(&once));
+    track.phase = 1;
+    try std.testing.expectEqual(@as(f64, 0), track.startSeconds(&loop));
+    try std.testing.expectEqual(@as(f64, -4), track.startSeconds(&once));
+    try track.validateProperties();
+    for ([_]f64{ 1.5, -1.01, std.math.nan(f64), std.math.inf(f64) }) |phase| {
+        track.phase = phase;
+        try std.testing.expectError(error.InvalidPhase, track.validateProperties());
+    }
 }

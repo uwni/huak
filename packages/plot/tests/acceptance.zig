@@ -64,6 +64,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .source = "a:=axis(f); plotting a do +bar categories [\"A\"] values [1]; breaks \"bottom\" over [[0,1]] end; render(f)", .expected = "require a numeric scale" },
         .{ .source = "a:=axis(f); b:=axis(f,(1,0)); plotting a do xlim [0,10]; breaks \"bottom\" over [[2,6]] end; plotting b do breaks \"bottom\" over [[3,7]] end; link_x(f,[a,b]); render(f)", .expected = "conflicting breaks" },
         .{ .source = "a:=axis(f); plotting a do side \"north\" with {} end", .expected = "unknown axis side" },
+        .{ .source = "a:=axis(f); plotting a do title typ[T]; settings {\"title_align\":\"top\"}; +lines x [0,1] y [0,1] end; render(f)", .expected = "title_align must be left, center or right" },
         .{ .source = "a:=axis(f); plotting a do +scatter x [0] y [0] on_axes x \"top\" y \"right\" end; render(f)", .expected = "undeclared axis side" },
         .{ .source = "a:=axis(f); plotting a do remap \"top\" ticks [1,10] to [typ[A]] end", .expected = "labels differ" },
         .{ .source = "a:=axis(f); plotting a do side \"bottom\" with {\"decades\":[1,2,5]} end; render(f)", .expected = "require a log10 scale" },

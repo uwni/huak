@@ -64,19 +64,18 @@ pub fn run(ctx: *h.Harness) !void {
     const animation = try ctx.fixture("animation");
     _ = try ctx.command("run", animation, &.{ "--output", "animation.svg" }, true);
     const animated = try ctx.svg("animation.svg");
-    var transforms: usize = 0;
-    for (animated.elements) |element| {
-        if (std.mem.eql(u8, element.name, "animateTransform") and element.attr("keyTimes") != null) {
-            transforms += 1;
-            try t.expectEqualStrings("translate", element.attr("type").?);
-            try t.expectEqualStrings("0;0.37;1", element.attr("keyTimes").?);
-            // Linear is animateTransform's default calcMode.
-            try t.expect(element.attr("calcMode") == null);
-        }
-    }
-    try t.expectEqual(@as(usize, 1), transforms);
-    try t.expectEqual(@as(usize, 1), animated.count("animate"));
-    try t.expectEqual(@as(usize, 1), animated.count("animateMotion"));
+    const animated_text = try ctx.read("animation.svg");
+    // CSS animations: one stylesheet, a class on each animated group, no SMIL.
+    var classes: usize = 0;
+    for (animated.elements) |element| if (element.attr("class")) |class| {
+        if (std.mem.startsWith(u8, class, "huak-a")) classes += 1;
+    };
+    try t.expectEqual(@as(usize, 3), classes);
+    try t.expectEqual(@as(usize, 1), animated.count("style"));
+    for ([_][]const u8{ "animate", "animateTransform", "animateMotion" }) |name| try t.expectEqual(@as(usize, 0), animated.count(name));
+    try h.contains(animated_text, "{0%{transform:translate(0px,0px)}37%{transform:translate(25px,0px)}100%{transform:translate(100px,0px)}}");
+    try h.contains(animated_text, "offset-path:path(");
+    try h.contains(animated_text, "@media (prefers-reduced-motion:no-preference)");
     try t.expectEqual(@as(usize, 1), animated.count("svg"));
     try t.expectEqual(@as(usize, 0), animated.count("image"));
     const animated_pdf = try ctx.command("run", animation, &.{ "--output", "pic=animation.pdf" }, false);

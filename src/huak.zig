@@ -10,6 +10,7 @@ pub const worker = @import("concurrency/worker.zig");
 pub const animation = @import("animation/root.zig");
 pub const sampling = @import("animation/sampling.zig");
 pub const motion = @import("animation/motion.zig");
+pub const evaluate = @import("animation/evaluate.zig");
 pub const text = struct {
     pub const outline = @import("text/outline.zig");
 };
@@ -27,5 +28,6 @@ test {
     _ = animation;
     _ = sampling;
     _ = motion;
+    _ = evaluate;
     _ = svg.animation;
 }

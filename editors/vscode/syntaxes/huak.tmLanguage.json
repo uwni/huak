@@ -37,7 +37,9 @@
     "typst": {
       "patterns": [
         { "name": "meta.embedded.block.typst", "begin": "\\b(typ)(?=\\s*\\[)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\])", "patterns": [{ "include": "source.typst#contentBlock" }] },
-        { "name": "meta.embedded.block.typst-code", "begin": "\\b(setup_typst)(?=\\s*\\{)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\})", "patterns": [{ "include": "source.typst#codeBlock" }] }
+        { "name": "meta.embedded.block.typst-code", "begin": "\\b(setup_typst)(?=\\s*\\{)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\})", "patterns": [{ "include": "source.typst#codeBlock" }] },
+        { "name": "meta.embedded.block.typst-code", "begin": "\\b(show_rule)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(=>)(?=[ \\t]*\\{)", "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "variable.parameter.huak" }, "3": { "name": "keyword.operator.huak" } }, "end": "(?<=\\})", "patterns": [{ "include": "source.typst#codeBlock" }] },
+        { "name": "meta.embedded.block.typst", "begin": "\\b(show_rule)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(=>)(?=[ \\t]*\\[)", "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "variable.parameter.huak" }, "3": { "name": "keyword.operator.huak" } }, "end": "(?<=\\])", "patterns": [{ "include": "source.typst#contentBlock" }] }
       ]
     },
     "call-forms": { "patterns": [
@@ -80,7 +82,7 @@
       { "begin": "\\{", "end": "\\}", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] }
     ] },
     "keywords": { "patterns": [
-      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|precedence|mixfix|and|or|not|typ|setup_typst|typst_expose|cycle)\\b" },
+      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|precedence|mixfix|and|or|not|typ|setup_typst|typst_expose|typst_show|show_rule|cycle)\\b" },
       { "name": "constant.language.boolean.huak", "match": "\\b(?:true|false)\\b" }
     ] },
     "numbers": { "patterns": [

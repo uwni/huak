@@ -381,7 +381,10 @@ test "standard drawing recipes return whole-object handles including empty strok
     try execute(&machine);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expectEqual(@as(usize, 7), std.mem.count(u8, svg.bytes(), "<animate "));
+    // Seven whole objects animate; their identical tracks share one class.
+    try t.expectEqual(@as(usize, 7), std.mem.count(u8, svg.bytes(), "class=\"huak-a"));
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), ".huak-a"));
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "@keyframes "));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "stroke=\"url(#"));
     try t.expect(std.mem.indexOf(u8, svg.bytes(), "<linearGradient") != null);
 }

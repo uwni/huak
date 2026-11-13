@@ -1055,8 +1055,9 @@ test "drawing returns typed instances and appended groups remain animation targe
         try t.expectEqual(@as(usize, 5), selected.tracks.items.len);
         var svg = try runtime.render(pic, .svg);
         defer svg.deinit();
-        try t.expectEqual(@as(usize, 4), std.mem.count(u8, svg.bytes(), "<animate "));
-        try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "<animateTransform "));
+        // Each of the five targets plays its track; equal keys share keyframes.
+        try t.expectEqual(@as(usize, 5), std.mem.count(u8, svg.bytes(), " class=\"huak-a"));
+        try t.expectEqual(@as(usize, 3), std.mem.count(u8, svg.bytes(), "@keyframes "));
     }
 }
 
@@ -1084,16 +1085,135 @@ test "script animation uses one retained frame and continuous native object trac
     try t.expectEqual(@as(usize, 1), runtime.frames.items.len);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "animateTransform") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "0.37") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "2.5s") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<animate ") != null);
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "37%{transform:translate(50px,20px)}") != null);
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "2.5s linear both") != null);
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "100%{fill:rgb(255,0,0)}") != null);
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "0%{opacity:0.2}") != null);
     try t.expectError(error.AnimationRequiresSvg, runtime.render(machine.getGlobal("pic").?, .pdf));
     // Encoding the same immutable scene again doesn't evaluate text again.
     var again = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer again.deinit();
     try t.expectEqualSlices(u8, svg.bytes(), again.bytes());
     try t.expectEqual(@as(usize, 1), runtime.frames.items.len);
+}
+
+test "animation snapshots are static pictures of the playback state" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const source =
+        \\import paint.{rgb, circle, rectangle, path, fill, picture, bounds};import animation.{timeline, animate, motion};import math.norm;import assertions.assert
+        \\// One second into a 4 s loop: phase 0.25.
+        \\pic:=picture(160pt,60pt); pic.timeline(4)
+        \\faded:=object.append(pic, fill(circle((20pt,30pt),6pt),rgb(0.2,0.4,0.6)))
+        \\animate(faded,"opacity",[[0,0.2],[0.5,1],[1,0]])
+        \\tinted:=object.append(pic, fill(rectangle((40pt,24pt),12pt,12pt),rgb(1,0,0)))
+        \\animate(tinted,"fill",[[0,rgb(1,0,0)],[1,rgb(0,0,1)]])
+        \\held:=object.append(pic, fill(circle((80pt,30pt),6pt),rgb(0,0,0)))
+        \\animate(held,"opacity",[[0,1],[0.5,0],[1,1]],"discrete")
+        \\hidden:=object.append(pic, fill(circle((110pt,30pt),6pt),rgb(0,0,0)))
+        \\animate(hidden,"opacity",[[0,1],[0.2,0],[1,0]],"discrete")
+        \\still:=animation.snapshot(pic,1)
+        \\expected:=picture(160pt,60pt)
+        \\object.append(expected, fill(circle((20pt,30pt),6pt),rgb(0.2,0.4,0.6,0.6)))
+        \\object.append(expected, fill(rectangle((40pt,24pt),12pt,12pt),rgb(0.75,0,0.25)))
+        \\object.append(expected, fill(circle((80pt,30pt),6pt),rgb(0,0,0)))
+        \\// A symmetric easing curve passes its midpoint at half time.
+        \\curved:=picture(40pt,40pt); curved.timeline(2)
+        \\dot:=object.append(curved, fill(circle((20pt,20pt),6pt),rgb(0,0,0)))
+        \\animate(dot,"opacity",[[0,0],[1,1]],[0.42,0,0.58,1])
+        \\curved_still:=animation.snapshot(curved,1)
+        \\curved_expected:=picture(40pt,40pt)
+        \\object.append(curved_expected, fill(circle((20pt,20pt),6pt),rgb(0,0,0,0.5)))
+        \\// A quarter cycle ahead, one second into four: halfway.
+        \\phased:=picture(40pt,40pt); phased.timeline(4)
+        \\lit:=object.append(phased, fill(circle((20pt,20pt),6pt),rgb(0,0,0)))
+        \\animate(lit,"opacity",[[0,0],[1,1]],phase:0.25)
+        \\phased_still:=animation.snapshot(phased,1)
+        \\phased_expected:=picture(40pt,40pt)
+        \\object.append(phased_expected, fill(circle((20pt,20pt),6pt),rgb(0,0,0,0.5)))
+        \\mixed:=picture(40pt,40pt); mixed.timeline(2)
+        \\kept:=object.append(mixed, fill(circle((20pt,20pt),6pt),rgb(0,0,0)))
+        \\animate(kept,"opacity",[[0,0],[1,1]],smil:true)
+        \\// Wrappers nest in declaration order: translate outside scale.
+        \\moving:=picture(200pt,200pt); moving.timeline(2,false)
+        \\square:=object.append(moving, fill(rectangle((0pt,0pt),10pt,10pt),rgb(0,0,0)))
+        \\animate(square,"translate",[[0,(0pt,0pt)],[1,(100pt,0pt)]])
+        \\animate(square,"scale",[[0,(1,1)],[1,(3,3)]])
+        \\half:=bounds(animation.snapshot(moving,1))
+        \\assert(half[0]==(50pt,0pt) and half[1]==(70pt,20pt))
+        \\// A single run holds its last keys after the end.
+        \\frozen:=bounds(animation.snapshot(moving,9))
+        \\assert(frozen[0]==(100pt,0pt) and frozen[1]==(130pt,30pt))
+        \\turning:=picture(200pt,200pt); turning.timeline(2)
+        \\bar:=object.append(turning, fill(rectangle((10pt,0pt),10pt,10pt),rgb(0,0,0)))
+        \\animate(bar,"rotate",[[0,0deg],[1,180deg]])
+        \\turned:=bounds(animation.snapshot(turning,1))
+        \\assert(norm(turned[0]-(-10pt,10pt))<0.000001pt and norm(turned[1]-(0pt,20pt))<0.000001pt)
+        \\travel:=picture(200pt,200pt); travel.timeline(4)
+        \\ball:=object.append(travel, fill(circle((0pt,0pt),2pt),rgb(0,0,0)))
+        \\motion(ball,path((0pt,0pt),(0pt,80pt)),[[0,0],[1,1]],"none")
+        \\placed:=bounds(animation.snapshot(travel,1))
+        \\assert(norm(placed[0]-(-2pt,18pt))<0.000001pt and norm(placed[1]-(2pt,22pt))<0.000001pt)
+    ;
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compileModulesOptimized(&library, source, &.{}, optimize);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+        for ([_][2][]const u8{ .{ "still", "expected" }, .{ "curved_still", "curved_expected" }, .{ "phased_still", "phased_expected" } }) |pair| {
+            var still = try runtime.render(machine.getGlobal(pair[0]).?, .svg);
+            defer still.deinit();
+            var expected = try runtime.render(machine.getGlobal(pair[1]).?, .svg);
+            defer expected.deinit();
+            try t.expectEqualSlices(u8, expected.bytes(), still.bytes());
+            try t.expect(std.mem.indexOf(u8, still.bytes(), "<animate") == null);
+        }
+        // The animated source still needs SVG; its snapshot exports as PDF.
+        try t.expectError(error.AnimationRequiresSvg, runtime.render(machine.getGlobal("pic").?, .pdf));
+        var pdf = try runtime.render(machine.getGlobal("still").?, .pdf);
+        defer pdf.deinit();
+        try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
+        // The easing list reaches CSS as one cubic-bezier timing curve.
+        var curved = try runtime.render(machine.getGlobal("curved").?, .svg);
+        defer curved.deinit();
+        try t.expect(std.mem.indexOf(u8, curved.bytes(), " 2s cubic-bezier(0.42,0,0.58,1) infinite") != null);
+        // A phase starts the loop partway: an inline delay over its start state.
+        var phased = try runtime.render(machine.getGlobal("phased").?, .svg);
+        defer phased.deinit();
+        try t.expect(std.mem.indexOf(u8, phased.bytes(), "opacity=\"0.25\" class=\"huak-a") != null);
+        try t.expect(std.mem.indexOf(u8, phased.bytes(), "\" style=\"animation-delay:-1s\"") != null);
+        // A track marked smil plays as SMIL and needs no stylesheet.
+        var mixed = try runtime.render(machine.getGlobal("mixed").?, .svg);
+        defer mixed.deinit();
+        try t.expect(std.mem.indexOf(u8, mixed.bytes(), "<animate attributeName=\"opacity\" values=\"0;1\" dur=\"2s\" repeatCount=\"indefinite\"/>") != null);
+        try t.expect(std.mem.indexOf(u8, mixed.bytes(), "<style>") == null);
+    }
+    const failures = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "pic:=picture(40pt,40pt); pic.timeline(1)\ngroup:=object.append(pic, picture())\nobject.append(group, fill(circle((9pt,9pt),3pt),rgb(0,0,0)))\nanimate(group,\"opacity\",[[0,0.5],[1,0.5]])\nstill:=animation.snapshot(pic,0)", .message = "Typst groups have no opacity" },
+        .{ .source = "pic:=picture(40pt,40pt); pic.timeline(1)\ndot:=object.append(pic, filldraw(circle((9pt,9pt),3pt),rgb(0,0,0),pen(rgb(1,0,0),1pt)))\nanimate(dot,\"opacity\",[[0,0.5],[1,1]])\nstill:=animation.snapshot(pic,0)", .message = "Typst groups have no opacity" },
+        .{ .source = "pic:=picture(40pt,40pt); pic.timeline(1)\ndot:=object.append(pic, fill(circle((9pt,9pt),3pt),rgb(0,0,0)))\nanimate(dot,\"stroke\",[[0,rgb(0,0,0)],[1,rgb(1,0,0)]])\nstill:=animation.snapshot(pic,0.5)", .message = "already has a stroke" },
+        .{ .source = "pic:=picture(40pt,40pt)\ndot:=object.append(pic, fill(circle((9pt,9pt),3pt),rgb(0,0,0)))\nanimate(dot,\"opacity\",[[0,0],[1,1]])\nstill:=animation.snapshot(pic,0)", .message = "MissingTimeline" },
+        .{ .source = "pic:=picture(40pt,40pt); pic.timeline(1)\ndot:=object.append(pic, fill(circle((9pt,9pt),3pt),rgb(0,0,0)))\nanimate(dot,\"opacity\",[[0,0],[1,1]])\nstill:=animation.snapshot(pic,-1)", .message = "InvalidTiming" },
+        .{ .source = "pic:=picture(40pt,40pt)\ndot:=object.append(pic, fill(circle((9pt,9pt),3pt),rgb(0,0,0)))\nanimate(dot,\"opacity\",[[0,0],[1,1]],[0.2,0,1.5,1])", .message = "InvalidEasing" },
+    };
+    for (failures) |failure| {
+        const input = try std.mem.concat(t.allocator, u8, &.{ "import paint.{rgb, circle, fill, filldraw, pen, picture};import animation.{timeline, animate}\n", failure.source });
+        defer t.allocator.free(input);
+        var program = try compileModulesOptimized(&library, input, &.{}, false);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
+        const detail = machine.failure.?;
+        const reported = std.mem.indexOf(u8, detail.text(), failure.message) != null or std.mem.indexOf(u8, detail.native_message, failure.message) != null;
+        if (!reported) std.debug.print("snapshot failure: {s} / {s}\n", .{ detail.text(), detail.native_message });
+        try t.expect(reported);
+    }
 }
 
 test "path queries clipping picture copies and animation motion reuse core operations" {
@@ -1122,7 +1242,7 @@ test "path queries clipping picture copies and animation motion reuse core opera
     try execute(&machine);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "animateMotion") != null);
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "offset-path:path(") != null);
 }
 
 test "runtime copies inputs before lazy engine creation and retains native diagnostic" {
@@ -1332,9 +1452,9 @@ test "animation and group state belong to each explicit picture" {
     defer static.deinit();
     var pdf = try runtime.render(machine.getGlobal("static").?, .pdf);
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, animated.bytes(), "<animate ") != null);
-    try t.expect(std.mem.indexOf(u8, animated.bytes(), "1.25s") != null);
-    try t.expect(std.mem.indexOf(u8, static.bytes(), "<animate") == null);
+    try t.expect(std.mem.indexOf(u8, animated.bytes(), "@keyframes ") != null);
+    try t.expect(std.mem.indexOf(u8, animated.bytes(), " 1.25s ") != null);
+    try t.expect(std.mem.indexOf(u8, static.bytes(), "<style>") == null);
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
 }
 
@@ -2750,9 +2870,9 @@ test "one picture container supports automatic extent nested export copies and i
     defer nested.deinit();
     try t.expectEqualSlices(u8, direct.bytes(), nested.bytes());
     try t.expect(std.mem.indexOf(u8, whole.bytes(), "viewBox=\"0 0 30 15\"") != null);
-    try t.expect(std.mem.indexOf(u8, whole.bytes(), "dur=\"3s\"") != null);
-    try t.expect(std.mem.indexOf(u8, nested.bytes(), "dur=\"2s\"") != null);
-    try t.expect(std.mem.indexOf(u8, nested.bytes(), "repeatCount=\"indefinite\"") == null);
+    try t.expect(std.mem.indexOf(u8, whole.bytes(), " 3s ") != null);
+    try t.expect(std.mem.indexOf(u8, nested.bytes(), " 2s ") != null);
+    try t.expect(std.mem.indexOf(u8, nested.bytes(), " infinite") == null);
     var plain = try batch.render(t.allocator, 3, .svg, &diagnostic);
     defer plain.deinit();
     var duplicate = try batch.render(t.allocator, 4, .svg, &diagnostic);
@@ -2866,5 +2986,92 @@ test "exported block templates preserve definition and caller scopes through ali
         try execute(&machine);
         try t.expectEqual(@as(i64, 119), machine.getGlobal("answer").?.int);
         try t.expectEqual(@as(i64, 5), machine.getGlobal("forward").?.int);
+    }
+}
+
+test "show rules carry data snapshots and their own setups into other modules and nest by scope" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const modules = [_]ModuleSource{.{ .name = "/native/styles.huak", .source =
+        \\setup_typst { let face = "DejaVu Sans Mono" }
+        \\export fn sized(size:length)->show_rule
+        \\    typst_expose size
+        \\    return show_rule body => { set text(font: face, size: huak.size); body }
+        \\end
+        \\export fn labelled(value:string, style:show_rule)->text
+        \\    typst_expose value
+        \\    typst_show style
+        \\    return typ[#huak.value]
+        \\end
+    }};
+    const source =
+        \\import assertions.assert
+        \\import math.abs
+        \\import "styles.huak" as styles
+        \\setup_typst { let shout(it) = upper(it) }
+        \\size:=20pt
+        \\typst_expose size
+        \\loud:=show_rule body => { set text(size: huak.size); shout(body) }
+        \\size=6pt
+        \\plain:=typ[hello]
+        \\big:=styles.labelled("hello", loud)
+        \\mono:=styles.sized(11pt)
+        \\same:=styles.labelled("hello", mono)
+        \\nested:=typ[]
+        \\block
+        \\    typst_show loud, mono
+        \\    nested=typ[hello]
+        \\end
+        \\upper_mono:=styles.labelled("HELLO", mono)
+        \\called:=typ[]
+        \\composed:=typ[]
+        \\block
+        \\    typst_expose loud
+        \\    called=typ[#(huak.loud)[hello] hello]
+        \\    both:=show_rule body => { show: huak.loud; strong(body) }
+        \\    block
+        \\        typst_show both
+        \\        composed=typ[hello]
+        \\    end
+        \\end
+        \\assert(big.width > 2*plain.width, "a caller's rule styles text typeset by another module")
+        \\assert(abs(same.width-plain.width) > 0.1pt, "a rule uses the setup of the module that made it")
+        \\assert(abs(nested.width-upper_mono.width) < 0.001pt, "the inner rule's settings win while the outer rule still applies")
+        \\assert(called.width > big.width and called.width < big.width+plain.width+5pt, "an exposed rule is a Typst function")
+        \\assert(composed.width > big.width, "a rule applies a rule it captured")
+    ;
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compileModulesOptimized(&library, source, &modules, optimize);
+        defer program.deinit();
+        for ([_]bool{ false, true }) |batched| {
+            var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+            defer runtime.deinit();
+            var host = runtime.host();
+            var vtable = host.vtable.*;
+            if (!batched) vtable.typst_batch = null;
+            host.vtable = &vtable;
+            var machine = try l.Machine.init(t.allocator, &program, host, .{});
+            defer machine.deinit();
+            try execute(&machine);
+        }
+    }
+
+    // Errors name the rule's own lines: Typst syntax where the rule is made,
+    // and evaluation where another module applies it.
+    const failures = [_]struct { source: []const u8, location: []const u8, message: []const u8 }{
+        .{ .source = "rule:=show_rule body => { let = 1; body }", .location = "/native/main.huak:1:", .message = "expected pattern" },
+        .{ .source = "import \"styles.huak\" as styles\nbroken:=show_rule body => {\n    set text(size: huak.missing)\n    body\n}\nvalue:=styles.labelled(\"x\", broken)", .location = "/native/main.huak:3:20: ", .message = "unknown variable: huak" },
+    };
+    for (failures) |failure| {
+        var program = try compileModulesOptimized(&library, failure.source, &modules, true);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
+        const detail = machine.failure.?.native_message;
+        try t.expect(std.mem.indexOf(u8, detail, failure.location) != null);
+        try t.expect(std.mem.indexOf(u8, detail, failure.message) != null);
     }
 }

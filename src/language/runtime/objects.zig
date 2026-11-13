@@ -5,6 +5,8 @@ const Scene = @import("../../drawing/Scene.zig");
 const DisplayList = @import("../../drawing/DisplayList.zig");
 const AnimationState = @import("../AnimationState.zig");
 const core_animation = @import("../../animation/root.zig");
+const evaluate = @import("../../animation/evaluate.zig");
+const Path = @import("../../drawing/path/Path.zig");
 
 pub const Owner = struct {
     scene: Scene,
@@ -97,7 +99,6 @@ pub const Owner = struct {
 test "animation follows object placement across stores without ID collisions" {
     const t = std.testing;
     const types = @import("../types.zig");
-    const Path = @import("../../drawing/path/Path.zig");
     var first: Owner = .{ .scene = try Scene.init(t.allocator), .owner_index = 0, .animation_state = .init(t.allocator) };
     defer first.scene.deinit();
     defer first.animation_state.deinit();
@@ -112,8 +113,8 @@ test "animation follows object placement across stores without ID collisions" {
         types.listView(&.{ .{ .int = 0 }, .{ .int = 0 } }),
         types.listView(&.{ .{ .int = 1 }, .{ .int = 1 } }),
     };
-    try first.animation_state.animate(left, "opacity", keys, "linear", null);
-    try second.animation_state.animate(right, "opacity", keys, "linear", null);
+    try first.animation_state.animate(left, "opacity", keys, .linear, .{}, null);
+    try second.animation_state.animate(right, "opacity", keys, .linear, .{}, null);
     (try first.scene.settings(0)).duration = 2;
     (try second.scene.settings(0)).* = .{ .duration = 3, .repeat = false };
     try first.scene.place(0, second.scene.object(right), null);
@@ -170,4 +171,122 @@ pub const View = struct {
             .tracks = self.tracks.items,
         };
     }
+
+    /// A static, independently owned copy `seconds` into the timeline, as the
+    /// SVG export plays it. It keeps the canvas size but no tracks. Typst
+    /// groups have no opacity, so an opacity strictly between 0 and 1 needs a
+    /// path with one solid paint.
+    pub fn still(self: *const View, allocator: std.mem.Allocator, scratch: std.mem.Allocator, seconds: f64) !Scene {
+        var copied = try self.snapshot.picture.copy(allocator);
+        errdefer copied.deinit();
+        // Commands become nodes in order; end markers are not nodes.
+        const nodes = try scratch.alloc(Scene.Index, copied.commands.items.len);
+        defer scratch.free(nodes);
+        var count: Scene.Index = 0;
+        for (copied.commands.items, nodes) |command, *node| {
+            node.* = count;
+            if (command != .pop) count += 1;
+        }
+        var scene = try Scene.fromDisplayList(&copied);
+        errdefer scene.deinit();
+        // A root wrapper, when added, precedes every converted command.
+        const wrap = @as(Scene.Index, @intCast(scene.nodes.items.len)) - count;
+        (try scene.settings(0)).* = .{ .size = self.settings.size };
+        const timing = (try self.animation()) orelse return scene;
+        try timing.validate();
+        // Selection IDs are command positions plus one.
+        const Locate = struct {
+            fn node(map: []const Scene.Index, offset: Scene.Index, track: *const core_animation.Track) !Scene.Index {
+                if (track.target == 0 or track.target > map.len) return error.InvalidAnimationTarget;
+                return offset + map[@intCast(track.target - 1)];
+            }
+        };
+        // Wrappers nest outermost first, so the innermost applies first.
+        var remaining = self.tracks.items.len;
+        while (remaining > 0) {
+            remaining -= 1;
+            const track = &self.tracks.items[remaining];
+            if (try evaluate.transform(scratch, track, try evaluate.time(timing, track, seconds))) |value| try scene.applyTransform(try Locate.node(nodes, wrap, track), value);
+        }
+        // Paints are set before the opacity that scales them.
+        for (self.tracks.items) |*track| switch (track.property) {
+            .fill, .stroke, .stroke_width, .path => try paintStill(&scene, scratch, try Locate.node(nodes, wrap, track), track, try evaluate.time(timing, track, seconds)),
+            else => {},
+        };
+        for (self.tracks.items) |*track| if (track.property == .opacity) {
+            try opacityStill(&scene, try Locate.node(nodes, wrap, track), evaluate.scalar(track.property.opacity, track.easing, try evaluate.time(timing, track, seconds)));
+        };
+        return scene;
+    }
 };
+
+fn paintStill(scene: *Scene, scratch: std.mem.Allocator, index: Scene.Index, track: *const core_animation.Track, at: f64) !void {
+    const target = try instancePath(scene, index);
+    if (track.property == .path) {
+        var shape = Path.init(scratch);
+        defer shape.deinit();
+        try evaluate.path(&shape, track.property.path, track.easing, at);
+        return scene.setPath(target, &shape);
+    }
+    var style = (try scene.getNode(target)).path.style.*;
+    switch (track.property) {
+        .fill => |keys| {
+            if (style.gradientFor(.fill) != null) style.gradient = null;
+            style.fill = evaluate.color(keys, track.easing, at);
+        },
+        .stroke => |keys| {
+            if (style.gradientFor(.stroke) != null) style.gradient = null;
+            var pen = style.pen orelse return error.UnsupportedSnapshotStroke;
+            pen.color = evaluate.color(keys, track.easing, at);
+            style.pen = pen;
+        },
+        .stroke_width => |keys| {
+            var pen = style.pen orelse return error.UnsupportedSnapshotStroke;
+            pen.width = evaluate.scalar(keys, track.easing, at);
+            style.pen = pen;
+        },
+        else => unreachable,
+    }
+    try scene.setStyle(target, &style);
+}
+
+/// The one path a paint track addresses: the target itself, or the only
+/// drawable inside a target group, as the SVG export requires.
+fn instancePath(scene: *const Scene, index: Scene.Index) !Scene.Index {
+    if ((try scene.getNode(index)).* == .path) return index;
+    var found: ?Scene.Index = null;
+    if (!try onlyPath(scene, index, &found)) return error.AmbiguousPathTarget;
+    return found orelse error.AmbiguousPathTarget;
+}
+
+fn onlyPath(scene: *const Scene, index: Scene.Index, found: *?Scene.Index) !bool {
+    var children = try scene.children(index);
+    while (children.next()) |child| switch ((try scene.getNode(child.index)).*) {
+        .path => {
+            if (found.* != null) return false;
+            found.* = child.index;
+        },
+        .label => return false,
+        .picture => if (!try onlyPath(scene, child.index, found)) return false,
+    };
+    return true;
+}
+
+/// Opacity 0 hides the object and 1 leaves it unchanged. Any other value
+/// scales the single solid paint of a path, which equals group opacity there.
+fn opacityStill(scene: *Scene, index: Scene.Index, value: f64) !void {
+    if (value >= 1) return;
+    if (value <= 0) return scene.setVisible(index, false);
+    const node = try scene.getNode(index);
+    if (node.* != .path) return error.UnsupportedSnapshotOpacity;
+    var style = node.path.style.*;
+    if (style.gradient != null or (style.fill == null) == (style.pen == null)) return error.UnsupportedSnapshotOpacity;
+    if (style.fill) |fill| {
+        style.fill.?.a = fill.a * value;
+    } else {
+        var pen = style.pen.?;
+        pen.color.a *= value;
+        style.pen = pen;
+    }
+    try scene.setStyle(index, &style);
+}

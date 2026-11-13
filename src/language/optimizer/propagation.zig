@@ -196,7 +196,7 @@ const Analysis = struct {
                     try self.push(.{});
                 }
             },
-            .call, .call_value, .call_builtin, .typst, .setup_typst, .import_module => {
+            .call, .call_value, .call_builtin, .typst, .show_rule, .setup_typst, .import_module => {
                 self.forgetBindings();
                 try self.unknownResult(instruction, .{});
             },
@@ -317,7 +317,7 @@ fn valid(code: []const bc.Instruction, constants: []const Value, bindings: Bindi
     var remaining: usize = limits.work - @min(limits.work, code.len);
     for (code) |instruction| switch (instruction.op) {
         .constant => if (instruction.a >= constants.len) return false,
-        .field, .set_field, .typst, .setup_typst => if (instruction.a >= constants.len or constants[instruction.a] != .string) return false,
+        .field, .set_field, .typst, .show_rule, .setup_typst => if (instruction.a >= constants.len or constants[instruction.a] != .string) return false,
         .bind_arguments => {
             if (instruction.a >= bindings.argument_bindings.len) return false;
             const binding = bindings.argument_bindings[instruction.a];

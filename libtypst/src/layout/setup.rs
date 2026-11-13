@@ -3,7 +3,7 @@ use comemo::Track;
 use typst_core::{
     diag::{At, SourceResult},
     engine::{Engine, Sink},
-    foundations::{Content, Context, Scope, Scopes},
+    foundations::{Content, Context, Scope, Scopes, Value},
     syntax::{ast, FileId, RangeMapper, Source, Span, SyntaxKind, SyntaxMode, SyntaxNode},
 };
 use typst_eval::{Eval, Vm};
@@ -85,6 +85,51 @@ pub(super) fn evaluate<'a>(
     Ok((value.display(), vm.engine))
 }
 
+/// Evaluates template code in its own scope with its own bindings. Optional
+/// setup runs first in that scope, so the resulting function captures its
+/// definitions; the content and styles the setup produces are discarded.
+pub(super) fn template<'a>(
+    mut engine: Engine<'a>,
+    context: &'a Context<'a>,
+    setup: Option<&Source>,
+    source: &Source,
+    bindings: Scope,
+) -> SourceResult<(Value, Engine<'a>)> {
+    let prefix = setup
+        .map(|setup| prepared(setup.text(), setup.id()))
+        .transpose()?;
+    let code = prepared(source.text(), source.id())?;
+    let mut errors = Vec::new();
+    if let Some(prefix) = &prefix {
+        errors.extend(diagnostics(prefix, &mut engine.sink));
+    }
+    errors.extend(diagnostics(&code, &mut engine.sink));
+    if !errors.is_empty() {
+        return Err(errors.into());
+    }
+    let mut scopes = Scopes::new(Some(engine.library));
+    if bindings.iter().next().is_some() {
+        scopes.scopes.push(bindings);
+    }
+    let mut vm = Vm::new(engine, context.track(), scopes, Span::detached());
+    if let Some(prefix) = &prefix {
+        statements(prefix, &mut vm)?;
+    }
+    let value = statements(&code, &mut vm)?;
+    Ok((value, vm.engine))
+}
+
+fn statements(tree: &SyntaxNode, vm: &mut Vm) -> SourceResult<Value> {
+    let value = tree
+        .cast::<ast::Code>()
+        .expect("native Code tree")
+        .eval(vm)?;
+    if let Some(flow) = vm.flow.take() {
+        return Err(vec![flow.forbidden()].into());
+    }
+    Ok(value)
+}
+
 fn diagnostics(
     node: &SyntaxNode,
     sink: &mut comemo::TrackedMut<'_, Sink>,
@@ -123,6 +168,7 @@ mod tests {
                     &options,
                     setup,
                     "preamble",
+                    Default::default(),
                     Default::default(),
                     0,
                 )
@@ -166,6 +212,7 @@ mod tests {
                 &Default::default(),
                 setup,
                 "preamble",
+                Default::default(),
                 Default::default(),
                 7,
             ) {

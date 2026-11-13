@@ -36,15 +36,42 @@ pub const TypstBinding = struct { name: []const u8, value: Value };
 pub const TypstRequest = struct {
     source: []const u8,
     bindings: []const TypstBinding = &.{},
+    /// show_rule values applied around the content, outermost first.
+    shows: []const Value = &.{},
+};
+/// Where Typst code given to the host begins: its module's name and the
+/// 0-based line and byte column of the code's first byte in that source.
+pub const TypstOrigin = struct { name: []const u8, line: usize, column: usize };
+
+const invalid_captures = "typst_expose requires finite numbers, bool, UTF-8 strings, lengths, colors or show rules; typst_show requires show rules";
+
+/// Captured operands split into data bindings and the shows marked by empty
+/// names. Both slices are allocated in one allocator.
+const Captures = struct {
+    bindings: []TypstBinding,
+    shows: []Value,
+
+    fn deinit(self: Captures, allocator: std.mem.Allocator) void {
+        allocator.free(self.bindings);
+        allocator.free(self.shows);
+    }
 };
 
-fn requestBindings(allocator: std.mem.Allocator, operands: []const Value) std.mem.Allocator.Error!?[]TypstBinding {
+/// Null rejects malformed operands and values Typst cannot receive.
+fn captures(allocator: std.mem.Allocator, operands: []const Value) std.mem.Allocator.Error!?Captures {
     if (operands.len % 2 != 0) return null;
+    var shows: usize = 0;
     var index: usize = 0;
     while (index < operands.len) : (index += 2) {
         const name = operands[index];
-        if (name != .string or name.string.len == 0 or !std.unicode.utf8ValidateSlice(name.string)) return null;
-        const valid = switch (operands[index + 1]) {
+        if (name != .string or !std.unicode.utf8ValidateSlice(name.string)) return null;
+        const value = operands[index + 1];
+        if (name.string.len == 0) {
+            if (value != .handle or value.handle.kind != .show_rule) return null;
+            shows += 1;
+            continue;
+        }
+        const valid = switch (value) {
             .int, .boolean => true,
             .number => |numeric_value| std.math.isFinite(numeric_value),
             .string => |string| std.unicode.utf8ValidateSlice(string),
@@ -53,14 +80,28 @@ fn requestBindings(allocator: std.mem.Allocator, operands: []const Value) std.me
                 _ = units.toPoints(quantity) catch break :blk false;
                 break :blk true;
             },
-            .handle => |handle| handle.kind == .color,
+            .handle => |handle| handle.kind == .color or handle.kind == .show_rule,
             else => false,
         };
         if (!valid) return null;
     }
-    const bindings = try allocator.alloc(TypstBinding, operands.len / 2);
-    for (bindings, 0..) |*binding, i| binding.* = .{ .name = operands[i * 2].string, .value = operands[i * 2 + 1] };
-    return bindings;
+    const bindings = try allocator.alloc(TypstBinding, operands.len / 2 - shows);
+    errdefer allocator.free(bindings);
+    const rules = try allocator.alloc(Value, shows);
+    var named: usize = 0;
+    var shown: usize = 0;
+    index = 0;
+    while (index < operands.len) : (index += 2) {
+        const name = operands[index].string;
+        if (name.len == 0) {
+            rules[shown] = operands[index + 1];
+            shown += 1;
+        } else {
+            bindings[named] = .{ .name = name, .value = operands[index + 1] };
+            named += 1;
+        }
+    }
+    return .{ .bindings = bindings, .shows = rules };
 }
 
 /// Host-owned objects are represented by typed handles. Callbacks may allocate
@@ -93,6 +134,9 @@ pub const Host = struct {
     pub inline fn typesetBatch(self: Host, allocator: std.mem.Allocator, requests: []const TypstRequest, values: []Value, diagnostic: *TypstBatchDiagnostic) anyerror!void {
         return self.vtable.typst_batch.?(self.ptr, allocator, requests, values, diagnostic);
     }
+    pub inline fn showRule(self: Host, allocator: std.mem.Allocator, code: []const u8, bindings: []const TypstBinding, origin: TypstOrigin) anyerror!Value {
+        return self.vtable.show_rule.?(self.ptr, allocator, code, bindings, origin);
+    }
     pub inline fn setupTypst(self: Host, source_text: []const u8) anyerror!void {
         return self.vtable.setup_typst.?(self.ptr, source_text);
     }
@@ -114,6 +158,9 @@ pub const Host = struct {
         /// Success initializes every output. Errors initialize only the diagnostic's
         /// completed prefix. Neither descriptor slice may be retained by the host.
         typst_batch: ?*const fn (?*anyopaque, std.mem.Allocator, []const TypstRequest, []Value, *TypstBatchDiagnostic) anyerror!void = null,
+        /// Makes a show_rule from Typst function code, snapshotting the
+        /// bindings and the selected module's setup. Inputs are borrowed.
+        show_rule: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const TypstBinding, TypstOrigin) anyerror!Value = null,
         setup_typst: ?*const fn (?*anyopaque, []const u8) anyerror!void = null,
         error_message: ?*const fn (?*anyopaque) []const u8 = null,
     };
@@ -713,12 +760,27 @@ fn runUntil(self: *Machine, task_end: ?usize, depth: usize) Error!Value {
                 const length = std.math.mul(usize, instruction.b, 2) catch return self.fail("invalid Typst capture count", .{});
                 if (length > self.stack.items.len) return self.fail("invalid Typst capture operands", .{});
                 const offset = self.stack.items.len - length;
-                const bindings = (try requestBindings(self.gpa, self.stack.items[offset..])) orelse return self.fail("typst_expose requires finite numbers, bool, UTF-8 strings, lengths or colors", .{});
-                defer self.gpa.free(bindings);
+                const captured = (try captures(self.gpa, self.stack.items[offset..])) orelse return self.fail(invalid_captures, .{});
+                defer captured.deinit(self.gpa);
                 self.stack.shrinkRetainingCapacity(offset);
-                const result = self.host.typeset(self.arena.allocator(), .{ .source = text, .bindings = bindings }) catch |err| return self.nativeFailure(err);
+                const result = self.host.typeset(self.arena.allocator(), .{ .source = text, .bindings = captured.bindings, .shows = captured.shows }) catch |err| return self.nativeFailure(err);
                 try self.checkFiniteExternal(result);
                 try self.push(try self.coerce(result, .text));
+            },
+            .show_rule => {
+                self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
+                const code = try self.stringConstant(instruction.a);
+                if (self.host.vtable.show_rule == null) return self.fail("show_rule requires a Typst host", .{});
+                const length = std.math.mul(usize, instruction.b, 2) catch return self.fail("invalid Typst capture count", .{});
+                if (length > self.stack.items.len) return self.fail("invalid Typst capture operands", .{});
+                const offset = self.stack.items.len - length;
+                const captured = (try captures(self.gpa, self.stack.items[offset..])) orelse return self.fail(invalid_captures, .{});
+                defer captured.deinit(self.gpa);
+                if (captured.shows.len != 0) return self.fail("invalid Typst capture operands", .{});
+                self.stack.shrinkRetainingCapacity(offset);
+                const origin = self.typstOrigin(if (instruction.module == std.math.maxInt(u32)) function.module else instruction.module, instruction.span.start);
+                const result = self.host.showRule(self.arena.allocator(), code, captured.bindings, origin) catch |err| return self.nativeFailure(err);
+                try self.push(try self.coerce(result, .show_rule));
             },
             .setup_typst => {
                 self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
@@ -865,7 +927,7 @@ fn planText(self: *Machine, allocator: std.mem.Allocator, frame_index: usize, fu
         break :blk self.stack.items[self.stack.items.len - count ..];
     } else operands.items;
     if (values.len != count) return null;
-    const bindings = try requestBindings(allocator, values) orelse return null;
+    const captured = try captures(allocator, values) orelse return null;
     const store = function.code[position + 1];
     switch (store.op) {
         .store_global => if (store.a >= self.globals.len or store.a >= self.program.global_types.len or
@@ -873,7 +935,7 @@ fn planText(self: *Machine, allocator: std.mem.Allocator, frame_index: usize, fu
         .store_local => if (store.a >= function.local_types.len or function.local_types[store.a] != .text) return null,
         else => return null,
     }
-    return .{ .begin = begin, .produce = position, .end = position + 2, .store = store, .request = .{ .source = self.program.constants[produce.a].string, .bindings = bindings } };
+    return .{ .begin = begin, .produce = position, .end = position + 2, .store = store, .request = .{ .source = self.program.constants[produce.a].string, .bindings = captured.bindings, .shows = captured.shows } };
 }
 
 fn chargeText(self: *Machine, frame_index: usize, function: bytecode.Function, begin: usize, end: usize) Error!void {
@@ -912,7 +974,7 @@ fn typesetBatch(self: *Machine, frame_index: usize, function: bytecode.Function,
     }
     if (count < 2) return false;
     self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
-    self.stack.shrinkRetainingCapacity(self.stack.items.len - requests[0].bindings.len * 2);
+    self.stack.shrinkRetainingCapacity(self.stack.items.len - (requests[0].bindings.len + requests[0].shows.len) * 2);
     var diagnostic: TypstBatchDiagnostic = .{};
     var cause: ?anyerror = null;
     self.host.typesetBatch(self.arena.allocator(), requests[0..count], values[0..count], &diagnostic) catch |err| {
@@ -1495,7 +1557,7 @@ fn checkFiniteLeaf(self: *Machine, value: Value) Error!void {
             return self.fail("arithmetic produced a non-finite vector", .{});
         },
         .handle => |handle| switch (handle.kind) {
-            .path, .shape, .color, .pen, .transform, .solver, .variable, .linear, .solution, .text, .measure => {},
+            .path, .shape, .color, .pen, .transform, .solver, .variable, .linear, .solution, .text, .measure, .show_rule => {},
             else => return self.fail("host returned an invalid native handle type", .{}),
         },
         else => {},
@@ -1716,6 +1778,15 @@ fn fail(self: *Machine, comptime format: []const u8, args: anytype) Error {
     failure.diagnostic.writeMessage(format, args);
     self.captureTrace(failure) catch return error.OutOfMemory;
     return error.RuntimeFailed;
+}
+
+fn typstOrigin(self: *const Machine, module: u32, offset: usize) TypstOrigin {
+    const name, const text = if (module < self.program.modules.len)
+        .{ self.program.modules[module].name, self.program.modules[module].source_text }
+    else
+        .{ self.program.name, self.program.source_text };
+    const position = std.zig.findLineColumn(text, @min(offset, text.len));
+    return .{ .name = name, .line = position.line, .column = position.column };
 }
 
 fn captureTrace(self: *Machine, failure: *RuntimeDiagnostic) error{OutOfMemory}!void {
@@ -3911,6 +3982,9 @@ const TypstBatchProbe = struct {
     batch_count: usize = 0,
     seen: [256][]const u8 = undefined,
     captures: [256][]const TypstBinding = undefined,
+    shows: [256][]const Value = undefined,
+    rules: [16]struct { code: []const u8, bindings: []const TypstBinding, origin: TypstOrigin } = undefined,
+    rule_count: usize = 0,
     generations: [256]usize = undefined,
     seen_count: usize = 0,
     generation: usize = 0,
@@ -3929,6 +4003,7 @@ const TypstBatchProbe = struct {
         const index = self.seen_count;
         self.seen[index] = text;
         self.captures[index] = try allocator.dupe(TypstBinding, request.bindings);
+        self.shows[index] = try allocator.dupe(Value, request.shows);
         self.generations[index] = self.generation;
         self.seen_count += 1;
         if (std.mem.indexOf(u8, text, "FAIL") != null) return error.TypesetFailed;
@@ -3968,6 +4043,13 @@ const TypstBatchProbe = struct {
         from(context).generation += 1;
     }
 
+    fn rule(context: ?*anyopaque, allocator: std.mem.Allocator, code: []const u8, bindings: []const TypstBinding, origin: TypstOrigin) !Value {
+        const self = from(context);
+        self.rules[self.rule_count] = .{ .code = code, .bindings = try allocator.dupe(TypstBinding, bindings), .origin = origin };
+        self.rule_count += 1;
+        return .{ .handle = .{ .kind = .show_rule, .index = self.rule_count - 1 } };
+    }
+
     fn field(context: ?*anyopaque, _: std.mem.Allocator, text: Value, _: []const u8) !Value {
         from(context).fields += 1;
         return .{ .quantity = units.fromPoints(@floatFromInt(text.handle.index + 1)) };
@@ -3978,7 +4060,7 @@ const TypstBatchProbe = struct {
         return .unit;
     }
 
-    const host_vtable: Host.VTable = .{ .typst = one, .typst_batch = batch, .setup_typst = setup, .field = field, .call_builtin = effect, .error_message = message };
+    const host_vtable: Host.VTable = .{ .typst = one, .typst_batch = batch, .show_rule = rule, .setup_typst = setup, .field = field, .call_builtin = effect, .error_message = message };
     const single_host_vtable = blk: {
         var table = host_vtable;
         table.typst_batch = null;
@@ -4286,6 +4368,58 @@ test "Typst captures batch current scalar snapshots and local shadows without ch
             try std.testing.expectEqual(expected.steps, actual.steps);
             try std.testing.expectEqualDeep(expected.initialized, actual.initialized);
             if (expected.failure) |failure| try std.testing.expectEqualDeep(failure.diagnostic.span, actual.failure.?.diagnostic.span);
+        }
+    }
+}
+
+test "show rules reach the host as data snapshots and typst_show rules batch around content" {
+    const input =
+        \\size:=2pt
+        \\typst_expose size
+        \\outer:=show_rule b => [B]
+        \\size=5pt
+        \\inner:=show_rule b => [I]
+        \\typst_show outer
+        \\a:=typ[A]
+        \\c:=typ[C]
+        \\fn caption()->text
+        \\    typst_show inner
+        \\    first:=typ[X]
+        \\    second:=typ[Y]
+        \\    return second
+        \\end
+        \\d:=caption()
+    ;
+    for ([_]bool{ false, true }) |optimize| {
+        for ([_]bool{ false, true }) |batched| {
+            var program = try TypstBatchProbe.compile(input, optimize);
+            defer program.deinit();
+            var probe: TypstBatchProbe = .{};
+            var machine = try Machine.init(std.testing.allocator, &program, probe.host(batched), .{});
+            defer machine.deinit();
+            _ = try machine.execute(&.{});
+            try std.testing.expectEqual(@as(usize, 2), probe.rule_count);
+            for (probe.rules[0..2], [_]f64{ 2, 5 }, [_][]const u8{ "b => [B]", "b => [I]" }, [_]usize{ 2, 4 }) |rule, points, code, line| {
+                try std.testing.expectEqualStrings(code, rule.code);
+                try std.testing.expectEqual(@as(usize, 1), rule.bindings.len);
+                try std.testing.expectEqualStrings("size", rule.bindings[0].name);
+                try std.testing.expectEqual(points, try units.toPoints(rule.bindings[0].value.quantity));
+                try std.testing.expectEqualStrings("typst-batch-vm.huak", rule.origin.name);
+                try std.testing.expectEqual(line, rule.origin.line);
+                try std.testing.expectEqual(@as(usize, "outer:=show_rule ".len), rule.origin.column);
+            }
+            if (batched) try std.testing.expectEqualSlices(usize, &.{ 2, 2 }, probe.batch_sizes[0..probe.batch_count]);
+            try std.testing.expectEqual(@as(usize, 4), probe.seen_count);
+            for (0..4) |index| {
+                // Content reads the data current at each typ, then the rules outermost first.
+                try std.testing.expectEqual(@as(f64, 5), try units.toPoints(probe.captures[index][0].value.quantity));
+                const shows = probe.shows[index];
+                try std.testing.expectEqual(@as(usize, if (index < 2) 1 else 2), shows.len);
+                for (shows, 0..) |rule, position| {
+                    try std.testing.expectEqual(Type.show_rule, rule.handle.kind);
+                    try std.testing.expectEqual(position, rule.handle.index);
+                }
+            }
         }
     }
 }

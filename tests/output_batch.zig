@@ -157,7 +157,7 @@ test "output preparation validates animation before frame references without con
         types.listView(&.{ .{ .int = 0 }, .{ .int = 0 } }),
         types.listView(&.{ .{ .int = 1 }, .{ .int = 1 } }),
     };
-    try owner.animation_state.animate(1, "opacity", &keys, "linear", null);
+    try owner.animation_state.animate(1, "opacity", &keys, .linear, .{}, null);
     const settings = try owner.scene.settings(0);
     settings.size = .{ .x = 20, .y = 20 };
     for ([_]struct { duration: ?f64, failure: anyerror }{
@@ -382,7 +382,7 @@ test "output jobs retain foreign animation keys after runtime and original outpu
         for ([_]huak.core.Scene.Object{ from, to }) |canvas| {
             const item = try firstChild(canvas);
             const owner: *Owner = @fieldParentPtr("scene", item.scene);
-            try owner.animation_state.animate(item.index, "opacity", keys, "linear", null);
+            try owner.animation_state.animate(item.index, "opacity", keys, .linear, .{}, null);
         }
         (try to.scene.settings(to.index)).duration = 2;
         (try to.scene.settings(to.index)).repeat = false;
@@ -392,7 +392,11 @@ test "output jobs retain foreign animation keys after runtime and original outpu
     defer batch.deinit();
     var before = try render(&batch, 1, .svg);
     defer before.deinit();
-    try t.expectEqual(@as(usize, 2), std.mem.count(u8, before.bytes(), "attributeName=\"opacity\""));
+    // Both objects keep their identical opacity track: one keyframes, one class.
+    try t.expectEqual(@as(usize, 2), std.mem.count(u8, before.bytes(), "class=\"huak-a"));
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, before.bytes(), ".huak-a"));
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, before.bytes(), "@keyframes "));
+    try t.expect(std.mem.indexOf(u8, before.bytes(), "{0%{opacity:0}100%{opacity:1}}") != null);
     batch.release(0);
     var after = try render(&batch, 1, .svg);
     defer after.deinit();

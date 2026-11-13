@@ -45,7 +45,7 @@ pub fn build(allocator: Allocator, program: *const bc.Program) Allocator.Error![
             while (end < function.code.len) : (end += 1) {
                 if (end != start and boundary[end]) break;
                 switch (function.code[end].op) {
-                    .jump, .jump_if_false, .return_value, .halt, .import_module, .setup_typst, .typst, .store_local, .load_local, .list_append, .list_append_items, .make_dict, .make_record, .set_index, .set_field => break,
+                    .jump, .jump_if_false, .return_value, .halt, .import_module, .setup_typst, .typst, .show_rule, .store_local, .load_local, .list_append, .list_append_items, .make_dict, .make_record, .set_index, .set_field => break,
                     else => {},
                 }
                 if (function.code[end].op == .store_global or function.code[end].op == .pop) break;

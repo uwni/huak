@@ -39,7 +39,7 @@ export fn options(ax:Axis, side:string) -> dict
     return merged(inherited, get(ax.sides, side, {}))
 end
 
-fn tick_text(r:Ruler, size:length) -> list
+fn tick_text(r:Ruler, size:length, style:any) -> list
     if get(r.options, "labels", false) != false then
         supplied:list := r.options["labels"]
         assert(len(supplied) == len(r.ticks), "tick positions and labels differ in length")
@@ -47,8 +47,8 @@ fn tick_text(r:Ruler, size:length) -> list
     end
     result := []
     for value in r.ticks do
-        if r.scale.kind == "category" then result += [labels.literal(str(value), size)]
-        else result += [labels.number(value, size, get(r.options, "format", "auto"))] end
+        if r.scale.kind == "category" then result += [labels.literal(str(value), size, style)]
+        else result += [labels.number(value, size, get(r.options, "format", "auto"), style)] end
     end
     return result
 end
@@ -81,10 +81,11 @@ fn automatic(r:Ruler, count:int, available:length) -> list
     return result
 end
 
-export fn measure(r:Ruler, available:length, font:length, shared:any)
+export fn measure(r:Ruler, available:length, font:length, tick_style:any, shared:any)
     opts := r.options
     along_x := horizontal(r.side)
     size:length := get(opts, "font_size", font)
+    style:any := get(opts, "tick_style", tick_style)
     assert(size > 0pt, "font size must be positive")
     estimate := 40pt
     if along_x then estimate = 65pt end
@@ -97,7 +98,7 @@ export fn measure(r:Ruler, available:length, font:length, shared:any)
     elseif dict_contains(opts, "ticks") then r.ticks = opts["ticks"]
     else r.ticks = automatic(r, count, available) end
     if shared != false then r.ticks = shared end
-    r.bodies = tick_text(r, size)
+    r.bodies = tick_text(r, size, style)
     rotation:angle := get(opts, "tick_rotation", 0deg)
     longest := 0pt
     for body in r.bodies do
@@ -116,7 +117,7 @@ export fn measure(r:Ruler, available:length, font:length, shared:any)
                 for i in 0:stride:len(r.ticks)-1 do thinned += [r.ticks[i]] end
                 r.ticks = thinned
             end
-            r.bodies = tick_text(r, size)
+            r.bodies = tick_text(r, size, style)
         end
     end
     thickness := 0pt

@@ -7,7 +7,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0004;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0005;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -19,6 +19,9 @@ pub const TYPST_CAP_PDF_IMPORT: u64 = 32;
 /// Font directories and TYPST_CONTEXT_SYSTEM_FONTS, discovered by typst-kit.
 /// Builds without a file system, such as Wasm, do not report it.
 pub const TYPST_CAP_FONT_DISCOVERY: u64 = 64;
+/// Template functions evaluated from code with their own bindings in content
+/// layout options, as binding values and as show rules around the content.
+pub const TYPST_CAP_LAYOUT_TEMPLATES: u64 = 128;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;
@@ -29,6 +32,9 @@ pub const TYPST_VALUE_DICT: u32 = 6;
 /// `number` is an absolute length in points.
 pub const TYPST_VALUE_LENGTH: u32 = 7;
 pub const TYPST_VALUE_COLOR: u32 = 8;
+/// `integer` indexes the layout options' templates; the value is that
+/// template's function, for `show:` rules or direct calls.
+pub const TYPST_VALUE_TEMPLATE: u32 = 9;
 pub const TYPST_CONTEXT_NO_BUILTIN_FONTS: u32 = 1;
 pub const TYPST_CONTEXT_DISABLE_PLUGINS: u32 = 2;
 /// Add the fonts installed on the system, as found by typst-kit. Requires
@@ -179,6 +185,33 @@ pub struct TypstLayoutOptions {
     /// copies their data during the call; context/import scopes are unaffected.
     pub bindings: *const TypstBinding,
     pub binding_count: usize,
+    /// Borrowed templates. TYPST_VALUE_TEMPLATE inputs in `bindings` refer to
+    /// them by index. Requires TYPST_CAP_LAYOUT_TEMPLATES.
+    pub templates: *const TypstTemplate,
+    pub template_count: usize,
+    /// Template indices applied to the request's content like `#show:` rules
+    /// at its start, outermost first. Rules nearer the content take precedence.
+    pub shows: *const usize,
+    pub show_count: usize,
+}
+
+/// Independent Typst code whose value is a function, such as
+/// `body => { set text(red); body }`, evaluated once per request in its own
+/// scope with its own borrowed bindings. Optional setup code runs first in
+/// that scope, so the function can use its definitions; the setup's own set
+/// and show rules style nothing. TYPST_VALUE_TEMPLATE inputs in a template's
+/// own bindings may refer only to earlier templates in the same array.
+/// Source names must differ from the request's and from each other.
+/// Frozen array element layout.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstTemplate {
+    pub code: TypstStr,
+    pub source_name: TypstStr,
+    pub setup_code: TypstStr,
+    pub setup_source_name: TypstStr,
+    pub bindings: *const TypstBinding,
+    pub binding_count: usize,
 }
 impl Default for TypstLayoutOptions {
     fn default() -> Self {
@@ -193,6 +226,10 @@ impl Default for TypstLayoutOptions {
             setup_source_name: TypstStr::default(),
             bindings: std::ptr::null(),
             binding_count: 0,
+            templates: std::ptr::null(),
+            template_count: 0,
+            shows: std::ptr::null(),
+            show_count: 0,
         }
     }
 }
@@ -279,8 +316,9 @@ pub struct TypstBinding {
 }
 
 /// Borrowed native-value input. Only the field selected by `kind` is read:
-/// BOOL/INT use `integer`, FLOAT/LENGTH use `number`, STRING uses `text`, COLOR
-/// uses `color`, ARRAY uses `items/item_count`, DICT uses `bindings/binding_count`.
+/// BOOL/INT/TEMPLATE use `integer`, FLOAT/LENGTH use `number`, STRING uses
+/// `text`, COLOR uses `color`, ARRAY uses `items/item_count`, DICT uses
+/// `bindings/binding_count`.
 /// `reserved` must be zero. Nested inputs are limited to depth 64 and one
 /// million nodes per request. These are C contract kinds, not Rust enum values.
 #[repr(C)]

@@ -31,6 +31,22 @@ test "formatter preserves Typst bytes comments and semantics and is idempotent" 
     try t.expectError(error.LanguageError, tooling.format.format(&frontend, "fn broken(\n", "/tmp/broken.huak", &diagnostic));
 }
 
+test "formatter spaces the show rule arrow and keeps rule code bytes" {
+    var editor_library = try typst.Library.open(options.library_path);
+    defer editor_library.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
+    const rule = "{\n  set text(fill: red)   // keep = a,b\n  body\n}";
+    const input = "fn style()->show_rule\nreturn show_rule body=>" ++ rule ++ "\nend\nloud:=style()\ntypst_show loud\nmarked:=show_rule it=>[*#it*]\nx:=typ[hi]\n";
+    const expected = "fn style()->show_rule\n    return show_rule body => " ++ rule ++ "\nend\nloud := style()\ntypst_show loud\nmarked := show_rule it => [*#it*]\nx := typ[hi]\n";
+    var diagnostic: ?tooling.compiler.Diagnostic = null;
+    const formatted = try tooling.format.format(&frontend, input, "/tmp/rules.huak", &diagnostic);
+    defer t.allocator.free(formatted);
+    try t.expectEqualStrings(expected, formatted);
+    const again = try tooling.format.format(&frontend, formatted, "/tmp/rules.huak", &diagnostic);
+    defer t.allocator.free(again);
+    try t.expectEqualStrings(formatted, again);
+}
+
 test "embedded parser and import failures belong to the request that tried to use them" {
     const filename = "/tmp/huak-provider.huak";
     for ([_]anyerror{ error.LibraryNotFound, error.OutOfMemory }) |reason| {

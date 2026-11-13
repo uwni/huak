@@ -43,6 +43,14 @@ Device-style nodes declare port columns, for example
 circuit bus: a stroke 2.2 rules wide, a slash at the middle, a solid head and
 a label on the left.
 
+Brace, bracket and paren nodes stretch a Typst glyph over the node. The
+node's `fill` colors the glyph, and the `style` shape option takes a
+`show_rule` applied around it, so the caller's text settings, such as
+`set text(size: 14pt)`, give its stroke weight:
+`{"shape": "brace", "shape_options": {"dir": "bottom", "style": rule}}`.
+`stretched_glyph(kind, extent, side, fill, style)` typesets the same glyph
+directly.
+
 Arrowheads bend along smooth routes by default. Their ordinary local geometry
 is transformed together with its clearance mask; arrow styles remain in this
 package, while `transform.bent` supplies the general geometric operation.

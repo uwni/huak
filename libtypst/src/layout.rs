@@ -2,7 +2,9 @@
 use comemo::Track;
 use typst_core::diag::SourceResult;
 use typst_core::engine::{Engine, Route, Sink, Traced};
-use typst_core::foundations::{Context as EvalContext, Scope, StyleChain, Target, TargetElem};
+use typst_core::foundations::{
+    Context as EvalContext, Scope, StyleChain, Target, TargetElem, Value,
+};
 use typst_core::introspection::{EmptyIntrospector, Locator};
 use typst_core::layout::{Abs, Axes, Frame, Region, Size};
 use typst_core::routines::SpanMode;
@@ -20,6 +22,24 @@ mod setup;
 
 pub(crate) struct Layout {
     pub(crate) frame: Frame,
+}
+
+/// Template code and its optional setup. Requests keep these sources in their
+/// world so that diagnostics raised inside a template call resolve.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TemplateSource<'a> {
+    pub(crate) code: &'a str,
+    pub(crate) source_name: &'a str,
+    pub(crate) setup_code: &'a str,
+    pub(crate) setup_source_name: &'a str,
+}
+
+/// The templates a request refers to, and the functions it applies around its
+/// content as `#show:` rules, outermost first.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Templates<'a> {
+    pub(crate) sources: &'a [TemplateSource<'a>],
+    pub(crate) shows: &'a [Value],
 }
 
 impl Layout {
@@ -61,10 +81,60 @@ impl Context {
             "",
             "",
             Scope::new(),
+            Templates::default(),
             request_index,
         )
     }
 
+    /// Evaluates template code into its function value with its own bindings,
+    /// before a request that refers to it. Warnings are returned for that
+    /// request's report; the function itself owns its syntax and captures.
+    pub(crate) fn template(
+        &self,
+        template: TemplateSource<'_>,
+        bindings: Scope,
+    ) -> Result<(Value, Report), Error> {
+        let mut world = self.world(template.code, template.source_name)?;
+        if !template.setup_code.is_empty() {
+            world.set_setup(template.setup_code, template.setup_source_name)?;
+        }
+        let library = world.library();
+        let traced = Traced::default();
+        let introspector = EmptyIntrospector;
+        let mut sink = Sink::new();
+        let eval_context = EvalContext::none();
+        let result = {
+            let setup = world.setup.as_ref();
+            let world: &dyn World = &world;
+            let source = world
+                .source(world.main())
+                .expect("the template source is present");
+            let engine = Engine {
+                world: world.track(),
+                library,
+                introspector: Protected::new(introspector.track()),
+                traced: traced.track(),
+                sink: sink.track_mut(),
+                route: Route::default(),
+            };
+            setup::template(engine, &eval_context, setup, &source, bindings).map(|(value, _)| value)
+        };
+        let mut report = Report::from_native(&world, &sink.warnings(), usize::MAX);
+        match result {
+            Ok(value @ Value::Func(_)) => Ok((value, report)),
+            Ok(value) => Err(Error::invalid(format!(
+                "template code must evaluate to a function, found {}",
+                value.ty()
+            ))
+            .with_source(template.source_name)),
+            Err(errors) => {
+                report.merge(Report::from_native(&world, &errors, usize::MAX));
+                Err(Error::compile(report))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_with_setup(
         &self,
         source: &str,
@@ -73,6 +143,7 @@ impl Context {
         setup_code: &str,
         setup_source_name: &str,
         bindings: Scope,
+        templates: Templates<'_>,
         request_index: usize,
     ) -> Result<(Layout, Report), Error> {
         let (mode, region) = region_and_syntax(options)?;
@@ -80,8 +151,14 @@ impl Context {
         if !setup_code.is_empty() {
             world.set_setup(setup_code, setup_source_name)?;
         }
+        for template in templates.sources {
+            world.add_template(template.code, template.source_name)?;
+            if !template.setup_code.is_empty() {
+                world.add_template(template.setup_code, template.setup_source_name)?;
+            }
+        }
         let mut sink = Sink::new();
-        let result = layout_in_world(&world, mode, region, bindings, &mut sink);
+        let result = layout_in_world(&world, mode, region, bindings, templates.shows, &mut sink);
         let needs_document = !sink.introspections().is_empty();
         let delayed = sink.delayed();
         let mut report = Report::from_native(&world, &sink.warnings(), request_index);
@@ -156,6 +233,7 @@ fn layout_in_world(
     mode: SyntaxMode,
     region: Region,
     bindings: Scope,
+    shows: &[Value],
     sink: &mut Sink,
 ) -> SourceResult<Frame> {
     let library = world.library();
@@ -175,7 +253,7 @@ fn layout_in_world(
         sink: sink.track_mut(),
         route: Route::default(),
     };
-    let content;
+    let mut content;
     if let Some(setup_source) = setup_source {
         (content, engine) =
             setup::evaluate(engine, &eval_context, setup_source, &source, mode, bindings)?;
@@ -210,6 +288,16 @@ fn layout_in_world(
             )?
             .display()
         };
+    }
+    // As with `#show: rule` at the start of the body, the innermost rule
+    // receives the content first and nearer rules take precedence.
+    for rule in shows.iter().rev() {
+        let Value::Func(function) = rule else {
+            unreachable!("templates are checked to be functions when made");
+        };
+        content = function
+            .call(&mut engine, eval_context.track(), [content])?
+            .display();
     }
     let target = TargetElem::target.set(Target::Paged).wrap();
     let base = StyleChain::new(&library.styles);
@@ -257,10 +345,199 @@ mod tests {
                 setup,
                 "setup.typ",
                 bindings,
+                Templates::default(),
                 0,
             )
             .unwrap()
             .0
+    }
+
+    /// Lays out `body` next to the request's `payload.word` and its binding
+    /// `style`, the template made from `setup` and `code` with its own
+    /// bindings. With `apply`, the template is also a show rule around it.
+    fn styled(
+        context: &Context,
+        body: &str,
+        setup: &str,
+        code: &str,
+        own: Scope,
+        apply: bool,
+    ) -> Result<(Layout, Report), Error> {
+        let template = TemplateSource {
+            code,
+            source_name: "template.typ",
+            setup_code: setup,
+            setup_source_name: "template-setup.typ",
+        };
+        let (style, _) = context.template(template, own)?;
+        let mut bindings = data(&[("word", "Hello".into_value())]);
+        bindings.bind("style".into(), Binding::detached(style.clone()));
+        let shows = [style];
+        let templates = Templates {
+            sources: &[template],
+            shows: if apply { &shows } else { &[] },
+        };
+        context.layout_with_setup(
+            body,
+            "source.typ",
+            &Default::default(),
+            "",
+            "",
+            bindings,
+            templates,
+            0,
+        )
+    }
+
+    fn mentions(error: &Error, source: &str, message: &str) -> bool {
+        error
+            .report
+            .entries
+            .iter()
+            .any(|entry| entry.source_name.ends_with(source) && entry.message.contains(message))
+    }
+
+    #[test]
+    fn templates_are_functions_with_their_own_scope_and_data() {
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
+        let width = |body: &str, setup: &str, code: &str, own: Scope, apply: bool| {
+            let (layout, _) = styled(&context, body, setup, code, own, apply).unwrap();
+            layout.metrics().width_pt
+        };
+        let identity = "body => body";
+        let plain = width("#payload.word", "", identity, Scope::new(), false);
+        // The template reads its own `payload`; the body reads the request's.
+        let mut size = Dict::new();
+        size.insert("size".into(), Abs::pt(30.0).into_value());
+        let mut own = Scope::new();
+        own.bind("payload".into(), Binding::detached(size));
+        let set_size = "body => { set text(size: payload.size); body }";
+        let large = width(
+            "#show: style\n#payload.word",
+            "",
+            set_size,
+            own.clone(),
+            false,
+        );
+        assert!(large > 2.0 * plain);
+        // A request show rule applies it to the whole content.
+        let applied = width("#payload.word", "", set_size, own.clone(), true);
+        assert!((applied - large).abs() < 1e-9);
+        // A direct call styles only part of the content.
+        let part = width(
+            "#style[#payload.word] #payload.word",
+            "",
+            set_size,
+            own.clone(),
+            false,
+        );
+        assert!(part > large && part < 2.0 * large);
+        // Rules nearer to the content take precedence over an applied rule.
+        let near = width("#text(size: 5pt, payload.word)", "", set_size, own, true);
+        assert!(near < plain);
+        // An everything rule wraps the body it receives.
+        let wrapped = width(
+            "#show: style\n#payload.word",
+            "",
+            "body => [Wrapped #body]",
+            Scope::new(),
+            false,
+        );
+        assert!(wrapped > plain);
+        // The template's setup lends it definitions, while its own rules
+        // style nothing and its definitions stay away from the body.
+        let helper = width(
+            "#show: style\n#payload.word",
+            "let big(it) = text(size: 30pt, it)",
+            "body => big(body)",
+            Scope::new(),
+            false,
+        );
+        assert!(helper > 2.0 * plain);
+        let unstyled = width(
+            "#show: style\n#payload.word",
+            "set text(size: 30pt)",
+            identity,
+            Scope::new(),
+            false,
+        );
+        assert!((unstyled - plain).abs() < 1e-9);
+        let hidden = styled(
+            &context,
+            "#show: style\n#big[x]",
+            "let big(it) = it",
+            identity,
+            Scope::new(),
+            false,
+        );
+        let error = hidden.err().unwrap();
+        assert_eq!(error.status, TYPST_COMPILE_FAILED);
+        assert!(mentions(&error, "source.typ", "unknown variable"));
+        // Errors raised during a call keep the template's own source names.
+        let failing = styled(
+            &context,
+            "#show: style\nHello",
+            "",
+            "body => { set text(size: missing); body }",
+            Scope::new(),
+            false,
+        );
+        assert!(mentions(
+            &failing.err().unwrap(),
+            "template.typ",
+            "unknown variable"
+        ));
+        let deep = styled(
+            &context,
+            "#show: style\nHello",
+            "let broken(it) = text(size: missing, it)",
+            "body => broken(body)",
+            Scope::new(),
+            false,
+        );
+        assert!(mentions(
+            &deep.err().unwrap(),
+            "template-setup.typ",
+            "unknown variable"
+        ));
+        // The code must evaluate to a function; syntax errors appear when made.
+        let number = TemplateSource {
+            code: "1 + 2",
+            source_name: "number.typ",
+            ..Default::default()
+        };
+        let error = context.template(number, Scope::new()).err().unwrap();
+        assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
+        let broken = TemplateSource {
+            code: "body => {",
+            source_name: "broken.typ",
+            ..Default::default()
+        };
+        let error = context.template(broken, Scope::new()).err().unwrap();
+        assert_eq!(error.status, TYPST_COMPILE_FAILED);
+        assert!(mentions(&error, "broken.typ", ""));
+        // Body, setup and template sources keep distinct names.
+        let clash = TemplateSource {
+            code: identity,
+            source_name: "source.typ",
+            ..Default::default()
+        };
+        let templates = Templates {
+            sources: &[clash],
+            shows: &[],
+        };
+        let options = Default::default();
+        let result = context.layout_with_setup(
+            "Hello",
+            "source.typ",
+            &options,
+            "",
+            "",
+            Scope::new(),
+            templates,
+            0,
+        );
+        assert_eq!(result.err().unwrap().status, TYPST_INVALID_ARGUMENT);
     }
 
     #[test]
@@ -358,6 +635,7 @@ mod tests {
                 "",
                 "setup.typ",
                 scope,
+                Templates::default(),
                 9,
             )
             .err()
@@ -386,6 +664,7 @@ mod tests {
                     setup,
                     "setup.typ",
                     data(&[("title", "available".into_value())]),
+                    Templates::default(),
                     13,
                 )
                 .err()

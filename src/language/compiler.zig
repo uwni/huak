@@ -45,11 +45,15 @@ pub const Diagnostic = source.Diagnostic;
 const Symbol = struct { index: u32, kind: Type, readonly: bool = false, inferable: bool = false, available_after: usize = 0 };
 const Names = std.StringHashMapUnmanaged(Symbol);
 const Binding = struct { symbol: Symbol, local: bool, declaration: usize = 0, module: ?u32 = null, initializer: ?u32 = null };
-/// A `typst_expose` name resolved where its declaration compiles, which may be
-/// inside a template expansion. Its environment is the declaring module.
-const Exposure = struct { binding: Binding, environment: *Environment, name: []const u8, span: Span };
+/// A `typst_expose` or `typst_show` name resolved where its declaration
+/// compiles, which may be inside a template expansion. Its environment is the
+/// declaring module.
+const Exposure = struct { binding: Binding, environment: *Environment, name: []const u8, span: Span, show: bool };
 const unreadable_exposure = "typst_expose requires a readable Huak variable, found '{s}'";
-const unsupported_exposure = "typst_expose supports numeric, bool, string, length, and color values; '{s}' has type {s}";
+const unsupported_exposure = "typst_expose supports numeric, bool, string, length, color, and show_rule values; '{s}' has type {s}";
+const unreadable_show = "typst_show requires a readable Huak variable, found '{s}'";
+const unsupported_show = "typst_show requires a show_rule; '{s}' has type {s}";
+const unreadable_rule_data = "show_rule snapshots every typst_expose name in scope when it is made, but '{s}' has no value here";
 const CallableTarget = struct { target: CallTarget, module: ?u32 = null, initializer: ?u32 = null };
 const CallTarget = @FieldType(bc.Export, "target");
 const ExpressionDefault = struct { expression: *ast.Expr, function: u32, kind: Type, span: Span };
@@ -1041,9 +1045,12 @@ const Compiler = struct {
             // Exposure is lexical metadata, not an evaluated statement. Names
             // resolve here, where template bodies still see the expansion's
             // locals; types are checked once forward declarations are inferred.
-            .typst_expose => |names| for (names) |name| {
-                const binding = context.resolve(name.name, name.span) orelse return self.fail(name.span, unreadable_exposure, .{name.name});
-                try context.exposures.append(self.build.syntax_allocator, .{ .binding = binding, .environment = self.environment, .name = name.name, .span = name.span });
+            .typst_expose, .typst_show => |names| {
+                const show = statement_.value == .typst_show;
+                for (names) |name| {
+                    const binding = context.resolve(name.name, name.span) orelse return if (show) self.fail(name.span, unreadable_show, .{name.name}) else self.fail(name.span, unreadable_exposure, .{name.name});
+                    try context.exposures.append(self.build.syntax_allocator, .{ .binding = binding, .environment = self.environment, .name = name.name, .span = name.span, .show = show });
+                }
             },
             .return_value => |value| {
                 if (context.entry and context.return_block == null) return self.fail(span, "return is only valid inside a function or block", .{});
@@ -1416,9 +1423,18 @@ const Compiler = struct {
                 return self.finishBlock(context, &block, !definitelyReturns(body), span);
             },
             .typst => |block| {
-                const count = try self.compileTypstCaptures(context, span);
+                const count = try self.compileTypstCaptures(context, span, .content);
                 _ = try context.emit(.typst, try self.addConstant(.{ .string = block }, span), count, span);
                 return .text;
+            },
+            .show_rule => |rule| {
+                // typst_show rules style typ content, not the rules made here.
+                const count = try self.compileTypstCaptures(context, span, .rule);
+                // The instruction spans exactly the code, which locates
+                // native diagnostics within this module's source.
+                const code: Span = .{ .start = rule.parameter.start, .end = span.end };
+                _ = try context.emit(.show_rule, try self.addConstant(.{ .string = rule.code }, code), count, code);
+                return .show_rule;
             },
         }
     }
@@ -1537,14 +1553,28 @@ const Compiler = struct {
     /// captured. Forward declarations need not be initialized yet.
     fn exposable(kind: Type) bool {
         return switch (kind) {
-            .any, .scalar, .quantity, .int, .number, .boolean, .string, .length, .color => true,
+            .any, .scalar, .quantity, .int, .number, .boolean, .string, .length, .color, .show_rule => true,
             else => false,
         };
     }
 
-    fn exposedBinding(self: *Compiler, context: *Context, name: []const u8, span: Span) !Binding {
-        const binding = context.resolve(name, span) orelse return self.fail(span, unreadable_exposure, .{name});
-        if (!exposable(binding.symbol.kind)) return self.fail(span, unsupported_exposure, .{ name, self.typeName(binding.symbol.kind) });
+    fn showable(kind: Type) bool {
+        return kind == .any or kind == .show_rule;
+    }
+
+    /// What a captured name supplies: data for typ content or for a show_rule
+    /// being made, or a rule applied around typ content.
+    const Capture = enum { data, rule_data, show };
+
+    fn exposedBinding(self: *Compiler, context: *Context, name: []const u8, capture: Capture, span: Span) !Binding {
+        const resolved = context.resolve(name, span);
+        if (capture == .rule_data) if (resolved == null or (resolved.?.local and span.start < resolved.?.symbol.available_after))
+            return self.fail(span, unreadable_rule_data, .{name});
+        const binding = resolved orelse return if (capture == .show) self.fail(span, unreadable_show, .{name}) else self.fail(span, unreadable_exposure, .{name});
+        const kind = binding.symbol.kind;
+        if (capture == .show) {
+            if (!showable(kind)) return self.fail(span, unsupported_show, .{ name, self.typeName(kind) });
+        } else if (!exposable(kind)) return self.fail(span, unsupported_exposure, .{ name, self.typeName(kind) });
         return binding;
     }
 
@@ -1561,42 +1591,56 @@ const Compiler = struct {
                 binding.symbol.kind
             else
                 exposure.environment.globals.get(exposure.name).?.kind;
-            if (exposable(kind)) continue;
+            if (if (exposure.show) showable(kind) else exposable(kind)) continue;
             self.environment = exposure.environment;
-            return self.fail(exposure.span, unsupported_exposure, .{ exposure.name, self.typeName(kind) });
+            return if (exposure.show) self.fail(exposure.span, unsupported_show, .{ exposure.name, self.typeName(kind) }) else self.fail(exposure.span, unsupported_exposure, .{ exposure.name, self.typeName(kind) });
         }
     }
 
-    fn compileTypstCaptures(self: *Compiler, context: *Context, span: Span) !u32 {
+    /// Pushes a (name, value) pair for each typst_expose name visible at span,
+    /// for typ content and show_rule code alike. For typ content, ("", rule)
+    /// pairs follow for the visible typst_show names: outer scopes first, each
+    /// in source order, so the outermost applies outermost. Names resolve at
+    /// the site.
+    fn compileTypstCaptures(self: *Compiler, context: *Context, span: Span, site: enum { content, rule }) !u32 {
         const headers = self.environment.unit.headers;
-        if (headers.typst_exposures.len == 0) return 0;
+        if (headers.typst_declarations.len == 0) return 0;
+        const allocator = self.build.syntax_allocator;
+        var chain: std.ArrayList(Parser.ScopeId) = .empty; // innermost first
+        defer chain.deinit(allocator);
+        var scope: ?Parser.ScopeId = self.environment.unit.scopeAt(span.start);
+        while (scope) |id| : (scope = headers.scopes[id].parent) try chain.append(allocator, id);
         var seen: std.StringHashMapUnmanaged(void) = .{};
-        defer seen.deinit(self.build.syntax_allocator);
+        defer seen.deinit(allocator);
         var count: u32 = 0;
-        // Read visible declarations in source order, so failed captures also
-        // have deterministic ordering. Resolve each name at the content site.
-        for (headers.typst_exposures) |header| {
-            var scope: ?Parser.ScopeId = self.environment.unit.scopeAt(span.start);
-            var visible = false;
-            while (scope) |id| {
-                if (header.scope == id) {
-                    visible = true;
-                    break;
-                }
-                scope = headers.scopes[id].parent;
-            }
-            if (!visible) continue;
-            for (header.statement.value.typst_expose) |name| {
-                const entry = try seen.getOrPut(self.build.syntax_allocator, name.name);
-                if (entry.found_existing) continue;
-                if (count == std.math.maxInt(u32) / 2) return self.fail(span, "Typst exposure exceeds bytecode stack capacity", .{});
-                const binding = try self.exposedBinding(context, name.name, span);
-                try context.constant(.{ .string = try self.allocator.dupe(u8, name.name) }, span);
-                try context.load(binding, span);
-                count += 1;
+        // Source order keeps failed captures deterministic.
+        for (headers.typst_declarations) |header| {
+            if (header.statement.value != .typst_expose or std.mem.indexOfScalar(Parser.ScopeId, chain.items, header.scope) == null) continue;
+            for (header.statement.value.typst_expose) |name| try self.compileTypstCapture(context, &seen, &count, name.name, if (site == .rule) .rule_data else .data, span);
+        }
+        // typst_show rules apply around typ content, not to a rule made here.
+        if (site == .rule) return count;
+        seen.clearRetainingCapacity();
+        var depth = chain.items.len;
+        while (depth != 0) {
+            depth -= 1;
+            for (headers.typst_declarations) |header| {
+                if (header.scope != chain.items[depth] or header.statement.value != .typst_show) continue;
+                for (header.statement.value.typst_show) |name| try self.compileTypstCapture(context, &seen, &count, name.name, .show, span);
             }
         }
         return count;
+    }
+
+    fn compileTypstCapture(self: *Compiler, context: *Context, seen: *std.StringHashMapUnmanaged(void), count: *u32, name: []const u8, capture: Capture, span: Span) !void {
+        const entry = try seen.getOrPut(self.build.syntax_allocator, name);
+        if (entry.found_existing) return;
+        if (count.* == std.math.maxInt(u32) / 2) return self.fail(span, "Typst exposure exceeds bytecode stack capacity", .{});
+        const binding = try self.exposedBinding(context, name, capture, span);
+        // An empty name marks a show rule; Huak names are never empty.
+        try context.constant(.{ .string = if (capture == .show) "" else try self.allocator.dupe(u8, name) }, span);
+        try context.load(binding, span);
+        count.* += 1;
     }
 
     fn compilePathLiteral(self: *Compiler, context: *Context, expression_: *ast.Expr) anyerror!Type {
@@ -4361,14 +4405,83 @@ test "Typst exposures reject unknown function and non-data variables without req
         .{ .input = "typst_expose missing", .message = "readable Huak variable" },
         .{ .input = "fn function()->int return 1 end\ntypst_expose function", .message = "readable Huak variable" },
         .{ .input = "typst_expose pi", .message = "readable Huak variable" },
-        .{ .input = "value:=[1]\ntypst_expose value", .message = "numeric, bool, string, length, and color" },
-        .{ .input = "typst_expose value\nvalue:=[1]", .message = "numeric, bool, string, length, and color" },
-        .{ .input = "value:=picture(640, 480)\ntypst_expose value\n", .message = "numeric, bool, string, length, and color" },
-        .{ .input = "value:=1deg\ntypst_expose value", .message = "numeric, bool, string, length, and color" },
+        .{ .input = "value:=[1]\ntypst_expose value", .message = "numeric, bool, string, length, color, and show_rule" },
+        .{ .input = "typst_expose value\nvalue:=[1]", .message = "numeric, bool, string, length, color, and show_rule" },
+        .{ .input = "value:=picture(640, 480)\ntypst_expose value\n", .message = "numeric, bool, string, length, color, and show_rule" },
+        .{ .input = "value:=1deg\ntypst_expose value", .message = "numeric, bool, string, length, color, and show_rule" },
     };
     for (cases) |fixture| {
         var diagnostic: ?Diagnostic = null;
         try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, fixture.input, "exposure-errors.huak", .{}, &diagnostic));
+        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), fixture.message) != null);
+    }
+}
+
+test "typst_show rules follow exposed data outermost first while show rules capture data only" {
+    const input =
+        \\size:=2pt
+        \\typst_expose size
+        \\outer:=show_rule b => []
+        \\inner:=show_rule b => []
+        \\typst_show outer
+        \\fn caption()->text
+        \\    typst_show inner, outer
+        \\    return typ[]
+        \\end
+        \\plain:=typ[]
+    ;
+    var program = try exposedCompile(std.testing.allocator, input, false);
+    defer program.deinit();
+    const Expected = struct { op: bc.Op, names: []const []const u8, rules: []const []const u8 = &.{} };
+    const Check = struct {
+        fn run(compiled: *const bc.Program, function: bc.Function, expected: []const Expected) !void {
+            var index: usize = 0;
+            for (function.code, 0..) |instruction, position| if (instruction.op == .typst or instruction.op == .show_rule) {
+                const want = expected[index];
+                try std.testing.expectEqual(want.op, instruction.op);
+                try std.testing.expectEqual(want.names.len + want.rules.len, instruction.b);
+                const inputs = function.code[position - instruction.b * 2 .. position];
+                for (0..instruction.b) |capture| {
+                    const name = compiled.constants[inputs[capture * 2].a].string;
+                    const value = compiled.global_names[inputs[capture * 2 + 1].a];
+                    if (capture < want.names.len) {
+                        try std.testing.expectEqualStrings(want.names[capture], name);
+                        try std.testing.expectEqualStrings(want.names[capture], value);
+                    } else {
+                        // An empty name marks a rule applied around the content.
+                        try std.testing.expectEqualStrings("", name);
+                        try std.testing.expectEqualStrings(want.rules[capture - want.names.len], value);
+                    }
+                }
+                if (instruction.op == .show_rule) try std.testing.expectEqualStrings("b => []", compiled.source_text[instruction.span.start..instruction.span.end]);
+                index += 1;
+            };
+            try std.testing.expectEqual(expected.len, index);
+        }
+    };
+    try Check.run(&program, program.functions[0], &.{
+        .{ .op = .show_rule, .names = &.{"size"} },
+        .{ .op = .show_rule, .names = &.{"size"} },
+        .{ .op = .typst, .names = &.{"size"}, .rules = &.{"outer"} },
+    });
+    try Check.run(&program, program.functions[1], &.{.{ .op = .typst, .names = &.{"size"}, .rules = &.{ "outer", "inner" } }});
+}
+
+test "typst_show and show_rule captures reject values Typst cannot receive" {
+    const cases = [_]struct { input: []const u8, message: []const u8 }{
+        .{ .input = "count:=1\ntypst_show count\nvalue:=typ[]", .message = "typst_show requires a show_rule; 'count' has type int" },
+        .{ .input = "count:=1\nblock\n    typst_show count\nend", .message = "typst_show requires a show_rule; 'count' has type int" },
+        .{ .input = "typst_show missing", .message = "typst_show requires a readable Huak variable, found 'missing'" },
+        .{ .input = "rule:=show_rule b => []\ntypst_expose rule", .message = "show_rule snapshots every typst_expose name in scope when it is made, but 'rule' has no value here" },
+        .{ .input = "fn make()->show_rule\n    rule:=show_rule b => []\n    typst_expose rule\n    return rule\nend", .message = "show_rule snapshots every typst_expose name in scope when it is made, but 'rule' has no value here" },
+        .{ .input = "items:=[1]\ntypst_expose items\nrule:=show_rule b => []", .message = "typst_expose supports numeric, bool, string, length, color, and show_rule values; 'items' has type list" },
+        .{ .input = "fn make()->text return show_rule b => [] end", .message = "show_rule" },
+    };
+    for (cases) |fixture| {
+        var marker: u8 = 0;
+        var diagnostic: ?Diagnostic = null;
+        const options: CompileOptions = .{ .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } } };
+        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, fixture.input, "show-errors.huak", options, &diagnostic));
         try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), fixture.message) != null);
     }
 }
@@ -4438,9 +4551,9 @@ test "Typst exposures in template call bodies resolve like ordinary reads" {
         // and an imported template reports them in its defining module.
         .{ .input = "expand_block frame()\n    typst_expose missing\n    ...\nend\nframe do\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .line = 2, .column = 18 },
         .{ .input = "import \"frames\".broken\nbroken do\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .file = "frames.huak", .line = 6, .column = 18 },
-        .{ .input = "expand_block frame()\n    items := [1]\n    ...\nend\nframe do\n    typst_expose items\nend", .message = "typst_expose supports numeric, bool, string, length, and color values; 'items' has type list", .line = 6, .column = 18 },
+        .{ .input = "expand_block frame()\n    items := [1]\n    ...\nend\nframe do\n    typst_expose items\nend", .message = "typst_expose supports numeric, bool, string, length, color, and show_rule values; 'items' has type list", .line = 6, .column = 18 },
         // Forward declarations are checked with their inferred types.
-        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose later\n    later := [1]\nend", .message = "typst_expose supports numeric, bool, string, length, and color values; 'later' has type list", .line = 5, .column = 18 },
+        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose later\n    later := [1]\nend", .message = "typst_expose supports numeric, bool, string, length, color, and show_rule values; 'later' has type list", .line = 5, .column = 18 },
         .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose missing\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .line = 5, .column = 18 },
     };
     for (failures) |failure| {

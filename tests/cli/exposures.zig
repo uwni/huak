@@ -61,7 +61,7 @@ pub fn run(ctx: *h.Harness) !void {
     try h.contains(bytecode.stdout, "load_global");
 
     const invalid_static = try ctx.script("exposures/static_list", "items:=[1]\ntypst_expose items\n");
-    try h.contains((try ctx.command("check", invalid_static, &.{}, false)).stderr, "numeric, bool, string, length, and color");
+    try h.contains((try ctx.command("check", invalid_static, &.{}, false)).stderr, "numeric, bool, string, length, color, and show_rule");
     const unknown = try ctx.script("exposures/unknown", "typst_expose missing\n");
     try h.contains((try ctx.command("check", unknown, &.{}, false)).stderr, "readable Huak variable");
     const dynamic = try ctx.script("exposures/dynamic",

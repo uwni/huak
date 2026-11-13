@@ -1,11 +1,14 @@
-//! Parametric SMIL added to one native Typst SVG export. Static glyph defs are
-//! shared unchanged. Typed tracks address marked scene objects, never glyph
-//! definitions or an arbitrary path found elsewhere in the document.
+//! Parametric animation added to one native Typst SVG export, as CSS or SMIL.
+//! Static glyph defs are shared unchanged. Typed tracks address marked scene
+//! objects, never glyph definitions or an arbitrary path found elsewhere in
+//! the document.
 const std = @import("std");
 const a = @import("../../animation/root.zig");
 const xml = @import("xml.zig");
 const Path = @import("../../drawing/path/Path.zig");
 const SmilEncoder = @import("SmilEncoder.zig");
+const CssEncoder = @import("CssEncoder.zig");
+const XmlWriter = @import("xml_parser").Writer;
 const Buffer = std.ArrayList(u8);
 const Properties = std.EnumSet(std.meta.Tag(a.Property));
 const animated_attributes = [_]struct { property: std.meta.Tag(a.Property), names: []const []const u8 }{
@@ -31,13 +34,16 @@ const Location = struct {
     properties: Properties = .empty,
 };
 const Range = struct { start: usize, end: usize };
-const PathEdit = struct { start: usize, end: usize, self_closing: bool, removal_start: usize, removal_count: usize };
+/// styled: the source path has a class or style attribute of its own.
+const PathEdit = struct { start: usize, end: usize, self_closing: bool, removal_start: usize, removal_count: usize, styled: bool };
 /// Owns binding metadata only. Source offsets refer to the caller's SVG; no
 /// XML reader, tag or attribute storage is retained during SMIL generation.
 const Targets = struct {
     arena: std.heap.ArenaAllocator,
     locations: Locations = .empty,
     paths: std.ArrayList(PathEdit) = .empty,
+    /// Where the root element's closing tag starts, which a stylesheet precedes.
+    root_close: usize = 0,
     removals: std.ArrayList(Range) = .empty,
 
     fn deinit(self: *Targets) void {
@@ -113,6 +119,9 @@ comptime {
 /// group's parent coordinates; huak supplies a y-up parent group. Path-morph
 /// keys and stroke widths use the actual instance path's local coordinates,
 /// before its preserved base/ancestor transforms. Typed angles are radians.
+/// Tracks play as CSS animations, which share keyframes between elements and
+/// stop for readers who prefer reduced motion. A track marked `smil` plays as
+/// SMIL instead, for browsers lacking a CSS property such as `d`.
 pub fn encodeAnimatedSvg(allocator: std.mem.Allocator, static_svg: []const u8, animation: *const a.Animation) ![]u8 {
     return encode(allocator, static_svg, animation) catch |err| switch (err) {
         // Both writer sinks are memory-only; WriteFailed can only be allocation failure.
@@ -143,33 +152,44 @@ fn encode(allocator: std.mem.Allocator, static_svg: []const u8, animation: *cons
         defer groups.deinit();
         var paint: SmilEncoder = .init(allocator, &fragment.writer, &value);
         defer paint.deinit();
+        var css: CssEncoder = .init(allocator);
+        defer css.deinit();
         var groups_started = false;
         var paint_started = false;
-        for (targets.locations.keys(), targets.locations.values()) |id, *location| {
-            if (!groups_started) {
-                try groups.xml.elementStart("g");
-                try groups.xml.embed("");
-                groups_started = true;
-            }
-            group_sink.clearRetainingCapacity();
-            var wrappers: usize = 1;
+        for (targets.locations.values()) |*location| {
             const track_indices = location.track_indices[0..location.properties.count()];
-            try groups.object(id);
+            // Each group track wraps the object's own group, without IDs:
+            // several SVG files may share one page.
+            var wrappers: usize = 0;
             for (track_indices) |track_index| {
                 const track = &animation.tracks[track_index];
                 if (isPaint(std.meta.activeTag(track.property))) continue;
+                if (!groups_started) {
+                    try groups.xml.elementStart("g");
+                    try groups.xml.embed("");
+                    groups_started = true;
+                }
+                if (wrappers == 0) group_sink.clearRetainingCapacity();
                 try groups.wrapper(track, animation);
+                if (track.smil) {
+                    try groups.wrapperAnimation(track, animation);
+                } else if (try css.element(&.{track}, animation)) |class| {
+                    try groups.attribute("class", "{f}", .{class});
+                    if (css.style().len != 0) try groups.attribute("style", "{s}", .{css.style()});
+                }
                 wrappers += 1;
             }
-            try groups.xml.embed("");
-            const opening_end = group_sink.written().len;
-            for (0..wrappers) |_| try groups.xml.elementEnd();
-            const group = try allocator.dupe(u8, group_sink.written());
-            const marker = @intFromPtr(location.marker.?) - @intFromPtr(static_svg.ptr);
-            // Reuse serialization scratch; edits retain only their exact bytes.
-            // The closing edit borrows its owner tail across sorting.
-            edits.appendAssumeCapacity(.{ .opening = .{ .position = marker, .storage = group, .content_len = opening_end } });
-            edits.appendAssumeCapacity(.{ .closing = .{ .position = location.end, .bytes = group[opening_end..] } });
+            if (wrappers != 0) {
+                try groups.xml.embed("");
+                const opening_end = group_sink.written().len;
+                for (0..wrappers) |_| try groups.xml.elementEnd();
+                const group = try allocator.dupe(u8, group_sink.written());
+                const marker = @intFromPtr(location.marker.?) - @intFromPtr(static_svg.ptr);
+                // Reuse serialization scratch; edits retain only their exact bytes.
+                // The closing edit borrows its owner tail across sorting.
+                edits.appendAssumeCapacity(.{ .opening = .{ .position = marker, .storage = group, .content_len = opening_end } });
+                edits.appendAssumeCapacity(.{ .closing = .{ .position = location.end, .bytes = group[opening_end..] } });
+            }
 
             if (location.properties.intersectWith(paint_properties).count() == 0) continue;
             if (location.path_count != 1 or location.drawable_count != 1) return error.AmbiguousPathTarget;
@@ -182,15 +202,26 @@ fn encode(allocator: std.mem.Allocator, static_svg: []const u8, animation: *cons
             fragment.clearRetainingCapacity();
             try paint.xml.elementStart("path");
             const attributes_start = fragment.written().len;
+            var styled: [Properties.len]*const a.Track = undefined;
+            var styled_count: usize = 0;
             for (track_indices) |track_index| {
                 const track = &animation.tracks[track_index];
                 if (!isPaint(std.meta.activeTag(track.property))) continue;
-                try paint.basePaint(&track.property);
+                try paint.basePaint(track, animation);
+                if (track.smil) continue;
+                styled[styled_count] = track;
+                styled_count += 1;
+            }
+            if (try css.element(styled[0..styled_count], animation)) |class| {
+                if (tag.styled) return error.StyledPathTarget;
+                try paint.attribute("class", "{f}", .{class});
+                if (css.style().len != 0) try paint.attribute("style", "{s}", .{css.style()});
             }
             try paint.xml.embed("");
             for (track_indices) |track_index| {
                 const track = &animation.tracks[track_index];
                 if (!isPaint(std.meta.activeTag(track.property))) continue;
+                if (!track.smil) continue;
                 try paint.paintAnimation(track, animation);
             }
             const content_end = fragment.written().len;
@@ -211,6 +242,27 @@ fn encode(allocator: std.mem.Allocator, static_svg: []const u8, animation: *cons
             replacement.appendSliceAssumeCapacity(static_svg[copied..tag_end]);
             replacement.appendSliceAssumeCapacity(tail);
             edits.appendAssumeCapacity(.{ .replacement = .{ .source = .{ .start = tag.start, .end = tag.end }, .bytes = replacement.toOwnedSliceAssert() } });
+        }
+        if (!css.empty()) {
+            // Classes apply wherever the stylesheet sits; it ends the root.
+            var text: std.Io.Writer.Allocating = .init(allocator);
+            defer text.deinit();
+            try css.stylesheet(&text.writer);
+            var sheet: std.Io.Writer.Allocating = .init(allocator);
+            defer sheet.deinit();
+            var style: XmlWriter = .init(allocator, &sheet.writer, .{ .namespace_aware = false });
+            defer style.deinit();
+            try style.elementStart("g");
+            try style.embed("");
+            sheet.clearRetainingCapacity();
+            try style.elementStart("style");
+            try style.text(text.written());
+            try style.elementEnd();
+            const bytes = try allocator.dupe(u8, sheet.written());
+            edits.append(allocator, .{ .opening = .{ .position = targets.root_close, .storage = bytes, .content_len = bytes.len } }) catch |err| {
+                allocator.free(bytes);
+                return err;
+            };
         }
     }
     std.mem.sort(Edit, edits.items, {}, struct {
@@ -297,6 +349,7 @@ fn locate(allocator: std.mem.Allocator, cursor: *xml.Cursor, targets: *Targets, 
         if (tag.closing) {
             const element = stack.pop().?;
             if (element.target) |index| locations[index].end = tag.end;
+            if (stack.items.len == 0) targets.root_close = tag.start;
             continue;
         }
         const local_name = tag.name[if (std.mem.lastIndexOfScalar(u8, tag.name, ':')) |colon| colon + 1 else 0..];
@@ -343,12 +396,14 @@ fn locate(allocator: std.mem.Allocator, cursor: *xml.Cursor, targets: *Targets, 
                     // the ambiguity counts; report that error at its old stage.
                     if (location.path_count == 1 and location.properties.intersectWith(paint_properties).count() != 0) {
                         const removal_start = targets.removals.items.len;
+                        var styled = false;
                         for (0..cursor.attributeCount()) |attribute_index| {
                             const attr = cursor.attribute(attribute_index);
                             if (animatedAttribute(location, attr.name)) targets.removals.appendAssumeCapacity(.{ .start = attr.nameStart(source), .end = attr.valueEnd(source) + 1 });
+                            styled = styled or std.mem.eql(u8, attr.name, "class") or std.mem.eql(u8, attr.name, "style");
                         }
                         const path_index = targets.paths.items.len;
-                        targets.paths.appendAssumeCapacity(.{ .start = tag.start, .end = tag.end, .self_closing = tag.self_closing, .removal_start = removal_start, .removal_count = targets.removals.items.len - removal_start });
+                        targets.paths.appendAssumeCapacity(.{ .start = tag.start, .end = tag.end, .self_closing = tag.self_closing, .removal_start = removal_start, .removal_count = targets.removals.items.len - removal_start, .styled = styled });
                         location.path = &targets.paths.items[path_index];
                     }
                 }
@@ -360,11 +415,8 @@ fn locate(allocator: std.mem.Allocator, cursor: *xml.Cursor, targets: *Targets, 
         };
     }
     if (failure) |err| return err;
-    for (targets.locations.keys(), locations) |id, *location| {
+    for (locations) |*location| {
         if (location.marker == null or location.end == 0) return error.MissingTarget;
-        var scratch: [64]u8 = undefined;
-        const stable_id = try std.fmt.bufPrint(&scratch, "huak-object-{d}", .{id});
-        if (cursor.ids.contains(stable_id)) return error.IdConflict;
     }
 }
 
@@ -400,6 +452,22 @@ fn animatedAttribute(location: *const Location, attribute: []const u8) bool {
     return false;
 }
 const t = std.testing;
+/// Encodes with every track marked `smil`, checking the SMIL elements alone.
+/// The copy uses the testing allocator, not the one under test.
+fn encodeSmil(allocator: std.mem.Allocator, static_svg: []const u8, animation: *const a.Animation) ![]u8 {
+    const tracks = try t.allocator.dupe(a.Track, animation.tracks);
+    defer t.allocator.free(tracks);
+    for (tracks) |*track| track.smil = true;
+    var marked = animation.*;
+    marked.tracks = tracks;
+    return encodeAnimatedSvg(allocator, static_svg, &marked);
+}
+
+/// Whether `svg` contains the text that `format` makes of `args`.
+fn contains(svg: []const u8, comptime format: []const u8, args: anytype) !bool {
+    var buffer: [512]u8 = undefined;
+    return std.mem.indexOf(u8, svg, try std.fmt.bufPrint(&buffer, format, args)) != null;
+}
 const fixture = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><defs><path id='glyph' d='M0 0L1 1'/></defs><g data-typst-label='libtypst-object-7' transform='translate(5 6)'><path fill='red' d='M0 0L10 0Z'/></g><g data-typst-label='libtypst-object-9'><use href='#glyph'/></g></svg>";
 test "parametric transforms are nested continuously and shared glyph definitions stay unchanged" {
     const tracks = [_]a.Track{
@@ -407,9 +475,11 @@ test "parametric transforms are nested continuously and shared glyph definitions
         .{ .target = 7, .property = .{ .rotate = .{ .keys = &.{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = std.math.pi } } } } },
         .{ .target = 9, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0.2 }, .{ .time = 1, .value = 1 } } } },
     };
-    const result = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 2, .tracks = &tracks });
+    const result = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 2, .tracks = &tracks });
     defer t.allocator.free(result);
-    try t.expect(std.mem.indexOf(u8, result, "id=\"huak-object-7\"><g transform=\"translate(10 20)\"><animateTransform") != null);
+    try t.expect(std.mem.indexOf(u8, result, "<g transform=\"translate(10 20)\"><animateTransform") != null);
+    // Wrappers carry no IDs, which several SVG files on one page would share.
+    try t.expect(std.mem.indexOf(u8, result, " id=\"") == null);
     try t.expect(std.mem.indexOf(u8, result, "values=\"10 20;50 60\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "values=\"0 0 0;180 0 0\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "transform='translate(5 6)'") != null);
@@ -427,7 +497,7 @@ test "paint and compatible d morph animate the instance path and establish stati
         .{ .target = 7, .property = .{ .stroke_width = &.{ .{ .time = 0, .value = 1 }, .{ .time = 1, .value = 3 } } } },
         .{ .target = 7, .property = .{ .path = &.{ .{ .time = 0, .value = &first }, .{ .time = 1, .value = &last } } } },
     };
-    const result = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 3, .tracks = &tracks, .repeat = false });
+    const result = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 3, .tracks = &tracks, .repeat = false });
     defer t.allocator.free(result);
     try t.expect(std.mem.indexOf(u8, result, "fill='red'") == null);
     try t.expect(std.mem.indexOf(u8, result, "fill=\"rgb(0,0,255)\" fill-opacity=\"0.4\"") != null);
@@ -446,7 +516,7 @@ test "constant tracks write base attributes without interpolation elements" {
         .{ .target = 7, .property = .{ .translate = &.{ .{ .time = 0, .value = .{ .x = 20, .y = 30 } }, .{ .time = 1, .value = .{ .x = 20, .y = 30 } } } } },
         .{ .target = 7, .property = .{ .fill = &.{ .{ .time = 0, .value = .black }, .{ .time = 1, .value = .black } } } },
     };
-    const result = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 1, .tracks = &tracks });
+    const result = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 1, .tracks = &tracks });
     defer t.allocator.free(result);
     try t.expect(std.mem.indexOf(u8, result, "transform=\"translate(20 30)\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "fill=\"rgb(0,0,0)\"") != null);
@@ -458,7 +528,7 @@ test "path morph retains nonidentity base transforms and writes local d coordina
     const first = [_]Path.Segment{ .{ .move = .{ .x = 1, .y = 2 } }, .{ .line = .{ .x = 4, .y = 5 } } };
     const last = [_]Path.Segment{ .{ .move = .{ .x = 1, .y = 2 } }, .{ .line = .{ .x = 6, .y = 7 } } };
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .path = &.{ .{ .time = 0, .value = &first }, .{ .time = 1, .value = &last } } } }} };
-    const result = try encodeAnimatedSvg(t.allocator, input, &animation);
+    const result = try encodeSmil(t.allocator, input, &animation);
     defer t.allocator.free(result);
     try t.expect(std.mem.indexOf(u8, result, "transform='matrix(2 0 0 3 11 13)'") != null);
     try t.expect(std.mem.indexOf(u8, result, "transform='translate(4 6)'") != null);
@@ -470,7 +540,7 @@ test "constant RGB and alpha components omit redundant animation while retaining
         .{ .target = 7, .property = .{ .fill = &.{ .{ .time = 0, .value = .{ .r = 1, .g = 0, .b = 0 } }, .{ .time = 1, .value = .{ .r = 0, .g = 0, .b = 1 } } } } },
         .{ .target = 7, .property = .{ .stroke = &.{ .{ .time = 0, .value = .{ .a = 0.25 } }, .{ .time = 1, .value = .{ .a = 0.75 } } } } },
     } };
-    const result = try encodeAnimatedSvg(t.allocator, fixture, &animation);
+    const result = try encodeSmil(t.allocator, fixture, &animation);
     defer t.allocator.free(result);
     try t.expect(std.mem.indexOf(u8, result, "fill=\"rgb(255,0,0)\" fill-opacity=\"1\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "stroke=\"rgb(0,0,0)\" stroke-opacity=\"0.25\"") != null);
@@ -483,14 +553,14 @@ test "constant RGB and alpha components omit redundant animation while retaining
 test "native motion uses exact fallback pose without double translation and constant motion stays static" {
     const route = [_]Path.Segment{ .{ .move = .{ .x = 20, .y = 30 } }, .{ .line = .{ .x = 100, .y = 30 } } };
     const dynamic: a.Animation = .{ .duration_seconds = 2, .repeat = false, .tracks = &.{.{ .target = 7, .property = .{ .motion = .{ .path = &route, .keys = &.{ .{ .time = 0, .value = 0.25 }, .{ .time = 1, .value = 0.75 } } } } }} };
-    const result = try encodeAnimatedSvg(t.allocator, fixture, &dynamic);
+    const result = try encodeSmil(t.allocator, fixture, &dynamic);
     defer t.allocator.free(result);
     try expectMotionPose(result, 40, 30, 0);
     try t.expect(std.mem.indexOf(u8, result, "<animateTransform attributeName=\"transform\" type=\"translate\" additive=\"replace\" values=\"0 0;0 0\" calcMode=\"discrete\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "<set") == null);
     try t.expect(std.mem.indexOf(u8, result, "<animateMotion path=\"M 20 30 L 100 30 \" rotate=\"0\" keyPoints=\"0.25;0.75\"") != null);
     const fixed: a.Animation = .{ .duration_seconds = 2, .tracks = &.{.{ .target = 7, .property = .{ .motion = .{ .path = &route, .rotate = .auto_reverse, .keys = &.{ .{ .time = 0, .value = 0.5 }, .{ .time = 1, .value = 0.5 } } } } }} };
-    const still = try encodeAnimatedSvg(t.allocator, fixture, &fixed);
+    const still = try encodeSmil(t.allocator, fixture, &fixed);
     defer t.allocator.free(still);
     try expectMotionPose(still, 60, 30, 180);
     try t.expect(std.mem.indexOf(u8, still, "<animate") == null);
@@ -505,13 +575,13 @@ test "motion fallbacks match SVG at exact corners subpath jumps and move-only pa
             .rotate = .auto,
             .keys = &.{ .{ .time = 0, .value = 0.5 }, .{ .time = 1, .value = 1 } },
         } } }} };
-        const output = try encodeAnimatedSvg(t.allocator, fixture, &animation);
+        const output = try encodeSmil(t.allocator, fixture, &animation);
         defer t.allocator.free(output);
         try expectMotionPose(output, 10, 0, 0);
     }
     const moves = [_]Path.Segment{ .{ .move = .{ .x = 20, .y = 30 } }, .{ .move = .{ .x = 50, .y = 60 } } };
     const animation: a.Animation = .{ .duration_seconds = 2, .tracks = &.{.{ .target = 7, .property = .{ .motion = .{ .path = &moves, .rotate = .auto } } }} };
-    const output = try encodeAnimatedSvg(t.allocator, fixture, &animation);
+    const output = try encodeSmil(t.allocator, fixture, &animation);
     defer t.allocator.free(output);
     try expectMotionPose(output, 50, 60, 0);
 }
@@ -527,24 +597,25 @@ test "mixed glyph uses and one decoration path reject every paint and morph trac
         .{ .target = 7, .property = .{ .path = &.{ .{ .time = 0, .value = &first }, .{ .time = 1, .value = &last } } } },
     };
     for (tracks) |track| {
-        try t.expectError(error.AmbiguousPathTarget, encodeAnimatedSvg(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{track} }));
+        try t.expectError(error.AmbiguousPathTarget, encodeSmil(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{track} }));
     }
 }
 
 test "parent paints reject nested object content while child paths and group transforms remain independent" {
     const input = "<svg xmlns='http://www.w3.org/2000/svg'><g data-typst-label='libtypst-object-8'><path d='M0 0L1 1'/><g data-typst-label='libtypst-object-7'><path d='M0 0L2 2'/></g></g></svg>";
     var fill: a.Track = .{ .target = 8, .property = .{ .fill = &.{ .{ .time = 0, .value = .black }, .{ .time = 1, .value = .{ .r = 1 } } } } };
-    try t.expectError(error.AmbiguousPathTarget, encodeAnimatedSvg(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{fill} }));
+    try t.expectError(error.AmbiguousPathTarget, encodeSmil(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{fill} }));
     fill.target = 7;
     const translate: a.Track = .{ .target = 8, .property = .{ .translate = &.{ .{ .time = 0, .value = .zero }, .{ .time = 1, .value = .{ .x = 5, .y = 6 } } } } };
-    const output = try encodeAnimatedSvg(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{ translate, fill } });
+    const output = try encodeSmil(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{ translate, fill } });
     defer t.allocator.free(output);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, output, "attributeName=\"fill\""));
     try t.expect(std.mem.indexOf(u8, output, "<path d='M0 0L1 1'/>") != null);
 }
 
 fn expectMotionPose(svg: []const u8, x: f64, y: f64, angle: f64) !void {
-    const needle = "id=\"huak-object-7\"><g transform=\"translate(";
+    // The motion wrapper; the static fixture quotes its attributes with '.
+    const needle = "<g transform=\"translate(";
     const begin = (std.mem.indexOf(u8, svg, needle) orelse return error.TestUnexpectedResult) + needle.len;
     const end = std.mem.indexOfScalarPos(u8, svg, begin, '"').?;
     var values = std.mem.tokenizeAny(u8, svg[begin..end], " ()");
@@ -557,24 +628,24 @@ fn expectMotionPose(svg: []const u8, x: f64, y: f64, angle: f64) !void {
 test "missing duplicate ambiguous definition and overflowing angle targets fail" {
     const opacity = a.Track{ .target = 7, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = 1 } } } };
     const animation = a.Animation{ .duration_seconds = 1, .tracks = &.{opacity} };
-    try t.expectError(error.MissingTarget, encodeAnimatedSvg(t.allocator, "<svg/>", &animation));
-    try t.expectError(error.DuplicateTarget, encodeAnimatedSvg(t.allocator, "<svg><g data-typst-label='libtypst-object-7'/><g data-typst-label='libtypst-object-7'/></svg>", &animation));
-    try t.expectError(error.InvalidTarget, encodeAnimatedSvg(t.allocator, "<svg><defs><g data-typst-label='libtypst-object-7'/></defs></svg>", &animation));
-    try t.expectError(error.InvalidTarget, encodeAnimatedSvg(t.allocator, "<svg xmlns:s='http://www.w3.org/2000/svg'><s:defs><g data-typst-label='libtypst-object-7'/></s:defs></svg>", &animation));
+    try t.expectError(error.MissingTarget, encodeSmil(t.allocator, "<svg/>", &animation));
+    try t.expectError(error.DuplicateTarget, encodeSmil(t.allocator, "<svg><g data-typst-label='libtypst-object-7'/><g data-typst-label='libtypst-object-7'/></svg>", &animation));
+    try t.expectError(error.InvalidTarget, encodeSmil(t.allocator, "<svg><defs><g data-typst-label='libtypst-object-7'/></defs></svg>", &animation));
+    try t.expectError(error.InvalidTarget, encodeSmil(t.allocator, "<svg xmlns:s='http://www.w3.org/2000/svg'><s:defs><g data-typst-label='libtypst-object-7'/></s:defs></svg>", &animation));
     const paint: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 9, .property = .{ .stroke_width = &.{ .{ .time = 0, .value = 1 }, .{ .time = 1, .value = 2 } } } }} };
-    try t.expectError(error.AmbiguousPathTarget, encodeAnimatedSvg(t.allocator, fixture, &paint));
+    try t.expectError(error.AmbiguousPathTarget, encodeSmil(t.allocator, fixture, &paint));
     const rotation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .rotate = .{ .keys = &.{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = 1e308 } } } } }} };
-    try t.expectError(error.NonFinite, encodeAnimatedSvg(t.allocator, fixture, &rotation));
+    try t.expectError(error.NonFinite, encodeSmil(t.allocator, fixture, &rotation));
 }
 
 test "input has one static SVG root with only whitespace declaration and comments outside" {
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{} };
     const allowed = "<?xml version='1.0'?>\n<!--before--><svg xmlns='http://www.w3.org/2000/svg'><g/></svg>\n<!--after-->";
-    const result = try encodeAnimatedSvg(t.allocator, allowed, &animation);
+    const result = try encodeSmil(t.allocator, allowed, &animation);
     defer t.allocator.free(result);
     try t.expectEqualStrings(allowed, result);
     for ([_][]const u8{ "", "<g/>", "<svg/><svg/>", "outside<svg/>", "<svg/>outside", "<![CDATA[outside]]><svg/>" }) |invalid| {
-        try t.expectError(error.InvalidSvg, encodeAnimatedSvg(t.allocator, invalid, &animation));
+        try t.expectError(error.InvalidSvg, encodeSmil(t.allocator, invalid, &animation));
     }
     for ([_][]const u8{
         "<svg xmlns='urn:not-svg'/>",
@@ -584,7 +655,7 @@ test "input has one static SVG root with only whitespace declaration and comment
         "<svg><set/></svg>",
         "<svg><?xml version='1.0'?></svg>",
     }) |unsupported| {
-        try t.expectError(error.UnsupportedSvg, encodeAnimatedSvg(t.allocator, unsupported, &animation));
+        try t.expectError(error.UnsupportedSvg, encodeSmil(t.allocator, unsupported, &animation));
     }
 }
 
@@ -594,7 +665,7 @@ test "writer fragments preserve nonempty path content and untouched attributes" 
         .{ .time = 0, .value = .black },
         .{ .time = 1, .value = .black },
     } } }};
-    const output = try encodeAnimatedSvg(t.allocator, source, &.{ .duration_seconds = 1, .tracks = &tracks });
+    const output = try encodeSmil(t.allocator, source, &.{ .duration_seconds = 1, .tracks = &tracks });
     defer t.allocator.free(output);
     try t.expect(std.mem.indexOf(u8, output, "data-note='A&amp;B' d='M0 0L1 1'") != null);
     try t.expect(std.mem.indexOf(u8, output, "fill-opacity=\"1\"><!--keep--><![CDATA[<>&]]></path>") != null);
@@ -611,7 +682,7 @@ fn allocationFailures(allocator: std.mem.Allocator) !void {
         .{ .target = 7, .property = .{ .fill = &.{ .{ .time = 0, .value = .black }, .{ .time = 1, .value = .{ .r = 1 } } } } },
         .{ .target = 9, .property = .{ .motion = .{ .path = &route } } },
     } };
-    const result = try encodeAnimatedSvg(allocator, fixture, &animation);
+    const result = try encodeSmil(allocator, fixture, &animation);
     defer allocator.free(result);
 }
 test "all allocation failures clean up locations edits and final SVG" {
@@ -627,7 +698,7 @@ fn targetAllocationFailures(allocator: std.mem.Allocator) !void {
         .{ .target = 7, .property = .{ .fill = &.{ .{ .time = 0, .value = .black }, .{ .time = 1, .value = .{ .r = 1 } } } } },
     };
     for (tracks) |track| {
-        const result = try encodeAnimatedSvg(allocator, fixture, &.{ .duration_seconds = 1, .tracks = &.{track} });
+        const result = try encodeSmil(allocator, fixture, &.{ .duration_seconds = 1, .tracks = &.{track} });
         defer allocator.free(result);
     }
 }
@@ -660,10 +731,10 @@ test "target index lookup skips unrelated objects and retains marked path" {
 
 test "complete XML validation precedes streamed binding diagnostics" {
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = 1 } } } }} };
-    try t.expectError(error.InvalidSvg, encodeAnimatedSvg(t.allocator, "<svg><g data-typst-label='libtypst-object-01'/><g></svg>", &animation));
-    try t.expectError(error.InvalidSvg, encodeAnimatedSvg(t.allocator, "<svg><g data-typst-label='libtypst-object-7'/><g data-typst-label='libtypst-object-7'/><g></svg>", &animation));
-    try t.expectError(error.UnsupportedSvg, encodeAnimatedSvg(t.allocator, "<svg><g data-typst-label='libtypst-object-01'/><style/></svg>", &animation));
-    try t.expectError(error.InvalidSvg, encodeAnimatedSvg(t.allocator, "<svg><g data-typst-label='libtypst-object-01'/><path id='same'/><path id='same'/></svg>", &animation));
+    try t.expectError(error.InvalidSvg, encodeSmil(t.allocator, "<svg><g data-typst-label='libtypst-object-01'/><g></svg>", &animation));
+    try t.expectError(error.InvalidSvg, encodeSmil(t.allocator, "<svg><g data-typst-label='libtypst-object-7'/><g data-typst-label='libtypst-object-7'/><g></svg>", &animation));
+    try t.expectError(error.UnsupportedSvg, encodeSmil(t.allocator, "<svg><g data-typst-label='libtypst-object-01'/><style/></svg>", &animation));
+    try t.expectError(error.InvalidSvg, encodeSmil(t.allocator, "<svg><g data-typst-label='libtypst-object-01'/><path id='same'/><path id='same'/></svg>", &animation));
 }
 
 test "metadata arena allocation failure still finishes XML validation" {
@@ -712,7 +783,6 @@ test "interleaved target tracks preserve the original SVG byte order" {
         "<defs>" ++
         "<path id='glyph' d='M0 0L1 1'/>" ++
         "</defs>" ++
-        "<g id=\"huak-object-7\">" ++
         "<g transform=\"translate(0 0)\">" ++
         "<animateTransform attributeName=\"transform\" type=\"translate\" values=\"0 0;2 3\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "<g transform=\"rotate(0 0 0)\">" ++
@@ -725,8 +795,6 @@ test "interleaved target tracks preserve the original SVG byte order" {
         "</g>" ++
         "</g>" ++
         "</g>" ++
-        "</g>" ++
-        "<g id=\"huak-object-9\">" ++
         "<g opacity=\"0\">" ++
         "<animate attributeName=\"opacity\" values=\"0;1\" dur=\"2s\" repeatCount=\"indefinite\"/>" ++
         "<g transform=\"scale(1 1)\">" ++
@@ -736,15 +804,16 @@ test "interleaved target tracks preserve the original SVG byte order" {
         "</g>" ++
         "</g>" ++
         "</g>" ++
-        "</g>" ++
         "</svg>";
-    const output = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 2, .tracks = &tracks });
+    const output = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 2, .tracks = &tracks });
     defer t.allocator.free(output);
     try t.expectEqualStrings(expected, output);
 }
 
 test {
     _ = SmilEncoder;
+    _ = CssEncoder;
+    _ = @import("values.zig");
 }
 
 test "SMIL timing omits defaults and numbers follow Typst's SVG precision" {
@@ -752,7 +821,7 @@ test "SMIL timing omits defaults and numbers follow Typst's SVG precision" {
     // an endless loop are all SMIL defaults.
     var keys: [26]a.ScalarKey = undefined;
     for (&keys, 0..) |*key, index| key.* = .{ .time = @as(f64, @floatFromInt(index)) / 25.0, .value = if (index % 2 == 0) 0.30974058379240427 else 0.1 };
-    const looped = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 60, .tracks = &.{.{ .target = 9, .property = .{ .opacity = &keys } }} });
+    const looped = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 60, .tracks = &.{.{ .target = 9, .property = .{ .opacity = &keys } }} });
     defer t.allocator.free(looped);
     try t.expect(std.mem.indexOf(u8, looped, "<g opacity=\"0.309740584\"><animate attributeName=\"opacity\" values=\"0.309740584;0.1;0.309740584;") != null);
     try t.expect(std.mem.indexOf(u8, looped, ";0.1\" dur=\"60s\" repeatCount=\"indefinite\"/>") != null);
@@ -760,7 +829,7 @@ test "SMIL timing omits defaults and numbers follow Typst's SVG precision" {
     // Uneven, discrete and motion timing stay explicit, as does the freeze of
     // a single run.
     const route = [_]Path.Segment{ .{ .move = .zero }, .{ .line = .{ .x = 10, .y = 0 } } };
-    const explicit = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 2, .repeat = false, .tracks = &.{
+    const explicit = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 2, .repeat = false, .tracks = &.{
         .{ .target = 7, .property = .{ .translate = &.{ .{ .time = 0, .value = .zero }, .{ .time = 0.37, .value = .{ .x = 1, .y = 0 } }, .{ .time = 1, .value = .{ .x = 2, .y = 0 } } } } },
         .{ .target = 9, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0 }, .{ .time = 0.5, .value = 1 }, .{ .time = 1, .value = 0 } } }, .easing = .discrete },
         .{ .target = 9, .property = .{ .motion = .{ .path = &route } } },
@@ -775,8 +844,8 @@ test "SMIL timing omits defaults and numbers follow Typst's SVG precision" {
 
 test "animation semantic errors precede SVG parsing and allocation failure" {
     const invalid: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0 }, .{ .time = 0.5, .value = 1 } } } }} };
-    try t.expectError(error.InvalidKeys, encodeAnimatedSvg(t.allocator, "<svg><script/></svg>", &invalid));
-    try t.expectError(error.InvalidKeys, encodeAnimatedSvg(t.failing_allocator, fixture, &invalid));
+    try t.expectError(error.InvalidKeys, encodeSmil(t.allocator, "<svg><script/></svg>", &invalid));
+    try t.expectError(error.InvalidKeys, encodeSmil(t.failing_allocator, fixture, &invalid));
 }
 
 test "late animation errors survive XML and target index allocation failures" {
@@ -790,7 +859,7 @@ test "late animation errors survive XML and target index allocation failures" {
     var induced_failures: usize = 0;
     for (0..32) |fail_index| {
         var failing = t.FailingAllocator.init(t.allocator, .{ .fail_index = fail_index, .resize_fail_index = 0 });
-        try t.expectError(error.InvalidKeys, encodeAnimatedSvg(failing.allocator(), fixture, &animation));
+        try t.expectError(error.InvalidKeys, encodeSmil(failing.allocator(), fixture, &animation));
         if (failing.has_induced_failure) induced_failures += 1;
     }
     try t.expect(induced_failures > 0);
@@ -814,7 +883,7 @@ test "target index growth releases partial storage at every allocation failure" 
 
 test "SVG parse errors precede target index allocation errors for valid animation" {
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .opacity = &.{ .{ .time = 0, .value = 0 }, .{ .time = 1, .value = 1 } } } }} };
-    try t.expectError(error.InvalidSvg, encodeAnimatedSvg(t.failing_allocator, "", &animation));
+    try t.expectError(error.InvalidSvg, encodeSmil(t.failing_allocator, "", &animation));
 }
 
 test "one ordered target index stores every property and rejects duplicates before invalid keys" {
@@ -848,10 +917,88 @@ test "color constancy completion preserves every key and late validation" {
         .{ .time = 1, .value = .{ .b = 1, .a = 0.8 } },
     };
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .fill = &keys } }} };
-    const result = try encodeAnimatedSvg(t.allocator, fixture, &animation);
+    const result = try encodeSmil(t.allocator, fixture, &animation);
     defer t.allocator.free(result);
     try t.expect(std.mem.indexOf(u8, result, "values=\"rgb(0,0,0);rgb(255,0,0);rgb(0,255,0);rgb(0,0,255)\"") != null);
     try t.expect(std.mem.indexOf(u8, result, "values=\"0;1;0.4;0.8\"") != null);
     keys[3].value.r = std.math.nan(f64);
-    try t.expectError(error.InvalidColor, encodeAnimatedSvg(t.allocator, fixture, &animation));
+    try t.expectError(error.InvalidColor, encodeSmil(t.allocator, fixture, &animation));
+}
+
+test "CSS shares keyframes, writes phases as delays and keeps start states for reduced motion" {
+    const pulse = [_]a.ScalarKey{ .{ .time = 0, .value = 0.2 }, .{ .time = 0.5, .value = 1 }, .{ .time = 1, .value = 0.2 } };
+    const tracks = [_]a.Track{
+        .{ .target = 7, .property = .{ .opacity = &pulse } },
+        .{ .target = 9, .property = .{ .opacity = &pulse }, .phase = 0.25 },
+    };
+    const result = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 4, .tracks = &tracks });
+    defer t.allocator.free(result);
+    // One keyframes and one class serve both; the second differs by its delay.
+    const body = "0%{opacity:0.2}50%{opacity:1}100%{opacity:0.2}";
+    const keyframes: CssEncoder.Name = .of(.keyframes, body);
+    var rule: [128]u8 = undefined;
+    const rule_text = try std.fmt.bufPrint(&rule, "animation:{f} 4s linear infinite", .{keyframes});
+    const class: CssEncoder.Name = .of(.class, rule_text);
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, result, "@keyframes"));
+    try t.expect(try contains(result, "<g opacity=\"0.2\" class=\"{f}\">", .{class}));
+    // A quarter cycle in, the pulse is halfway up: its start state is 0.6.
+    try t.expect(try contains(result, "<g opacity=\"0.6\" class=\"{f}\" style=\"animation-delay:-1s\">", .{class}));
+    try t.expect(try contains(result, "<style>@keyframes {f}{{{s}}}@media (prefers-reduced-motion:no-preference){{.{f}{{{s}}}}}</style></svg>", .{ keyframes, body, class, rule_text }));
+    try t.expect(std.mem.indexOf(u8, result, "<animate") == null);
+}
+
+test "CSS paints and motion use classes while tracks marked smil keep SMIL" {
+    const first = [_]Path.Segment{ .{ .move = .zero }, .{ .line = .{ .x = 10, .y = 10 } }, .close };
+    const last = [_]Path.Segment{ .{ .move = .zero }, .{ .line = .{ .x = 30, .y = 20 } }, .close };
+    const route = [_]Path.Segment{ .{ .move = .{ .x = 20, .y = 30 } }, .{ .line = .{ .x = 100, .y = 30 } } };
+    const tracks = [_]a.Track{
+        .{ .target = 7, .property = .{ .fill = &.{ .{ .time = 0, .value = .{ .r = 0, .g = 0, .b = 1, .a = 0.4 } }, .{ .time = 1, .value = .{ .r = 1, .g = 0, .b = 0 } } } }, .easing = .{ .spline = .{ .x1 = 0.3, .y1 = 0, .x2 = 0.7, .y2 = 1 } } },
+        .{ .target = 7, .property = .{ .path = &.{ .{ .time = 0, .value = &first }, .{ .time = 1, .value = &last } } }, .smil = true },
+        .{ .target = 9, .property = .{ .motion = .{ .path = &route, .rotate = .auto } } },
+    };
+    const result = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 3, .repeat = false, .tracks = &tracks });
+    defer t.allocator.free(result);
+    const fill_body = "0%{fill:rgb(0,0,255);fill-opacity:0.4}100%{fill:rgb(255,0,0);fill-opacity:1}";
+    const fill_keyframes: CssEncoder.Name = .of(.keyframes, fill_body);
+    var fill_rule: [128]u8 = undefined;
+    const fill_text = try std.fmt.bufPrint(&fill_rule, "animation:{f} 3s cubic-bezier(0.3,0,0.7,1) both", .{fill_keyframes});
+    const fill_class: CssEncoder.Name = .of(.class, fill_text);
+    try t.expect(try contains(result, "fill=\"rgb(0,0,255)\" fill-opacity=\"0.4\" d=\"M 0 0 L 10 10 Z \" class=\"{f}\"><animate attributeName=\"d\"", .{fill_class}));
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, result, "<animate"));
+    try t.expect(try contains(result, "@keyframes {f}{{{s}}}", .{ fill_keyframes, fill_body }));
+    try t.expect(try contains(result, ".{f}{{{s}}}", .{ fill_class, fill_text }));
+    // Motion trades the group's start pose for a place on the path.
+    const motion_body = "0%{offset-distance:0%}100%{offset-distance:100%}";
+    const motion_keyframes: CssEncoder.Name = .of(.keyframes, motion_body);
+    var motion_rule: [160]u8 = undefined;
+    const motion_text = try std.fmt.bufPrint(&motion_rule, "transform:none;offset-path:path(\"M 20 30 L 100 30 \");offset-rotate:auto;animation:{f} 3s linear both", .{motion_keyframes});
+    const motion_class: CssEncoder.Name = .of(.class, motion_text);
+    try t.expect(try contains(result, "<g transform=\"translate(20 30) rotate(0)\" class=\"{f}\">", .{motion_class}));
+    try t.expect(try contains(result, "@keyframes {f}{{{s}}}", .{ motion_keyframes, motion_body }));
+    try t.expect(try contains(result, ".{f}{{{s}}}", .{ motion_class, motion_text }));
+    // Half a run ahead, the start pose lies halfway along the route; written
+    // inline, the distance keeps it there when a page removes the animation.
+    var phased = tracks;
+    phased[2].phase = 0.5;
+    const ahead = try encodeAnimatedSvg(t.allocator, fixture, &.{ .duration_seconds = 3, .repeat = false, .tracks = &phased });
+    defer t.allocator.free(ahead);
+    try t.expect(try contains(ahead, "<g transform=\"translate(60 30) rotate(0)\" class=\"{f}\" style=\"animation-delay:-1.5s;offset-distance:50%\">", .{motion_class}));
+    const styled = "<svg xmlns='http://www.w3.org/2000/svg'><g data-typst-label='libtypst-object-7'><path class='x' fill='red' d='M0 0L1 1'/></g></svg>";
+    const fill: a.Track = tracks[0];
+    try t.expectError(error.StyledPathTarget, encodeAnimatedSvg(t.allocator, styled, &.{ .duration_seconds = 1, .tracks = &.{fill} }));
+    const kept = try encodeSmil(t.allocator, styled, &.{ .duration_seconds = 1, .tracks = &.{fill} });
+    t.allocator.free(kept);
+}
+
+test "SMIL writes phases as begin offsets over evaluated start states" {
+    const pulse = [_]a.ScalarKey{ .{ .time = 0, .value = 0.2 }, .{ .time = 0.5, .value = 1 }, .{ .time = 1, .value = 0.2 } };
+    const tracks = [_]a.Track{.{ .target = 9, .property = .{ .opacity = &pulse }, .phase = -0.25 }};
+    // A loop runs three quarters ahead, starting on the falling half.
+    const looped = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 4, .tracks = &tracks });
+    defer t.allocator.free(looped);
+    try t.expect(std.mem.indexOf(u8, looped, "<g opacity=\"0.6\"><animate attributeName=\"opacity\" values=\"0.2;1;0.2\" dur=\"4s\" begin=\"-3s\" repeatCount=\"indefinite\"/>") != null);
+    // A single run starts a quarter cycle late and holds its first key.
+    const late = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 4, .repeat = false, .tracks = &tracks });
+    defer t.allocator.free(late);
+    try t.expect(std.mem.indexOf(u8, late, "<g opacity=\"0.2\"><animate attributeName=\"opacity\" values=\"0.2;1;0.2\" dur=\"4s\" begin=\"1s\" fill=\"freeze\"/>") != null);
 }

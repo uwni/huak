@@ -493,7 +493,7 @@ test "object handles allow independent construction before continuous animation"
         var actual = try render(&parallel.outputs, index, .svg);
         defer actual.deinit();
         try t.expectEqualSlices(u8, expected.bytes(), actual.bytes());
-        if (index != 1) try t.expect(std.mem.indexOf(u8, actual.bytes(), "<animateTransform") != null);
+        if (index != 1) try t.expect(std.mem.indexOf(u8, actual.bytes(), "transform:translate(") != null);
     }
     try t.expectError(error.AnimationRequiresSvg, parallel.outputs.validate(0, .pdf));
 }
@@ -1257,5 +1257,50 @@ test "workers publish detached object subtrees and retain text through dependent
             defer after.deinit();
             try t.expectEqualSlices(u8, before.bytes(), after.bytes());
         }
+    }
+}
+
+test "show rules made before and inside workers keep parallel typography identical" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const source =
+        \\import paint.{label, picture}
+        \\setup_typst { let shout(it) = upper(it) }
+        \\loud:=show_rule body => { set text(size: 14pt); shout(body) }
+        \\fn figure(index:int)->picture
+        \\    typst_expose index
+        \\    tint:=show_rule body => { set text(fill: rgb(huak.index * 100, 0, 0)); body }
+        \\    typst_show loud, tint
+        \\    caption:=typ[Worker #huak.index]
+        \\    p:=picture(220,60)
+        \\    object.append(p, object.label(caption, (5,30)))
+        \\    return p
+        \\end
+        \\export first:=figure(1)
+        \\export second:=figure(2)
+    ;
+    const names: []const []const u8 = &.{ "first", "second" };
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compile(&library, source, optimize);
+        defer program.deinit();
+        var serial = try evaluate(&library, &program, 1, names);
+        defer serial.outputs.deinit();
+        var parallel = try evaluate(&library, &program, 4, names);
+        defer parallel.outputs.deinit();
+        try t.expect(parallel.stats.tasks >= 2);
+        try t.expectEqual(serial.steps, parallel.steps);
+        for (0..names.len) |index| {
+            var expected = try render(&serial.outputs, index, .pdf);
+            defer expected.deinit();
+            var actual = try render(&parallel.outputs, index, .pdf);
+            defer actual.deinit();
+            try t.expectEqualSlices(u8, expected.bytes(), actual.bytes());
+            const text = try pdf_text.text(actual.bytes(), .{ .raw = true });
+            defer t.allocator.free(text);
+            try t.expect(std.mem.indexOf(u8, text, if (index == 0) "WORKER 1" else "WORKER 2") != null);
+        }
+        var svg = try render(&parallel.outputs, 1, .svg);
+        defer svg.deinit();
+        try t.expect(std.mem.indexOf(u8, svg.bytes(), "#c80000") != null);
     }
 }

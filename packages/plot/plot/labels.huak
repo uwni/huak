@@ -3,35 +3,45 @@ import transform.{transformed, rotate, translate}
 import math.{abs, log10, floor, pow}
 import assertions.assert
 
-export fn literal(value:string, size:length = 9pt) -> text
+// A style rule applies around tick text as typst_show applies around typ
+// content. Without one the text is typeset plainly, with no rule at all.
+export fn literal(value:string, size:length = 9pt, style:any = false) -> text
     typst_expose value, size
-    return typ[#text(size:huak.size, huak.value)]
-end
-
-fn power_label(value:float, size:length) -> text
-    assert(value > 0, "power10 labels require positive tick values")
-    exponent := int(floor(log10(value)+1e-12))
-    coefficient := pow(10, log10(value)-exponent)
-    typst_expose exponent, coefficient, size
-    if abs(coefficient-1) < 1e-10 then
-        return typ[#text(size:huak.size)[$10^(#huak.exponent)$]]
+    if style == false then
+        return typ[#text(size:huak.size, huak.value)]
+    else
+        typst_show style
+        return typ[#text(size:huak.size, huak.value)]
     end
-    return typ[#text(size:huak.size)[$#calc.round(huak.coefficient,digits:5) times 10^(#huak.exponent)$]]
 end
 
-export fn number(value:float, size:length = 9pt, format:string = "auto") -> text
-    if format == "power10" then return power_label(value, size) end
-    assert(format == "auto" or format == "scientific" or format == "fixed", "unknown tick format")
-    scientific := format == "scientific" or (format == "auto" and value != 0 and (abs(value) >= 10000 or abs(value) < 0.001))
+export fn number(value:float, size:length = 9pt, format:string = "auto", style:any = false) -> text
+    assert(format == "auto" or format == "scientific" or format == "fixed" or format == "power10", "unknown tick format")
+    // A fixed form prints the value; a scaled form prints the mantissa times
+    // a power of ten, and a power form only the power, for a unit mantissa.
+    form := "fixed"
     exponent := 0
     mantissa := value
-    if scientific and value != 0 then
-        exponent = int(floor(log10(abs(value))))
-        mantissa = value/pow(10, exponent)
+    if format == "power10" then
+        assert(value > 0, "power10 labels require positive tick values")
+        exponent = int(floor(log10(value)+1e-12))
+        mantissa = pow(10, log10(value)-exponent)
+        form = "scaled"
+        if abs(mantissa-1) < 1e-10 then form = "power" end
+    elseif format == "scientific" or (format == "auto" and value != 0 and (abs(value) >= 10000 or abs(value) < 0.001)) then
+        form = "scaled"
+        if value != 0 then
+            exponent = int(floor(log10(abs(value))))
+            mantissa = value/pow(10, exponent)
+        end
     end
-    typst_expose value, size, exponent, mantissa
-    if scientific then return typ[#text(size:huak.size)[$#calc.round(huak.mantissa,digits:5) times 10^(#huak.exponent)$]] end
-    return typ[#text(size:huak.size, str(calc.round(huak.value,digits:8)))]
+    typst_expose value, size, form, exponent, mantissa
+    if style == false then
+        return typ[#text(size:huak.size, if huak.form == "fixed" { str(calc.round(huak.value,digits:8)) } else if huak.form == "power" [$10^(#huak.exponent)$] else [$#calc.round(huak.mantissa,digits:5) times 10^(#huak.exponent)$])]
+    else
+        typst_show style
+        return typ[#text(size:huak.size, if huak.form == "fixed" { str(calc.round(huak.value,digits:8)) } else if huak.form == "power" [$10^(#huak.exponent)$] else [$#calc.round(huak.mantissa,digits:5) times 10^(#huak.exponent)$])]
+    end
 end
 
 // Alignment uses the rotated native text bounds, including the real baseline.

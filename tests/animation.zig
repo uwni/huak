@@ -80,7 +80,9 @@ test "one typeset scene yields continuous tracks with shared glyph resources and
     engine.deinit();
     var static = try document.exportSvg(0);
     defer static.deinit();
-    const output = try native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 2, .tracks = &Fixture.tracks });
+    var smil_tracks = Fixture.tracks;
+    for (&smil_tracks) |*track| track.smil = true;
+    const output = try native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 2, .tracks = &smil_tracks });
     defer std.testing.allocator.free(output);
     try std.testing.expectEqual(std.mem.count(u8, static.bytes(), "<symbol "), std.mem.count(u8, output, "<symbol "));
     try std.testing.expect(std.mem.count(u8, output, "<symbol ") > 0);
@@ -88,6 +90,15 @@ test "one typeset scene yields continuous tracks with shared glyph resources and
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "<animateMotion "));
     try std.testing.expect(std.mem.indexOf(u8, output, "attributeName=\"d\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "libtypst-object-18446744073709551615"));
+    // The same scene by default, as CSS: one stylesheet, no SMIL elements, the same glyphs.
+    const css = try native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 2, .tracks = &Fixture.tracks });
+    defer std.testing.allocator.free(css);
+    try std.testing.expectEqual(std.mem.count(u8, static.bytes(), "<symbol "), std.mem.count(u8, css, "<symbol "));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, css, "<style>"));
+    try std.testing.expect(std.mem.indexOf(u8, css, "<animate") == null);
+    try std.testing.expect(std.mem.indexOf(u8, css, "offset-path:path(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, css, "d:path(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, css, "@media (prefers-reduced-motion:no-preference)") != null);
 }
 
 test "animation bytes outlive native owners and unknown objects fail explicitly" {
@@ -110,7 +121,7 @@ test "animation bytes outlive native owners and unknown objects fail explicitly"
     defer static.deinit();
     document.deinit();
     const opacity = [_]a.ScalarKey{ .{ .time = 0, .value = 0.25 }, .{ .time = 1, .value = 1 } };
-    const tracks = [_]a.Track{.{ .target = Fixture.label_id, .property = .{ .opacity = &opacity } }};
+    const tracks = [_]a.Track{.{ .target = Fixture.label_id, .property = .{ .opacity = &opacity }, .smil = true }};
     const output = try native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 1, .repeat = false, .tracks = &tracks });
     defer std.testing.allocator.free(output);
     try std.testing.expect(std.mem.indexOf(u8, output, "attributeName=\"opacity\"") != null);

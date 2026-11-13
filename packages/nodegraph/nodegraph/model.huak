@@ -133,7 +133,7 @@ end
 export fn node(name:string, position:any, body:text, options:dict = {}) -> NodeDescription
     opt.validate(options, ["shape", "width", "height", "radius", "inset", "outset", "fill", "stroke", "thickness", "corner_radius", "extrude", "rotate", "layer", "hidden", "floating", "snap", "outline", "shape_options", "defocus", "ports", "port_pitch", "port_padding"])
     shape_options:dict := opt.get(options, "shape_options", {})
-    opt.validate(shape_options, ["angle", "fit", "dir", "flip", "aspect", "truncate", "tilt", "rings", "scale", "sep", "font_size"])
+    opt.validate(shape_options, ["angle", "fit", "dir", "flip", "aspect", "truncate", "tilt", "rings", "scale", "sep", "style"])
     if opt.has(options, "ports") then validate_ports(options) end
     return NodeDescription(name: name, position: position, body: body, options: options)
 end

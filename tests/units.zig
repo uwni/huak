@@ -83,6 +83,7 @@ test "known incompatible dimensions fail during compilation including dead code"
         "x:=(1cm,1deg)",                   "x:=(1,1cm)",
         "if false then;x:=1cm+1deg;end",   "param length:length=90deg",
         "import math.floor;x:=floor(1cm)", "import math.ceil;x:=ceil(90deg)",
+        "import math.round;x:=round(1mm)",
     };
     for (invalid) |source| {
         var diagnostic: ?l.compiler.Diagnostic = null;

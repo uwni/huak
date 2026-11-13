@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65540
+#define TYPST_ABI_VERSION 65541
 
 #define TYPST_CAP_PDF 1
 
@@ -35,6 +35,12 @@
  */
 #define TYPST_CAP_FONT_DISCOVERY 64
 
+/**
+ * Template functions evaluated from code with their own bindings in content
+ * layout options, as binding values and as show rules around the content.
+ */
+#define TYPST_CAP_LAYOUT_TEMPLATES 128
+
 #define TYPST_VALUE_NONE 0
 
 #define TYPST_VALUE_BOOL 1
@@ -55,6 +61,12 @@
 #define TYPST_VALUE_LENGTH 7
 
 #define TYPST_VALUE_COLOR 8
+
+/**
+ * `integer` indexes the layout options' templates; the value is that
+ * template's function, for `show:` rules or direct calls.
+ */
+#define TYPST_VALUE_TEMPLATE 9
 
 #define TYPST_CONTEXT_NO_BUILTIN_FONTS 1
 
@@ -231,8 +243,9 @@ typedef struct TypstColor {
 
 /**
  * Borrowed native-value input. Only the field selected by `kind` is read:
- * BOOL/INT use `integer`, FLOAT/LENGTH use `number`, STRING uses `text`, COLOR
- * uses `color`, ARRAY uses `items/item_count`, DICT uses `bindings/binding_count`.
+ * BOOL/INT/TEMPLATE use `integer`, FLOAT/LENGTH use `number`, STRING uses
+ * `text`, COLOR uses `color`, ARRAY uses `items/item_count`, DICT uses
+ * `bindings/binding_count`.
  * `reserved` must be zero. Nested inputs are limited to depth 64 and one
  * million nodes per request. These are C contract kinds, not Rust enum values.
  */
@@ -256,6 +269,25 @@ typedef struct TypstBinding {
   struct TypstStr name;
   const struct TypstValueInput *value;
 } TypstBinding;
+
+/**
+ * Independent Typst code whose value is a function, such as
+ * `body => { set text(red); body }`, evaluated once per request in its own
+ * scope with its own borrowed bindings. Optional setup code runs first in
+ * that scope, so the function can use its definitions; the setup's own set
+ * and show rules style nothing. TYPST_VALUE_TEMPLATE inputs in a template's
+ * own bindings may refer only to earlier templates in the same array.
+ * Source names must differ from the request's and from each other.
+ * Frozen array element layout.
+ */
+typedef struct TypstTemplate {
+  struct TypstStr code;
+  struct TypstStr source_name;
+  struct TypstStr setup_code;
+  struct TypstStr setup_source_name;
+  const struct TypstBinding *bindings;
+  size_t binding_count;
+} TypstTemplate;
 
 typedef struct TypstLayoutOptions {
   uint32_t struct_size;
@@ -283,6 +315,18 @@ typedef struct TypstLayoutOptions {
    */
   const struct TypstBinding *bindings;
   size_t binding_count;
+  /**
+   * Borrowed templates. TYPST_VALUE_TEMPLATE inputs in `bindings` refer to
+   * them by index. Requires TYPST_CAP_LAYOUT_TEMPLATES.
+   */
+  const struct TypstTemplate *templates;
+  size_t template_count;
+  /**
+   * Template indices applied to the request's content like `#show:` rules
+   * at its start, outermost first. Rules nearer the content take precedence.
+   */
+  const size_t *shows;
+  size_t show_count;
 } TypstLayoutOptions;
 
 /**

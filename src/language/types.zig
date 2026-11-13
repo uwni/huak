@@ -35,6 +35,8 @@ pub const Type = enum(u32) {
     vector,
     shape,
     path_or_shape,
+    /// A Typst function that a typst_show declaration applies around content.
+    show_rule,
     _,
 
     pub const record_base: u32 = 0x10000;

@@ -516,6 +516,16 @@ pub fn setStyle(self: *Scene, index: Index, style: *const DisplayList.Style) !vo
     target.* = try self.storage.styles.replace(target.*, style);
 }
 
+/// Replace only this instance's geometry; its style and transform remain.
+pub fn setPath(self: *Scene, index: Index, path: *const Path) !void {
+    const current = (try self.getNode(index)).*;
+    if (current != .path) return error.ExpectedPathObject;
+    try Storage.validateDrawing(path, current.path.style, current.path.transform);
+    const replacement = try self.storage.path(path, current.path.style, current.path.transform);
+    self.storage.styles.release(current.path.style);
+    self.nodes.items[index].path = replacement;
+}
+
 /// Mutate only this instance's local transform. Parent transforms continue
 /// to apply to its descendants; source paths and other instances stay intact.
 pub fn applyTransform(self: *Scene, index: Index, value: g.Transform) !void {

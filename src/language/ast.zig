@@ -68,6 +68,8 @@ pub const Expr = struct {
         member: struct { object: *Expr, name: []const u8 },
         /// Original content block, including its brackets, borrowed from module source.
         typst: []const u8,
+        /// Typst function code `parameter => {...}`, borrowed from module source.
+        show_rule: struct { code: []const u8, parameter: Span },
         block: []const *Stmt,
         expansion: struct { name: OperatorName, definition: *Stmt, module: u32, args: []const *Expr, argument_names: []const ?[]const u8, body: []const *Stmt, scope: u32 },
     },
@@ -109,6 +111,8 @@ pub const Stmt = struct {
         /// Original code block, including its braces, borrowed from module source.
         setup_typst: []const u8,
         typst_expose: []const ExportName,
+        /// Show rules applied around every `typ` in this lexical scope.
+        typst_show: []const ExportName,
         imported: struct { path: []const u8, bare: bool = false, namespace_path: []const []const u8 = &.{}, form: ImportForm },
         precedence_group: struct { name: []const u8, relations: []const Relation, associativity: Associativity = .none },
         mixfix_binding: MixfixBinding,

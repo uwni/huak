@@ -4,81 +4,100 @@ use crate::{abi::*, error::Error};
 use typst_core::foundations::{Array, Binding, Dict, IntoValue, Scope, Value};
 use typst_core::layout::Abs;
 
-unsafe fn binding_values(
+/// Converts one borrowed tree. Template inputs refer to `templates`, the
+/// functions already evaluated for this request.
+struct Conversion<'a> {
+    templates: &'a [Value],
+    budget: usize,
+}
+
+impl Conversion<'_> {
+    unsafe fn bindings(
+        &mut self,
+        data: *const TypstBinding,
+        count: usize,
+        depth: usize,
+    ) -> Result<Dict, Error> {
+        if (count != 0 && depth > 64) || count > self.budget {
+            return Err(Error::invalid(
+                "binding value tree exceeds depth or node limit",
+            ));
+        }
+        let mut result = Dict::new();
+        for binding in unsafe { values(data, count, "bindings")? } {
+            let name = unsafe { text(binding.name, "binding name")? };
+            if result.contains(name) {
+                return Err(Error::invalid(format!("duplicate binding name: {name}")));
+            }
+            let input = unsafe { required(binding.value, "binding value")? };
+            let value = unsafe { self.value(input, depth)? };
+            result.insert(name.into(), value);
+        }
+        Ok(result)
+    }
+
+    unsafe fn value(&mut self, input: &TypstValueInput, depth: usize) -> Result<Value, Error> {
+        if depth > 64 || self.budget == 0 {
+            return Err(Error::invalid(
+                "binding value tree exceeds depth or node limit",
+            ));
+        }
+        self.budget -= 1;
+        if input.reserved != 0 {
+            return Err(Error::invalid("binding value reserved field must be zero"));
+        }
+        Ok(match input.kind {
+            TYPST_VALUE_NONE => Value::None,
+            TYPST_VALUE_BOOL if input.integer == 0 || input.integer == 1 => {
+                (input.integer != 0).into_value()
+            }
+            TYPST_VALUE_BOOL => {
+                return Err(Error::invalid("boolean binding input must be zero or one"))
+            }
+            TYPST_VALUE_INT => input.integer.into_value(),
+            TYPST_VALUE_FLOAT | TYPST_VALUE_LENGTH if !input.number.is_finite() => {
+                return Err(Error::invalid("numeric binding inputs must be finite"))
+            }
+            TYPST_VALUE_FLOAT => input.number.into_value(),
+            TYPST_VALUE_LENGTH => Abs::pt(input.number).into_value(),
+            TYPST_VALUE_COLOR => crate::scene::color(input.color)?.into_value(),
+            TYPST_VALUE_STRING => unsafe { text(input.text, "binding string")? }.into_value(),
+            TYPST_VALUE_ARRAY => {
+                if input.item_count > self.budget {
+                    return Err(Error::invalid("binding value tree exceeds node limit"));
+                }
+                let mut items = Array::new();
+                for value in unsafe { values(input.items, input.item_count, "binding array")? } {
+                    items.push(unsafe { self.value(value, depth + 1)? });
+                }
+                items.into_value()
+            }
+            TYPST_VALUE_DICT => {
+                unsafe { self.bindings(input.bindings, input.binding_count, depth + 1)? }
+                    .into_value()
+            }
+            TYPST_VALUE_TEMPLATE => usize::try_from(input.integer)
+                .ok()
+                .and_then(|index| self.templates.get(index))
+                .cloned()
+                .ok_or_else(|| Error::invalid("template binding index is out of range"))?,
+            _ => return Err(Error::invalid("unknown binding value kind")),
+        })
+    }
+}
+
+/// `templates` are the functions already evaluated for this request.
+pub(super) unsafe fn bindings(
     data: *const TypstBinding,
     count: usize,
-    depth: usize,
-    budget: &mut usize,
-) -> Result<Dict, Error> {
-    if (count != 0 && depth > 64) || count > *budget {
-        return Err(Error::invalid(
-            "binding value tree exceeds depth or node limit",
-        ));
-    }
-    let mut result = Dict::new();
-    for binding in unsafe { values(data, count, "bindings")? } {
-        let name = unsafe { text(binding.name, "binding name")? };
-        if result.contains(name) {
-            return Err(Error::invalid(format!("duplicate binding name: {name}")));
-        }
-        let input = unsafe { required(binding.value, "binding value")? };
-        let value = unsafe { input_value(input, depth, budget)? };
-        result.insert(name.into(), value);
-    }
-    Ok(result)
-}
-
-unsafe fn input_value(
-    input: &TypstValueInput,
-    depth: usize,
-    budget: &mut usize,
-) -> Result<Value, Error> {
-    if depth > 64 || *budget == 0 {
-        return Err(Error::invalid(
-            "binding value tree exceeds depth or node limit",
-        ));
-    }
-    *budget -= 1;
-    if input.reserved != 0 {
-        return Err(Error::invalid("binding value reserved field must be zero"));
-    }
-    Ok(match input.kind {
-        TYPST_VALUE_NONE => Value::None,
-        TYPST_VALUE_BOOL if input.integer == 0 || input.integer == 1 => {
-            (input.integer != 0).into_value()
-        }
-        TYPST_VALUE_BOOL => {
-            return Err(Error::invalid("boolean binding input must be zero or one"))
-        }
-        TYPST_VALUE_INT => input.integer.into_value(),
-        TYPST_VALUE_FLOAT | TYPST_VALUE_LENGTH if !input.number.is_finite() => {
-            return Err(Error::invalid("numeric binding inputs must be finite"))
-        }
-        TYPST_VALUE_FLOAT => input.number.into_value(),
-        TYPST_VALUE_LENGTH => Abs::pt(input.number).into_value(),
-        TYPST_VALUE_COLOR => crate::scene::color(input.color)?.into_value(),
-        TYPST_VALUE_STRING => unsafe { text(input.text, "binding string")? }.into_value(),
-        TYPST_VALUE_ARRAY => {
-            if input.item_count > *budget {
-                return Err(Error::invalid("binding value tree exceeds node limit"));
-            }
-            let mut items = Array::new();
-            for value in unsafe { values(input.items, input.item_count, "binding array")? } {
-                items.push(unsafe { input_value(value, depth + 1, budget)? });
-            }
-            items.into_value()
-        }
-        TYPST_VALUE_DICT => {
-            unsafe { binding_values(input.bindings, input.binding_count, depth + 1, budget)? }
-                .into_value()
-        }
-        _ => return Err(Error::invalid("unknown binding value kind")),
-    })
-}
-
-pub(super) unsafe fn bindings(data: *const TypstBinding, count: usize) -> Result<Scope, Error> {
+    templates: &[Value],
+) -> Result<Scope, Error> {
+    let mut conversion = Conversion {
+        templates,
+        budget: 1_000_000,
+    };
     let mut scope = Scope::new();
-    for (name, value) in unsafe { binding_values(data, count, 0, &mut 1_000_000)? } {
+    for (name, value) in unsafe { conversion.bindings(data, count, 0)? } {
         scope.bind(name.into(), Binding::detached(value));
     }
     Ok(scope)
@@ -103,7 +122,39 @@ mod tests {
     }
 
     fn converted(value: &TypstValueInput) -> Result<Value, Error> {
-        unsafe { input_value(value, 0, &mut 1_000_000) }
+        unsafe {
+            Conversion {
+                templates: &[],
+                budget: 1_000_000,
+            }
+            .value(value, 0)
+        }
+    }
+
+    #[test]
+    fn template_inputs_select_the_request_templates_by_index() {
+        let templates = ["first".into_value(), "second".into_value()];
+        let mut reference = input(TYPST_VALUE_TEMPLATE);
+        reference.integer = 1;
+        let mut conversion = Conversion {
+            templates: &templates,
+            budget: 8,
+        };
+        assert_eq!(
+            unsafe { conversion.value(&reference, 0) }.unwrap(),
+            templates[1]
+        );
+        for index in [-1, 2] {
+            reference.integer = index;
+            let error = unsafe { conversion.value(&reference, 0) }.err().unwrap();
+            assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
+        }
+        // Template bindings themselves have no templates to refer to.
+        reference.integer = 0;
+        assert_eq!(
+            converted(&reference).err().unwrap().status,
+            TYPST_INVALID_ARGUMENT
+        );
     }
 
     #[test]
@@ -216,7 +267,7 @@ mod tests {
             value: std::ptr::null(),
         };
         assert_eq!(
-            unsafe { bindings(&missing, 1) }.err().unwrap().status,
+            unsafe { bindings(&missing, 1, &[]) }.err().unwrap().status,
             TYPST_INVALID_ARGUMENT
         );
         let leaf = input(TYPST_VALUE_NONE);
@@ -225,7 +276,7 @@ mod tests {
             value: &leaf,
         }; 2];
         assert_eq!(
-            unsafe { bindings(duplicate.as_ptr(), 2) }
+            unsafe { bindings(duplicate.as_ptr(), 2, &[]) }
                 .err()
                 .unwrap()
                 .status,
@@ -250,12 +301,25 @@ mod tests {
         );
         for kind in [TYPST_VALUE_ARRAY, TYPST_VALUE_DICT] {
             let empty = input(kind);
-            assert!(unsafe { input_value(&empty, 64, &mut 1) }.is_ok());
+            assert!(unsafe {
+                Conversion {
+                    templates: &[],
+                    budget: 1,
+                }
+                .value(&empty, 64)
+            }
+            .is_ok());
             assert_eq!(
-                unsafe { input_value(&empty, 65, &mut 1) }
-                    .err()
-                    .unwrap()
-                    .status,
+                unsafe {
+                    Conversion {
+                        templates: &[],
+                        budget: 1,
+                    }
+                    .value(&empty, 65)
+                }
+                .err()
+                .unwrap()
+                .status,
                 TYPST_INVALID_ARGUMENT
             );
         }

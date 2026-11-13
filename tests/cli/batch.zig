@@ -56,7 +56,7 @@ pub fn run(ctx: *h.Harness) !void {
     try t.expectEqualStrings(try ctx.read("batch-parallel-a.svg"), try ctx.read("batch-parallel-alias.svg"));
     try (try ctx.svg("batch-parallel-a.svg")).viewBox("0 0 180 80");
     try (try ctx.svg("batch-parallel-b.svg")).viewBox("0 0 220 100");
-    try t.expectEqual(@as(usize, 1), (try ctx.svg("batch-parallel-moving.svg")).count("animateTransform"));
+    try h.contains(try ctx.read("batch-parallel-moving.svg"), "transform:translate(");
     for ([_][]const u8{ "a", "b" }) |name| {
         const serial = try ctx.pdfText(try ctx.fmt("batch-serial-{s}.pdf", .{name}), false);
         const parallel = try ctx.pdfText(try ctx.fmt("batch-parallel-{s}.pdf", .{name}), false);

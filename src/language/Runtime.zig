@@ -42,6 +42,14 @@ const Expr = struct { owner: ?usize, expression: constraints.LinearExpr };
 const Variable = struct { owner: usize, id: constraints.Var };
 const Solved = struct { owner: usize, solution: constraints.Solution };
 const Text = struct { layout: *typst.Layout, frame: usize, metrics: DisplayList.Metrics };
+/// A Typst function with the data and module setup it was made with. Strings
+/// live in the runtime arena; color and rule handles index append-only lists.
+const ShowRule = struct {
+    code: []const u8,
+    setup: []const u8,
+    bindings: []const Machine.TypstBinding,
+    origin: typst.SourceOrigin,
+};
 pub const SceneOwner = @import("runtime/objects.zig").Owner;
 pub const Format = renderer.Format;
 pub const Output = renderer.Output;
@@ -128,6 +136,7 @@ variables: std.ArrayList(Variable) = .empty,
 expressions: std.ArrayList(Expr) = .empty,
 solutions: std.ArrayList(Solved) = .empty,
 texts: std.ArrayList(Text) = .empty,
+show_rules: std.ArrayList(ShowRule) = .empty,
 layouts: std.ArrayList(*typst.Layout) = .empty,
 outline_cache: std.AutoHashMapUnmanaged(*const typst.Layout, outline.Batch) = .empty,
 frames: std.ArrayList(typst.FrameRef) = .empty,
@@ -182,7 +191,7 @@ pub fn deinit(self: *Runtime) void {
     self.* = undefined;
 }
 
-const host_vtable: Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = typesetBatch, .setup_typst = setupBlock, .module = selectModule, .error_message = diagnostic };
+const host_vtable: Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = typesetBatch, .show_rule = makeShowRule, .setup_typst = setupBlock, .module = selectModule, .error_message = diagnostic };
 const single_host_vtable = blk: {
     var table = host_vtable;
     table.typst_batch = null;
@@ -340,16 +349,21 @@ fn typesetBatch(ctx: ?*anyopaque, _: std.mem.Allocator, sources: []const Machine
     const setup = self.moduleSetup();
     const requests = try scratch.alloc(typst.LayoutRequest, sources.len);
     for (sources, requests) |input, *request| {
-        const bindings = try typst_bindings.encode(scratch, input.bindings, self.colors.items);
+        for (input.shows) |rule| if (rule != .handle or rule.handle.kind != .show_rule) return error.InvalidArgument;
+        const rules = try self.requestRules(scratch, input.bindings, input.shows);
+        const bindings = try typst_bindings.encode(scratch, input.bindings, self.colors.items, rules);
+        const templates = try self.ruleTemplates(scratch, rules);
+        const shows = try scratch.alloc(usize, input.shows.len);
+        for (shows, input.shows) |*position, rule| position.* = std.sort.binarySearch(usize, rules, rule.handle.index, ruleOrder).?;
         if (setup.len != 0) {
             // Independently parsed trees keep setup and body locations
             // distinct while applying setup's definitions and style rules.
-            request.* = .{ .source = wrappedContent(input.source), .syntax = .markup, .preamble = setup, .bindings = bindings };
+            request.* = .{ .source = wrappedContent(input.source), .syntax = .markup, .preamble = setup, .bindings = bindings, .templates = templates, .shows = shows };
             continue;
         }
         // The compiler stored the content-block delimiters with this
         // constant, so code evaluation borrows the program's bytes.
-        request.* = .{ .source = input.source, .syntax = .code, .bindings = bindings };
+        request.* = .{ .source = input.source, .syntax = .code, .bindings = bindings, .templates = templates, .shows = shows };
     }
     const metrics = try scratch.alloc(typst.Metrics, sources.len);
     var native_diagnostic: typst.Diagnostic = .{};
@@ -362,6 +376,87 @@ fn typesetBatch(ctx: ?*anyopaque, _: std.mem.Allocator, sources: []const Machine
         detail.message = self.native_message;
         return err;
     }
+}
+/// Snapshots the data and the selected module's setup, then lets Typst
+/// evaluate the rule once, so syntax errors and code that is not a function
+/// are reported where the rule is made rather than where it is applied.
+fn makeShowRule(ctx: ?*anyopaque, _: std.mem.Allocator, code: []const u8, bindings: []const Machine.TypstBinding, origin: Machine.TypstOrigin) !Value {
+    const self = from(ctx);
+    if (self.outputs_taken) return error.InvalidState;
+    self.native_message = "";
+    const a = self.mem();
+    const data = try a.alloc(Machine.TypstBinding, bindings.len);
+    for (data, bindings) |*copy, binding| {
+        const value = binding.value;
+        // Only rules made before this one exist, so templates follow those they bind.
+        if (value == .handle and value.handle.kind == .show_rule and value.handle.index >= self.show_rules.items.len) return error.InvalidTypstBinding;
+        copy.* = .{ .name = try a.dupe(u8, binding.name), .value = if (value == .string) .{ .string = try a.dupe(u8, value.string) } else value };
+    }
+    const index = self.show_rules.items.len;
+    try self.show_rules.append(a, .{
+        .code = try a.dupe(u8, code),
+        .setup = self.moduleSetup(),
+        .bindings = data,
+        .origin = .{ .name = try a.dupe(u8, origin.name), .line = origin.line, .column = origin.column },
+    });
+    errdefer self.show_rules.shrinkRetainingCapacity(index);
+    var temporary: std.heap.ArenaAllocator = .init(self.gpa);
+    defer temporary.deinit();
+    const scratch = temporary.allocator();
+    const rules = try self.requestRules(scratch, &.{}, &.{handle(.show_rule, index)});
+    const request: typst.LayoutRequest = .{ .source = "", .templates = try self.ruleTemplates(scratch, rules) };
+    const engine = try self.engineRef();
+    var result = engine.layoutBatch(&.{request}) catch |err| {
+        self.captureNative();
+        return err;
+    };
+    defer result.deinit();
+    if (result.failure) |err| {
+        var detail = result.takeDiagnostic();
+        defer detail.deinit();
+        if (detail.text().len != 0) self.native_message = try a.dupe(u8, detail.text());
+        return err;
+    }
+    return handle(.show_rule, index);
+}
+/// The rules a request supplies as templates, in ascending order: those it
+/// shows, those its data binds, and the rules those bind in turn. A rule
+/// binds only rules made before it, so every template follows those it binds.
+fn requestRules(self: *const Runtime, scratch: std.mem.Allocator, bindings: []const Machine.TypstBinding, shows: []const Value) ![]const usize {
+    var found: std.AutoArrayHashMapUnmanaged(usize, void) = .empty;
+    for (shows) |rule| try self.addRule(scratch, &found, rule);
+    for (bindings) |binding| try self.addRule(scratch, &found, binding.value);
+    var next: usize = 0;
+    while (next < found.count()) : (next += 1) {
+        for (self.show_rules.items[found.keys()[next]].bindings) |binding| try self.addRule(scratch, &found, binding.value);
+    }
+    const rules = try scratch.dupe(usize, found.keys());
+    std.mem.sortUnstable(usize, rules, {}, std.sort.asc(usize));
+    return rules;
+}
+fn addRule(self: *const Runtime, scratch: std.mem.Allocator, found: *std.AutoArrayHashMapUnmanaged(usize, void), value: Value) !void {
+    if (value != .handle or value.handle.kind != .show_rule) return;
+    if (value.handle.index >= self.show_rules.items.len) return error.InvalidTypstBinding;
+    try found.put(scratch, value.handle.index, {});
+}
+fn ruleOrder(index: usize, item: usize) std.math.Order {
+    return std.math.order(index, item);
+}
+/// Source names are unique per rule, so diagnostics can find the rule's text.
+fn ruleTemplates(self: *const Runtime, scratch: std.mem.Allocator, rules: []const usize) ![]const typst.Template {
+    const templates = try scratch.alloc(typst.Template, rules.len);
+    for (templates, rules) |*template, index| {
+        const rule = self.show_rules.items[index];
+        template.* = .{
+            .code = rule.code,
+            .name = try std.fmt.allocPrint(scratch, "show_rule-{d}", .{index}),
+            .setup = rule.setup,
+            .setup_name = try std.fmt.allocPrint(scratch, "show_rule-{d}-preamble", .{index}),
+            .bindings = try typst_bindings.encode(scratch, rule.bindings, self.colors.items, rules),
+            .origin = rule.origin,
+        };
+    }
+    return templates;
 }
 /// Compiler constants for `typ[...]` retain the content-block delimiters.
 /// Setup layouts evaluate the inner markup directly; no second string copy
@@ -380,7 +475,10 @@ fn retainTextBatch(self: *Runtime, requests: []const typst.LayoutRequest, metric
     try self.texts.ensureUnusedCapacity(a, requests.len);
     try self.frames.ensureUnusedCapacity(a, requests.len);
     const engine = try self.engineRef();
-    var result = try engine.layoutBatch(requests);
+    var result = engine.layoutBatch(requests) catch |err| {
+        self.captureNative();
+        return err;
+    };
     defer result.deinit();
     diagnostic_detail.* = result.takeDiagnostic();
     var completed: usize = 0;
@@ -813,14 +911,33 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         .animate, .motion => {
             const instance = try self.objectValue(args[0], true);
             const target = instance.owner;
+            const options: AnimationState.Options = .{
+                .phase = if (hasArgument(args, 4)) try numeric(args[4]) else 0,
+                .smil = if (hasArgument(args, 5)) try boolean(args[5]) else false,
+            };
             if (id == .animate) {
                 const property = try string(args[1]);
                 if ((std.mem.eql(u8, property, "path") or std.mem.eql(u8, property, "stroke_width") or std.mem.eql(u8, property, "stroke") or std.mem.eql(u8, property, "fill")) and target.hasGeometricStroke(instance.index)) return error.UnsupportedNibAnimation;
-                try target.animation_state.animate(instance.index, property, try sequence(args[2]), if (hasArgument(args, 3)) try string(args[3]) else "linear", self);
+                const curve: @import("../animation/root.zig").Easing = if (hasArgument(args, 3)) try AnimationState.easing(args[3]) else .linear;
+                try target.animation_state.animate(instance.index, property, try sequence(args[2]), curve, options, self);
             } else {
-                try target.animation_state.motion(instance.index, args[1], try sequence(args[2]), if (hasArgument(args, 3)) try string(args[3]) else "auto", self);
+                try target.animation_state.motion(instance.index, args[1], try sequence(args[2]), if (hasArgument(args, 3)) try string(args[3]) else "auto", options, self);
             }
             return .unit;
+        },
+        .animation_snapshot => {
+            const target = try self.objectValue(args[0], false);
+            var selected = try target.owner.viewWithBounds(self.gpa, target.index, renderer.FrameBounds{ .frames = self.frames.items });
+            defer selected.deinit();
+            const still = selected.still(self.scene_allocator, self.gpa, try numeric(args[1])) catch |err| {
+                self.native_message = switch (err) {
+                    error.UnsupportedSnapshotOpacity => "a snapshot opacity between 0 and 1 needs a path with one solid fill or stroke; Typst groups have no opacity",
+                    error.UnsupportedSnapshotStroke => "a snapshot of a stroke or stroke width animation needs a path that already has a stroke",
+                    else => return err,
+                };
+                return err;
+            };
+            return self.sceneResult(still, 0);
         },
         .object_transform, .object_remove, .object_before, .object_style, .object_visible, .object_clip, .object_reset_clip => {
             const instance = try self.objectValue(args[0], true);
@@ -942,9 +1059,14 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (x <= 0) return error.DomainError;
             return number(if (id == .log) @log(x) else @log10(x));
         },
-        .floor, .ceil => {
+        .floor, .ceil, .round => {
             const x = try numeric(args[0]);
-            return number(if (id == .floor) @floor(x) else @ceil(x));
+            // Halves round away from zero, as Typst's calc.round does.
+            return number(switch (id) {
+                .floor => @floor(x),
+                .ceil => @ceil(x),
+                else => @round(x),
+            });
         },
         .min, .max, .pow, .atan2 => {
             const x = try types.asQuantity(args[0]);

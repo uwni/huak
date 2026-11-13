@@ -96,6 +96,24 @@ test "logarithms use dimensionless positive inputs through the public namespace"
     }
 }
 
+test "round takes halves away from zero without floor's offset error" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try compile("import math.{round, floor}\nnear_half:=0.49999999999999994\nvalues:=[round(2.5),round(-2.5),round(value:1.4),math.round(-0.4),round(near_half),floor(near_half+0.5)]", optimize);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+        // floor(x+0.5) rounds the largest double below 0.5 up to 1.
+        const expected = [_]f64{ 3, -3, 1, 0, 0, 1 };
+        for (expected, machine.getGlobal("values").?.list.items()) |want, actual|
+            try t.expectEqual(want, actual.number);
+    }
+}
+
 test "special functions accept aliases named arguments and finite tail values" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();

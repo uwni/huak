@@ -35,6 +35,24 @@ pub const LayoutRequest = struct {
     /// Independent Typst code scope applied before evaluating the source.
     preamble: []const u8 = "",
     /// Borrowed native-value trees, copied by the library during the call.
+    /// TYPST_VALUE_TEMPLATE inputs index `templates`.
     bindings: []const c.TypstBinding = &.{},
+    templates: []const Template = &.{},
+    /// Indices of templates applied around the content, outermost first.
+    shows: []const usize = &.{},
 };
+/// Typst code whose value is a function, evaluated for the request in its own
+/// scope after its setup. Names differ from "source", "preamble" and each other.
+pub const Template = struct {
+    code: []const u8,
+    name: []const u8,
+    setup: []const u8 = "",
+    setup_name: []const u8 = "",
+    /// Its TYPST_VALUE_TEMPLATE inputs may index only earlier templates.
+    bindings: []const c.TypstBinding = &.{},
+    /// Where the code lies in a larger file that diagnostics name instead.
+    origin: ?SourceOrigin = null,
+};
+/// A file name and the 0-based line and byte column where some text begins.
+pub const SourceOrigin = struct { name: []const u8, line: usize, column: usize };
 pub const Metrics = struct { width: f64, height: f64, baseline: f64 };

@@ -353,7 +353,9 @@ const Analysis = struct {
                 if (kind.isObject()) value.fresh_owner = object.fresh_owner;
                 try self.push(state, value);
             },
-            .typst => {
+            // Workers read the rules made before their group; a rule made in a
+            // task stays in the worker, since only the task's picture escapes.
+            .typst, .show_rule => {
                 self.uses_typst = true;
                 const count = std.math.mul(u32, instruction_.b, 2) catch return self.invalid();
                 const captures = self.args(state, count);
@@ -362,12 +364,12 @@ const Analysis = struct {
                 while (index < captures.len) : (index += 2) {
                     if (captures[index].kind != .string) self.safe = false;
                     switch (captures[index + 1].kind) {
-                        .int, .number, .boolean, .string, .scalar, .length, .quantity, .color, .any => {},
+                        .int, .number, .boolean, .string, .scalar, .length, .quantity, .color, .show_rule, .any => {},
                         else => self.safe = false,
                     }
                 }
                 state.stack.shrinkRetainingCapacity(state.stack.items.len - captures.len);
-                try self.push(state, Value.ordinary(.text));
+                try self.push(state, Value.ordinary(if (instruction_.op == .typst) .text else .show_rule));
             },
             .check_module, .jump => {},
             .return_value => {
@@ -529,6 +531,11 @@ const Analysis = struct {
                 if (result.kind == .object and arguments.len != 0) result.fresh_owner = arguments[0].fresh_owner;
                 if (id == .object_before and (arguments.len < 2 or !arguments[1].fresh_owner)) self.safe = false;
             },
+            // It reads animation tracks, which are published on the serial path.
+            .animation_snapshot => {
+                self.safe = false;
+                result.fresh_owner = true;
+            },
             .to_string => {
                 if (arguments.len != 1 or !simpleType(arguments[0].kind)) {
                     self.safe = false;
@@ -626,7 +633,7 @@ const Analysis = struct {
 
 fn supportedType(kind: Type) bool {
     return switch (kind) {
-        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .pen, .transform, .text, .picture, .function, .measure, .object => true,
+        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .pen, .transform, .text, .show_rule, .picture, .function, .measure, .object => true,
         else => false,
     };
 }

@@ -125,7 +125,7 @@ pub fn pictureAt(allocator: std.mem.Allocator, measured: []const typst.Metrics, 
     while (index + 2 < keys.len and keys[index + 1].time < time) : (index += 1) {}
     const fraction = (time - keys[index].time) / (keys[index + 1].time - keys[index].time);
     const range = picture.picture.commands.items[picture.objects.curve].path.path;
-    for (picture.picture.segments.items[range.first..][0..range.count], keys[index].value, keys[index + 1].value) |*segment, left, right| segment.* = switch (left) {
+    for (picture.picture.storage.segments.items[range.first..][0..range.count], keys[index].value, keys[index + 1].value) |*segment, left, right| segment.* = switch (left) {
         .move => |point| .{ .move = point.lerp(right.move, fraction) },
         .line => |point| .{ .line = point.lerp(right.line, fraction) },
         .cubic => |curve| .{ .cubic = .{ .c1 = curve.c1.lerp(right.cubic.c1, fraction), .c2 = curve.c2.lerp(right.cubic.c2, fraction), .end = curve.end.lerp(right.cubic.end, fraction) } },
@@ -138,10 +138,13 @@ pub fn pictureAt(allocator: std.mem.Allocator, measured: []const typst.Metrics, 
     const pulse = if (time <= 0.5) 1 + time * 1.2 else 1.6 - (time - 0.5) * 1.2;
     picture.picture.commands.items[picture.marker].path.transform = g.Transform.scaling(pulse, pulse).then(g.Transform.rotation(pose.angle)).then(g.Transform.translation(pose.position.x, pose.position.y));
     const color_fraction = if (time <= 0.5) time * 2 else (1 - time) * 2;
-    picture.picture.commands.items[picture.marker].path.style.fill = .{
+    const marker = &picture.picture.commands.items[picture.marker].path;
+    var style = marker.style.*;
+    style.fill = .{
         .r = blue.r * (1 - color_fraction) + red.r * color_fraction,
         .g = blue.g * (1 - color_fraction) + red.g * color_fraction,
         .b = blue.b * (1 - color_fraction) + red.b * color_fraction,
     };
+    marker.style = try picture.picture.storage.styles.replace(marker.style, &style);
     return picture;
 }

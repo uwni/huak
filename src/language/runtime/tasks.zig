@@ -65,9 +65,9 @@ pub fn fork(parent: *Runtime) !Runtime {
     // No child-owned resources exist while these metadata copies can fail.
     errdefer child.arena.deinit();
     inline for (.{
-        "module_setups", "path_values",  "colors",      "pens",      "transforms", "models",
-        "solvers",       "variables",    "expressions", "solutions", "texts",      "layouts",
-        "frames",        "scene_values", "measures",
+        "module_setups", "path_values", "colors",       "pens",      "transforms", "models",
+        "solvers",       "variables",   "expressions",  "solutions", "texts",      "layouts",
+        "show_rules",    "frames",      "scene_values", "measures",
     }) |name| {
         try @field(child, name).appendSlice(child.arena.allocator(), @field(parent, name).items);
     }

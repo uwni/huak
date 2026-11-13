@@ -68,12 +68,16 @@ fn tokenAt(frontend: *const Frontend, input: []const u8, byte_offset: usize, sou
             return token;
         }
         if (token.span.end == byte_offset and token.kind == .identifier) trailing = token;
-        if (token.kind == .kw_typ or token.kind == .kw_setup_typst) {
+        // Typst parameters and blocks name nothing in Huak.
+        if (token.kind == .kw_typ or token.kind == .kw_setup_typst or token.kind == .kw_show_rule) {
             if (blocks) |ranges| {
                 if (ranges.len == 0) return null;
                 scanner.pos = ranges[0].end;
                 blocks = ranges[1..];
             } else {
+                if (token.kind == .kw_show_rule) for ([_]Lexer.Kind{ .identifier, .fat_arrow }) |kind| {
+                    if ((scanner.next() catch return null).kind != kind) return null;
+                };
                 var start = scanner.pos;
                 while (start < input.len and (input[start] == ' ' or input[start] == '\t' or input[start] == '\r')) start += 1;
                 const length = frontend.sourceBlock(input[start..]) catch |err| {
@@ -260,7 +264,7 @@ const Query = struct {
             .exported => |exported| {
                 for (exported.names) |name| if (self.contains(name.span)) return self.named(name.name, offset, .exported);
             },
-            .typst_expose => |names| {
+            .typst_expose, .typst_show => |names| {
                 for (names) |name| if (self.contains(name.span)) return self.named(name.name, offset, .value);
             },
             .imported => {
@@ -838,8 +842,22 @@ const Fixture = struct {
         return error.FileNotFound;
     }
 
+    /// Balanced delimiters stand in for the native Typst parser.
+    fn block(_: *anyopaque, input: []const u8) !usize {
+        var depth: usize = 0;
+        for (input, 0..) |byte, index| switch (byte) {
+            '{', '[' => depth += 1,
+            '}', ']' => {
+                depth -= 1;
+                if (depth == 0) return index + 1;
+            },
+            else => {},
+        };
+        return error.UnclosedBlock;
+    }
+
     fn lookup(self: *const Fixture, allocator: std.mem.Allocator, query: []const u8) !?Location {
-        const frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
+        const frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .source_parser = .{ .ptr = @constCast(self), .vtable = &.{ .block = block } }, .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
         const offset = std.mem.lastIndexOf(u8, self.source, query) orelse return error.MissingTestQuery;
         return find(&frontend, allocator, self.source, self.name, offset);
     }
@@ -920,6 +938,22 @@ test "Typst exposure names navigate through ordinary local and imported value bi
     try fixture.expect("count\n", "file:///tmp/library.huak", library, "amount");
     try fixture.expect("title\n    return", "file:///tmp/definition.huak", source, "title:string");
     try fixture.expectNone("typst_expose title, count");
+}
+
+test "show rule code stays opaque while typst_show names navigate" {
+    const source =
+        \\setup_typst { let shout(it) = upper(it) }
+        \\big:=show_rule body => { set text(size: 20pt); shout(body) }
+        \\fn caption()->text
+        \\    typst_show big
+        \\    return typ[body]
+        \\end
+    ;
+    const fixture: Fixture = .{ .source = source };
+    try fixture.expect("big\n", "file:///tmp/definition.huak", source, "big:=");
+    try fixture.expectNone("body =>");
+    try fixture.expectNone("shout(body)");
+    try fixture.expectNone("size: 20pt");
 }
 
 test "definitions use scoped callable imports and restore outer callable after block" {

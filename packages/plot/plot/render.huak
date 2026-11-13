@@ -279,6 +279,7 @@ end
 fn measure(panel:Panel, fig:Figure, available:vec2)
     opts := panel.source.options
     size:length := get(opts, "font_size", get(fig.options, "font_size", 9pt))
+    style:any := get(opts, "tick_style", get(fig.options, "tick_style", false))
     panel.left = 10pt; panel.right = 10pt; panel.bottom = 10pt; panel.top = 10pt
     for side in keys(panel.rulers_by_side) do
         r := panel.rulers_by_side[side]
@@ -286,7 +287,7 @@ fn measure(panel:Panel, fig:Figure, available:vec2)
         if horizontal(side) then span = available.x end
         if side == primary(panel.source, "x") then shared = panel.shared_x end
         if side == primary(panel.source, "y") then shared = panel.shared_y end
-        rulers.measure(r, span, size, shared)
+        rulers.measure(r, span, size, style, shared)
         if side == "left" then panel.left = r.depth
         elseif side == "right" then panel.right = r.depth
         elseif side == "bottom" then panel.bottom = r.depth
@@ -295,6 +296,8 @@ fn measure(panel:Panel, fig:Figure, available:vec2)
     panel.xt = panel.rulers_by_side[primary(panel.source, "x")].ticks
     panel.yt = panel.rulers_by_side[primary(panel.source, "y")].ticks
     if get(opts, "title", false) != false then panel.top = panel.top+opts["title"].height+6pt end
+    title_align:string := get(opts, "title_align", "center")
+    assert(title_align == "left" or title_align == "center" or title_align == "right", "title_align must be left, center or right")
     position:string := get(opts, "legend", "none")
     assert(scales.index(["none", "top-right", "top-left", "bottom-right", "bottom-left", "outside-right", "outside-bottom"], position) >= 0, "unknown legend position")
     panel.legends = []
@@ -332,7 +335,7 @@ fn measure(panel:Panel, fig:Figure, available:vec2)
         panel.color_ticks = scales.ticks(scales.resolve(limits, "linear", limits), 4)
         max_width := 0pt; max_height := 0pt
         for value in panel.color_ticks do
-            body := labels.number(value, size)
+            body := labels.number(value, size, "auto", style)
             panel.color_labels += [body]
             max_width = max(max_width, body.width); max_height = max(max_height, body.height)
         end
@@ -458,8 +461,19 @@ fn decorations(dst:picture, panel:Panel, fig:Figure, foreground:bool)
                 rulers.spine(dst, frame, start, ink)
             end
         end
-        if get(opts, "title", false) != false then labels.place(dst, opts["title"], (o.x+s.x/2, o.y+s.y+panel.top-3pt), (0.5, 1)) end
+        if get(opts, "title", false) != false then
+            share := title_share(opts)
+            labels.place(dst, opts["title"], (o.x+s.x*share, o.y+s.y+panel.top-3pt), (share, 1))
+        end
     end
+end
+
+// An aligned title is anchored at this share of the plot area's width.
+fn title_share(opts:dict) -> float
+    align:string := get(opts, "title_align", "center")
+    if align == "left" then return 0.0 end
+    if align == "right" then return 1.0 end
+    return 0.5
 end
 
 fn legend(dst:picture, panel:Panel, fig:Figure)

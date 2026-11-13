@@ -42,7 +42,7 @@ end
 
 export fn figure(width:length = 400pt, height:length = 280pt, options:dict = {}) -> Figure
     assert(width > 0pt and height > 0pt, "figure dimensions must be positive")
-    validate(options, ["margin", "gap", "background", "palette", "font_size", "ink", "grid_color", "line_width", "auto_bounds"])
+    validate(options, ["margin", "gap", "background", "palette", "font_size", "tick_style", "ink", "grid_color", "line_width", "auto_bounds"])
     return Figure(width: width, height: height, options: copy(options))
 end
 
@@ -55,7 +55,7 @@ export fn axis(fig:Figure, cell:vec2 = (0, 0), options:dict = {}) -> Axis
     return result
 end
 
-export AXIS_OPTIONS := ["title", "xlabel", "ylabel", "xscale", "yscale", "xlim", "ylim", "xreverse", "yreverse", "xticks", "yticks", "xlabels", "ylabels", "xstep", "ystep", "xminorticks", "yminorticks", "grid", "minorgrid", "legend", "legend_columns", "spines", "xside", "yside", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "equal", "colorbar", "font_size", "xformat", "yformat"]
+export AXIS_OPTIONS := ["title", "xlabel", "ylabel", "xscale", "yscale", "xlim", "ylim", "xreverse", "yreverse", "xticks", "yticks", "xlabels", "ylabels", "xstep", "ystep", "xminorticks", "yminorticks", "grid", "minorgrid", "legend", "legend_columns", "spines", "xside", "yside", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "equal", "colorbar", "font_size", "tick_style", "xformat", "yformat", "title_align"]
 export LAYER_OPTIONS := ["label", "color", "fill", "pen", "width", "dash", "marker", "sizes", "colors", "orientation", "bar_width", "baseline", "stack", "group", "upper", "cap_size", "colormap", "clim", "clip", "xaxis", "yaxis", "arrow", "arrow_size", "align", "legend_line"]
 
 export fn horizontal(side:string) -> bool
@@ -71,7 +71,7 @@ end
 
 export fn side(ax:Axis, name:string, options:dict)
     horizontal(name)
-    validate(options, ["scale", "limits", "reverse", "ticks", "labels", "step", "minorticks", "decades", "format", "label", "pen", "arrow", "arrow_size", "grid", "minorgrid", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "font_size", "breaks", "break_gap"])
+    validate(options, ["scale", "limits", "reverse", "ticks", "labels", "step", "minorticks", "decades", "format", "label", "pen", "arrow", "arrow_size", "grid", "minorgrid", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "font_size", "tick_style", "breaks", "break_gap"])
     ax.sides[name] = merged(get(ax.sides, name, {}), options)
 end
 

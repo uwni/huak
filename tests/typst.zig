@@ -244,6 +244,46 @@ test "host preamble errors preserve separate source positions hints and traces" 
     try testing.expect(std.mem.indexOf(u8, detail.text(), "\\]") != null);
 }
 
+test "host templates apply as show rules and report positions in their originating file" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var engine = try library.createEngine();
+    defer engine.deinit();
+    // A template keeps its own setup definitions; its setup styles nothing.
+    const large: typst.Template = .{
+        .code = "body => { set text(size: 30pt); emphasis(body) }",
+        .name = "large",
+        .setup = "let emphasis(body) = strong(body)\nset text(red)",
+        .setup_name = "large-setup",
+    };
+    const plain: typst.LayoutRequest = .{ .source = "Hello" };
+    var shown = plain;
+    shown.templates = &.{large};
+    shown.shows = &.{0};
+    var registered = plain;
+    registered.templates = &.{large};
+    var metrics: [3]typst.Metrics = undefined;
+    var layout = try engine.layoutContent(&.{ plain, shown, registered }, &metrics, null);
+    defer layout.deinit();
+    try testing.expect(metrics[1].width > 2 * metrics[0].width);
+    try testing.expectEqual(metrics[0].width, metrics[2].width);
+
+    // Errors inside a template are placed in the file the code came from.
+    const failing: typst.Template = .{
+        .code = "body => {\n  set text(size: missing)\n  body\n}",
+        .name = "failing",
+        .origin = .{ .name = "styles.huak", .line = 6, .column = 20 },
+    };
+    var broken = plain;
+    broken.templates = &.{failing};
+    broken.shows = &.{0};
+    var single: [1]typst.Metrics = undefined;
+    var detail: typst.Diagnostic = .{};
+    defer detail.deinit();
+    try testing.expectError(error.CompileFailed, engine.layoutContent(&.{broken}, &single, &detail));
+    try testing.expect(std.mem.indexOf(u8, detail.text(), "styles.huak:8:18: unknown variable: missing") != null);
+}
+
 test "engine inputs are immutable strings copied before the caller releases storage" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();

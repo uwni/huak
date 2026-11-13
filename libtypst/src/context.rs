@@ -151,6 +151,7 @@ impl Context {
             bytes: Bytes::from_string(source.clone()),
             source,
             setup: None,
+            templates: Vec::new(),
         })
     }
 }
@@ -202,19 +203,39 @@ pub(crate) struct JobWorld {
     pub(crate) source: Source,
     bytes: Bytes,
     pub(crate) setup: Option<Source>,
+    /// Template code, so diagnostics raised inside a template call resolve.
+    templates: Vec<Source>,
 }
 
 impl JobWorld {
     pub(crate) fn set_setup(&mut self, text: &str, name: &str) -> Result<(), Error> {
-        let name = if name.is_empty() { "setup.typ" } else { name };
+        let source = self.request_source(text, if name.is_empty() { "setup.typ" } else { name })?;
+        self.setup = Some(source);
+        Ok(())
+    }
+
+    pub(crate) fn add_template(&mut self, text: &str, name: &str) -> Result<(), Error> {
+        let source = self.request_source(text, name)?;
+        self.templates.push(source);
+        Ok(())
+    }
+
+    /// Body, setup and template code keep their own file IDs for diagnostics.
+    fn request_source(&self, text: &str, name: &str) -> Result<Source, Error> {
         let id = file_id(name)?;
-        if id == self.source.id() {
+        if id == self.source.id() || self.auxiliary(id).is_some() {
             return Err(Error::invalid(
-                "setup and body must have distinct source names",
+                "body, setup and templates must have distinct source names",
             ));
         }
-        self.setup = Some(parsed_source(id, text));
-        Ok(())
+        Ok(parsed_source(id, text))
+    }
+
+    fn auxiliary(&self, id: FileId) -> Option<&Source> {
+        self.setup
+            .iter()
+            .chain(&self.templates)
+            .find(|source| source.id() == id)
     }
 }
 
@@ -235,10 +256,8 @@ impl World for JobWorld {
         if id == self.main() {
             return Ok(self.source.clone());
         }
-        if let Some(setup) = &self.setup {
-            if id == setup.id() {
-                return Ok(setup.clone());
-            }
+        if let Some(source) = self.auxiliary(id) {
+            return Ok(source.clone());
         }
         let file = self
             .resources
@@ -257,10 +276,8 @@ impl World for JobWorld {
         if id == self.main() {
             return Ok(self.bytes.clone());
         }
-        if let Some(setup) = &self.setup {
-            if id == setup.id() {
-                return Ok(Bytes::from_string(setup.clone()));
-            }
+        if let Some(source) = self.auxiliary(id) {
+            return Ok(Bytes::from_string(source.clone()));
         }
         self.resources
             .files

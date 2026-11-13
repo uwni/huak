@@ -36,9 +36,9 @@ Use **−**, **+** or **Ctrl/Cmd + scroll** to zoom. The zoom menu offers **Fit 
 
 Choose **Export…** in the preview or **Huak: Export Picture…** in the editor and select **SVG** or **PDF**. The preview exports the selected picture with its render settings. From the editor you can choose among multiple pictures. For `diagram.huak`, the default picture saves beside the source as `diagram.svg` or `diagram.pdf`; a named picture such as `detail` saves as `diagram.detail.svg` or `diagram.detail.pdf`. The extension saves edits before rendering and asks before replacing an existing file.
 
-`typst_expose title, count` exposes selected Huak data to the local `huak` namespace in Typst. Its declaration names support ordinary Go to Definition, while Typst source stays opaque to Huak tooling. The native compiler validates the selected bindings; the extension does not mirror that logic.
+`typst_expose title, count` exposes selected Huak data to the local `huak` namespace in Typst, and `typst_show rule` applies show rules around `typ` content. Their declaration names support ordinary Go to Definition, while Typst source, including a `show_rule` parameter and block, stays opaque to Huak tooling. The native compiler validates the selected bindings; the extension does not mirror that logic.
 
-Embedded `typ[…]` and `setup_typst {…}` highlighting reuses the Typst grammar supplied by Tinymist when installed. It does not parse or evaluate Typst independently.
+Embedded `typ[…]`, `setup_typst {…}` and `show_rule body => {…}` or `=> […]` highlighting reuses the Typst grammar supplied by Tinymist when installed. It does not parse or evaluate Typst independently.
 
 ## Installation and native verification
 

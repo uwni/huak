@@ -42,10 +42,16 @@ pub fn main(init: std.process.Init) !void {
     var static_svg = try document.exportSvg(0);
     defer static_svg.deinit();
     const tracks = prepared.tracks();
-    const animation: a.Animation = .{ .duration_seconds = scene.duration, .tracks = &tracks };
-    const output = try native_svg.encodeAnimatedSvg(init.gpa, static_svg.bytes(), &animation);
-    defer init.gpa.free(output);
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = output_path, .data = output });
+    // CSS is the default; a copy with every track marked smil lets browsers
+    // compare both.
+    for ([_]bool{ false, true }) |smil| {
+        var marked_tracks = tracks;
+        for (&marked_tracks) |*track| track.smil = smil;
+        const output = try native_svg.encodeAnimatedSvg(init.gpa, static_svg.bytes(), &.{ .duration_seconds = scene.duration, .tracks = &marked_tracks });
+        defer init.gpa.free(output);
+        const path = if (smil) try std.fmt.allocPrint(init.arena.allocator(), "{s}-smil.svg", .{output_path[0 .. output_path.len - ".svg".len]}) else output_path;
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = output });
+    }
     try writeReferences(init, &library, &references, &measured, &prepared, ids);
     try writePropertyFixture(init, static_svg.bytes());
 }
@@ -58,9 +64,13 @@ fn writePropertyFixture(init: std.process.Init, static_svg: []const u8) !void {
         .{ .target = marker_id, .property = .{ .stroke_width = &.{ .{ .time = 0, .value = 1 }, .{ .time = 1, .value = 5 } } } },
         .{ .target = marker_id, .property = .{ .stroke = &.{ .{ .time = 0, .value = .{ .r = 0, .g = 0, .b = 1, .a = 0.4 } }, .{ .time = 1, .value = .{ .r = 1, .g = 0, .b = 0 } } } } },
     };
-    const output = try native_svg.encodeAnimatedSvg(init.gpa, static_svg, &.{ .duration_seconds = duration, .repeat = false, .tracks = &fixture_tracks });
-    defer init.gpa.free(output);
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "target/animation-properties.svg", .data = output });
+    for ([_]bool{ false, true }) |smil| {
+        var marked_tracks = fixture_tracks;
+        for (&marked_tracks) |*track| track.smil = smil;
+        const output = try native_svg.encodeAnimatedSvg(init.gpa, static_svg, &.{ .duration_seconds = duration, .repeat = false, .tracks = &marked_tracks });
+        defer init.gpa.free(output);
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = if (smil) "target/animation-properties-smil.svg" else "target/animation-properties.svg", .data = output });
+    }
 }
 
 fn writeReferences(init: std.process.Init, library: *typst.Library, references: []const typst.FrameRef, measured: []const typst.Metrics, prepared: *const scene.Prepared, ids: []const u64) !void {

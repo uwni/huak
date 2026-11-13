@@ -86,8 +86,17 @@ pub const FrameRef = struct {
     }
 };
 
-fn sources(request: api.LayoutRequest) [2]diagnostics.Source {
-    return .{ .{ .name = "source", .text = request.source }, .{ .name = "preamble", .text = request.preamble } };
+/// Formats native diagnostics against the texts the request names.
+fn describe(library: *api.Library, report: ?*const c.TypstDiagnostics, request: api.LayoutRequest) api.Error![]u8 {
+    const named = try a.alloc(diagnostics.Source, 2 + 2 * request.templates.len);
+    defer a.free(named);
+    named[0] = .{ .name = "source", .text = request.source };
+    named[1] = .{ .name = "preamble", .text = request.preamble };
+    for (request.templates, 0..) |template, index| {
+        named[2 + 2 * index] = .{ .name = template.name, .text = template.code, .origin = template.origin };
+        named[3 + 2 * index] = .{ .name = template.setup_name, .text = template.setup };
+    }
+    return diagnostics.format(library, report, named);
 }
 
 pub fn layoutContent(engine: *api.Engine, requests: []const api.LayoutRequest, metrics: []api.Metrics, detail: ?*api.Diagnostic) api.Error!Layout {
@@ -121,6 +130,15 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
         }
         break;
     };
+    var template_count: usize = 0;
+    for (requests) |request| template_count += request.templates.len;
+    if (template_count != 0 and !try library.supports(c.TYPST_CAP_LAYOUT_TEMPLATES)) {
+        try library.setError("libtypst does not support layout templates");
+        return error.Unsupported;
+    }
+    const templates = try a.alloc(c.TypstTemplate, template_count);
+    defer a.free(templates);
+    var next_template: usize = 0;
 
     // One allocation holds the three contiguous arrays borrowed by the ABI.
     var descriptors = try std.MultiArrayList(struct {
@@ -153,6 +171,20 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
         config.setup_source_name = binding.str("preamble");
         config.bindings = request.bindings.ptr;
         config.binding_count = request.bindings.len;
+        const own = templates[next_template..][0..request.templates.len];
+        next_template += own.len;
+        for (own, request.templates) |*record, template| record.* = .{
+            .code = binding.str(template.code),
+            .source_name = binding.str(template.name),
+            .setup_code = binding.str(template.setup),
+            .setup_source_name = binding.str(template.setup_name),
+            .bindings = template.bindings.ptr,
+            .binding_count = template.bindings.len,
+        };
+        config.templates = own.ptr;
+        config.template_count = own.len;
+        config.shows = request.shows.ptr;
+        config.show_count = request.shows.len;
         input.* = .{ .source = binding.str(request.source), .source_name = binding.str("source"), .options = config };
     }
     @memset(results, std.mem.zeroes(c.TypstLayoutResult));
@@ -186,7 +218,7 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
         const result = &results[index];
         const failure = if (binding.status(result.status)) |_| error.InvalidResult else |err| err;
         const message = message: {
-            const text = try diagnostics.format(library, result.diagnostics, &sources(requests[index]));
+            const text = try describe(library, result.diagnostics, requests[index]);
             if (text.len != 0) break :message text;
             a.free(text);
             break :message try a.dupe(u8, @errorName(failure));
@@ -220,7 +252,7 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
         try library.check(library.functions.layout_metrics(frame_owner, &native_metrics), null);
         measurement.* = .{ .width = native_metrics.width_pt, .height = native_metrics.height_pt, .baseline = native_metrics.baseline_pt };
         if (!std.math.isFinite(measurement.width) or !std.math.isFinite(measurement.height) or !std.math.isFinite(measurement.baseline)) return error.InvalidResult;
-        const warning = try diagnostics.format(library, result.diagnostics, &sources(request));
+        const warning = try describe(library, result.diagnostics, request);
         defer a.free(warning);
         if (warning.len != 0) {
             if (warnings.written().len != 0) warnings.writer.writeByte('\n') catch return error.OutOfMemory;

@@ -62,7 +62,7 @@ export fn node_object(item:layout.ResolvedNode) -> PaintedObject
             assert(sep >= 0pt, "node graph separator must be nonnegative")
             extent:length := item.size.x
             if side == "left" or side == "right" then extent = item.size.y end
-            glyph := shapes.stretched_glyph(kind, extent, side, opt.get(options, "fill", false), opt.get(shape_options, "font_size", 0pt))
+            glyph := shapes.stretched_glyph(kind, extent, side, opt.get(options, "fill", false), opt.get(shape_options, "style", false))
             glyph_center:vec2 := center
             if side == "bottom" then glyph_center = (center.x, center.y-item.size.y/2-sep-glyph.height/2) end
             if side == "top" then glyph_center = (center.x, center.y+item.size.y/2+sep+glyph.height/2) end

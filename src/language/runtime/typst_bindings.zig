@@ -9,7 +9,9 @@ const c = native.c;
 
 /// Every record and string is borrowed until the native layout call returns.
 /// Allocate the tree in that call's scratch arena, never the VM lifetime arena.
-pub fn encode(allocator: std.mem.Allocator, bindings: []const Machine.TypstBinding, colors: []const Color) ![]const c.TypstBinding {
+/// A show_rule handle becomes the template at its position in `rules`, the
+/// ascending rule indices the request supplies as templates.
+pub fn encode(allocator: std.mem.Allocator, bindings: []const Machine.TypstBinding, colors: []const Color, rules: []const usize) ![]const c.TypstBinding {
     if (bindings.len == 0) return &.{};
     const values = try allocator.alloc(c.TypstValueInput, bindings.len);
     const members = try allocator.alloc(c.TypstBinding, bindings.len);
@@ -40,7 +42,11 @@ pub fn encode(allocator: std.mem.Allocator, bindings: []const Machine.TypstBindi
                 value.kind = c.TYPST_VALUE_LENGTH;
                 value.number = try units.toPoints(quantity);
             },
-            .handle => |handle| {
+            .handle => |handle| if (handle.kind == .show_rule) {
+                const position = std.sort.binarySearch(usize, rules, handle.index, order) orelse return error.InvalidTypstBinding;
+                value.kind = c.TYPST_VALUE_TEMPLATE;
+                value.integer = @intCast(position);
+            } else {
                 if (handle.kind != .color or handle.index >= colors.len) return error.InvalidTypstBinding;
                 const color = colors[handle.index];
                 if (!color.valid()) return error.InvalidTypstBinding;
@@ -61,6 +67,10 @@ pub fn encode(allocator: std.mem.Allocator, bindings: []const Machine.TypstBindi
     return roots;
 }
 
+fn order(index: usize, item: usize) std.math.Order {
+    return std.math.order(index, item);
+}
+
 test "Typst snapshot tree scratch ownership is released on every allocation failure" {
     const Check = struct {
         fn run(allocator: std.mem.Allocator) !void {
@@ -71,8 +81,9 @@ test "Typst snapshot tree scratch ownership is released on every allocation fail
                 .{ .name = "title", .value = .{ .string = "literal \" #panic(\"never\") Ω" } },
                 .{ .name = "size", .value = .{ .quantity = units.fromPoints(12) } },
                 .{ .name = "ink", .value = .{ .handle = .{ .kind = .color, .index = 0 } } },
+                .{ .name = "style", .value = .{ .handle = .{ .kind = .show_rule, .index = 3 } } },
             };
-            _ = try encode(scratch.allocator(), &snapshot, &.{.{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 0.25 }});
+            _ = try encode(scratch.allocator(), &snapshot, &.{.{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 0.25 }}, &.{3});
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Check.run, .{});
@@ -85,6 +96,17 @@ test "aggregate runtime Typst bindings reject script containers and omitted slot
     for ([_]types.Value{ .{ .dict = &dict }, .{ .record = &record_value }, types.listView(&.{}), .omitted }) |value| {
         var scratch: std.heap.ArenaAllocator = .init(std.testing.allocator);
         defer scratch.deinit();
-        try std.testing.expectError(error.InvalidTypstBinding, encode(scratch.allocator(), &.{.{ .name = "container", .value = value }}, &.{}));
+        try std.testing.expectError(error.InvalidTypstBinding, encode(scratch.allocator(), &.{.{ .name = "container", .value = value }}, &.{}, &.{}));
     }
+}
+
+test "show rule handles index the request's ascending rule templates" {
+    var scratch: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer scratch.deinit();
+    const rule = [_]Machine.TypstBinding{.{ .name = "style", .value = .{ .handle = .{ .kind = .show_rule, .index = 7 } } }};
+    const roots = try encode(scratch.allocator(), &rule, &.{}, &.{ 2, 7, 9 });
+    const member = roots[0].value.*.bindings[0];
+    try std.testing.expectEqual(@as(u32, c.TYPST_VALUE_TEMPLATE), member.value.*.kind);
+    try std.testing.expectEqual(@as(i64, 1), member.value.*.integer);
+    try std.testing.expectError(error.InvalidTypstBinding, encode(scratch.allocator(), &rule, &.{}, &.{ 2, 9 }));
 }
