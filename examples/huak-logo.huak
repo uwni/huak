@@ -24,9 +24,13 @@ palette := [
     rgb(64 / 255, 89 / 255, 173 / 255), // #4059ad
 ]
 
-setup_typst {
-  set text(font: "Libertinus Serif", size: 33.54mm)
-}
+theme := typ.module[
+  #let style(body) = {
+    set text(font: "Libertinus Serif", size: 33.54mm)
+    body
+  }
+]
+typ.show theme.style
 
 // Typeset one letter, apply its placement transform, then extract the outline
 // and reduce it to an explicit filled region.

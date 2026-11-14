@@ -34,6 +34,12 @@ fn lookup(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8,
         break :incomplete null;
     };
     const blocks = if (parsed) |*graph| graph.units.items[0].headers.source_blocks else null;
+    // A `huak.name` read in Typst code names the Huak value it reads, never
+    // a builtin function of that name.
+    if (parsed) |*graph| if (typstUseAt(graph.units.items[0], byte_offset)) |use| {
+        const query: Query = .{ .graph = graph, .unit = graph.units.items[0], .token = .{ .kind = .identifier, .span = use.span }, .name = use.name };
+        return .{ .target = query.named(use.name, use.span.start, .value) };
+    };
     const token = try tokenAt(frontend, text, byte_offset, blocks) orelse return .{};
     const name = text[token.span.start..token.span.end];
     var result: Lookup = .{ .identifier = if (token.kind == .identifier) name else null };
@@ -68,16 +74,15 @@ fn tokenAt(frontend: *const Frontend, input: []const u8, byte_offset: usize, sou
             return token;
         }
         if (token.span.end == byte_offset and token.kind == .identifier) trailing = token;
-        // Typst parameters and blocks name nothing in Huak.
-        if (token.kind == .kw_typ or token.kind == .kw_setup_typst or token.kind == .kw_show_rule) {
+        // Typst blocks name nothing in Huak; their `huak.name` reads are
+        // found from the parsed uses. `typ.show` and a `typ.module`
+        // annotation have no block.
+        if (token.kind == .kw_typ and typstBlockFollows(&scanner)) {
             if (blocks) |ranges| {
                 if (ranges.len == 0) return null;
                 scanner.pos = ranges[0].end;
                 blocks = ranges[1..];
             } else {
-                if (token.kind == .kw_show_rule) for ([_]Lexer.Kind{ .identifier, .fat_arrow }) |kind| {
-                    if ((scanner.next() catch return null).kind != kind) return null;
-                };
                 var start = scanner.pos;
                 while (start < input.len and (input[start] == ' ' or input[start] == '\t' or input[start] == '\r')) start += 1;
                 const length = frontend.sourceBlock(input[start..]) catch |err| {
@@ -89,6 +94,31 @@ fn tokenAt(frontend: *const Frontend, input: []const u8, byte_offset: usize, sou
             if (byte_offset < scanner.pos) return null;
         }
     }
+}
+
+/// Whether a Typst block follows `typ`, directly or after `.module`; the
+/// scanner is left just before the block.
+fn typstBlockFollows(scanner: *Lexer) bool {
+    if (scanner.startsBlock('[')) return true;
+    if (!scanner.startsMember("module")) return false;
+    var ahead = scanner.*;
+    _ = ahead.next() catch return false;
+    _ = ahead.next() catch return false;
+    if (!ahead.startsBlock('[')) return false;
+    scanner.* = ahead;
+    return true;
+}
+
+/// The `huak.name` read in Typst code at the offset, if any.
+fn typstUseAt(unit: *const ModuleGraph.Unit, byte_offset: usize) ?ast.TypstUse {
+    const node = SyntaxAt.find(unit.script.statements, .{ .start = byte_offset, .end = byte_offset }).node orelse return null;
+    if (node != .expression) return null;
+    const code = switch (node.expression.value) {
+        .typst, .typst_module => |code| code,
+        else => return null,
+    };
+    for (code.uses) |use| if (use.span.start <= byte_offset and byte_offset <= use.span.end) return use;
+    return null;
 }
 
 const Query = struct {
@@ -264,8 +294,24 @@ const Query = struct {
             .exported => |exported| {
                 for (exported.names) |name| if (self.contains(name.span)) return self.named(name.name, offset, .exported);
             },
-            .typst_expose, .typst_show => |names| {
-                for (names) |name| if (self.contains(name.span)) return self.named(name.name, offset, .value);
+            // The path's Huak names lead through namespaces to a value; the
+            // remaining names are Typst members.
+            .typst_show => |path| {
+                const resolver = self.unit.resolverAt(statement_.span.start);
+                const scope = self.unit.scopeAt(statement_.span.start);
+                if (self.contains(path[0].span)) return self.named(path[0].name, offset, .value);
+                var namespace: ?u32 = if (resolver.readable(scope, path[0].name)) |readable| switch (readable) {
+                    .imported => |imported| switch (imported) {
+                        .namespace => |id| id,
+                        .member => null,
+                    },
+                    .ordinary => null,
+                } else null;
+                for (path[1..]) |segment| {
+                    const id = namespace orelse return null;
+                    if (self.contains(segment.span)) return self.public(id, segment.name);
+                    namespace = self.graph.exportedNamespace(id, segment.name);
+                }
             },
             .imported => {
                 for (self.unit.imports.items) |imported| if (imported.span.start == statement_.span.start) {
@@ -842,22 +888,8 @@ const Fixture = struct {
         return error.FileNotFound;
     }
 
-    /// Balanced delimiters stand in for the native Typst parser.
-    fn block(_: *anyopaque, input: []const u8) !usize {
-        var depth: usize = 0;
-        for (input, 0..) |byte, index| switch (byte) {
-            '{', '[' => depth += 1,
-            '}', ']' => {
-                depth -= 1;
-                if (depth == 0) return index + 1;
-            },
-            else => {},
-        };
-        return error.UnclosedBlock;
-    }
-
     fn lookup(self: *const Fixture, allocator: std.mem.Allocator, query: []const u8) !?Location {
-        const frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .source_parser = .{ .ptr = @constCast(self), .vtable = &.{ .block = block } }, .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
+        const frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .source_parser = @import("../language/Parser.zig").TestSourceParser.parser, .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
         const offset = std.mem.lastIndexOf(u8, self.source, query) orelse return error.MissingTestQuery;
         return find(&frontend, allocator, self.source, self.name, offset);
     }
@@ -922,38 +954,57 @@ test "definitions follow selected aliases namespace calls values and reexports" 
     try fixture.expectNone("as library");
 }
 
-test "Typst exposure names navigate through ordinary local and imported value bindings" {
+test "huak reads in Typst code navigate to the Huak values they read" {
     const library = "export amount:=3\n";
     const source =
         \\import "/tmp/library.huak".amount as count
         \\title:="Figure"
-        \\typst_expose title, count
-        \\fn label(title:string)->string
-        \\    typst_expose title
-        \\    return title
+        \\caption:=typ[#huak.title #huak.count $huak.title$]
+        \\fn label(title:string)->text
+        \\    return typ[#huak.title]
         \\end
     ;
     const fixture: Fixture = .{ .source = source, .files = &.{.{ .name = "/tmp/library.huak", .source = library }} };
-    try fixture.expect("title, count", "file:///tmp/definition.huak", source, "title:=");
-    try fixture.expect("count\n", "file:///tmp/library.huak", library, "amount");
-    try fixture.expect("title\n    return", "file:///tmp/definition.huak", source, "title:string");
-    try fixture.expectNone("typst_expose title, count");
+    try fixture.expect("title #huak.count", "file:///tmp/definition.huak", source, "title:=");
+    try fixture.expect("count $", "file:///tmp/library.huak", library, "amount");
+    try fixture.expect("title$", "file:///tmp/definition.huak", source, "title:=");
+    try fixture.expect("title]\nend", "file:///tmp/definition.huak", source, "title:string");
+    try fixture.expectNone("#huak.title #huak");
+    try fixture.expectNone("huak.title #huak");
 }
 
-test "show rule code stays opaque while typst_show names navigate" {
+test "typ.module code stays opaque while typ.show paths navigate through Huak names" {
+    const themes = "export theme:=typ.module[#let style(body) = body]\n";
     const source =
-        \\setup_typst { let shout(it) = upper(it) }
-        \\big:=show_rule body => { set text(size: 20pt); shout(body) }
+        \\import "/tmp/themes.huak" as themes
+        \\shout:=typ.module[#let shout(it, size) = text(size: size, upper(it))]
+        \\fn styles()->typ.module
+        \\    return typ.module[#let style(body) = huak.shout.shout(body, 20pt)]
+        \\end
+        \\big:=styles()
         \\fn caption()->text
-        \\    typst_show big
+        \\    typ.show big.style
+        \\    typ.show themes.theme.style
         \\    return typ[body]
         \\end
     ;
-    const fixture: Fixture = .{ .source = source };
-    try fixture.expect("big\n", "file:///tmp/definition.huak", source, "big:=");
-    try fixture.expectNone("body =>");
-    try fixture.expectNone("shout(body)");
-    try fixture.expectNone("size: 20pt");
+    const fixture: Fixture = .{ .source = source, .files = &.{.{ .name = "/tmp/themes.huak", .source = themes }} };
+    try fixture.expect("shout.shout(body", "file:///tmp/definition.huak", source, "shout:=");
+    try fixture.expect("big.style", "file:///tmp/definition.huak", source, "big:=");
+    try fixture.expect("theme.style\n    return", "file:///tmp/themes.huak", themes, "theme");
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const namespace = (try fixture.lookup(arena.allocator(), "themes.theme.style")).?;
+    try std.testing.expectEqualStrings("/tmp/themes.huak", namespace.path);
+    try std.testing.expectEqualDeep(locations.at(themes, 0), namespace.range.start);
+    try std.testing.expectEqualDeep(locations.at(themes, 0), namespace.range.end);
+    try fixture.expectNone("style\n    typ.show themes");
+    try fixture.expectNone("style\n    return");
+    try fixture.expectNone("show big");
+    try fixture.expectNone("module\n    return");
+    try fixture.expectNone("it, size");
+    try fixture.expectNone("size: size");
+    try fixture.expectNone("shout(body");
 }
 
 test "definitions use scoped callable imports and restore outer callable after block" {

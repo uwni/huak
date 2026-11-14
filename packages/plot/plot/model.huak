@@ -56,7 +56,7 @@ export fn axis(fig:Figure, cell:vec2 = (0, 0), options:dict = {}) -> Axis
 end
 
 export AXIS_OPTIONS := ["title", "xlabel", "ylabel", "xscale", "yscale", "xlim", "ylim", "xreverse", "yreverse", "xticks", "yticks", "xlabels", "ylabels", "xstep", "ystep", "xminorticks", "yminorticks", "grid", "minorgrid", "legend", "legend_columns", "spines", "xside", "yside", "tick_direction", "tick_size", "tick_rotation", "ticks_visible", "labels_visible", "equal", "colorbar", "font_size", "tick_style", "xformat", "yformat", "title_align"]
-export LAYER_OPTIONS := ["label", "color", "fill", "pen", "width", "dash", "marker", "sizes", "colors", "orientation", "bar_width", "baseline", "stack", "group", "upper", "cap_size", "colormap", "clim", "clip", "xaxis", "yaxis", "arrow", "arrow_size", "align", "legend_line"]
+export LAYER_OPTIONS := ["label", "color", "fill", "pen", "width", "dash", "marker", "sizes", "colors", "orientation", "bar_width", "baseline", "stack", "group", "upper", "cap_size", "colormap", "clim", "clip", "xaxis", "yaxis", "arrow", "arrow_size", "align", "part", "legend_line"]
 
 export fn horizontal(side:string) -> bool
     if side == "top" or side == "bottom" then return true end

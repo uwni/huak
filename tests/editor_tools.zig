@@ -11,7 +11,7 @@ test "formatter preserves Typst bytes comments and semantics and is idempotent" 
     defer editor_library.deinit();
     const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
     const native = "[\n    ```typ\n ] end   \n```\n #box[Inner]\n]";
-    const input = "setup_typst {let word=[Hello]}\nexport fn make()->text\n// retained comment\nreturn typ" ++ native ++ "\nend   \nexport fn gather(values...)->list\nreturn values\nend\n";
+    const input = "word:=typ.module[#let hello = [Hello]]\nexport fn make()->text\n// retained comment\nreturn typ" ++ native ++ "\nend   \nexport fn gather(values...)->list\nreturn values\nend\n";
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     const formatted = try tooling.format.format(&frontend, input, "/tmp/format.huak", &diagnostic);
     defer t.allocator.free(formatted);
@@ -31,18 +31,18 @@ test "formatter preserves Typst bytes comments and semantics and is idempotent" 
     try t.expectError(error.LanguageError, tooling.format.format(&frontend, "fn broken(\n", "/tmp/broken.huak", &diagnostic));
 }
 
-test "formatter spaces the show rule arrow and keeps rule code bytes" {
+test "formatter keeps typ.module code bytes and spaces typ.show declarations" {
     var editor_library = try typst.Library.open(options.library_path);
     defer editor_library.deinit();
     const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
-    const rule = "{\n  set text(fill: red)   // keep = a,b\n  body\n}";
-    const input = "fn style()->show_rule\nreturn show_rule body=>" ++ rule ++ "\nend\nloud:=style()\ntypst_show loud\nmarked:=show_rule it=>[*#it*]\nx:=typ[hi]\n";
-    const expected = "fn style()->show_rule\n    return show_rule body => " ++ rule ++ "\nend\nloud := style()\ntypst_show loud\nmarked := show_rule it => [*#it*]\nx := typ[hi]\n";
+    const module = "[\n  #let style(body) = {\n    set text(fill: red)   // keep = a,b\n    body\n  }\n]";
+    const input = "fn style()->typ.module\nreturn typ.module" ++ module ++ "\nend\nloud:=style()\ntyp.show loud.style\nmarked:=typ.module[#let style(it) = [*#it*]]\nx:=typ[hi #huak.marked.style[x]]\n";
+    const expected = "fn style()->typ.module\n    return typ.module" ++ module ++ "\nend\nloud := style()\ntyp.show loud.style\nmarked := typ.module[#let style(it) = [*#it*]]\nx := typ[hi #huak.marked.style[x]]\n";
     var diagnostic: ?tooling.compiler.Diagnostic = null;
-    const formatted = try tooling.format.format(&frontend, input, "/tmp/rules.huak", &diagnostic);
+    const formatted = try tooling.format.format(&frontend, input, "/tmp/modules.huak", &diagnostic);
     defer t.allocator.free(formatted);
     try t.expectEqualStrings(expected, formatted);
-    const again = try tooling.format.format(&frontend, formatted, "/tmp/rules.huak", &diagnostic);
+    const again = try tooling.format.format(&frontend, formatted, "/tmp/modules.huak", &diagnostic);
     defer t.allocator.free(again);
     try t.expectEqualStrings(formatted, again);
 }
@@ -142,22 +142,24 @@ test "formatter preserves explicit control headers and inline bodies" {
     try t.expectEqualStrings(formatted, again);
 }
 
-test "exposure declarations share formatting navigation completion hints and export services" {
-    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io };
+test "Typst reads share formatting navigation completion hints and export services" {
+    var editor_library = try typst.Library.open(options.library_path);
+    defer editor_library.deinit();
+    const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
     var session: tooling.lsp.Session = .{ .frontend = &frontend, .initialized = true };
     defer session.deinit();
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const uri = "file:///tmp/expose-editor.huak";
-    const input = "title:=\"Figure\"\ncount:=2\ntypst_expose title,count\nfn echo(title:string)->string\ntypst_expose title\nreturn title\nend\nimport paint.*\nexport stage:=picture(640, 480)\n";
-    const expected = "title := \"Figure\"\ncount := 2\ntypst_expose title, count\nfn echo(title:string)->string\n    typst_expose title\n    return title\nend\nimport paint.*\nexport stage := picture(640, 480)\n";
+    const uri = "file:///tmp/typst-editor.huak";
+    const input = "title:=\"Figure\"\ncount:=2\ncaption:=typ[#huak.title #huak.count]\nfn echo(title:string)->text\nreturn typ[#huak.title]\nend\nimport paint.*\nexport stage:=picture(640, 480)\n";
+    const expected = "title := \"Figure\"\ncount := 2\ncaption := typ[#huak.title #huak.count]\nfn echo(title:string)->text\n    return typ[#huak.title]\nend\nimport paint.*\nexport stage := picture(640, 480)\n";
     var output: std.Io.Writer.Allocating = .init(t.allocator);
     defer output.deinit();
     const writer = &output.writer;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = input } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 1, .method = "textDocument/formatting", .params = .{ .textDocument = .{ .uri = uri }, .options = .{ .tabSize = 4, .insertSpaces = true } } }, .{}), writer);
-    const offset = std.mem.indexOf(u8, input, "title,count").? + "title,".len;
+    const offset = std.mem.indexOf(u8, input, "count]").?;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/definition", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, offset) } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 3, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = .{ .line = 0, .character = 0 } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 4, .method = "huak/outputs", .params = .{ .textDocument = .{ .uri = uri } } }, .{}), writer);
@@ -180,16 +182,16 @@ test "exposure declarations share formatting navigation completion hints and exp
                 try t.expectEqual(@as(i64, 0), start.get("character").?.integer);
             },
             3 => {
-                var found = false;
+                var found: [2]bool = @splat(false);
                 for (response.object.get("result").?.object.get("items").?.array.items) |item| {
                     const label = item.object.get("label").?.string;
-                    if (std.mem.eql(u8, label, "typst_expose")) {
-                        found = true;
+                    for ([_][]const u8{ "typ.module", "typ.show" }, &found) |form, *seen_form| if (std.mem.eql(u8, label, form)) {
+                        seen_form.* = true;
                         try t.expectEqual(@as(i64, 14), item.object.get("kind").?.integer);
-                    }
-                    try t.expect(!std.mem.eql(u8, label, "expose") and !std.mem.eql(u8, label, "using"));
+                    };
+                    try t.expect(!std.mem.eql(u8, label, "typst_expose") and !std.mem.eql(u8, label, "typst_fn"));
                 }
-                try t.expect(found);
+                try t.expect(found[0] and found[1]);
             },
             4 => {
                 const exports = response.object.get("result").?.object.get("outputs").?.array.items;
@@ -202,7 +204,7 @@ test "exposure declarations share formatting navigation completion hints and exp
     }
     for (seen) |received| try t.expect(received);
     var diagnostic: ?tooling.compiler.Diagnostic = null;
-    const formatted = try tooling.format.format(&frontend, expected, "/tmp/expose-editor.huak", &diagnostic);
+    const formatted = try tooling.format.format(&frontend, expected, "/tmp/typst-editor.huak", &diagnostic);
     defer t.allocator.free(formatted);
     try t.expectEqualStrings(expected, formatted);
 }
@@ -396,7 +398,7 @@ test "language server shares mixfix metadata across unsaved imports formatting a
     try t.expect(frontend.overlay == null);
 }
 
-test "mixfix semantic colors follow syntax scopes and leave embedded content untouched" {
+test "semantic colors follow syntax scopes and mark only Huak reads in embedded content" {
     var editor_library = try typst.Library.open(options.library_path);
     defer editor_library.deinit();
     const frontend: Frontend = .{ .allocator = t.allocator, .io = t.io, .source_parser = .init(&editor_library) };
@@ -428,6 +430,11 @@ test "mixfix semantic colors follow syntax scopes and leave embedded content unt
     const qualified_data = try tooling.semantic_tokens.collect(&frontend, a, qualified, "/tmp/semantic-qualified.huak");
     try expectSemanticRow(qualified, qualified_data, 2, &.{ .{ "p", .namespace }, .{ "circle", .function }, .{ "with", .keyword }, .{ "center", .keyword }, .{ "center", .variable }, .{ "radius", .keyword }, .{ "radius", .variable } });
     try expectSemanticRow(qualified, qualified_data, 3, &.{ .{ "p", .namespace }, .{ "circle", .function }, .{ "disk", .keyword }, .{ "at", .keyword }, .{ "_", .operator }, .{ "radius", .keyword }, .{ "_", .operator } });
+
+    // Inside Typst code only the reads of Huak values are colored.
+    const reads = "title:=\"T\"\ncaption:=typ[#huak.title #huak.missing $huak.title$ #title]\n";
+    const reads_data = try tooling.semantic_tokens.collect(&frontend, a, reads, "/tmp/semantic-reads.huak");
+    try expectSemanticRow(reads, reads_data, 1, &.{ .{ "title", .variable }, .{ "title", .variable } });
 
     const example_path = "examples/language/mixfix.huak";
     const example = try std.Io.Dir.cwd().readFileAlloc(t.io, example_path, a, .unlimited);

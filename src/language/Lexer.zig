@@ -32,8 +32,6 @@ pub const Kind = enum {
     assign,
     declare,
     arrow,
-    /// `=>` between a show_rule parameter and its Typst block.
-    fat_arrow,
     equal,
     not_equal,
     less,
@@ -67,10 +65,6 @@ pub const Kind = enum {
     kw_not,
     kw_true,
     kw_false,
-    kw_setup_typst,
-    kw_typst_expose,
-    kw_typst_show,
-    kw_show_rule,
     kw_typ,
     kw_cycle,
 };
@@ -99,10 +93,6 @@ pub fn next(self: *Lexer) error{LanguageError}!Token {
         switch (ch) {
             ' ', '\t', '\r' => continue,
             '\n' => if (self.nesting == self.newline_nesting) return self.token(.newline, start) else continue,
-            '#' => {
-                self.skipComment();
-                continue;
-            },
             '/' => {
                 if (self.take('/')) {
                     self.skipComment();
@@ -154,7 +144,7 @@ pub fn next(self: *Lexer) error{LanguageError}!Token {
             '*' => return self.token(.star, start),
             '%' => return self.token(.percent, start),
             '^' => return self.token(.caret, start),
-            '=' => return self.token(if (self.take('=')) .equal else if (self.take('>')) .fat_arrow else .assign, start),
+            '=' => return self.token(if (self.take('=')) .equal else .assign, start),
             '<' => return self.token(if (self.take('=')) .less_equal else .less, start),
             '>' => return self.token(if (self.take('=')) .greater_equal else .greater, start),
             '!' => {
@@ -196,13 +186,12 @@ pub fn next(self: *Lexer) error{LanguageError}!Token {
                 while (self.pos < self.source.len and (std.ascii.isAlphanumeric(self.source[self.pos]) or self.source[self.pos] == '_')) self.pos += 1;
                 const word = self.source[start..self.pos];
                 const keywords = std.StaticStringMap(Kind).initComptime(.{
-                    .{ "fn", .kw_fn },                     .{ "block", .kw_block },             .{ "end", .kw_end },             .{ "param", .kw_param },   .{ "if", .kw_if },
-                    .{ "expand_block", .kw_expand_block }, .{ "elseif", .kw_elseif },           .{ "else", .kw_else },           .{ "while", .kw_while },   .{ "for", .kw_for },
-                    .{ "then", .kw_then },                 .{ "do", .kw_do },                   .{ "in", .kw_in },               .{ "break", .kw_break },   .{ "continue", .kw_continue },
-                    .{ "return", .kw_return },             .{ "and", .kw_and },                 .{ "or", .kw_or },               .{ "not", .kw_not },       .{ "true", .kw_true },
-                    .{ "false", .kw_false },               .{ "setup_typst", .kw_setup_typst }, .{ "typ", .kw_typ },             .{ "export", .kw_export }, .{ "default", .kw_default },
-                    .{ "import", .kw_import },             .{ "precedence", .kw_precedence },   .{ "cycle", .kw_cycle },         .{ "mixfix", .kw_mixfix }, .{ "typst_expose", .kw_typst_expose },
-                    .{ "struct", .kw_struct },             .{ "typst_show", .kw_typst_show },   .{ "show_rule", .kw_show_rule },
+                    .{ "fn", .kw_fn },                     .{ "block", .kw_block },   .{ "end", .kw_end },       .{ "param", .kw_param },     .{ "if", .kw_if },
+                    .{ "expand_block", .kw_expand_block }, .{ "elseif", .kw_elseif }, .{ "else", .kw_else },     .{ "while", .kw_while },     .{ "for", .kw_for },
+                    .{ "then", .kw_then },                 .{ "do", .kw_do },         .{ "in", .kw_in },         .{ "break", .kw_break },     .{ "continue", .kw_continue },
+                    .{ "return", .kw_return },             .{ "and", .kw_and },       .{ "or", .kw_or },         .{ "not", .kw_not },         .{ "true", .kw_true },
+                    .{ "false", .kw_false },               .{ "typ", .kw_typ },       .{ "export", .kw_export }, .{ "default", .kw_default }, .{ "import", .kw_import },
+                    .{ "precedence", .kw_precedence },     .{ "cycle", .kw_cycle },   .{ "mixfix", .kw_mixfix }, .{ "struct", .kw_struct },
                 });
                 return self.token(keywords.get(word) orelse .identifier, start);
             },
@@ -225,6 +214,24 @@ fn token(self: *const Lexer, kind: Kind, start: usize) Token {
 fn skipComment(self: *Lexer) void {
     while (self.pos < self.source.len and self.source[self.pos] != '\n') self.pos += 1;
 }
+/// Whether the next tokens are `.name`, as in `typ.module`. Reads a copy of
+/// this lexer.
+pub fn startsMember(self: Lexer, name: []const u8) bool {
+    var diagnostic: ?source_info.Diagnostic = null;
+    var ahead = self;
+    ahead.diagnostic = &diagnostic;
+    if ((ahead.next() catch return false).kind != .dot) return false;
+    const member = ahead.next() catch return false;
+    return member.kind == .identifier and std.mem.eql(u8, self.source[member.span.start..member.span.end], name);
+}
+
+/// Whether a Typst block opened by `opening` starts after horizontal space.
+pub fn startsBlock(self: Lexer, opening: u8) bool {
+    var index = self.pos;
+    while (index < self.source.len and (self.source[index] == ' ' or self.source[index] == '\t' or self.source[index] == '\r')) index += 1;
+    return index < self.source.len and self.source[index] == opening;
+}
+
 fn fail(self: *Lexer, start: usize, message: []const u8) error{LanguageError} {
     _ = source_info.Diagnostic.set(self.diagnostic, .{ .start = start, .end = self.pos }, "{s}", .{message});
     return error.LanguageError;
@@ -232,15 +239,23 @@ fn fail(self: *Lexer, start: usize, message: []const u8) error{LanguageError} {
 
 test "separators and comments do not depend on indentation" {
     var diagnostic: ?source_info.Diagnostic = null;
-    var lexer: Lexer = .{ .source = "a:=(1,\n2);#x\n// y\nb:=3", .diagnostic = &diagnostic };
+    var lexer: Lexer = .{ .source = "a:=(1,\n2);//x\n// y\nb:=3", .diagnostic = &diagnostic };
     const expected = [_]Kind{ .identifier, .declare, .lparen, .integer, .comma, .integer, .rparen, .semicolon, .newline, .newline, .identifier, .declare, .integer, .eof };
     for (expected) |kind| try std.testing.expectEqual(kind, (try lexer.next()).kind);
 }
 
+test "only a double slash starts a line comment" {
+    var diagnostic: ?source_info.Diagnostic = null;
+    var lexer: Lexer = .{ .source = "// a\n#b", .diagnostic = &diagnostic };
+    try std.testing.expectEqual(Kind.newline, (try lexer.next()).kind);
+    try std.testing.expectError(error.LanguageError, lexer.next());
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unexpected character") != null);
+}
+
 test "typ is the content keyword while typst remains an identifier" {
     var diagnostic: ?source_info.Diagnostic = null;
-    var lexer: Lexer = .{ .source = "typ typst setup_typst typology", .diagnostic = &diagnostic };
-    for ([_]Kind{ .kw_typ, .identifier, .kw_setup_typst, .identifier, .eof }) |kind| {
+    var lexer: Lexer = .{ .source = "typ typst typst_fn typology setup_typst typst_expose typst_show", .diagnostic = &diagnostic };
+    for ([_]Kind{ .kw_typ, .identifier, .identifier, .identifier, .identifier, .identifier, .identifier, .eof }) |kind| {
         try std.testing.expectEqual(kind, (try lexer.next()).kind);
     }
 }
@@ -323,14 +338,28 @@ test "path joins use longest match without changing arithmetic decimals or membe
 
 test "domain keywords leave ordinary template words available as identifiers" {
     var diagnostic: ?source_info.Diagnostic = null;
-    var scanner: Lexer = .{ .source = "typst_expose expose using to typst_exposure mixfix prefix infix with", .diagnostic = &diagnostic };
-    for ([_]Kind{ .kw_typst_expose, .identifier, .identifier, .identifier, .identifier, .kw_mixfix, .identifier, .identifier, .identifier, .eof }) |kind|
+    var scanner: Lexer = .{ .source = "expose using to mixfix prefix infix with module show", .diagnostic = &diagnostic };
+    for ([_]Kind{ .identifier, .identifier, .identifier, .kw_mixfix, .identifier, .identifier, .identifier, .identifier, .identifier, .eof }) |kind|
         try std.testing.expectEqual(kind, (try scanner.next()).kind);
 }
 
-test "show rule words and the arrow are single tokens" {
+test "typ members are found by lookahead without consuming tokens" {
     var diagnostic: ?source_info.Diagnostic = null;
-    var scanner: Lexer = .{ .source = "typst_show show_rule body => a=>b a = b a == b a >= b show rules", .diagnostic = &diagnostic };
-    for ([_]Kind{ .kw_typst_show, .kw_show_rule, .identifier, .fat_arrow, .identifier, .fat_arrow, .identifier, .identifier, .assign, .identifier, .identifier, .equal, .identifier, .identifier, .greater_equal, .identifier, .identifier, .identifier, .eof }) |kind|
-        try std.testing.expectEqual(kind, (try scanner.next()).kind);
+    var scanner: Lexer = .{ .source = "typ.module [x] typ . show a.b typ.modules typ[", .diagnostic = &diagnostic };
+    try std.testing.expectEqual(Kind.kw_typ, (try scanner.next()).kind);
+    try std.testing.expect(scanner.startsMember("module") and !scanner.startsMember("show"));
+    try std.testing.expectEqual(Kind.dot, (try scanner.next()).kind);
+    _ = try scanner.next();
+    try std.testing.expect(scanner.startsBlock('[') and !scanner.startsBlock('{'));
+    _ = try scanner.next();
+    _ = try scanner.next();
+    _ = try scanner.next();
+    try std.testing.expectEqual(Kind.kw_typ, (try scanner.next()).kind);
+    try std.testing.expect(scanner.startsMember("show"));
+    for (0..5) |_| _ = try scanner.next();
+    try std.testing.expectEqual(Kind.kw_typ, (try scanner.next()).kind);
+    try std.testing.expect(!scanner.startsMember("module"));
+    for (0..2) |_| _ = try scanner.next();
+    try std.testing.expectEqual(Kind.kw_typ, (try scanner.next()).kind);
+    try std.testing.expect(!scanner.startsMember("module") and scanner.startsBlock('['));
 }

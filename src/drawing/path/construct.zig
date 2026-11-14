@@ -28,14 +28,11 @@ fn knotCapacity(spans: anytype) usize {
     return count;
 }
 
+/// The result owns its storage at its exact size; the solver's temporary
+/// arrays are released before returning.
 pub fn fromKnots(allocator: std.mem.Allocator, knots: []const hobby.Knot, options: hobby.Options) Error!Path {
-    return fromKnotsWithScratch(allocator, allocator, knots, options);
-}
-
-/// Keep the solver's temporary arrays out of a long-lived path arena.
-pub fn fromKnotsWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Allocator, knots: []const hobby.Knot, options: hobby.Options) Error!Path {
-    const spans = try hobby.interpolateSpans(scratch, knots, options);
-    defer scratch.free(spans);
+    const spans = try hobby.interpolateSpans(allocator, knots, options);
+    defer allocator.free(spans);
     var path = Path.init(allocator);
     errdefer path.deinit();
     try path.segments.ensureTotalCapacityPrecise(allocator, 1 + spans.len + @intFromBool(options.closed));
@@ -53,10 +50,6 @@ pub fn fromKnotsWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Alloc
 /// Repeated endpoints of smooth edges are rejected by Hobby; zero-length
 /// straight edges are retained. At least two finite points are required.
 pub fn construct(allocator: std.mem.Allocator, points: []const geometry.Point, joins: []const Join, options: Options) Error!Path {
-    return constructWithScratch(allocator, allocator, points, joins, options);
-}
-
-pub fn constructWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Allocator, points: []const geometry.Point, joins: []const Join, options: Options) Error!Path {
     if (points.len < 2) return error.TooFewKnots;
     const count = if (options.closed) points.len else points.len - 1;
     if (joins.len != count) return error.InvalidJoinCount;
@@ -68,14 +61,14 @@ pub fn constructWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Alloc
         smooth_count += 1;
     };
     if (smooth_count == count) {
-        const knots = try scratch.alloc(hobby.Knot, points.len);
-        defer scratch.free(knots);
+        const knots = try allocator.alloc(hobby.Knot, points.len);
+        defer allocator.free(knots);
         for (points, knots) |point, *knot| knot.* = .{ .point = point };
-        return fromKnotsWithScratch(allocator, scratch, knots, .{ .closed = options.closed });
+        return fromKnots(allocator, knots, .{ .closed = options.closed });
     }
 
-    const curves = try scratch.alloc(?hobby.Span, if (smooth_count == 0) 0 else count);
-    defer scratch.free(curves);
+    const curves = try allocator.alloc(?hobby.Span, if (smooth_count == 0) 0 else count);
+    defer allocator.free(curves);
     @memset(curves, null);
     if (smooth_count != 0) {
         for (joins, 0..) |join, first| {
@@ -86,11 +79,11 @@ pub fn constructWithScratch(allocator: std.mem.Allocator, scratch: std.mem.Alloc
             while (first + length < count or options.closed) : (length += 1) {
                 if (joins[(first + length) % count] != .smooth) break;
             }
-            const knots = try scratch.alloc(hobby.Knot, length + 1);
-            defer scratch.free(knots);
+            const knots = try allocator.alloc(hobby.Knot, length + 1);
+            defer allocator.free(knots);
             for (knots, 0..) |*knot, offset| knot.* = .{ .point = points[(first + offset) % points.len] };
-            const run = try hobby.interpolateSpans(scratch, knots, .{});
-            defer scratch.free(run);
+            const run = try hobby.interpolateSpans(allocator, knots, .{});
+            defer allocator.free(run);
             for (run, 0..) |span, offset| {
                 curves[(first + offset) % count] = span;
             }
@@ -223,10 +216,13 @@ test "Hobby construction and cloning fit the exact result budget" {
     for (&points, 0..) |*p, i| p.* = .{ .x = @floatFromInt(i), .y = @floatFromInt(i % 7) };
     const joins: [n]Join = @splat(.smooth);
     const bytes = @sizeOf(Path.Segment) * (n + 1) + @sizeOf(Path.KnotTable) + @sizeOf(Path.KnotTable.Knot) * (n - 1);
-    var buffer: [bytes]u8 align(@alignOf(Path.KnotTable)) = undefined;
-    var result = std.heap.FixedBufferAllocator.init(&buffer);
-    var path = try constructWithScratch(result.allocator(), t.allocator, &points, &joins, .{});
+    // The working arrays share the allocator and are released before the
+    // path returns, which then holds exactly its own storage.
+    var counting: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
+    defer t.expect(counting.deinit() == .ok) catch @panic("leak");
+    var path = try construct(counting.allocator(), &points, &joins, .{});
     defer path.deinit();
+    try t.expectEqual(bytes, counting.total_requested_bytes);
     try t.expectEqual(n - 1, path.knotRecords().len);
     var clone_buffer: [bytes]u8 align(@alignOf(Path.KnotTable)) = undefined;
     var clone_storage = std.heap.FixedBufferAllocator.init(&clone_buffer);

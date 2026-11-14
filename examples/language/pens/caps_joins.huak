@@ -1,12 +1,16 @@
 import drawing.drawing
 import paint.{rgb, pen, translate, rectangle, path, draw, fill, label, picture}
-# The pale guides mark the original centerline and its endpoint positions.
+// The pale guides mark the original centerline and its endpoint positions.
 export plate := picture(180mm, 180mm)
 default plate
 
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 11pt, fill: rgb("#26354b"))
-}
+    body
+  }
+]
+typ.show theme.style
 
 ink := rgb(0.12, 0.35, 0.68)
 guide := pen(rgb(0.73, 0.78, 0.84), 0.2mm, "butt", "bevel", 4, [1mm, 1mm])

@@ -240,6 +240,8 @@ pub const Session = struct {
                 const name = comptime @tagName(kind);
                 if (comptime std.mem.startsWith(u8, name, "kw_")) try items.append(arena.allocator(), .{ .label = name[3..], .kind = 14, .detail = "Huak keyword" });
             }
+            // Members of the `typ` keyword form keywords of their own.
+            for ([_][]const u8{ "typ.module", "typ.show" }) |form| try items.append(arena.allocator(), .{ .label = form, .kind = 14, .detail = "Huak keyword" });
             return self.reply(writer, id.?, .{ .isIncomplete = false, .items = items.items });
         }
         if (std.mem.eql(u8, method, "textDocument/hover")) {

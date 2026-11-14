@@ -71,6 +71,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .source = "a:=axis(f); plotting a do side \"bottom\" with {\"scale\":\"log10\",\"decades\":[1,10]} end; render(f)", .expected = "decade multipliers" },
         .{ .source = "a:=axis(f); plotting a do side \"left\" with {\"arrow\":\"middle\"} end; render(f)", .expected = "unknown arrow ends" },
         .{ .source = "a:=axis(f); plotting a do +annotate(0.5,0.5,typ[note]) styled {\"align\":\"middle\"} end; render(f)", .expected = "unknown annotation align" },
+        .{ .source = "a:=axis(f); plotting a do +annotate(0.5,0.5,typ[#box[n] <n>]) styled {\"part\":\"m\"} end; render(f)", .expected = "annotation has no part labeled m" },
         .{ .source = "lines([1],[1,2])", .expected = "lengths differ" },
         .{ .source = "marker(\"bogus\")", .expected = "unknown marker" },
         .{ .source = "marker(\"circle\") sized -1pt", .expected = "positive" },

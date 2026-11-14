@@ -1,21 +1,21 @@
 import object.{append, label, bounds}
-import transform.{transformed, rotate, translate}
-import math.{abs, log10, floor, pow}
+import transform.{apply, transformed, rotate, translate}
+import math.{abs, log10, floor, pow, min, max}
 import assertions.assert
 
-// A style rule applies around tick text as typst_show applies around typ
-// content. Without one the text is typeset plainly, with no rule at all.
-export fn literal(value:string, size:length = 9pt, style:any = false) -> text
-    typst_expose value, size
-    if style == false then
+// A tick style module's `style` applies around tick text as typ.show applies
+// it around typ content. Without one the text is typeset plainly, with no rule
+// at all.
+export fn literal(value:string, size:length = 9pt, tick_style:any = false) -> text
+    if tick_style == false then
         return typ[#text(size:huak.size, huak.value)]
     else
-        typst_show style
+        typ.show tick_style.style
         return typ[#text(size:huak.size, huak.value)]
     end
 end
 
-export fn number(value:float, size:length = 9pt, format:string = "auto", style:any = false) -> text
+export fn number(value:float, size:length = 9pt, format:string = "auto", tick_style:any = false) -> text
     assert(format == "auto" or format == "scientific" or format == "fixed" or format == "power10", "unknown tick format")
     // A fixed form prints the value; a scaled form prints the mantissa times
     // a power of ten, and a power form only the power, for a unit mantissa.
@@ -35,19 +35,35 @@ export fn number(value:float, size:length = 9pt, format:string = "auto", style:a
             mantissa = value/pow(10, exponent)
         end
     end
-    typst_expose value, size, form, exponent, mantissa
-    if style == false then
+    if tick_style == false then
         return typ[#text(size:huak.size, if huak.form == "fixed" { str(calc.round(huak.value,digits:8)) } else if huak.form == "power" [$10^(#huak.exponent)$] else [$#calc.round(huak.mantissa,digits:5) times 10^(#huak.exponent)$])]
     else
-        typst_show style
+        typ.show tick_style.style
         return typ[#text(size:huak.size, if huak.form == "fixed" { str(calc.round(huak.value,digits:8)) } else if huak.form == "power" [$10^(#huak.exponent)$] else [$#calc.round(huak.mantissa,digits:5) times 10^(#huak.exponent)$])]
     end
 end
 
 // Alignment uses the rotated native text bounds, including the real baseline.
-export fn place(dst:picture, body:text, point:vec2, anchor:vec2 = (0.5, 0.5), angle:angle = 0deg)
+// The anchor is a fraction of the text's extent. With part, it is a fraction
+// of the extent of the element labeled part in the text, such as the x_0 of
+// `$f(#box[$x_0$] <x>)$`.
+export fn place(dst:picture, body:text, point:vec2, anchor:vec2 = (0.5, 0.5), angle:angle = 0deg, part:string = "")
     item := transformed(label(body, (0pt, 0pt)), rotate(angle))
     box := bounds(item)
+    if part != "" then
+        anchors := body.anchors
+        assert(dict_contains(anchors, part), "annotation has no part labeled " + part)
+        element := anchors[part]
+        turn := rotate(angle)
+        low := apply(turn, element.min)
+        high := low
+        for corner in [element.max, (element.min.x, element.max.y), (element.max.x, element.min.y)] do
+            turned := apply(turn, corner)
+            low = (min(low.x, turned.x), min(low.y, turned.y))
+            high = (max(high.x, turned.x), max(high.y, turned.y))
+        end
+        box = [low, high]
+    end
     origin := (box[0].x+(box[1].x-box[0].x)*anchor.x, box[0].y+(box[1].y-box[0].y)*anchor.y)
     append(dst, item, translate(point-origin))
 end

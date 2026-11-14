@@ -1,6 +1,9 @@
-import paint.{label, picture};setup_typst {
+import paint.{label, picture}
+theme := typ.module[#let style(body) = {
 set text(size:24pt)
-}
+body
+}]
+typ.show theme.style
 export caption := typ[
 Module Ω
 ]

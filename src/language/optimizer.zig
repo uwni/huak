@@ -263,7 +263,7 @@ fn removeUnreachable(allocator: Allocator, scratch: Allocator, code: []const Ins
 
 fn refersToConstant(op: bc.Op) bool {
     return switch (op) {
-        .constant, .field, .set_field, .typst, .show_rule, .setup_typst => true,
+        .constant, .field, .set_field, .typst, .typst_module => true,
         else => false,
     };
 }

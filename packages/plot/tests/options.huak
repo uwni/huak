@@ -28,6 +28,30 @@ anchor := (center[0].x+center[1].x)/2
 assert(abs(left[0].x-anchor) < 0.01pt and abs(right[1].x-anchor) < 0.01pt, "annotation align must pin the matching text edge")
 assert(left[1].x > anchor+5pt and right[0].x < anchor-5pt, "aligned text must extend away from its anchor")
 
+// With part, alignment applies to the labeled element of the text instead of
+// to the whole text: its center, or with align its left edge, sits on the anchor.
+fn note_part(options:dict) -> picture
+    fig := figure(200pt, 200pt, plain)
+    ax := axis of fig at (0, 0)
+    plotting ax do
+        settings BARE
+        +annotate(0.5, 0.5, typ[peak at #box[$x_0$] <x> here]) styled options
+    end
+    return render fig
+end
+body := typ[peak at #box[$x_0$] <x> here]
+part_box := body.anchors["x"]
+text_box := bounds(object(body))
+middle := ((center[0].y+center[1].y)/2)
+target := (anchor, middle)
+for case in [[{"part": "x"}, part_box.center], [{"part": "x", "align": "left"}, (part_box.min.x, part_box.center.y)]] do
+    options:dict := case[0]
+    origin:vec2 := case[1]
+    placed := bounds(note_part(options))
+    expected := text_box[0]+target-origin
+    assert(abs(placed[0].x-expected.x) < 0.01pt and abs(placed[0].y-expected.y) < 0.01pt, "a part must sit on the annotation anchor")
+end
+
 // A figure keeps its canvas unless auto_bounds crops it to the drawn content.
 fixed := note("center", plain)
 assert(fixed.width == 200pt and fixed.height == 200pt, "a figure keeps its canvas by default")
@@ -89,10 +113,11 @@ for align in ["left", "center", "right"] do
     assert(abs(box[1].y-titled("center")[0][1].y) < 0.01pt, "alignment keeps the title's height")
 end
 
-// tick_style applies a caller's show_rule around the tick text plot typesets.
+// tick_style applies the style member of a caller's typ.module around the
+// tick text plot typesets.
 // Side options override axis options, which override figure options.
-mono := show_rule body => { set text(font: "DejaVu Sans Mono"); body }
-serif := show_rule body => { set text(font: "Libertinus Serif"); body }
+mono := typ.module[#let style(body) = { set text(font: "DejaVu Sans Mono"); body }]
+serif := typ.module[#let style(body) = { set text(font: "Libertinus Serif"); body }]
 fn ticks(figure_options:dict, axis_options:dict, bottom:dict) -> list
     fig := figure(240pt, 200pt, figure_options)
     ax := axis of fig at (0, 0)

@@ -8,7 +8,8 @@ pub const process_count = 4;
 pub fn run(ctx: *h.Harness) !void {
     _ = try ctx.script("workers/figures",
         \\import paint.{translate, draw, label, picture, append};print("worker module initialized")
-        \\setup_typst { set text(size: 14pt) }
+        \\theme := typ.module[#let style(body) = { set text(size: 14pt); body }]
+        \\typ.show theme.style
         \\export caption:=typ[Worker shared label Ω $x^2$]
         \\fn figure(index:int) -> picture
         \\ p:=picture(180,100)

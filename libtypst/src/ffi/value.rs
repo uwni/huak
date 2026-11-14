@@ -1,13 +1,21 @@
 //! Copies borrowed C value trees into upstream Typst values and scopes.
 use super::{required, text, values};
 use crate::{abi::*, error::Error};
-use typst_core::foundations::{Array, Binding, Dict, IntoValue, Scope, Value};
+use typst_core::foundations::{Array, Binding, Dict, IntoValue, Module, Scope, Value};
 use typst_core::layout::Abs;
 
-/// Converts one borrowed tree. Template inputs refer to `templates`, the
-/// functions already evaluated for this request.
+/// Values made before a request's bindings, which inputs refer to by index:
+/// template functions and the modules of the options' handles.
+#[derive(Clone, Copy, Default)]
+pub(super) struct References<'a> {
+    pub(super) templates: &'a [Value],
+    pub(super) handles: &'a [Value],
+}
+
+/// Converts one borrowed tree. Template and module-handle inputs refer to the
+/// values already made for this request.
 struct Conversion<'a> {
-    templates: &'a [Value],
+    references: References<'a>,
     budget: usize,
 }
 
@@ -76,24 +84,55 @@ impl Conversion<'_> {
                 unsafe { self.bindings(input.bindings, input.binding_count, depth + 1)? }
                     .into_value()
             }
+            TYPST_VALUE_MODULE => {
+                let name = unsafe { text(input.text, "module name")? };
+                let members =
+                    unsafe { self.bindings(input.bindings, input.binding_count, depth + 1)? };
+                let mut scope = Scope::new();
+                for (member, value) in members {
+                    scope.bind(member.into(), Binding::detached(value));
+                }
+                Value::Module(if name.is_empty() {
+                    Module::anonymous(scope)
+                } else {
+                    Module::new(name, scope)
+                })
+            }
             TYPST_VALUE_TEMPLATE => usize::try_from(input.integer)
                 .ok()
-                .and_then(|index| self.templates.get(index))
+                .and_then(|index| self.references.templates.get(index))
                 .cloned()
                 .ok_or_else(|| Error::invalid("template binding index is out of range"))?,
+            TYPST_VALUE_MODULE_HANDLE => usize::try_from(input.integer)
+                .ok()
+                .and_then(|index| self.references.handles.get(index))
+                .cloned()
+                .ok_or_else(|| Error::invalid("module handle binding index is out of range"))?,
             _ => return Err(Error::invalid("unknown binding value kind")),
         })
     }
 }
 
-/// `templates` are the functions already evaluated for this request.
+/// Converts one borrowed value, such as a show rule's.
+pub(super) unsafe fn value(
+    input: &TypstValueInput,
+    references: References<'_>,
+) -> Result<Value, Error> {
+    let mut conversion = Conversion {
+        references,
+        budget: 1_000_000,
+    };
+    unsafe { conversion.value(input, 0) }
+}
+
+/// `references` are the values already made for this request.
 pub(super) unsafe fn bindings(
     data: *const TypstBinding,
     count: usize,
-    templates: &[Value],
+    references: References<'_>,
 ) -> Result<Scope, Error> {
     let mut conversion = Conversion {
-        templates,
+        references,
         budget: 1_000_000,
     };
     let mut scope = Scope::new();
@@ -124,7 +163,7 @@ mod tests {
     fn converted(value: &TypstValueInput) -> Result<Value, Error> {
         unsafe {
             Conversion {
-                templates: &[],
+                references: References::default(),
                 budget: 1_000_000,
             }
             .value(value, 0)
@@ -137,7 +176,10 @@ mod tests {
         let mut reference = input(TYPST_VALUE_TEMPLATE);
         reference.integer = 1;
         let mut conversion = Conversion {
-            templates: &templates,
+            references: References {
+                templates: &templates,
+                ..Default::default()
+            },
             budget: 8,
         };
         assert_eq!(
@@ -150,6 +192,35 @@ mod tests {
             assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
         }
         // Template bindings themselves have no templates to refer to.
+        reference.integer = 0;
+        assert_eq!(
+            converted(&reference).err().unwrap().status,
+            TYPST_INVALID_ARGUMENT
+        );
+    }
+
+    #[test]
+    fn module_handle_inputs_select_the_options_handles_by_index() {
+        let handles = ["first".into_value(), "second".into_value()];
+        let mut reference = input(TYPST_VALUE_MODULE_HANDLE);
+        reference.integer = 1;
+        let mut conversion = Conversion {
+            references: References {
+                handles: &handles,
+                ..Default::default()
+            },
+            budget: 8,
+        };
+        assert_eq!(
+            unsafe { conversion.value(&reference, 0) }.unwrap(),
+            handles[1]
+        );
+        for index in [-1, 2] {
+            reference.integer = index;
+            let error = unsafe { conversion.value(&reference, 0) }.err().unwrap();
+            assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
+        }
+        // Without handles in the options there is nothing to refer to.
         reference.integer = 0;
         assert_eq!(
             converted(&reference).err().unwrap().status,
@@ -224,6 +295,41 @@ mod tests {
     }
 
     #[test]
+    fn module_inputs_become_named_or_anonymous_native_modules() {
+        let mut count = input(TYPST_VALUE_INT);
+        count.integer = 3;
+        let members = [TypstBinding {
+            name: TypstStr::view("count"),
+            value: &count,
+        }];
+        let mut module = input(TYPST_VALUE_MODULE);
+        module.text = TypstStr::view("lib");
+        module.bindings = members.as_ptr();
+        module.binding_count = members.len();
+        let Value::Module(named) = converted(&module).unwrap() else {
+            panic!("expected a native module")
+        };
+        assert_eq!(named.name().map(|name| name.as_str()), Some("lib"));
+        assert_eq!(
+            *named.scope().get("count").unwrap().read(),
+            3i64.into_value()
+        );
+        module.text = TypstStr::default();
+        let Value::Module(anonymous) = converted(&module).unwrap() else {
+            panic!("expected a native module")
+        };
+        assert!(anonymous.name().is_none());
+        // Members follow the dictionary rules: names are unique.
+        let duplicate = [members[0]; 2];
+        module.bindings = duplicate.as_ptr();
+        module.binding_count = duplicate.len();
+        assert_eq!(
+            converted(&module).err().unwrap().status,
+            TYPST_INVALID_ARGUMENT
+        );
+    }
+
+    #[test]
     fn malformed_kind_numbers_strings_and_trees_fail_without_dereferencing_unused_views() {
         let mut bad = input(99);
         assert_eq!(
@@ -267,7 +373,10 @@ mod tests {
             value: std::ptr::null(),
         };
         assert_eq!(
-            unsafe { bindings(&missing, 1, &[]) }.err().unwrap().status,
+            unsafe { bindings(&missing, 1, References::default()) }
+                .err()
+                .unwrap()
+                .status,
             TYPST_INVALID_ARGUMENT
         );
         let leaf = input(TYPST_VALUE_NONE);
@@ -276,7 +385,7 @@ mod tests {
             value: &leaf,
         }; 2];
         assert_eq!(
-            unsafe { bindings(duplicate.as_ptr(), 2, &[]) }
+            unsafe { bindings(duplicate.as_ptr(), 2, References::default()) }
                 .err()
                 .unwrap()
                 .status,
@@ -303,7 +412,7 @@ mod tests {
             let empty = input(kind);
             assert!(unsafe {
                 Conversion {
-                    templates: &[],
+                    references: References::default(),
                     budget: 1,
                 }
                 .value(&empty, 64)
@@ -312,7 +421,7 @@ mod tests {
             assert_eq!(
                 unsafe {
                     Conversion {
-                        templates: &[],
+                        references: References::default(),
                         budget: 1,
                     }
                     .value(&empty, 65)

@@ -13,7 +13,9 @@ const Owner = language.Runtime.SceneOwner;
 const AnimationState = @FieldType(Owner, "animation_state");
 
 const script =
-    \\import paint.{draw, label, picture};setup_typst { set text(size: 14pt) }
+    \\import paint.{draw, label, picture}
+    \\theme := typ.module[#let style(body) = { set text(size: 14pt); body }]
+    \\typ.show theme.style
     \\unused_text := typ[Unselected text]
     \\unused_width := unused_text.width
     \\shared := typ[Shared native text Ω $x^2$]

@@ -719,7 +719,7 @@ test "moving pen workspace is reused and encoded coordinates retain their precis
     try path.lineTo(.{ .x = 110, .y = 0 });
     const motion: pens.Motion = .{ .tracks = &.{.{ .kind = .scale, .first = 0, .len = 2 }}, .keys = &.{ .{ .t = 0, .value = 1 }, .{ .t = 1, .value = 2 } } };
     const paint: DisplayList.Pen = .{ .nib = pens.Nib.square(), .motion = &motion };
-    var geometric = try pens.resolveStroke(a, a, path, &paint, .{ .tolerance = 1e-7 }, .outline);
+    var geometric = try pens.resolveStroke(a, path, &paint, .{ .tolerance = 1e-7 }, .outline);
     defer geometric.path.deinit();
     try std.testing.expect(geometric.path.segments.items.len > 0);
     try std.testing.expectError(error.OutputPrecisionRange, physical.checkOutputPrecision(&geometric.path, 1e-7));

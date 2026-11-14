@@ -90,20 +90,20 @@ fn metric(runtime: *const language.Runtime, machine: *const language.Machine, na
 
 const styled_source =
     \\import math.abs;import paint.{label, picture};import assertions.assert
-    \\setup_typst {
-    \\ set text(size: 10pt)
-    \\ let decorate(body) = strong(body)
-    \\ show "token": "MMMM"
-    \\}
+    \\helpers := typ.module[#let decorate(body) = strong(body)]
+    \\tokens := typ.module[#let style(body) = { show "token": "MMMM"; body }]
+    \\size := typ.module[#let style(body) = { set text(size: 10pt); body }]
+    \\typ.show tokens.style
+    \\typ.show size.style
     \\a := typ[MMMM]
     \\b := typ[#set text(size: 30pt); MMMM]
     \\c := typ[MMMM]
     \\assert(abs(b.width - 3*a.width) < 0.000001pt)
     \\assert(abs(c.width - a.width) < 0.000001pt)
-    \\setup_typst { set text(size: 20pt) }
+    \\size = typ.module[#let style(body) = { set text(size: 20pt); body }]
     \\d := typ[MMMM]
     \\e := typ[token]
-    \\f := typ[#decorate[MMMM]]
+    \\f := typ[#huak.helpers.decorate[MMMM]]
     \\assert(abs(d.width - 2*a.width) < 0.000001pt)
     \\assert(e.width == d.width)
     \\fn local_pair() -> length
@@ -139,8 +139,8 @@ fn styled(library: *typst.Library, source: []const u8, optimize: bool, batched: 
     defer machine.deinit();
     try execute(&machine);
     if (batched) {
-        // These adjacent independent inputs share one native owner. A different
-        // setup starts a separate group, and local assignments are also batched.
+        // These adjacent independent inputs share one native owner. Reading a
+        // result ends the group, and local assignments are also batched.
         try t.expect(runtime.frames.items[0].layout == runtime.frames.items[1].layout);
         try t.expect(runtime.frames.items[1].layout == runtime.frames.items[2].layout);
         try t.expect(runtime.frames.items[2].layout != runtime.frames.items[3].layout);
@@ -159,7 +159,7 @@ fn styled(library: *typst.Library, source: []const u8, optimize: bool, batched: 
     };
 }
 
-test "native text batches preserve setup snapshots local scope local bindings and execution steps" {
+test "native text batches preserve show rule snapshots local scope local bindings and execution steps" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     for ([_]bool{ false, true }) |optimize| {
@@ -260,12 +260,14 @@ test "batched nonzero text frames use their own outlines and metrics are executi
 
 const Modules = struct {
     const small =
-        \\setup_typst { set text(size: 10pt) }
+        \\theme := typ.module[#let style(body) = { set text(size: 10pt); body }]
+        \\typ.show theme.style
         \\export first := typ[MMMM]
         \\export second := typ[MMMM]
     ;
     const large =
-        \\setup_typst { set text(size: 20pt) }
+        \\theme := typ.module[#let style(body) = { set text(size: 20pt); body }]
+        \\typ.show theme.style
         \\export first := typ[MMMM]
         \\export second := typ[MMMM]
     ;
@@ -276,10 +278,11 @@ const Modules = struct {
     }
 };
 
-test "imported typography keeps independent module setups across batched requests" {
+test "imported typography keeps independent module show rules across batched requests" {
     const input =
         \\import math.abs;import assertions.assert
-        \\setup_typst { set text(size: 30pt) }
+        \\theme := typ.module[#let style(body) = { set text(size: 30pt); body }]
+        \\typ.show theme.style
         \\root_first := typ[MMMM]
         \\root_second := typ[MMMM]
         \\import "small" as small

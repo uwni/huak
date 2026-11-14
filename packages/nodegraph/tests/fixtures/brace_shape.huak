@@ -6,12 +6,12 @@ import "../../nodegraph.huak".*
 n := node("g", absolute((0pt, 0pt)), typ[Group], {"shape": "brace", "shape_options": {"dir": "bottom"}, "width": 60pt, "height": 20pt})
 p := diagram([n])
 assert(len(bounds(p)) == 2, "brace shape must render")
-// A caller's style rule reaches the glyph the package typesets: larger math
+// A caller's style module reaches the glyph the package typesets: larger math
 // text gives a heavier, taller brace over the same extent.
-large := show_rule body => { set text(size: 24pt); body }
+large := typ.module[#let style(body) = { set text(size: 24pt); body }]
 plain := stretched_glyph("brace", 60pt)
 styled := stretched_glyph("brace", 60pt, "bottom", false, large)
-assert(styled.height > plain.height, "a glyph style rule must apply around the glyph")
+assert(styled.height > plain.height, "a glyph style must apply around the glyph")
 heavy := node("h", absolute((0pt, 0pt)), typ[Group], {"shape": "brace", "shape_options": {"dir": "bottom", "style": large}, "width": 60pt, "height": 20pt})
 growth := bounds(diagram([heavy]))[1].y-bounds(p)[1].y
 assert(abs(growth-(styled.height-plain.height)) < 0.001pt, "the node style option must reach the brace glyph")

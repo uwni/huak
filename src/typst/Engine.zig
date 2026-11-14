@@ -87,6 +87,10 @@ pub fn layoutContent(self: *Engine, requests: []const api.LayoutRequest, metrics
 pub fn layoutBatch(self: *Engine, requests: []const api.LayoutRequest) api.Error!api.BatchResult {
     return @import("layout.zig").layoutBatch(self, requests);
 }
+/// Evaluates Typst code once into a module that later requests use.
+pub fn evalModule(self: *Engine, source: api.ModuleSource) api.Error!api.Module {
+    return api.Module.init(self, source);
+}
 
 fn createContext(library: *api.Library, options: api.EngineOptions) api.Error!*c.TypstContext {
     const fonts = try a.alloc(c.TypstFontSource, options.font_sources.len);

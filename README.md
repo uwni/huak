@@ -104,6 +104,7 @@ export page := drawing picture(50pt,32pt) do +draw guide with ink end
 
 - [绘图脚本](examples/language/)涵盖平滑曲线、笔触和路径交织。
 - [三叶结](examples/language/trefoil.huak)用 `ab & bc & ca` 把三段首尾相接的 Bézier 曲线拼成一条路径。
+- [矩阵标注](examples/language/anchors.huak)用 Typst 标签标记矩阵元素，`m.anchors["a"]` 读出 Typst 排出的位置，再在元素之间画箭头。
 - [Huak 标志](examples/huak-logo.huak)用 `import regions.{union, minus}` 引入区域运算，再用 `a union b` 合并字形轮廓。需要交集或对称差时，可从同一模块导入 `inter` 或 `xor`。
 - [选择性擦除](examples/language/erase.huak)对照展示点划线、异形笔尖、变宽圆笔和旋转笔尖。
 - Plot 提供折线图、误差棒和热图的 [SVG 图集](packages/plot/gallery/) 和[绘图脚本](packages/plot/examples/)。

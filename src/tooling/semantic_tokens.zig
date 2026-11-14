@@ -63,6 +63,11 @@ const Collector = struct {
                         (resolver.readable(scope, name) == null and builtin.Namespace.parse(name) != null);
                     try self.tokens.append(self.allocator, .{ .span = expr.span, .kind = if (namespace) .namespace else .variable });
                 },
+                // A `huak.name` read in Typst code names a Huak value.
+                .typst, .typst_module => |code| for (code.uses) |use| {
+                    if (self.unit.resolverAt(use.span.start).readable(self.unit.scopeAt(use.span.start), use.name) != null)
+                        try self.tokens.append(self.allocator, .{ .span = use.span, .kind = .variable });
+                },
                 else => {},
             },
             .statement => |stmt| switch (stmt.value) {

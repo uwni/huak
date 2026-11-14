@@ -32,7 +32,8 @@ export fn arrows(spec:string) -> list
     if spec == "-/-|>" then return [model.mark("slash", 0.5, false, {"scale": slash_size_ratio}), model.mark("solid")]
     end
     if spec == "|->" then return [model.mark("bar", 0), model.mark("head")] end
-    if spec == "hook->" then return [model.mark("hook", 0), model.mark("head")] end
+    // A reversed tail hook curls back outside the edge, as in ↪.
+    if spec == "hook->" then return [model.mark("hook", 0, true), model.mark("head")] end
     if spec == ">->" then return [model.mark("head", 0), model.mark("head")] end
     panic("unsupported arrow shorthand; use explicit mark descriptors: " + spec)
     return []
@@ -44,19 +45,35 @@ export fn canonical(kind:string) -> string
     return kind
 end
 
+fn raw_kind(description:model.MarkDescription) -> string
+    return opt.get(description.options, "inherit", description.kind)
+end
+
+fn mark_size(description:model.MarkDescription, default_size:length) -> length
+    return opt.get(description.options, "size", default_size)*opt.get(description.options, "scale", 1)
+end
+
+// How far a tip mark sits back from the edge's end, with the stroke ending
+// there too. A hook curls past its start by its radius, so a tip hook steps
+// back by that much and its apex meets the end, as Fletcher places it.
+export fn tip_inset(description:model.MarkDescription, default_size:length) -> length
+    kind := canonical(raw_kind(description))
+    if description.position < 1 or description.reverse or (kind != "hook" and kind != "hooks") then return 0pt end
+    return mark_size(description, default_size)/2
+end
+
 export fn render(description:model.MarkDescription, guide:path, ink:color, width:length, default_size:length) -> MarkObject
-    raw:string := description.kind
+    raw := raw_kind(description)
     options:dict := description.options
-    if opt.has(options, "inherit") then raw = opt.get(options, "inherit", raw) end
     kind := canonical(raw)
     where := curves.position(guide, description.position)
     origin:length := 0pt
     if description.position <= 0 then origin = opt.get(options, "tail_origin", 0pt) end
     if description.position >= 1 then origin = opt.get(options, "tip_origin", 0pt) end
+    origin = origin-tip_inset(description, default_size)
     location:vec2 := where.point+where.tangent*origin
     direction:vec2 := where.tangent
-    size:length := opt.get(options, "size", default_size)
-    size = size*opt.get(options, "scale", 1)
+    size := mark_size(description, default_size)
     assert(size > 0pt and width > 0pt, "mark size and stroke thickness must be positive")
     base := picture()
     mask := compound([])
@@ -128,8 +145,10 @@ export fn render(description:model.MarkDescription, guide:path, ink:color, width
         curve := curves.arc((-size, 0pt), size, -50deg, 100deg)
         object.append(base, draw(curve, stroke))
     elseif kind == "hook" or kind == "hooks" then
-        object.append(base, draw(curves.arc((-size/2, size/2), size/2, -90deg, 180deg), stroke))
-        if kind == "hooks" then object.append(base, draw(curves.arc((-size/2, -size/2), size/2, 90deg, -180deg), stroke)) end
+        // Fletcher's hook: a half turn that leaves the mark's origin, where
+        // the edge stroke ends, along +x and curls back to the left of it.
+        object.append(base, draw(curves.arc((0pt, size/2), size/2, -90deg, 180deg), stroke))
+        if kind == "hooks" then object.append(base, draw(curves.arc((0pt, -size/2), size/2, 90deg, -180deg), stroke)) end
     elseif kind == "n" or kind == "n?" or kind == "n!" or kind == "1" or kind == "1?" or kind == "1!" or kind == "crowfoot" then
         many := kind == "n" or kind == "n?" or kind == "n!" or kind == "crowfoot"
         one := kind == "1" or kind == "1?" or kind == "1!" or kind == "n!" or kind == "crowfoot"
@@ -157,6 +176,10 @@ export fn render(description:model.MarkDescription, guide:path, ink:color, width
     reversed:bool := description.reverse
     if raw == "<" or raw == "<<" or raw == "<<<" or raw == "<|" or raw == "<{" or raw == "[" or raw == "(" then reversed = not reversed end
     if reversed then angle = angle+180deg end
+    // Turning a hook half around would move it to the right of the edge.
+    // Mirror it instead, as Fletcher reverses a mark, so a reversed tail hook
+    // curls back outside the edge on its left, as in ↪.
+    if reversed and (kind == "hook" or kind == "hooks") then flip = -flip end
     transform := compose(scale(1, flip), compose(rotate(angle), translate(location)))
     local := picture()
     extrude:list := opt.get(options, "extrude", [0pt])

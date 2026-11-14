@@ -14,6 +14,10 @@ pub const Syntax = host_types.Syntax;
 pub const Region = host_types.Region;
 pub const LayoutRequest = host_types.LayoutRequest;
 pub const Template = host_types.Template;
+pub const ModuleSource = host_types.ModuleSource;
+pub const Module = @import("Module.zig");
+pub const MemberUse = host_types.MemberUse;
+pub const MemberUses = host_types.MemberUses;
 pub const SourceOrigin = host_types.SourceOrigin;
 pub const Metrics = host_types.Metrics;
 pub const Engine = @import("Engine.zig");
@@ -148,6 +152,11 @@ pub const Library = struct {
     pub fn sourceBlock(self: *Library, source: []const u8) Error!usize {
         self.clearError();
         return @import("syntax.zig").sourceBlock(self, source);
+    }
+    /// Where `source`, parsed in `syntax` mode, reads members of `name`.
+    pub fn sourceMemberUses(self: *Library, allocator: std.mem.Allocator, source: []const u8, syntax: Syntax, name: []const u8) Error!MemberUses {
+        self.clearError();
+        return @import("syntax.zig").memberUses(self, allocator, source, syntax, name);
     }
     pub fn sameInstance(self: *const Library, other: *const Library) bool {
         return self == other or (self.functions.context_create == other.functions.context_create and

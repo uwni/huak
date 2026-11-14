@@ -1,12 +1,28 @@
 //! Paired CLI measurements. Run: zig run bench/compare.zig -- BEFORE AFTER CASES.json
 //! Cases provide a name, full CLI arguments and optional output paths to compare.
+//! When the language changes, `before_args` and `after_args` give each binary
+//! its own arguments, such as the same script in old and new syntax.
 //! Each child is a fresh process. No engine or allocator instrumentation is used.
 const std = @import("std");
 const builtin = @import("builtin");
 const rounds = 16;
 const warmups = 2;
 const Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
-const Case = struct { name: []const u8, args: []const []const u8, outputs: []const []const u8 = &.{} };
+const Case = struct {
+    name: []const u8,
+    args: []const []const u8 = &.{},
+    before_args: ?[]const []const u8 = null,
+    after_args: ?[]const []const u8 = null,
+    outputs: []const []const u8 = &.{},
+
+    fn argv(case: Case, a: std.mem.Allocator, binary: []const u8, version: usize) ![]const []const u8 {
+        const args = (if (version == 0) case.before_args else case.after_args) orelse case.args;
+        const result = try a.alloc([]const u8, args.len + 1);
+        result[0] = binary;
+        @memcpy(result[1..], args);
+        return result;
+    }
+};
 const Sample = struct { ms: f64, rss: usize };
 const Comparison = struct {
     name: []const u8,
@@ -67,18 +83,16 @@ pub fn main(init: std.process.Init) !void {
     const hashes = [2]Digest{ try digest(a, io, binaries[0]), try digest(a, io, binaries[1]) };
     for (cases.value, results) |case, *result| {
         result.name = case.name;
-        const argv = try a.alloc([]const u8, case.args.len + 1);
-        @memcpy(argv[1..], case.args);
+        const argv = [2][]const []const u8{ try case.argv(a, binaries[0], 0), try case.argv(a, binaries[1], 1) };
         const expected = try a.alloc(Digest, case.outputs.len);
         for (0..warmups + rounds) |trial| {
             for (0..2) |order| {
                 const version = (trial + order) % 2;
-                argv[0] = binaries[version];
                 for (case.outputs) |file| cwd.deleteFile(io, file) catch |err| switch (err) {
                     error.FileNotFound => {},
                     else => return err,
                 };
-                const sample = try measure(io, log, argv);
+                const sample = try measure(io, log, argv[version]);
                 if (trial >= warmups) result.samples[trial - warmups][version] = sample;
                 for (case.outputs, expected) |file, *reference| {
                     const actual = try digest(init.gpa, io, file);

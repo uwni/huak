@@ -1,6 +1,7 @@
 import paint.*
 
-setup_typst { set text(size: 15pt, fill: rgb("#243d39")) }
+theme := typ.module[#let style(body) = { set text(size: 15pt, fill: rgb("#243d39")); body }]
+typ.show theme.style
 
 curve := bezier((40, 35), (110, 35), (180, 75), (250, 155))
 area := curve & (250, 155) -- (250, 35) -- (40, 35)

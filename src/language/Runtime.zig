@@ -41,14 +41,31 @@ fn hasArgument(args: []const Value, index: usize) bool {
 const Expr = struct { owner: ?usize, expression: constraints.LinearExpr };
 const Variable = struct { owner: usize, id: constraints.Var };
 const Solved = struct { owner: usize, solution: constraints.Solution };
-const Text = struct { layout: *typst.Layout, frame: usize, metrics: DisplayList.Metrics };
-/// A Typst function with the data and module setup it was made with. Strings
-/// live in the runtime arena; color and rule handles index append-only lists.
-const ShowRule = struct {
+const Text = struct {
+    layout: *typst.Layout,
+    frame: usize,
+    metrics: DisplayList.Metrics,
+    /// Label anchors, made on first use. The VM copies this template on each read.
+    anchors: ?*types.Dict = null,
+};
+/// A labeled element of typeset content, in the content's own y-up coordinates:
+/// the origin is the baseline start where `label` and `object` place the text.
+const Anchor = struct { position: g.Point, min: g.Point, max: g.Point };
+/// A typ.module: Typst file content that libtypst evaluated once with the
+/// Huak values its code reads. The entry owns the source name, code and
+/// origin file name that the evaluated module borrows to locate diagnostics.
+const TypstModule = struct {
+    native: typst.Module,
     code: []const u8,
-    setup: []const u8,
-    bindings: []const Machine.TypstBinding,
-    origin: typst.SourceOrigin,
+    name: []const u8,
+    origin_name: []const u8,
+
+    fn release(self: *TypstModule, gpa: std.mem.Allocator) void {
+        self.native.deinit();
+        gpa.free(self.code);
+        gpa.free(self.name);
+        gpa.free(self.origin_name);
+    }
 };
 pub const SceneOwner = @import("runtime/objects.zig").Owner;
 pub const Format = renderer.Format;
@@ -113,22 +130,25 @@ const Transform = union(enum) {
 };
 
 pub const TaskCheckpoint = task_owners.Checkpoint;
+/// Owns every registry and every value they hold. Values are released with
+/// the runtime; geometry operations get this allocator for their results and
+/// return their working memory to it as they go.
 gpa: std.mem.Allocator,
 /// Scene arrays and paints retain this allocator through output handoff.
 scene_allocator: std.mem.Allocator,
-arena: std.heap.ArenaAllocator,
 backends: Backends,
+/// Copies owned by the root runtime; task children borrow them.
 options: Options,
 outputs_taken: bool = false,
 engine: ?typst.Engine = null,
 /// Task children borrow a stable engine and immutable input owners until
-/// their task group joins. Their metadata and arena remain independent.
+/// their task group joins. Their metadata remains independent.
 shared_engine: ?*typst.Engine = null,
 task_borrow: ?task_owners.Borrowed = null,
-module_setups: std.ArrayList([]const u8) = .empty,
-current_module: u32 = 0,
 printed: std.ArrayList(u8) = .empty,
+/// The latest native diagnostic: a static string or text in `message`.
 native_message: []const u8 = "",
+message: std.ArrayList(u8) = .empty,
 path_values: std.ArrayList(Path) = .empty,
 measures: std.ArrayList(Measure) = .empty,
 colors: std.ArrayList(DisplayList.Color) = .empty,
@@ -140,7 +160,10 @@ variables: std.ArrayList(Variable) = .empty,
 expressions: std.ArrayList(Expr) = .empty,
 solutions: std.ArrayList(Solved) = .empty,
 texts: std.ArrayList(Text) = .empty,
-show_rules: std.ArrayList(ShowRule) = .empty,
+anchors: std.ArrayList(Anchor) = .empty,
+/// Individually allocated: an evaluated module refers to the modules it was
+/// made with, so their addresses stay fixed as the list grows.
+typst_modules: std.ArrayList(*TypstModule) = .empty,
 layouts: std.ArrayList(*typst.Layout) = .empty,
 outline_cache: std.AutoHashMapUnmanaged(*const typst.Layout, outline.Batch) = .empty,
 frames: std.ArrayList(typst.FrameRef) = .empty,
@@ -156,46 +179,127 @@ pub fn init(allocator: std.mem.Allocator, scene_allocator: std.mem.Allocator, li
 }
 
 pub fn initWithBackends(allocator: std.mem.Allocator, scene_allocator: std.mem.Allocator, backends: Backends, options: Options) !Runtime {
-    var result: Runtime = .{ .gpa = allocator, .scene_allocator = scene_allocator, .arena = .init(allocator), .backends = backends, .options = options };
-    errdefer result.deinit();
-    const a = result.mem();
-    const fonts = try a.alloc(typst.FontSource, options.font_sources.len);
+    return .{ .gpa = allocator, .scene_allocator = scene_allocator, .backends = backends, .options = try copyOptions(allocator, options) };
+}
+
+fn copyOptions(gpa: std.mem.Allocator, options: Options) !Options {
+    const fonts = try gpa.alloc(typst.FontSource, options.font_sources.len);
+    var font_count: usize = 0;
+    errdefer {
+        for (fonts[0..font_count]) |font| gpa.free(font.data);
+        gpa.free(fonts);
+    }
     for (fonts, options.font_sources) |*out, in| {
-        out.* = .{ .data = try a.dupe(u8, in.data) };
+        out.* = .{ .data = try gpa.dupe(u8, in.data) };
+        font_count += 1;
     }
-    const font_dirs = try a.alloc([]const u8, options.font_dirs.len);
-    for (font_dirs, options.font_dirs) |*out, in| out.* = try a.dupe(u8, in);
-    const inputs = try a.alloc(typst.Input, options.inputs.len);
+    const font_dirs = try gpa.alloc([]const u8, options.font_dirs.len);
+    var dir_count: usize = 0;
+    errdefer {
+        for (font_dirs[0..dir_count]) |dir| gpa.free(dir);
+        gpa.free(font_dirs);
+    }
+    for (font_dirs, options.font_dirs) |*out, in| {
+        out.* = try gpa.dupe(u8, in);
+        dir_count += 1;
+    }
+    const inputs = try gpa.alloc(typst.Input, options.inputs.len);
+    var input_count: usize = 0;
+    errdefer {
+        for (inputs[0..input_count]) |input| {
+            gpa.free(input.key);
+            gpa.free(input.value);
+        }
+        gpa.free(inputs);
+    }
     for (inputs, options.inputs) |*out, in| {
-        out.* = .{ .key = try a.dupe(u8, in.key), .value = try a.dupe(u8, in.value) };
+        const key = try gpa.dupe(u8, in.key);
+        errdefer gpa.free(key);
+        out.* = .{ .key = key, .value = try gpa.dupe(u8, in.value) };
+        input_count += 1;
     }
-    result.options.font_sources = fonts;
-    result.options.font_dirs = font_dirs;
-    result.options.inputs = inputs;
-    return result;
+    return .{ .font_sources = fonts, .font_dirs = font_dirs, .system_fonts = options.system_fonts, .use_bundled_fonts = options.use_bundled_fonts, .inputs = inputs };
+}
+
+fn freeOptions(gpa: std.mem.Allocator, options: Options) void {
+    for (options.font_sources) |font| gpa.free(font.data);
+    for (options.font_dirs) |dir| gpa.free(dir);
+    for (options.inputs) |input| {
+        gpa.free(input.key);
+        gpa.free(input.value);
+    }
+    gpa.free(options.font_sources);
+    gpa.free(options.font_dirs);
+    gpa.free(options.inputs);
+}
+
+/// The first entry of a registry that this runtime owns. A task child shares
+/// the entries before it with its parent.
+fn firstOwned(self: *const Runtime, comptime registry: []const u8) usize {
+    return if (self.task_borrow) |borrowed| @field(borrowed.lengths, registry) else 0;
+}
+
+/// The entries of a registry that this runtime owns. A fork that failed
+/// part-way may hold fewer entries than it borrowed, and owns none.
+fn owned(self: *Runtime, comptime registry: []const u8) @FieldType(@FieldType(Runtime, registry), "items") {
+    const items = @field(self, registry).items;
+    return items[@min(self.firstOwned(registry), items.len)..];
+}
+
+pub fn releaseLayout(gpa: std.mem.Allocator, layout: *typst.Layout) void {
+    layout.deinit();
+    gpa.destroy(layout);
+}
+
+pub fn releaseText(gpa: std.mem.Allocator, text: *Text) void {
+    const anchors = text.anchors orelse return;
+    for (anchors.entries.keys()) |key| gpa.free(key);
+    anchors.entries.deinit(gpa);
+    gpa.destroy(anchors);
+    text.anchors = null;
 }
 
 pub fn deinit(self: *Runtime) void {
-    const borrowed_measures = if (self.task_borrow) |borrowed| borrowed.measures else 0;
-    for (self.measures.items[borrowed_measures..]) |*measure| measure.deinit();
+    const gpa = self.gpa;
+    for (self.owned("measures")) |*measure| measure.deinit();
     var cached_outlines = self.outline_cache.valueIterator();
     while (cached_outlines.next()) |batch| batch.deinit();
-    const borrowed_layouts = if (self.task_borrow) |borrowed| borrowed.layouts else 0;
-    for (self.layouts.items[borrowed_layouts..]) |layout| layout.deinit();
+    self.outline_cache.deinit(gpa);
+    for (self.owned("layouts")) |layout| releaseLayout(gpa, layout);
+    for (self.owned("typst_modules")) |module| {
+        module.release(gpa);
+        gpa.destroy(module);
+    }
     if (self.engine) |*engine| engine.deinit();
-    const borrowed_scenes = if (self.task_borrow) |borrowed| borrowed.scenes else 0;
-    for (self.scene_values.items[borrowed_scenes..]) |target| {
-        if (self.task_borrow) |borrowed| if (borrowed.adopted) |owners| if (owners.contains(&target.scene)) continue;
+    const adopted = if (self.task_borrow) |*borrowed| if (borrowed.adopted) |*owners| owners else null else null;
+    for (self.owned("scene_values")) |target| {
+        if (adopted) |owners| if (owners.contains(&target.scene)) continue;
         target.scene.deinit();
         target.animation_state.deinit();
-        self.gpa.destroy(target);
+        gpa.destroy(target);
     }
-    self.printed.deinit(self.gpa);
-    self.arena.deinit();
+    if (adopted) |owners| owners.deinit(gpa);
+    for (self.owned("path_values")) |*value| value.deinit();
+    for (self.owned("pens")) |*value| value.freeData(gpa);
+    for (self.owned("transforms")) |value| if (value == .spatial) gpa.destroy(value.spatial);
+    for (self.owned("models")) |value| gpa.free(value.arguments);
+    for (self.owned("solvers")) |value| {
+        value.deinit();
+        gpa.destroy(value);
+    }
+    for (self.owned("expressions")) |value| gpa.free(value.expression.terms);
+    for (self.owned("solutions")) |*value| value.solution.deinit();
+    // A child forks with no cached anchors, so every cached dictionary
+    // belongs to the runtime whose text entry holds it.
+    for (self.texts.items) |*text| releaseText(gpa, text);
+    inline for (@typeInfo(task_owners.Lengths).@"struct".field_names) |name| @field(self, name).deinit(gpa);
+    self.printed.deinit(gpa);
+    self.message.deinit(gpa);
+    if (self.task_borrow == null) freeOptions(gpa, self.options);
     self.* = undefined;
 }
 
-const host_vtable: Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = typesetBatch, .show_rule = makeShowRule, .setup_typst = setupBlock, .module = selectModule, .error_message = diagnostic };
+const host_vtable: Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = typesetBatch, .typst_module = makeTypstModule, .error_message = diagnostic };
 const single_host_vtable = blk: {
     var table = host_vtable;
     table.typst_batch = null;
@@ -259,7 +363,7 @@ pub fn render(self: *Runtime, value: Value, format: Format) !Output {
     var diagnostic_buffer: ?typst.Buffer = null;
     defer if (diagnostic_buffer) |*buffer| buffer.deinit();
     return scene.render(self.gpa, self.backends.typst, format, &diagnostic_buffer) catch |err| {
-        if (diagnostic_buffer) |buffer| self.native_message = self.mem().dupe(u8, buffer.bytes()) catch "cannot copy native diagnostic";
+        if (diagnostic_buffer) |buffer| self.setMessage(buffer.bytes());
         return err;
     };
 }
@@ -278,8 +382,23 @@ pub fn takeOutputs(self: *Runtime, values: []const Value) !OutputBatch {
     self.outputs_taken = true;
     return batch;
 }
-pub fn mem(self: *Runtime) std.mem.Allocator {
-    return self.arena.allocator();
+/// Keeps a copy of a native diagnostic until the next one replaces it.
+/// `text` must not point into the previous message.
+pub fn setMessage(self: *Runtime, text: []const u8) void {
+    self.message.clearRetainingCapacity();
+    self.message.appendSlice(self.gpa, text) catch {
+        self.native_message = "cannot copy native diagnostic";
+        return;
+    };
+    self.native_message = self.message.items;
+}
+fn setMessageFormat(self: *Runtime, comptime format: []const u8, args: anytype) void {
+    self.message.clearRetainingCapacity();
+    self.message.print(self.gpa, format, args) catch {
+        self.native_message = "cannot copy native diagnostic";
+        return;
+    };
+    self.native_message = self.message.items;
 }
 fn from(ctx: ?*anyopaque) *Runtime {
     return @ptrCast(@alignCast(ctx.?));
@@ -290,7 +409,7 @@ fn diagnostic(ctx: ?*anyopaque) []const u8 {
 fn captureNative(self: *Runtime) void {
     var buffer = self.backends.typst.lastError() catch return;
     defer buffer.deinit();
-    self.native_message = self.mem().dupe(u8, buffer.bytes()) catch "cannot copy native diagnostic";
+    self.setMessage(buffer.bytes());
 }
 fn engineRef(self: *Runtime) !*typst.Engine {
     if (self.shared_engine) |engine| return engine;
@@ -310,29 +429,6 @@ fn engineRef(self: *Runtime) !*typst.Engine {
     }
     return &self.engine.?;
 }
-fn setupBlock(ctx: ?*anyopaque, source: []const u8) !void {
-    const self = from(ctx);
-    if (self.outputs_taken) return error.InvalidState;
-    const previous = self.moduleSetup();
-    const combined = try std.fmt.allocPrint(self.mem(), "{s}\n{s}\n", .{ previous, source });
-    try self.ensureModule();
-    self.module_setups.items[self.current_module] = combined;
-}
-fn selectModule(ctx: ?*anyopaque, index: u32) !void {
-    const self = from(ctx);
-    if (self.outputs_taken) return error.InvalidState;
-    self.current_module = index;
-}
-fn ensureModule(self: *Runtime) !void {
-    const length = @as(usize, self.current_module) + 1;
-    if (length <= self.module_setups.items.len) return;
-    const old_length = self.module_setups.items.len;
-    try self.module_setups.resize(self.mem(), length);
-    @memset(self.module_setups.items[old_length..], "");
-}
-fn moduleSetup(self: *const Runtime) []const u8 {
-    return if (self.current_module < self.module_setups.items.len) self.module_setups.items[self.current_module] else "";
-}
 fn typeset(ctx: ?*anyopaque, allocator: std.mem.Allocator, request: Machine.TypstRequest) !Value {
     var values: [1]Value = undefined;
     var detail: Machine.TypstBatchDiagnostic = .{};
@@ -348,26 +444,18 @@ fn typesetBatch(ctx: ?*anyopaque, _: std.mem.Allocator, sources: []const Machine
     var temporary: std.heap.ArenaAllocator = .init(self.gpa);
     defer temporary.deinit();
     const scratch = temporary.allocator();
-    // This immutable string is the settings snapshot for this batch. The
-    // VM never groups requests across a setup or module boundary.
-    const setup = self.moduleSetup();
     const requests = try scratch.alloc(typst.LayoutRequest, sources.len);
     for (sources, requests) |input, *request| {
-        for (input.shows) |rule| if (rule != .handle or rule.handle.kind != .show_rule) return error.InvalidArgument;
-        const rules = try self.requestRules(scratch, input.bindings, input.shows);
-        const bindings = try typst_bindings.encode(scratch, input.bindings, self.colors.items, rules);
-        const templates = try self.ruleTemplates(scratch, rules);
-        const shows = try scratch.alloc(usize, input.shows.len);
-        for (shows, input.shows) |*position, rule| position.* = std.sort.binarySearch(usize, rules, rule.handle.index, ruleOrder).?;
-        if (setup.len != 0) {
-            // Independently parsed trees keep setup and body locations
-            // distinct while applying setup's definitions and style rules.
-            request.* = .{ .source = wrappedContent(input.source), .syntax = .markup, .preamble = setup, .bindings = bindings, .templates = templates, .shows = shows };
-            continue;
-        }
+        const modules = try self.requestModules(scratch, input.bindings, input.shows);
         // The compiler stored the content-block delimiters with this
         // constant, so code evaluation borrows the program's bytes.
-        request.* = .{ .source = input.source, .syntax = .code, .bindings = bindings, .templates = templates, .shows = shows };
+        request.* = .{
+            .source = input.source,
+            .syntax = .code,
+            .bindings = try self.huakBindings(scratch, input.bindings, modules, input.whole),
+            .modules = try self.moduleHandles(scratch, modules),
+            .show_values = try typst_bindings.encodeShows(scratch, input.shows, modules),
+        };
     }
     const metrics = try scratch.alloc(typst.Metrics, sources.len);
     var native_diagnostic: typst.Diagnostic = .{};
@@ -375,109 +463,98 @@ fn typesetBatch(ctx: ?*anyopaque, _: std.mem.Allocator, sources: []const Machine
     const result = try self.retainTextBatch(requests, metrics, values, &native_diagnostic);
     detail.completed = result.completed;
     if (result.failure) |err| {
-        if (native_diagnostic.text().len != 0) self.native_message = self.mem().dupe(u8, native_diagnostic.text()) catch return error.OutOfMemory;
+        if (native_diagnostic.text().len != 0) self.setMessage(native_diagnostic.text());
         detail.request_index = native_diagnostic.request_index orelse 0;
         detail.message = self.native_message;
         return err;
     }
 }
-/// Snapshots the data and the selected module's setup, then lets Typst
-/// evaluate the rule once, so syntax errors and code that is not a function
-/// are reported where the rule is made rather than where it is applied.
-fn makeShowRule(ctx: ?*anyopaque, _: std.mem.Allocator, code: []const u8, bindings: []const Machine.TypstBinding, origin: Machine.TypstOrigin) !Value {
+/// Snapshots the data and lets Typst evaluate the module once, so syntax and
+/// evaluation errors are reported where the module is made, and requests use
+/// the evaluated module rather than its code.
+fn makeTypstModule(ctx: ?*anyopaque, _: std.mem.Allocator, module: Machine.TypstModule) !Value {
     const self = from(ctx);
     if (self.outputs_taken) return error.InvalidState;
     self.native_message = "";
-    const a = self.mem();
-    const data = try a.alloc(Machine.TypstBinding, bindings.len);
-    for (data, bindings) |*copy, binding| {
-        const value = binding.value;
-        // Only rules made before this one exist, so templates follow those they bind.
-        if (value == .handle and value.handle.kind == .show_rule and value.handle.index >= self.show_rules.items.len) return error.InvalidTypstBinding;
-        copy.* = .{ .name = try a.dupe(u8, binding.name), .value = if (value == .string) .{ .string = try a.dupe(u8, value.string) } else value };
-    }
-    const index = self.show_rules.items.len;
-    try self.show_rules.append(a, .{
-        .code = try a.dupe(u8, code),
-        .setup = self.moduleSetup(),
-        .bindings = data,
-        .origin = .{ .name = try a.dupe(u8, origin.name), .line = origin.line, .column = origin.column },
-    });
-    errdefer self.show_rules.shrinkRetainingCapacity(index);
-    var temporary: std.heap.ArenaAllocator = .init(self.gpa);
+    const gpa = self.gpa;
+    var temporary: std.heap.ArenaAllocator = .init(gpa);
     defer temporary.deinit();
     const scratch = temporary.allocator();
-    const rules = try self.requestRules(scratch, &.{}, &.{handle(.show_rule, index)});
-    const request: typst.LayoutRequest = .{ .source = "", .templates = try self.ruleTemplates(scratch, rules) };
+    // Only modules made before this one exist, so each follows those it binds.
+    const bound = try self.requestModules(scratch, module.bindings, &.{});
+    const index = self.typst_modules.items.len;
+    // Reserve all persistent metadata before acquiring the native owner.
+    try self.typst_modules.ensureUnusedCapacity(gpa, 1);
+    const entry = try gpa.create(TypstModule);
+    errdefer gpa.destroy(entry);
+    const code = try gpa.dupe(u8, module.code);
+    errdefer gpa.free(code);
+    // The path is unique per module, so diagnostics find its text, and its
+    // file stem names the Typst module.
+    const name = try std.fmt.allocPrint(gpa, "typ-module/{d}/{s}.typ", .{ index, module.name });
+    errdefer gpa.free(name);
+    const origin_name = try gpa.dupe(u8, module.origin.name);
+    errdefer gpa.free(origin_name);
+    const source: typst.ModuleSource = .{
+        .code = code,
+        .name = name,
+        .bindings = try self.huakBindings(scratch, module.bindings, bound, module.whole),
+        .modules = try self.moduleHandles(scratch, bound),
+        .origin = .{ .name = origin_name, .line = module.origin.line, .column = module.origin.column },
+    };
     const engine = try self.engineRef();
-    var result = engine.layoutBatch(&.{request}) catch |err| {
+    const native = engine.evalModule(source) catch |err| {
         self.captureNative();
         return err;
     };
-    defer result.deinit();
-    if (result.failure) |err| {
-        var detail = result.takeDiagnostic();
-        defer detail.deinit();
-        if (detail.text().len != 0) self.native_message = try a.dupe(u8, detail.text());
-        return err;
-    }
-    return handle(.show_rule, index);
+    entry.* = .{ .native = native, .code = code, .name = name, .origin_name = origin_name };
+    self.typst_modules.appendAssumeCapacity(entry);
+    return handle(.typst_module, index);
 }
-/// The rules a request supplies as templates, in ascending order: those it
-/// shows, those its data binds, and the rules those bind in turn. A rule
-/// binds only rules made before it, so every template follows those it binds.
-fn requestRules(self: *const Runtime, scratch: std.mem.Allocator, bindings: []const Machine.TypstBinding, shows: []const Value) ![]const usize {
+/// The modules a request names, in ascending order: those its data binds or
+/// it shows. Each module keeps track of the modules it was made with.
+fn requestModules(self: *const Runtime, scratch: std.mem.Allocator, bindings: []const Machine.TypstBinding, shows: []const Machine.TypstShow) ![]const usize {
     var found: std.AutoArrayHashMapUnmanaged(usize, void) = .empty;
-    for (shows) |rule| try self.addRule(scratch, &found, rule);
-    for (bindings) |binding| try self.addRule(scratch, &found, binding.value);
-    var next: usize = 0;
-    while (next < found.count()) : (next += 1) {
-        for (self.show_rules.items[found.keys()[next]].bindings) |binding| try self.addRule(scratch, &found, binding.value);
+    for (shows) |show| {
+        if (show.value != .handle or show.value.handle.kind != .typst_module) return error.InvalidArgument;
+        try self.addModule(scratch, &found, show.value);
     }
-    const rules = try scratch.dupe(usize, found.keys());
-    std.mem.sortUnstable(usize, rules, {}, std.sort.asc(usize));
-    return rules;
+    for (bindings) |binding| try self.addModule(scratch, &found, binding.value);
+    const modules = try scratch.dupe(usize, found.keys());
+    std.mem.sortUnstable(usize, modules, {}, std.sort.asc(usize));
+    return modules;
 }
-fn addRule(self: *const Runtime, scratch: std.mem.Allocator, found: *std.AutoArrayHashMapUnmanaged(usize, void), value: Value) !void {
-    if (value != .handle or value.handle.kind != .show_rule) return;
-    if (value.handle.index >= self.show_rules.items.len) return error.InvalidTypstBinding;
+fn addModule(self: *const Runtime, scratch: std.mem.Allocator, found: *std.AutoArrayHashMapUnmanaged(usize, void), value: Value) !void {
+    if (value != .handle or value.handle.kind != .typst_module) return;
+    if (value.handle.index >= self.typst_modules.items.len) return error.InvalidTypstBinding;
     try found.put(scratch, value.handle.index, {});
 }
-fn ruleOrder(index: usize, item: usize) std.math.Order {
-    return std.math.order(index, item);
+/// Borrowed until the next module is made.
+fn moduleHandles(self: *const Runtime, scratch: std.mem.Allocator, modules: []const usize) ![]const *const typst.Module {
+    const handles = try scratch.alloc(*const typst.Module, modules.len);
+    for (handles, modules) |*item, index| item.* = &self.typst_modules.items[index].native;
+    return handles;
 }
-/// Source names are unique per rule, so diagnostics can find the rule's text.
-fn ruleTemplates(self: *const Runtime, scratch: std.mem.Allocator, rules: []const usize) ![]const typst.Template {
-    const templates = try scratch.alloc(typst.Template, rules.len);
-    for (templates, rules) |*template, index| {
-        const rule = self.show_rules.items[index];
-        template.* = .{
-            .code = rule.code,
-            .name = try std.fmt.allocPrint(scratch, "show_rule-{d}", .{index}),
-            .setup = rule.setup,
-            .setup_name = try std.fmt.allocPrint(scratch, "show_rule-{d}-preamble", .{index}),
-            .bindings = try typst_bindings.encode(scratch, rule.bindings, self.colors.items, rules),
-            .origin = rule.origin,
-        };
+/// Huak data reaches Typst as the `huak` module, a module value.
+fn huakBindings(self: *Runtime, scratch: std.mem.Allocator, bindings: []const Machine.TypstBinding, modules: []const usize, whole: bool) ![]const typst.c.TypstBinding {
+    const roots = try typst_bindings.encode(scratch, bindings, self.colors.items, modules, whole);
+    if (roots.len != 0 and !try self.backends.typst.supports(typst.c.TYPST_CAP_BINDING_MODULES)) {
+        self.native_message = "libtypst does not support module bindings";
+        return error.Unsupported;
     }
-    return templates;
-}
-/// Compiler constants for `typ[...]` retain the content-block delimiters.
-/// Setup layouts evaluate the inner markup directly; no second string copy
-/// is needed for either form.
-fn wrappedContent(source: []const u8) []const u8 {
-    if (source.len >= 2 and source[0] == '[' and source[source.len - 1] == ']') return source[1 .. source.len - 1];
-    return source;
+    return roots;
 }
 
 fn retainTextBatch(self: *Runtime, requests: []const typst.LayoutRequest, metrics: []typst.Metrics, values: []Value, diagnostic_detail: *typst.Diagnostic) !struct { completed: usize, failure: ?typst.Error } {
-    const a = self.mem();
+    const gpa = self.gpa;
     // Reserve all persistent metadata before acquiring a native owner; no
     // allocation or partial registration follows a successful layout call.
-    const owner = try a.create(typst.Layout);
-    try self.layouts.ensureUnusedCapacity(a, 1);
-    try self.texts.ensureUnusedCapacity(a, requests.len);
-    try self.frames.ensureUnusedCapacity(a, requests.len);
+    const owner = try gpa.create(typst.Layout);
+    var registered = false;
+    defer if (!registered) gpa.destroy(owner);
+    try self.layouts.ensureUnusedCapacity(gpa, 1);
+    try self.texts.ensureUnusedCapacity(gpa, requests.len);
+    try self.frames.ensureUnusedCapacity(gpa, requests.len);
     const engine = try self.engineRef();
     var result = engine.layoutBatch(requests) catch |err| {
         self.captureNative();
@@ -488,6 +565,7 @@ fn retainTextBatch(self: *Runtime, requests: []const typst.LayoutRequest, metric
     var completed: usize = 0;
     if (result.takeLayout()) |layout| {
         owner.* = layout;
+        registered = true;
         completed = owner.frameCount();
         self.layouts.appendAssumeCapacity(owner);
         for (metrics[0..completed], values[0..completed], 0..) |*metric, *value, index| {
@@ -499,9 +577,10 @@ fn retainTextBatch(self: *Runtime, requests: []const typst.LayoutRequest, metric
     }
     return .{ .completed = completed, .failure = result.failure };
 }
+/// Appends a value whose memory, if any, the caller still releases on failure.
 fn store(self: *Runtime, comptime T: type, list: *std.ArrayList(T), value: T, kind: Type) !Value {
     const index = list.items.len;
-    try list.append(self.mem(), value);
+    try list.append(self.gpa, value);
     return handle(kind, index);
 }
 pub fn path(self: *Runtime, value: Value) !Path {
@@ -534,13 +613,59 @@ fn modelResult(self: *Runtime, kind: Model.Kind, args: []const Value) !Value {
         },
         else => return error.InvalidModelArgument,
     };
-    return self.store(Model.Node, &self.models, .{ .kind = kind, .arguments = try self.mem().dupe(Value, args) }, .shape);
+    const arguments = try self.gpa.dupe(Value, args);
+    errdefer self.gpa.free(arguments);
+    return self.store(Model.Node, &self.models, .{ .kind = kind, .arguments = arguments }, .shape);
 }
 fn textValue(self: *Runtime, value: Value) !Text {
     return self.texts.items[try checkedIndex(value, .text, self.texts.items.len)];
 }
+/// Maps each label of typeset content to its anchor. Typst reports a label as
+/// often as it occurs; a dictionary needs each one once.
+fn textAnchors(self: *Runtime, value: Value) !Value {
+    self.native_message = "";
+    const index = try checkedIndex(value, .text, self.texts.items.len);
+    const text = self.texts.items[index];
+    if (text.anchors) |cached| return .{ .dict = cached };
+    const elements = text.layout.labels(text.frame) catch |err| {
+        self.captureNative();
+        return err;
+    };
+    const gpa = self.gpa;
+    var cached = text;
+    cached.anchors = try gpa.create(types.Dict);
+    cached.anchors.?.* = .{};
+    errdefer releaseText(gpa, &cached);
+    const result = cached.anchors.?;
+    // Frame y-down points to text-local y-up coordinates.
+    const local = struct {
+        fn point(baseline: f64, at: typst.c.TypstPoint) g.Point {
+            return .{ .x = at.x, .y = baseline - at.y };
+        }
+    }.point;
+    const baseline = text.metrics.baseline;
+    for (elements) |element| {
+        const name = if (element.label.len == 0) "" else element.label.data[0..element.label.len];
+        if (result.entries.contains(name)) {
+            self.setMessageFormat("label <{s}> occurs more than once in the typeset content", .{name});
+            return error.DuplicateLabel;
+        }
+        const position = local(baseline, element.position);
+        const anchor: Anchor = if (element.flags & typst.c.TYPST_LABEL_EXTENT != 0) .{
+            .position = position,
+            .min = local(baseline, .{ .x = element.min.x, .y = element.max.y }),
+            .max = local(baseline, .{ .x = element.max.x, .y = element.min.y }),
+        } else .{ .position = position, .min = position, .max = position };
+        const anchor_value = try self.store(Anchor, &self.anchors, anchor, .anchor);
+        const key = try gpa.dupe(u8, name);
+        errdefer gpa.free(key);
+        try result.entries.putNoClobber(gpa, key, anchor_value);
+    }
+    self.texts.items[index].anchors = result;
+    return .{ .dict = result };
+}
 fn mutableSolver(self: *Runtime, index: usize) !*constraints.Solver {
-    if (self.task_borrow) |borrowed| if (index < borrowed.solvers) return error.TaskCannotMutateBorrowedSolver;
+    if (index < self.firstOwned("solvers")) return error.TaskCannotMutateBorrowedSolver;
     return self.solvers.items[index];
 }
 const Instance = struct { owner: *SceneOwner, index: Scene.Index };
@@ -572,7 +697,7 @@ fn objectValue(self: *Runtime, value: Value, mutable: bool) !Instance {
     const owner: *SceneOwner = @ptrCast(@alignCast(@constCast(value.object.owner)));
     const index = owner.owner_index;
     if (index >= self.scene_values.items.len or self.scene_values.items[index] != owner) return error.InvalidObject;
-    if (mutable) if (self.task_borrow) |borrowed| if (index < borrowed.scenes) return error.TaskCannotMutateBorrowedPicture;
+    if (mutable and index < self.firstOwned("scene_values")) return error.TaskCannotMutateBorrowedPicture;
     _ = try owner.scene.getNode(value.object.index);
     return .{ .owner = owner, .index = value.object.index };
 }
@@ -626,8 +751,29 @@ fn objectSnapshot(self: *Runtime, value: Value, static: bool) !Scene.Snapshot {
     if (static) try self.requireStatic(object);
     return object.owner.scene.snapshotWithBounds(self.gpa, object.index, null, renderer.FrameBounds{ .frames = self.frames.items });
 }
+/// Stores a pen with its own copy of the dash, motion and nib arrays, so
+/// pens share nothing with the values they were made from. The caller keeps
+/// ownership of `value`'s arrays.
+fn storePen(self: *Runtime, value: DisplayList.Pen) !Value {
+    var copy = value;
+    try copy.cloneData(self.gpa);
+    errdefer copy.freeData(self.gpa);
+    return self.store(DisplayList.Pen, &self.pens, copy, .pen);
+}
+/// Takes ownership of `value`, also when storing it fails.
 pub fn pathResult(self: *Runtime, value: Path) !Value {
-    return self.store(Path, &self.path_values, value, .path);
+    var result = value;
+    errdefer result.deinit();
+    return self.store(Path, &self.path_values, result, .path);
+}
+/// Moves every path into the registry, or none: on failure the caller still
+/// owns them all.
+fn pathResults(self: *Runtime, paths: []const Path, values: []Value) !void {
+    try self.path_values.ensureUnusedCapacity(self.gpa, paths.len);
+    for (paths, values) |item, *value| {
+        value.* = handle(.path, self.path_values.items.len);
+        self.path_values.appendAssumeCapacity(item);
+    }
 }
 fn outlinedLabel(self: *Runtime, reference: usize) !*const outline.Label {
     if (reference >= self.texts.items.len) return error.InvalidFrameReference;
@@ -638,7 +784,7 @@ fn outlinedLabel(self: *Runtime, reference: usize) !*const outline.Label {
             return err;
         };
         errdefer extracted.deinit();
-        try self.outline_cache.put(self.mem(), text.layout, extracted);
+        try self.outline_cache.put(self.gpa, text.layout, extracted);
         break :cache self.outline_cache.getPtr(text.layout).?;
     };
     if (text.frame >= batch.labels.len) return error.InvalidFrameReference;
@@ -695,10 +841,14 @@ fn rawPaths(self: *Runtime, allocator: std.mem.Allocator, object: Value) !Value 
         };
         break :source &selected.picture;
     };
-    const raw = try geometry_outline.rawPaths(self.mem(), source);
+    const raw = try geometry_outline.rawPaths(self.gpa, source);
+    defer self.gpa.free(raw);
+    var moved = false;
+    defer if (!moved) for (raw) |*item| item.deinit();
     const result = try allocator.alloc(Value, raw.len);
     errdefer allocator.free(result);
-    for (result, raw) |*value, path_| value.* = try self.pathResult(path_);
+    try self.pathResults(raw, result);
+    moved = true;
     return types.listView(result);
 }
 fn transformResult(self: *Runtime, value: g.Transform, z_scale: f64) !Value {
@@ -709,7 +859,8 @@ fn spatialTransform(self: *Runtime, value: Affine3) !Value {
     for (value.rows) |row| for (row) |v| {
         if (!std.math.isFinite(v)) return error.NonFinite;
     };
-    const matrix = try self.mem().create(Affine3);
+    const matrix = try self.gpa.create(Affine3);
+    errdefer self.gpa.destroy(matrix);
     matrix.* = value;
     return self.store(Transform, &self.transforms, .{ .spatial = matrix }, .transform);
 }
@@ -732,6 +883,20 @@ fn field(ctx: ?*anyopaque, allocator: std.mem.Allocator, object: Value, name: []
         if (std.mem.eql(u8, name, "width")) return lengthResult(metrics.width);
         if (std.mem.eql(u8, name, "height")) return lengthResult(metrics.height);
         if (std.mem.eql(u8, name, "baseline")) return lengthResult(metrics.baseline);
+        if (std.mem.eql(u8, name, "anchors")) return self.textAnchors(object);
+    } else if (object.valueType() == .anchor) {
+        const anchor = self.anchors.items[try checkedIndex(object, .anchor, self.anchors.items.len)];
+        const point_: g.Point = if (std.mem.eql(u8, name, "position"))
+            anchor.position
+        else if (std.mem.eql(u8, name, "min"))
+            anchor.min
+        else if (std.mem.eql(u8, name, "max"))
+            anchor.max
+        else if (std.mem.eql(u8, name, "center"))
+            anchor.min.add(anchor.max).scale(0.5)
+        else
+            return error.UnknownField;
+        return .{ .vec2 = types.Vec2.fromPoint(point_) };
     } else if (object.valueType() == .solution) {
         const solved = self.solutions.items[try checkedIndex(object, .solution, self.solutions.items.len)].solution;
         if (std.mem.eql(u8, name, "status")) return .{ .string = @tagName(solved.status) };
@@ -769,10 +934,7 @@ fn field(ctx: ?*anyopaque, allocator: std.mem.Allocator, object: Value, name: []
         if (std.mem.eql(u8, name, "fill") or std.mem.eql(u8, name, "pen")) {
             if (command.* != .path) return error.ExpectedPathObject;
             if (std.mem.eql(u8, name, "fill")) return if (command.path.style.fill) |value| self.store(DisplayList.Color, &self.colors, value, .color) else .{ .boolean = false };
-            var value = command.path.style.pen orelse return .{ .boolean = false };
-            try value.cloneData(self.mem());
-            errdefer value.freeData(self.mem());
-            return self.store(DisplayList.Pen, &self.pens, value, .pen);
+            return self.storePen(command.path.style.pen orelse return .{ .boolean = false });
         }
         if (std.mem.eql(u8, name, "animated")) {
             return .{ .boolean = self.hasAnimation(instance) };
@@ -821,7 +983,7 @@ fn mapObject(self: *Runtime, machine: *Machine, args: []const Value) !Value {
     const operator: @import("runtime/Mapping.zig") = .{ .machine = machine, .function = function, .context = context };
     if (object.valueType() == .path) {
         const source = try self.path(object);
-        return self.pathResult(if (affine) |t| try source.transformed(self.mem(), t) else try mapping.mapped(self.mem(), source, operator, options));
+        return self.pathResult(if (affine) |t| try source.transformed(self.gpa, t) else try mapping.mapped(self.gpa, source, operator, options));
     }
     if (affine) |t| return self.transformedObject(object, t);
     var selected = try self.objectSnapshot(object, true);
@@ -857,7 +1019,7 @@ fn storeScene(self: *Runtime, value: Scene) !*SceneOwner {
     const target = try self.gpa.create(SceneOwner);
     errdefer self.gpa.destroy(target);
     target.* = .{ .scene = scene, .owner_index = try self.nextOwnerIndex(), .animation_state = .init(self.gpa) };
-    try self.scene_values.append(self.mem(), target);
+    try self.scene_values.append(self.gpa, target);
     return target;
 }
 fn objectStorage(self: *Runtime, curve: ?*const Path) !*SceneOwner {
@@ -897,7 +1059,6 @@ pub fn animationColor(self: *Runtime, value: Value) !DisplayList.Color {
     return self.color(value);
 }
 fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Value) !Value {
-    const own = self.mem();
     switch (id) {
         .project_scene => return @import("runtime/projection.zig").project(self, a, args),
         .model_shape => return self.modelResult(std.meta.stringToEnum(Model.Kind, try string(args[0])) orelse return error.InvalidModelShape, try sequence(args[1])),
@@ -993,7 +1154,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             defer if (painted) |*path_| path_.deinit();
             if (hasArgument(args, 3)) {
                 const brush = try self.penValue(args[3]);
-                painted = try renderer.strokeFootprint(self.gpa, self.gpa, sweep, &brush, null);
+                painted = try renderer.strokeFootprint(self.gpa, sweep, &brush, null);
             }
             const parent = try self.objectValue(args[0], true);
             const values = try sequence(args[1]);
@@ -1117,11 +1278,16 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return self.store(DisplayList.Color, &self.colors, value, .color);
         },
         .pen => {
+            // Dash and motion are parsed into scratch memory released with
+            // this call; the stored pen keeps its own copy.
+            var temporary: std.heap.ArenaAllocator = .init(self.gpa);
+            defer temporary.deinit();
+            const scratch = temporary.allocator();
             var value = DisplayList.Pen{ .color = try self.color(args[0]), .width = if (hasArgument(args, 1)) try lengthPoints(args[1]) else 1 };
             if (hasArgument(args, 2)) value.cap = std.meta.stringToEnum(DisplayList.Cap, try string(args[2])) orelse return error.InvalidPen;
             if (hasArgument(args, 3)) value.join = std.meta.stringToEnum(DisplayList.Join, try string(args[3])) orelse return error.InvalidPen;
             if (hasArgument(args, 4)) value.miter_limit = try numeric(args[4]);
-            if (hasArgument(args, 5)) value.dash = try lengths(own, try sequence(args[5]));
+            if (hasArgument(args, 5)) value.dash = try lengths(scratch, try sequence(args[5]));
             if (hasArgument(args, 6)) value.dash_phase = try lengthPoints(args[6]);
             if (hasArgument(args, 7)) {
                 // The source contributes only immutable nib geometry;
@@ -1143,7 +1309,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 value.cap = .round;
                 value.join = .round;
                 const tolerance = if (hasArgument(args, 10)) try lengthPoints(args[10]) else 0.001;
-                value.motion = readMotion(own, if (legacy) args[8] else args[9], legacy, tolerance) catch |err| {
+                value.motion = readMotion(scratch, if (legacy) args[8] else args[9], legacy, tolerance) catch |err| {
                     self.native_message = switch (err) {
                         error.InvalidFrameCorner => "frame corner must be strict, rotate, or overlap",
                         error.ConflictingFrameCorners => "path frames in one motion must use the same corner policy",
@@ -1154,29 +1320,31 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 };
             } else if (hasArgument(args, 10)) return error.InvalidMotion;
             try DisplayList.validateStyle(&.{ .pen = value });
-            return self.store(DisplayList.Pen, &self.pens, value, .pen);
+            return self.storePen(value);
         },
         .pencircle, .pensquare => {
             const width = if (hasArgument(args, 0)) try lengthPoints(args[0]) else 1;
             if (!std.math.isFinite(width) or width < 0) return error.InvalidPen;
             const source = if (id == .pencircle) pen_geometry.Nib.circle() else pen_geometry.Nib.square();
-            const transformed_nib = try source.transformed(own, .scaling(width, width));
-            return self.store(DisplayList.Pen, &self.pens, .{ .nib = transformed_nib.nib, .color = if (hasArgument(args, 1)) try self.color(args[1]) else .black, .cap = .round, .join = .round }, .pen);
+            var transformed_nib = try source.transformed(self.gpa, .scaling(width, width));
+            defer transformed_nib.deinit();
+            return self.storePen(.{ .nib = transformed_nib.nib, .color = if (hasArgument(args, 1)) try self.color(args[1]) else .black, .cap = .round, .join = .round });
         },
         .makepen => {
-            const retained = try pen_geometry.makePen(own, try self.path(args[0]));
-            return self.store(DisplayList.Pen, &self.pens, .{ .nib = retained.nib, .color = if (hasArgument(args, 1)) try self.color(args[1]) else .black, .cap = .round, .join = .round }, .pen);
+            var retained = try pen_geometry.makePen(self.gpa, try self.path(args[0]));
+            defer retained.deinit();
+            return self.storePen(.{ .nib = retained.nib, .color = if (hasArgument(args, 1)) try self.color(args[1]) else .black, .cap = .round, .join = .round });
         },
         .makepath, .penoffset => {
             const nib = try (try self.penValue(args[0])).fixedNib();
-            if (id == .makepath) return self.pathResult(try nib.makePath(own));
+            if (id == .makepath) return self.pathResult(try nib.makePath(self.gpa));
             return .{ .vec2 = types.Vec2.fromPoint(try nib.offset(try point(args[1]))) };
         },
         .envelope => {
             const brush = try self.penValue(args[1]);
             var config: pen_geometry.EnvelopeOptions = .{ .cap = brush.cap, .join = brush.join, .miter_limit = brush.miter_limit };
             if (hasArgument(args, 2)) config.tolerance = try lengthPoints(args[2]);
-            const result = pen_geometry.envelope(own, try brush.fixedNib(), try self.path(args[0]), config) catch |err| {
+            const result = pen_geometry.envelope(self.gpa, try brush.fixedNib(), try self.path(args[0]), config) catch |err| {
                 if (err == error.EllipticalPen) self.native_message = "envelope requires a polygonal pen; use pensquare or makepen";
                 return err;
             };
@@ -1185,7 +1353,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         .stroke_outline => {
             const tolerance = if (hasArgument(args, 2)) try lengthPoints(args[2]) else null;
             const brush = try self.penValue(args[1]);
-            return self.pathResult(try pen_geometry.footprint(own, self.gpa, try self.path(args[0]), &brush, tolerance));
+            return self.pathResult(try pen_geometry.footprint(self.gpa, try self.path(args[0]), &brush, tolerance));
         },
         .translate => {
             if (args[0] == .vec3) {
@@ -1230,15 +1398,18 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         },
         .bezier, .rectangle, .circle, .ellipse, .arc, .path, .smooth => return self.constructPath(id, args),
         .compound => {
-            var combined = Path.init(own);
-            errdefer combined.deinit();
-            for (try sequence(args[0])) |item| {
-                if (item.valueType() != .path) {
-                    self.native_message = "compound requires path elements";
-                    return error.TypeMismatch;
+            const combined = combined: {
+                var result = Path.init(self.gpa);
+                errdefer result.deinit();
+                for (try sequence(args[0])) |item| {
+                    if (item.valueType() != .path) {
+                        self.native_message = "compound requires path elements";
+                        return error.TypeMismatch;
+                    }
+                    try result.append(try self.path(item));
                 }
-                try combined.append(try self.path(item));
-            }
+                break :combined result;
+            };
             return self.pathResult(combined);
         },
         .contour_ranges => {
@@ -1251,32 +1422,33 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             return types.listView(rows);
         },
         .subpaths => {
-            const parts = try (try self.path(args[0])).subpaths(own);
-            defer own.free(parts);
-            errdefer for (parts) |*part| part.deinit();
+            const parts = try (try self.path(args[0])).subpaths(self.gpa);
+            defer self.gpa.free(parts);
+            var moved = false;
+            defer if (!moved) for (parts) |*part| part.deinit();
             const values = try a.alloc(Value, parts.len);
             errdefer a.free(values);
-            try self.path_values.ensureUnusedCapacity(own, parts.len);
-            for (parts, values) |part, *value| {
-                value.* = handle(.path, self.path_values.items.len);
-                self.path_values.appendAssumeCapacity(part);
-            }
+            try self.pathResults(parts, values);
+            moved = true;
             return types.listView(values);
         },
         .reverse, .closed => {
             if (args[0].valueType() == .shape)
                 return self.modelResult(if (id == .reverse) .reverse else .closed, args);
-            if (id == .reverse) return self.pathResult(try (try self.path(args[0])).reverse(own));
-            var result = try (try self.path(args[0])).clone(own);
-            errdefer result.deinit();
-            try result.close();
-            return self.pathResult(result);
+            if (id == .reverse) return self.pathResult(try (try self.path(args[0])).reverse(self.gpa));
+            const closed = closed: {
+                var result = try (try self.path(args[0])).clone(self.gpa);
+                errdefer result.deinit();
+                try result.close();
+                break :closed result;
+            };
+            return self.pathResult(closed);
         },
         .mapped => return error.CallbackUnavailable,
         .bent => {
             var bend = try transform_geometry.Bend.init(self.gpa, try self.path(args[1]), if (hasArgument(args, 2)) try lengthPoints(args[2]) else 0, if (hasArgument(args, 3)) try lengthPoints(args[3]) else 1e-3);
             defer bend.deinit();
-            if (args[0].valueType() == .path) return self.pathResult(try bend.path(own, try self.path(args[0])));
+            if (args[0].valueType() == .path) return self.pathResult(try bend.path(self.gpa, try self.path(args[0])));
             var source = try self.objectSnapshot(args[0], true);
             defer source.deinit();
             return self.objectResult(try bend.picture(self.scene_allocator, &source.picture));
@@ -1292,21 +1464,26 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const transform = try self.transformValue(args[1]);
             if (args[0].valueType() == .pen) {
                 var value = try self.penValue(args[0]);
-                const retained = try (try value.fixedNib()).transformed(own, transform);
+                var retained = try (try value.fixedNib()).transformed(self.gpa, transform);
+                defer retained.deinit();
                 value.nib = retained.nib;
-                return self.store(DisplayList.Pen, &self.pens, value, .pen);
+                return self.storePen(value);
             }
             if (args[0] == .object) return self.transformedObject(args[0], transform);
-            return self.pathResult(try (try self.path(args[0])).transformed(own, transform));
+            return self.pathResult(try (try self.path(args[0])).transformed(self.gpa, transform));
         },
         .joined => {
             if (args[0].valueType() == .shape or args[1].valueType() == .shape)
                 return self.modelResult(.joined, args);
-            var result = try (try self.path(args[0])).clone(own);
-            try result.join(try self.path(args[1]));
-            return self.pathResult(result);
+            const joined = joined: {
+                var result = try (try self.path(args[0])).clone(self.gpa);
+                errdefer result.deinit();
+                try result.join(try self.path(args[1]));
+                break :joined result;
+            };
+            return self.pathResult(joined);
         },
-        .trimmed => return self.pathResult(try (try self.path(args[0])).trimmed(own, try numeric(args[1]), try numeric(args[2]))),
+        .trimmed => return self.pathResult(try (try self.path(args[0])).trimmed(self.gpa, try numeric(args[1]), try numeric(args[2]))),
         .point_at, .tangent_at => {
             const curve = try (try self.path(args[0])).curveAt(try numeric(args[1]));
             return .{ .vec2 = types.Vec2.fromPoint(if (id == .point_at) curve.curve.at(curve.t) else curve.curve.derivative(curve.t)) };
@@ -1356,7 +1533,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (hasArgument(args, 4)) options.join = std.meta.stringToEnum(regions.Join, try string(args[4])) orelse return error.InvalidJoin;
             if (hasArgument(args, 5)) options.miter_limit = try numeric(args[5]);
             if (hasArgument(args, 6)) options.tolerance = try lengthPoints(args[6]);
-            return self.pathResult(try pen_geometry.profileOutline(own, try self.path(args[0]), positions, widths, options));
+            return self.pathResult(try pen_geometry.profileOutline(self.gpa, try self.path(args[0]), positions, widths, options));
         },
         .bounds => {
             const box = switch (args[0].valueType()) {
@@ -1413,13 +1590,17 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                     .end = try numeric(fields[2]),
                 };
             }
-            const sections = try pen_geometry.sections.extract(self.gpa, own, try self.path(args[0]), try self.penValue(args[1]), ranges, options);
+            const sections = try pen_geometry.sections.extract(self.gpa, try self.path(args[0]), try self.penValue(args[1]), ranges, options);
             defer self.gpa.free(sections);
+            var moved = false;
+            defer if (!moved) for (sections) |*section| section.deinit();
             const rows = try a.alloc(Value, sections.len);
-            for (rows, sections) |*row, section| row.* = try self.pathResult(section);
+            errdefer a.free(rows);
+            try self.pathResults(sections, rows);
+            moved = true;
             return types.listView(rows);
         },
-        .clipped => return self.pathResult(try (try self.path(args[0])).clippedToRect(own, .{ .min = try point(args[1]), .max = try point(args[2]) })),
+        .clipped => return self.pathResult(try (try self.path(args[0])).clippedToRect(self.gpa, .{ .min = try point(args[1]), .max = try point(args[2]) })),
         .region => {
             var options: regions.Options = .{};
             if (hasArgument(args, 1)) options.tolerance = try lengthPoints(args[1]);
@@ -1429,9 +1610,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             }
             var vector_picture = try self.vectorPicture(self.gpa, args[0], .region);
             defer vector_picture.deinit();
-            var converted = try region_geometry.extract(self.gpa, &vector_picture, options);
-            defer converted.deinit();
-            return self.pathResult(try converted.clone(own));
+            return self.pathResult(try region_geometry.extract(self.gpa, &vector_picture, options));
         },
         .region_union, .region_intersection, .region_difference, .region_xor => {
             if (args[0].valueType() == .shape or args[1].valueType() == .shape) {
@@ -1453,7 +1632,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 .region_xor => .xor,
                 else => unreachable,
             };
-            return self.pathResult(try regions.combine(own, try self.path(args[0]), try self.path(args[1]), operation, options));
+            return self.pathResult(try regions.combine(self.gpa, try self.path(args[0]), try self.path(args[1]), operation, options));
         },
         .fillet => {
             const source = try self.path(args[0]);
@@ -1464,7 +1643,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 break :blk &uniform;
             };
             defer if (listed != null) self.gpa.free(radii);
-            const rounded = path_fillet.fillet(own, self.gpa, source, radii) catch |err| {
+            const rounded = path_fillet.fillet(self.gpa, source, radii) catch |err| {
                 switch (err) {
                     error.InvalidRadii => self.native_message = "fillet radii must be finite, nonnegative, and one value or one per vertex",
                     error.OpenPath => self.native_message = "fillet requires a closed polygon",
@@ -1488,7 +1667,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (hasArgument(args, 3)) options.miter_limit = try numeric(args[3]);
             if (hasArgument(args, 4)) options.tolerance = try lengthPoints(args[4]);
             if (hasArgument(args, 5)) options.fill_rule = std.meta.stringToEnum(regions.FillRule, try string(args[5])) orelse return error.InvalidFillRule;
-            return self.pathResult(try regions.offset(own, try self.path(args[0]), try lengthPoints(args[1]), options));
+            return self.pathResult(try regions.offset(self.gpa, try self.path(args[0]), try lengthPoints(args[1]), options));
         },
         .stroke_path => {
             var options: regions.Options = .{};
@@ -1496,7 +1675,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (hasArgument(args, 3)) options.join = std.meta.stringToEnum(regions.Join, try string(args[3])) orelse return error.InvalidJoin;
             if (hasArgument(args, 4)) options.miter_limit = try numeric(args[4]);
             if (hasArgument(args, 5)) options.tolerance = try lengthPoints(args[5]);
-            return self.pathResult(try regions.stroke(own, try self.path(args[0]), try lengthPoints(args[1]), options));
+            return self.pathResult(try regions.stroke(self.gpa, try self.path(args[0]), try lengthPoints(args[1]), options));
         },
         .clip_region, .clip_lines => {
             var options: regions.Options = .{};
@@ -1504,7 +1683,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             if (id == .clip_region and hasArgument(args, 4)) options.fill_rule = std.meta.stringToEnum(regions.FillRule, try string(args[4])) orelse return error.InvalidFillRule;
             const source = try self.path(args[0]);
             const rect: g.BBox = .{ .min = try point(args[1]), .max = try point(args[2]) };
-            return self.pathResult(if (id == .clip_region) try regions.clipRegion(own, source, rect, options) else try regions.clipLines(own, source, rect, options));
+            return self.pathResult(if (id == .clip_region) try regions.clipRegion(self.gpa, source, rect, options) else try regions.clipLines(self.gpa, source, rect, options));
         },
         .canvas => {
             const target = try self.objectValue(args[0], true);
@@ -1560,6 +1739,7 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
                 else => unreachable,
             };
         },
+        .anchors => return self.textAnchors(args[0]),
         .width, .height, .baseline => {
             const metric = (try self.textValue(args[0])).metrics;
             return lengthResult(switch (id) {
@@ -1571,8 +1751,10 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         },
         .outlines => return self.extractOutlines(args[0]),
         .solver => {
-            const value = try own.create(constraints.Solver);
-            value.* = .init(own, .{});
+            const value = try self.gpa.create(constraints.Solver);
+            errdefer self.gpa.destroy(value);
+            value.* = .init(self.gpa, .{});
+            errdefer value.deinit();
             return self.store(*constraints.Solver, &self.solvers, value, .solver);
         },
         .unknown => {
@@ -1581,19 +1763,21 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
         },
         .equation => {
             const owner = try checkedIndex(args[0], .solver, self.solvers.items.len);
-            const lhs = try self.expr(args[1]);
-            const rhs = try self.expr(args[2]);
+            var lhs_term: [1]constraints.Term = undefined;
+            var rhs_term: [1]constraints.Term = undefined;
+            const lhs = try self.expr(args[1], &lhs_term);
+            const rhs = try self.expr(args[2], &rhs_term);
             if ((lhs.owner != null and lhs.owner != owner) or (rhs.owner != null and rhs.owner != owner)) return error.DifferentSolvers;
             _ = try (try self.mutableSolver(owner)).addEquation(lhs.expression, rhs.expression);
             return .unit;
         },
         .solve => {
             const owner = try checkedIndex(args[0], .solver, self.solvers.items.len);
-            // Solving is read-only, but its scratch/output allocations
-            // must use this worker's arena even for a borrowed solver.
-            var solver = self.solvers.items[owner].*;
-            solver.allocator = own;
-            const result = try solver.solve();
+            // Solving only reads the solver, so workers can solve a borrowed
+            // one; the solution uses the solver's allocator, which supports
+            // concurrent use, and belongs to this runtime.
+            var result = try self.solvers.items[owner].solve();
+            errdefer result.deinit();
             return self.store(Solved, &self.solutions, .{ .owner = owner, .solution = result }, .solution);
         },
         .value => {
@@ -1636,14 +1820,13 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             errdefer owner.scene.deinit();
             const index = try owner.scene.addPicture(null, .{}, null);
             (try owner.scene.settings(index)).size = size;
-            try self.scene_values.append(self.mem(), owner);
+            try self.scene_values.append(self.gpa, owner);
             return objectHandle(owner.scene.object(index));
         },
     }
 }
 fn constructPath(self: *Runtime, id: builtin.Id, args: []const Value) !Value {
-    const a = self.mem();
-    var result = Path.init(a);
+    const gpa = self.gpa;
     if (args[0] == .vec3) switch (id) {
         .circle, .ellipse, .arc, .bezier => return self.modelResult(switch (id) {
             .circle => .circle,
@@ -1653,110 +1836,125 @@ fn constructPath(self: *Runtime, id: builtin.Id, args: []const Value) !Value {
         }, args),
         else => {},
     };
-    switch (id) {
-        .bezier => {
-            try result.moveTo(try point(args[0]));
-            try result.cubicTo(try point(args[1]), try point(args[2]), try point(args[3]));
-        },
-        .rectangle => {
-            const p = if (args[0] == .vec3) g.Point.zero else try point(args[0]);
-            const w = try lengthPoints(args[1]);
-            const h = try lengthPoints(args[2]);
-            try result.moveTo(p);
-            try result.lineTo(p.add(.{ .x = w, .y = 0 }));
-            try result.lineTo(p.add(.{ .x = w, .y = h }));
-            try result.lineTo(p.add(.{ .x = 0, .y = h }));
-            try result.close();
-            if (args[0] == .vec3) return self.modelResult(.profile, &.{
-                try self.pathResult(result),              args[0],
-                .{ .vec3 = .{ .x = 1, .y = 0, .z = 0 } }, .{ .vec3 = .{ .x = 0, .y = 1, .z = 0 } },
-            });
-        },
-        .circle => result = try Path.circle(a, try point(args[0]), try lengthPoints(args[1])),
-        .ellipse => {
-            const center = try point(args[0]);
-            const rx = try lengthPoints(args[1]);
-            const ry = try lengthPoints(args[2]);
-            if (rx <= 0 or ry <= 0) return error.InvalidParameter;
-            result = try Path.circle(a, .zero, 1);
-            try result.transform(g.Transform.scaling(rx, ry).then(.translation(center.x, center.y)));
-        },
-        .arc => result = try Path.arc(a, try point(args[0]), try lengthPoints(args[1]), try angular(args[2]), try angular(args[3])),
-        .path, .smooth => {
-            const from_list = id == .smooth or types.sequence(args[0]) != null;
-            if (id == .path and from_list and args.len > 3) return error.InvalidPath;
-            const values = if (from_list) try sequence(args[0]) else args;
-            const closed = if (from_list and hasArgument(args, 1)) try boolean(args[1]) else false;
-            if (id == .path and values.len != 0 and values[0] == .vec3) {
-                if (values.len < 2) return error.TooFewKnots;
-                for (values) |v| if (v != .vec3) return error.ExpectedVec3;
-                if (from_list and hasArgument(args, 2)) {
-                    const joins = try sequence(args[2]);
-                    if (joins.len != values.len - @intFromBool(!closed)) return error.InvalidJoinCount;
-                    for (joins) |join| if (!std.mem.eql(u8, try string(join), "straight")) return error.HobbyRequiresPlanarPath;
+    const built = built: {
+        // An empty path owns no memory until a segment is added, so a
+        // constructor's result can replace it.
+        var result = Path.init(gpa);
+        errdefer result.deinit();
+        switch (id) {
+            .bezier => {
+                try result.moveTo(try point(args[0]));
+                try result.cubicTo(try point(args[1]), try point(args[2]), try point(args[3]));
+            },
+            .rectangle => {
+                const p = if (args[0] == .vec3) g.Point.zero else try point(args[0]);
+                const w = try lengthPoints(args[1]);
+                const h = try lengthPoints(args[2]);
+                try result.moveTo(p);
+                try result.lineTo(p.add(.{ .x = w, .y = 0 }));
+                try result.lineTo(p.add(.{ .x = w, .y = h }));
+                try result.lineTo(p.add(.{ .x = 0, .y = h }));
+                try result.close();
+            },
+            .circle => result = try Path.circle(gpa, try point(args[0]), try lengthPoints(args[1])),
+            .ellipse => {
+                const center = try point(args[0]);
+                const rx = try lengthPoints(args[1]);
+                const ry = try lengthPoints(args[2]);
+                if (rx <= 0 or ry <= 0) return error.InvalidParameter;
+                result = try Path.circle(gpa, .zero, 1);
+                try result.transform(g.Transform.scaling(rx, ry).then(.translation(center.x, center.y)));
+            },
+            .arc => result = try Path.arc(gpa, try point(args[0]), try lengthPoints(args[1]), try angular(args[2]), try angular(args[3])),
+            .path, .smooth => {
+                const from_list = id == .smooth or types.sequence(args[0]) != null;
+                if (id == .path and from_list and args.len > 3) return error.InvalidPath;
+                const values = if (from_list) try sequence(args[0]) else args;
+                const closed = if (from_list and hasArgument(args, 1)) try boolean(args[1]) else false;
+                if (id == .path and values.len != 0 and values[0] == .vec3) {
+                    if (values.len < 2) return error.TooFewKnots;
+                    for (values) |v| if (v != .vec3) return error.ExpectedVec3;
+                    if (from_list and hasArgument(args, 2)) {
+                        const joins = try sequence(args[2]);
+                        if (joins.len != values.len - @intFromBool(!closed)) return error.InvalidJoinCount;
+                        for (joins) |join| if (!std.mem.eql(u8, try string(join), "straight")) return error.HobbyRequiresPlanarPath;
+                    }
+                    return self.modelResult(if (closed) .polygon else .polyline, values);
                 }
-                return self.modelResult(if (closed) .polygon else .polyline, values);
-            }
-            if (id == .path and from_list and hasArgument(args, 2)) {
-                const kinds = try sequence(args[2]);
-                const points = try self.gpa.alloc(g.Point, values.len);
-                defer self.gpa.free(points);
-                const joins = try self.gpa.alloc(path_construct.Join, kinds.len);
-                defer self.gpa.free(joins);
-                for (points, values) |*out, value| out.* = try point(value);
-                for (joins, kinds) |*out, value| out.* = std.meta.stringToEnum(path_construct.Join, try string(value)) orelse return error.InvalidPathJoin;
-                result = try path_construct.constructWithScratch(a, self.gpa, points, joins, .{ .closed = closed });
-            } else if (id == .path) {
-                if (values.len == 0) return error.InvalidPath;
-                try result.moveTo(try point(values[0]));
-                for (values[1..]) |v| try result.lineTo(try point(v));
-                if (closed) try result.close();
-            } else {
-                const knots = try self.gpa.alloc(hobby.Knot, values.len);
-                defer self.gpa.free(knots);
-                const tension = if (hasArgument(args, 2)) try numeric(args[2]) else 1;
-                for (values, knots) |v, *k| k.* = .{ .point = try point(v), .incoming_tension = tension, .outgoing_tension = tension };
-                result = try path_construct.fromKnotsWithScratch(a, self.gpa, knots, .{ .closed = closed });
-            }
-        },
-        else => unreachable,
-    }
-    return self.pathResult(result);
+                if (id == .path and from_list and hasArgument(args, 2)) {
+                    const kinds = try sequence(args[2]);
+                    const points = try gpa.alloc(g.Point, values.len);
+                    defer gpa.free(points);
+                    const joins = try gpa.alloc(path_construct.Join, kinds.len);
+                    defer gpa.free(joins);
+                    for (points, values) |*out, value| out.* = try point(value);
+                    for (joins, kinds) |*out, value| out.* = std.meta.stringToEnum(path_construct.Join, try string(value)) orelse return error.InvalidPathJoin;
+                    result = try path_construct.construct(gpa, points, joins, .{ .closed = closed });
+                } else if (id == .path) {
+                    if (values.len == 0) return error.InvalidPath;
+                    try result.moveTo(try point(values[0]));
+                    for (values[1..]) |v| try result.lineTo(try point(v));
+                    if (closed) try result.close();
+                } else {
+                    const knots = try gpa.alloc(hobby.Knot, values.len);
+                    defer gpa.free(knots);
+                    const tension = if (hasArgument(args, 2)) try numeric(args[2]) else 1;
+                    for (values, knots) |v, *k| k.* = .{ .point = try point(v), .incoming_tension = tension, .outgoing_tension = tension };
+                    result = try path_construct.fromKnots(gpa, knots, .{ .closed = closed });
+                }
+            },
+            else => unreachable,
+        }
+        break :built result;
+    };
+    // A spatial rectangle is the profile of a model; its path is stored too.
+    if (id == .rectangle and args[0] == .vec3) return self.modelResult(.profile, &.{
+        try self.pathResult(built),               args[0],
+        .{ .vec3 = .{ .x = 1, .y = 0, .z = 0 } }, .{ .vec3 = .{ .x = 0, .y = 1, .z = 0 } },
+    });
+    return self.pathResult(built);
 }
-fn expr(self: *Runtime, v: Value) !Expr {
+/// A variable reads as one term, held in `single` for the caller's use.
+fn expr(self: *Runtime, v: Value, single: *[1]constraints.Term) !Expr {
     if (v.valueType() == .variable) {
         const variable = self.variables.items[try checkedIndex(v, .variable, self.variables.items.len)];
-        return .{ .owner = variable.owner, .expression = .{ .terms = try self.mem().dupe(constraints.Term, &.{.{ .variable = variable.id, .coefficient = 1 }}) } };
+        single[0] = .{ .variable = variable.id, .coefficient = 1 };
+        return .{ .owner = variable.owner, .expression = .{ .terms = single } };
     }
     if (v.valueType() == .linear) return self.expressions.items[try checkedIndex(v, .linear, self.expressions.items.len)];
     return .{ .owner = null, .expression = .number(try numeric(v)) };
 }
 fn binary(ctx: ?*anyopaque, _: std.mem.Allocator, op: bc.Op, lhs: Value, rhs: Value) !Value {
     const self = from(ctx);
-    const left = try self.expr(lhs);
-    const right = try self.expr(rhs);
+    var left_term: [1]constraints.Term = undefined;
+    var right_term: [1]constraints.Term = undefined;
+    const left = try self.expr(lhs, &left_term);
+    const right = try self.expr(rhs, &right_term);
     if (left.owner != null and right.owner != null and left.owner != right.owner) return error.DifferentSolvers;
     var result: Expr = .{ .owner = left.owner orelse right.owner, .expression = .{} };
-    const a = self.mem();
-    switch (op) {
-        .add, .subtract => {
-            const terms = try a.alloc(constraints.Term, left.expression.terms.len + right.expression.terms.len);
+    const gpa = self.gpa;
+    const terms = switch (op) {
+        .add, .subtract => terms: {
+            const terms = try gpa.alloc(constraints.Term, left.expression.terms.len + right.expression.terms.len);
             @memcpy(terms[0..left.expression.terms.len], left.expression.terms);
             const sign: f64 = if (op == .add) 1 else -1;
             for (right.expression.terms, terms[left.expression.terms.len..]) |t, *out| out.* = .{ .variable = t.variable, .coefficient = t.coefficient * sign };
             result.expression = .{ .constant = left.expression.constant + sign * right.expression.constant, .terms = terms };
+            break :terms terms;
         },
-        .multiply, .divide => {
+        .multiply, .divide => terms: {
             if ((left.owner != null and right.owner != null) or (op == .divide and right.owner != null)) return error.NonlinearExpression;
             const expression = if (left.owner != null) left.expression else right.expression;
             const scalar = if (left.owner != null) right.expression.constant else left.expression.constant;
             if (op == .divide and scalar == 0) return error.DivisionByZero;
-            const terms = try a.dupe(constraints.Term, expression.terms);
+            const terms = try gpa.dupe(constraints.Term, expression.terms);
             for (terms) |*term| term.coefficient = if (op == .divide) term.coefficient / scalar else term.coefficient * scalar;
             result.expression = .{ .constant = if (op == .divide) expression.constant / scalar else expression.constant * scalar, .terms = terms };
+            break :terms terms;
         },
         else => return error.UnsupportedOperator,
-    }
+    };
+    errdefer gpa.free(terms);
     if (!std.math.isFinite(result.expression.constant)) return error.NonFinite;
     for (result.expression.terms) |term| if (!std.math.isFinite(term.coefficient)) return error.NonFinite;
     return self.store(Expr, &self.expressions, result, .linear);
@@ -2088,8 +2286,12 @@ test "region clipping fill rule preserves the hole between nested same-direction
     defer runtime.deinit();
     const outer = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .{ .x = 0, .y = 0 } }, .{ .number = 10 }, .{ .number = 10 } });
     const inner = try runtime.invoke(a, .rectangle, &.{ .{ .vec2 = .{ .x = 2, .y = 2 } }, .{ .number = 6 }, .{ .number = 6 } });
-    var compound = try (try runtime.path(outer)).clone(runtime.mem());
-    try compound.append(try runtime.path(inner));
+    const compound = compound: {
+        var result = try (try runtime.path(outer)).clone(runtime.gpa);
+        errdefer result.deinit();
+        try result.append(try runtime.path(inner));
+        break :compound result;
+    };
     const nested = try runtime.pathResult(compound);
     const min: Value = .{ .vec2 = .{ .x = -1, .y = -1 } };
     const max: Value = .{ .vec2 = .{ .x = 11, .y = 11 } };
@@ -2127,25 +2329,6 @@ test "region clipping fill rule preserves the hole between nested same-direction
     try std.testing.expectEqual(@as(usize, 2), contours);
     try std.testing.expectEqual(@as(usize, 1), holes);
     try std.testing.expectApproxEqAbs(@as(f64, 64), area, 1e-7);
-}
-
-test "module Typst setups stay independent while switching the active file" {
-    var unused_library: typst.Library = undefined;
-    var runtime = try Runtime.init(std.testing.allocator, std.testing.allocator, &unused_library, .{});
-    defer runtime.deinit();
-    try std.testing.expectEqualStrings("", runtime.moduleSetup());
-    try Runtime.setupBlock(&runtime, "set text(size: 10pt)");
-    const root_setup = runtime.moduleSetup();
-    try Runtime.selectModule(&runtime, 2);
-    try std.testing.expectEqualStrings("", runtime.moduleSetup());
-    try Runtime.setupBlock(&runtime, "set text(size: 30pt)");
-    const child_setup = runtime.moduleSetup();
-    try Runtime.selectModule(&runtime, 0);
-    try std.testing.expectEqualStrings(root_setup, runtime.moduleSetup());
-    try Runtime.selectModule(&runtime, 1);
-    try std.testing.expectEqualStrings("", runtime.moduleSetup());
-    try Runtime.selectModule(&runtime, 2);
-    try std.testing.expectEqualStrings(child_setup, runtime.moduleSetup());
 }
 
 test "native geometry converts physical lengths while vector arithmetic retains dimensions" {
@@ -2397,12 +2580,12 @@ fn penSnapshotAllocationScenario(a: std.mem.Allocator) !void {
     var runtime = try Runtime.init(a, a, &unused_library, .{});
     defer runtime.deinit();
     const points = [_]g.Point{ .{ .x = -2, .y = -1 }, .{ .x = 2, .y = -1 }, .{ .x = 2, .y = 1 }, .{ .x = -2, .y = 1 } };
-    const brush = try runtime.store(DisplayList.Pen, &runtime.pens, .{ .dash = &.{ 3, 2 }, .nib = .{ .polygon = &points } }, .pen);
+    const brush = try runtime.storePen(.{ .dash = &.{ 3, 2 }, .nib = .{ .polygon = &points } });
     const curve = try runtime.invoke(a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const item = try runtime.invoke(a, .draw, &.{ curve, brush });
     const host_value = runtime.host();
     const saved = try host_value.field(a, item, "pen");
-    const replacement = try runtime.store(DisplayList.Pen, &runtime.pens, .{}, .pen);
+    const replacement = try runtime.storePen(.{});
     _ = try runtime.invoke(a, .object_style, &.{ item, .omitted, replacement });
     const pen = try runtime.penValue(saved);
     try std.testing.expectEqualSlices(f64, &.{ 3, 2 }, pen.dash);

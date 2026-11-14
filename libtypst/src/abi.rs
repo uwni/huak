@@ -7,7 +7,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0005;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0008;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -22,6 +22,17 @@ pub const TYPST_CAP_FONT_DISCOVERY: u64 = 64;
 /// Template functions evaluated from code with their own bindings in content
 /// layout options, as binding values and as show rules around the content.
 pub const TYPST_CAP_LAYOUT_TEMPLATES: u64 = 128;
+/// Labeled elements of a layout, with their positions and extents.
+pub const TYPST_CAP_LAYOUT_LABELS: u64 = 256;
+/// Module values among layout bindings.
+pub const TYPST_CAP_BINDING_MODULES: u64 = 512;
+/// `typst_context_eval`, the module handles it returns in layout and
+/// evaluation options, and TYPST_VALUE_MODULE_HANDLE inputs.
+pub const TYPST_CAP_MODULE_HANDLES: u64 = 1024;
+/// Show rules given as values in layout options.
+pub const TYPST_CAP_SHOW_VALUES: u64 = 2048;
+/// `typst_source_member_uses`.
+pub const TYPST_CAP_MEMBER_USES: u64 = 4096;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;
@@ -35,6 +46,20 @@ pub const TYPST_VALUE_COLOR: u32 = 8;
 /// `integer` indexes the layout options' templates; the value is that
 /// template's function, for `show:` rules or direct calls.
 pub const TYPST_VALUE_TEMPLATE: u32 = 9;
+/// A module whose members are `bindings`, named by `text` or anonymous when
+/// `text` is empty. Unlike dictionary keys, Typst code calls a module's
+/// function members directly, as `lib.f(x)`, in markup and math alike.
+pub const TYPST_VALUE_MODULE: u32 = 10;
+/// `integer` indexes the options' module handles; the value is the module
+/// that handle retains.
+pub const TYPST_VALUE_MODULE_HANDLE: u32 = 11;
+/// The source binds the queried name itself, for example with `let` or as a
+/// parameter, so some reported uses may not refer to the outer value.
+pub const TYPST_MEMBER_USES_REBOUND: u32 = 1;
+/// The source also uses the queried name as a whole value: it occurs other
+/// than as the owner of a reported member and other than where the source
+/// binds it, as in `f(name)`, `#name` or `import name: *`.
+pub const TYPST_MEMBER_USES_WHOLE: u32 = 2;
 pub const TYPST_CONTEXT_NO_BUILTIN_FONTS: u32 = 1;
 pub const TYPST_CONTEXT_DISABLE_PLUGINS: u32 = 2;
 /// Add the fonts installed on the system, as found by typst-kit. Requires
@@ -79,6 +104,9 @@ pub const TYPST_OUTLINE_BEGIN_CLIP: u32 = 2;
 /// Closes the most recent clipping scope. Geometry and paints are unused.
 pub const TYPST_OUTLINE_END_CLIP: u32 = 3;
 pub const TYPST_SCENE_ITEM_ISOLATE_TRANSFORM: u32 = 1;
+/// The labeled element's `min` and `max` hold its extent. Without it, the
+/// element lays out nothing, such as labeled metadata.
+pub const TYPST_LABEL_EXTENT: u32 = 1;
 
 /// A borrowed UTF-8 view; the pointer may be NULL only when len is zero.
 #[repr(C)]
@@ -193,6 +221,54 @@ pub struct TypstLayoutOptions {
     /// at its start, outermost first. Rules nearer the content take precedence.
     pub shows: *const usize,
     pub show_count: usize,
+    /// Borrowed modules that `typst_context_eval` made. The request's values
+    /// and templates refer to them by index with TYPST_VALUE_MODULE_HANDLE.
+    /// Requires TYPST_CAP_MODULE_HANDLES.
+    pub module_handles: *const *const crate::handles::TypstModule,
+    pub module_handle_count: usize,
+    /// Show rules given as values, applied inside `shows`, outermost first.
+    /// Requires TYPST_CAP_SHOW_VALUES.
+    pub show_values: *const TypstShowValue,
+    pub show_value_count: usize,
+}
+
+/// Pass by pointer; null selects defaults. `bindings` are names visible to the
+/// evaluated source from an enclosing scope; they are not members of the
+/// module. TYPST_VALUE_MODULE_HANDLE inputs among them index `module_handles`;
+/// template inputs have nothing to refer to here.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstEvalOptions {
+    pub struct_size: u32,
+    /// No flags are defined; must be zero.
+    pub flags: u32,
+    pub bindings: *const TypstBinding,
+    pub binding_count: usize,
+    pub module_handles: *const *const crate::handles::TypstModule,
+    pub module_handle_count: usize,
+}
+impl Default for TypstEvalOptions {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            flags: 0,
+            bindings: std::ptr::null(),
+            binding_count: 0,
+            module_handles: std::ptr::null(),
+            module_handle_count: 0,
+        }
+    }
+}
+
+/// A show rule given as a value, converted like a binding value. Each path
+/// entry names a field read from the value in turn, as `value.a.b` would; the
+/// result must be a function. Frozen array element layout.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstShowValue {
+    pub value: *const TypstValueInput,
+    pub path: *const TypstStr,
+    pub path_count: usize,
 }
 
 /// Independent Typst code whose value is a function, such as
@@ -230,6 +306,10 @@ impl Default for TypstLayoutOptions {
             template_count: 0,
             shows: std::ptr::null(),
             show_count: 0,
+            module_handles: std::ptr::null(),
+            module_handle_count: 0,
+            show_values: std::ptr::null(),
+            show_value_count: 0,
         }
     }
 }
@@ -315,10 +395,11 @@ pub struct TypstBinding {
     pub value: *const TypstValueInput,
 }
 
-/// Borrowed native-value input. Only the field selected by `kind` is read:
-/// BOOL/INT/TEMPLATE use `integer`, FLOAT/LENGTH use `number`, STRING uses
-/// `text`, COLOR uses `color`, ARRAY uses `items/item_count`, DICT uses
-/// `bindings/binding_count`.
+/// Borrowed native-value input. Only the fields selected by `kind` are read:
+/// BOOL/INT/TEMPLATE/MODULE_HANDLE use `integer`, FLOAT/LENGTH
+/// use `number`, STRING uses `text`, COLOR uses `color`, ARRAY uses
+/// `items/item_count`, DICT uses `bindings/binding_count`, and MODULE uses
+/// `text` with `bindings/binding_count`.
 /// `reserved` must be zero. Nested inputs are limited to depth 64 and one
 /// million nodes per request. These are C contract kinds, not Rust enum values.
 #[repr(C)]
@@ -510,6 +591,68 @@ pub struct TypstOutlineView {
     pub dashes: *const f64,
     pub dash_count: usize,
     pub run_count: usize,
+}
+/// An element that carries a label, in the layout's y-down points.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TypstLabeledElement {
+    /// The label's name, without angle brackets.
+    pub label: TypstStr,
+    /// Where the element starts: the position Typst's `location.position()`
+    /// reports in a document. Inline and math content start on their baseline;
+    /// an element that begins a paragraph starts at the paragraph's top left.
+    pub position: TypstPoint,
+    /// Conservative extent with TYPST_LABEL_EXTENT: the logical rectangle of
+    /// each frame the element lays out and what its content paints, like
+    /// `typst_layout_bounds`. Clips may make the visible extent smaller.
+    pub min: TypstPoint,
+    pub max: TypstPoint,
+    pub flags: u32,
+}
+/// One place where Typst code reads a member of a name: the identifier
+/// `member` in `name.member` or in `import name: member`. `start` and `end`
+/// are its byte range in the queried source.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstMemberUse {
+    pub member: TypstStr,
+    pub start: usize,
+    pub end: usize,
+}
+/// Borrows the uses found by `typst_source_member_uses`, in source order.
+/// `flags` may contain TYPST_MEMBER_USES_REBOUND and TYPST_MEMBER_USES_WHOLE.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstMemberUseView {
+    pub uses: *const TypstMemberUse,
+    pub use_count: usize,
+    pub flags: u32,
+    pub reserved: u32,
+}
+impl Default for TypstMemberUseView {
+    fn default() -> Self {
+        Self {
+            uses: std::ptr::null(),
+            use_count: 0,
+            flags: 0,
+            reserved: 0,
+        }
+    }
+}
+/// Borrows a layout's labeled elements, in document order.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TypstLabelView {
+    pub elements: *const TypstLabeledElement,
+    pub element_count: usize,
+}
+impl Default for TypstLabelView {
+    fn default() -> Self {
+        Self {
+            elements: std::ptr::null(),
+            element_count: 0,
+        }
+    }
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

@@ -3,7 +3,8 @@
 import paint.*
 import geometry.compound
 
-setup_typst { set text(size: 10pt) }
+theme := typ.module[#let style(body) = { set text(size: 10pt); body }]
+typ.show theme.style
 caption := typ[$V = I R$]
 caption_position := (15mm, 37mm)
 padding := 2mm

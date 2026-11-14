@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65541
+#define TYPST_ABI_VERSION 65544
 
 #define TYPST_CAP_PDF 1
 
@@ -41,6 +41,32 @@
  */
 #define TYPST_CAP_LAYOUT_TEMPLATES 128
 
+/**
+ * Labeled elements of a layout, with their positions and extents.
+ */
+#define TYPST_CAP_LAYOUT_LABELS 256
+
+/**
+ * Module values among layout bindings.
+ */
+#define TYPST_CAP_BINDING_MODULES 512
+
+/**
+ * `typst_context_eval`, the module handles it returns in layout and
+ * evaluation options, and TYPST_VALUE_MODULE_HANDLE inputs.
+ */
+#define TYPST_CAP_MODULE_HANDLES 1024
+
+/**
+ * Show rules given as values in layout options.
+ */
+#define TYPST_CAP_SHOW_VALUES 2048
+
+/**
+ * `typst_source_member_uses`.
+ */
+#define TYPST_CAP_MEMBER_USES 4096
+
 #define TYPST_VALUE_NONE 0
 
 #define TYPST_VALUE_BOOL 1
@@ -67,6 +93,32 @@
  * template's function, for `show:` rules or direct calls.
  */
 #define TYPST_VALUE_TEMPLATE 9
+
+/**
+ * A module whose members are `bindings`, named by `text` or anonymous when
+ * `text` is empty. Unlike dictionary keys, Typst code calls a module's
+ * function members directly, as `lib.f(x)`, in markup and math alike.
+ */
+#define TYPST_VALUE_MODULE 10
+
+/**
+ * `integer` indexes the options' module handles; the value is the module
+ * that handle retains.
+ */
+#define TYPST_VALUE_MODULE_HANDLE 11
+
+/**
+ * The source binds the queried name itself, for example with `let` or as a
+ * parameter, so some reported uses may not refer to the outer value.
+ */
+#define TYPST_MEMBER_USES_REBOUND 1
+
+/**
+ * The source also uses the queried name as a whole value: it occurs other
+ * than as the owner of a reported member and other than where the source
+ * binds it, as in `f(name)`, `#name` or `import name: *`.
+ */
+#define TYPST_MEMBER_USES_WHOLE 2
 
 #define TYPST_CONTEXT_NO_BUILTIN_FONTS 1
 
@@ -158,6 +210,12 @@
 
 #define TYPST_SCENE_ITEM_ISOLATE_TRANSFORM 1
 
+/**
+ * The labeled element's `min` and `max` hold its extent. Without it, the
+ * element lays out nothing, such as labeled metadata.
+ */
+#define TYPST_LABEL_EXTENT 1
+
 #define TYPST_GRADIENT_LINEAR 0
 
 #define TYPST_GRADIENT_RADIAL 1
@@ -172,6 +230,10 @@ typedef struct TypstDocument TypstDocument;
 
 typedef struct TypstLayout TypstLayout;
 
+typedef struct TypstMemberUses TypstMemberUses;
+
+typedef struct TypstModule TypstModule;
+
 typedef struct TypstOutline TypstOutline;
 
 typedef struct TypstScene TypstScene;
@@ -185,6 +247,28 @@ typedef struct TypstStr {
   const uint8_t *data;
   size_t len;
 } TypstStr;
+
+/**
+ * One place where Typst code reads a member of a name: the identifier
+ * `member` in `name.member` or in `import name: member`. `start` and `end`
+ * are its byte range in the queried source.
+ */
+typedef struct TypstMemberUse {
+  struct TypstStr member;
+  size_t start;
+  size_t end;
+} TypstMemberUse;
+
+/**
+ * Borrows the uses found by `typst_source_member_uses`, in source order.
+ * `flags` may contain TYPST_MEMBER_USES_REBOUND and TYPST_MEMBER_USES_WHOLE.
+ */
+typedef struct TypstMemberUseView {
+  const struct TypstMemberUse *uses;
+  size_t use_count;
+  uint32_t flags;
+  uint32_t reserved;
+} TypstMemberUseView;
 
 typedef struct TypstVersionInfo {
   uint32_t abi_major;
@@ -242,10 +326,11 @@ typedef struct TypstColor {
 } TypstColor;
 
 /**
- * Borrowed native-value input. Only the field selected by `kind` is read:
- * BOOL/INT/TEMPLATE use `integer`, FLOAT/LENGTH use `number`, STRING uses
- * `text`, COLOR uses `color`, ARRAY uses `items/item_count`, DICT uses
- * `bindings/binding_count`.
+ * Borrowed native-value input. Only the fields selected by `kind` are read:
+ * BOOL/INT/TEMPLATE/MODULE_HANDLE use `integer`, FLOAT/LENGTH
+ * use `number`, STRING uses `text`, COLOR uses `color`, ARRAY uses
+ * `items/item_count`, DICT uses `bindings/binding_count`, and MODULE uses
+ * `text` with `bindings/binding_count`.
  * `reserved` must be zero. Nested inputs are limited to depth 64 and one
  * million nodes per request. These are C contract kinds, not Rust enum values.
  */
@@ -271,6 +356,24 @@ typedef struct TypstBinding {
 } TypstBinding;
 
 /**
+ * Pass by pointer; null selects defaults. `bindings` are names visible to the
+ * evaluated source from an enclosing scope; they are not members of the
+ * module. TYPST_VALUE_MODULE_HANDLE inputs among them index `module_handles`;
+ * template inputs have nothing to refer to here.
+ */
+typedef struct TypstEvalOptions {
+  uint32_t struct_size;
+  /**
+   * No flags are defined; must be zero.
+   */
+  uint32_t flags;
+  const struct TypstBinding *bindings;
+  size_t binding_count;
+  const struct TypstModule *const *module_handles;
+  size_t module_handle_count;
+} TypstEvalOptions;
+
+/**
  * Independent Typst code whose value is a function, such as
  * `body => { set text(red); body }`, evaluated once per request in its own
  * scope with its own borrowed bindings. Optional setup code runs first in
@@ -288,6 +391,17 @@ typedef struct TypstTemplate {
   const struct TypstBinding *bindings;
   size_t binding_count;
 } TypstTemplate;
+
+/**
+ * A show rule given as a value, converted like a binding value. Each path
+ * entry names a field read from the value in turn, as `value.a.b` would; the
+ * result must be a function. Frozen array element layout.
+ */
+typedef struct TypstShowValue {
+  const struct TypstValueInput *value;
+  const struct TypstStr *path;
+  size_t path_count;
+} TypstShowValue;
 
 typedef struct TypstLayoutOptions {
   uint32_t struct_size;
@@ -327,6 +441,19 @@ typedef struct TypstLayoutOptions {
    */
   const size_t *shows;
   size_t show_count;
+  /**
+   * Borrowed modules that `typst_context_eval` made. The request's values
+   * and templates refer to them by index with TYPST_VALUE_MODULE_HANDLE.
+   * Requires TYPST_CAP_MODULE_HANDLES.
+   */
+  const struct TypstModule *const *module_handles;
+  size_t module_handle_count;
+  /**
+   * Show rules given as values, applied inside `shows`, outermost first.
+   * Requires TYPST_CAP_SHOW_VALUES.
+   */
+  const struct TypstShowValue *show_values;
+  size_t show_value_count;
 } TypstLayoutOptions;
 
 /**
@@ -359,6 +486,38 @@ typedef struct TypstPoint {
   double x;
   double y;
 } TypstPoint;
+
+/**
+ * An element that carries a label, in the layout's y-down points.
+ */
+typedef struct TypstLabeledElement {
+  /**
+   * The label's name, without angle brackets.
+   */
+  struct TypstStr label;
+  /**
+   * Where the element starts: the position Typst's `location.position()`
+   * reports in a document. Inline and math content start on their baseline;
+   * an element that begins a paragraph starts at the paragraph's top left.
+   */
+  struct TypstPoint position;
+  /**
+   * Conservative extent with TYPST_LABEL_EXTENT: the logical rectangle of
+   * each frame the element lays out and what its content paints, like
+   * `typst_layout_bounds`. Clips may make the visible extent smaller.
+   */
+  struct TypstPoint min;
+  struct TypstPoint max;
+  uint32_t flags;
+} TypstLabeledElement;
+
+/**
+ * Borrows a layout's labeled elements, in document order.
+ */
+typedef struct TypstLabelView {
+  const struct TypstLabeledElement *elements;
+  size_t element_count;
+} TypstLabelView;
 
 typedef struct TypstPdfOptions {
   uint32_t struct_size;
@@ -554,6 +713,45 @@ TypstStatus typst_source_block(struct TypstStr source,
                                struct TypstDiagnostics **diagnostics);
 
 /**
+ * Finds where `source`, parsed in `syntax` mode (a TYPST_SYNTAX_* value), reads
+ * members of the identifier `name`: each `name.member` in code, markup or math,
+ * and each member listed in `import name: …`, in source order. A wildcard
+ * import or other use of `name` as a whole value names no member; the view
+ * reports it with TYPST_MEMBER_USES_WHOLE. Uses through another
+ * value, as in `let m = name; m.x`, are not found. Syntax errors do not stop
+ * the query. Available since ABI 1.8 with TYPST_CAP_MEMBER_USES.
+ *
+ * # Safety
+ * `source` and `name` must be readable views for the call. `out` must be a
+ * non-null writable handle slot; release the handle with
+ * `typst_member_uses_release`. The optional diagnostics slot follows the module
+ * pointer contract.
+ */
+TypstStatus typst_source_member_uses(struct TypstStr source,
+                                     uint32_t syntax,
+                                     struct TypstStr name,
+                                     struct TypstMemberUses **out,
+                                     struct TypstDiagnostics **diagnostics);
+
+/**
+ * Borrows the uses a `typst_source_member_uses` handle found.
+ *
+ * # Safety
+ * `uses` must be live. `out` must point to aligned writable storage for one
+ * `TypstMemberUseView`. Keep the handle alive for every access to the view.
+ */
+TypstStatus typst_member_uses_view(const struct TypstMemberUses *uses,
+                                   struct TypstMemberUseView *out);
+
+/**
+ * Releases a member-use handle; null is a no-op.
+ *
+ * # Safety
+ * A non-null `value` must be a handle owned by the caller from this library.
+ */
+void typst_member_uses_release(const struct TypstMemberUses *value);
+
+/**
  * The returned strings are static and remain valid while the library is mapped.
  *
  * # Safety
@@ -589,6 +787,34 @@ TypstStatus typst_context_compile(const struct TypstContext *context,
                                   struct TypstStr source_name,
                                   struct TypstDocument **out,
                                   struct TypstDiagnostics **diagnostics);
+
+/**
+ * Evaluates `source` like an imported file and retains the resulting module:
+ * the file's top-level definitions become the members of a module named by
+ * the source name's file stem, and the content it produces is kept with the
+ * module, unused. List the handle in the `module_handles` of layout or later
+ * evaluation options, where TYPST_VALUE_MODULE_HANDLE inputs refer to it;
+ * the source is not evaluated again. The module owns its values and the
+ * source text that diagnostics raised later inside its functions refer to, so
+ * it can outlive `context`, the options and the handles it was made with.
+ * A source name must be nonempty and differ from those of the requests,
+ * templates and other handles the module is used with. Warnings are
+ * returned with success. Available since ABI 1.8 with
+ * TYPST_CAP_MODULE_HANDLES.
+ *
+ * # Safety
+ * `context` must be live. Both source views must follow the module pointer
+ * contract, and so must `config` unless it is null, which selects defaults,
+ * with its nested views and live module handles. `out` must be a non-null
+ * writable handle slot; `diagnostics` is optional. Release the returned
+ * module with `typst_module_release` and any diagnostic owner separately.
+ */
+TypstStatus typst_context_eval(const struct TypstContext *context,
+                               struct TypstStr source,
+                               struct TypstStr source_name,
+                               const struct TypstEvalOptions *config,
+                               struct TypstModule **out,
+                               struct TypstDiagnostics **diagnostics);
 
 /**
  * Lays out one request into an independently owned native layout.
@@ -645,6 +871,19 @@ TypstStatus typst_layout_metrics(const struct TypstLayout *layout, struct TypstM
  * disjoint from the layout, receiving the minimum and maximum respectively.
  */
 TypstStatus typst_layout_bounds(const struct TypstLayout *layout, struct TypstPoint *out);
+
+/**
+ * Borrows every labeled element of a layout, read from the start and end tags
+ * Typst places around content that carries a label. Elements appear in
+ * document order, a label as often as it occurs. Records are made on the
+ * first call and live as long as the layout. Available since ABI 1.6.
+ *
+ * # Safety
+ * `layout` must be live. `out` must point to aligned writable storage for one
+ * `TypstLabelView`, disjoint from the layout. Keep a layout reference alive
+ * for every access to the returned view; do not mutate or free it.
+ */
+TypstStatus typst_layout_labels(const struct TypstLayout *layout, struct TypstLabelView *out);
 
 /**
  * Returns the number of pages, or zero for a null document.
@@ -980,6 +1219,24 @@ void typst_diagnostics_retain(const struct TypstDiagnostics *value);
  * library. This consumes that reference; keep another owner for any live views.
  */
 void typst_diagnostics_release(const struct TypstDiagnostics *value);
+
+/**
+ * Acquires one additional module reference; null is a no-op.
+ *
+ * # Safety
+ * A non-null `value` must be a live module from this library, with an existing
+ * reference held through the call. Release the new reference exactly once.
+ */
+void typst_module_retain(const struct TypstModule *value);
+
+/**
+ * Releases one owned module reference; null is a no-op.
+ *
+ * # Safety
+ * A non-null `value` must be a module reference owned by the caller from this
+ * library. This consumes that reference; do not reuse it without another owner.
+ */
+void typst_module_release(const struct TypstModule *value);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -32,9 +32,9 @@ fn geometryTolerance(tolerance: f64) f64 {
     return tolerance * 0.75;
 }
 
-pub fn strokeFootprint(allocator: std.mem.Allocator, scratch: std.mem.Allocator, curve: Path, pen: *const DisplayList.Pen, tolerance: ?f64) !Path {
+pub fn strokeFootprint(allocator: std.mem.Allocator, curve: Path, pen: *const DisplayList.Pen, tolerance: ?f64) !Path {
     const geometric = if (pen.motion) |motion| geometryTolerance(tolerance orelse motion.tolerance) else tolerance;
-    return pens.footprint(allocator, scratch, curve, pen, geometric);
+    return pens.footprint(allocator, curve, pen, geometric);
 }
 
 pub fn motionFootprint(allocator: std.mem.Allocator, center: Path, pen: *const DisplayList.Pen, options: pens.StrokeOptions) !Path {
@@ -57,7 +57,7 @@ pub fn resolvePath(allocator: std.mem.Allocator, center: Path, style: *const Dis
     var settings = options;
     if (pen.motion) |motion| settings.tolerance = geometryTolerance(motion.tolerance);
     const representation: pens.Representation = if (style.gradientFor(.stroke) != null) .outline else .normalized_stroke;
-    return pens.resolveStroke(allocator, allocator, center, pen, settings, representation);
+    return pens.resolveStroke(allocator, center, pen, settings, representation);
 }
 
 /// Bounds in picture coordinates for the representation used by the renderer.

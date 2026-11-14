@@ -33,23 +33,35 @@ pub const TypstBatchDiagnostic = struct {
 /// Request-local immutable values. The host borrows the descriptor and values
 /// only for the callback; no callback into Huak is needed during evaluation.
 pub const TypstBinding = struct { name: []const u8, value: Value };
+/// A member of a typ.module value applied as a show rule. `path` names the
+/// member, with '.' between the names of nested members.
+pub const TypstShow = struct { value: Value, path: []const u8 };
 pub const TypstRequest = struct {
     source: []const u8,
     bindings: []const TypstBinding = &.{},
-    /// show_rule values applied around the content, outermost first.
-    shows: []const Value = &.{},
+    /// Applied around the content, outermost first.
+    shows: []const TypstShow = &.{},
+    /// The code uses `huak` as a whole value, so the host binds it even when
+    /// `bindings` is empty.
+    whole: bool = false,
 };
 /// Where Typst code given to the host begins: its module's name and the
 /// 0-based line and byte column of the code's first byte in that source.
 pub const TypstOrigin = struct { name: []const u8, line: usize, column: usize };
+/// Typst file content to make a typ.module from, borrowed for the callback.
+/// `name` names the Typst module, as a file's stem would; `bindings` are
+/// the Huak values its code reads; `whole` is as in a request; `origin`
+/// locates the code.
+pub const TypstModule = struct { code: []const u8, name: []const u8, bindings: []const TypstBinding, whole: bool = false, origin: TypstOrigin };
 
-const invalid_captures = "typst_expose requires finite numbers, bool, UTF-8 strings, lengths, colors or show rules; typst_show requires show rules";
+const invalid_captures = "Typst code can read finite numbers, bool, UTF-8 strings, lengths, colors and typ.module values from huak; typ.show requires typ.module values";
 
-/// Captured operands split into data bindings and the shows marked by empty
-/// names. Both slices are allocated in one allocator.
+/// Captured operands split into data bindings and the shows marked by a
+/// leading '.' before their member path. Both slices are allocated in one
+/// allocator.
 const Captures = struct {
     bindings: []TypstBinding,
-    shows: []Value,
+    shows: []TypstShow,
 
     fn deinit(self: Captures, allocator: std.mem.Allocator) void {
         allocator.free(self.bindings);
@@ -64,10 +76,10 @@ fn captures(allocator: std.mem.Allocator, operands: []const Value) std.mem.Alloc
     var index: usize = 0;
     while (index < operands.len) : (index += 2) {
         const name = operands[index];
-        if (name != .string or !std.unicode.utf8ValidateSlice(name.string)) return null;
+        if (name != .string or name.string.len == 0 or !std.unicode.utf8ValidateSlice(name.string)) return null;
         const value = operands[index + 1];
-        if (name.string.len == 0) {
-            if (value != .handle or value.handle.kind != .show_rule) return null;
+        if (name.string[0] == '.') {
+            if (name.string.len == 1 or value != .handle or value.handle.kind != .typst_module) return null;
             shows += 1;
             continue;
         }
@@ -80,21 +92,21 @@ fn captures(allocator: std.mem.Allocator, operands: []const Value) std.mem.Alloc
                 _ = units.toPoints(quantity) catch break :blk false;
                 break :blk true;
             },
-            .handle => |handle| handle.kind == .color or handle.kind == .show_rule,
+            .handle => |handle| handle.kind == .color or handle.kind == .typst_module,
             else => false,
         };
         if (!valid) return null;
     }
     const bindings = try allocator.alloc(TypstBinding, operands.len / 2 - shows);
     errdefer allocator.free(bindings);
-    const rules = try allocator.alloc(Value, shows);
+    const rules = try allocator.alloc(TypstShow, shows);
     var named: usize = 0;
     var shown: usize = 0;
     index = 0;
     while (index < operands.len) : (index += 2) {
         const name = operands[index].string;
-        if (name.len == 0) {
-            rules[shown] = operands[index + 1];
+        if (name[0] == '.') {
+            rules[shown] = .{ .value = operands[index + 1], .path = name[1..] };
             shown += 1;
         } else {
             bindings[named] = .{ .name = name, .value = operands[index + 1] };
@@ -134,21 +146,14 @@ pub const Host = struct {
     pub inline fn typesetBatch(self: Host, allocator: std.mem.Allocator, requests: []const TypstRequest, values: []Value, diagnostic: *TypstBatchDiagnostic) anyerror!void {
         return self.vtable.typst_batch.?(self.ptr, allocator, requests, values, diagnostic);
     }
-    pub inline fn showRule(self: Host, allocator: std.mem.Allocator, code: []const u8, bindings: []const TypstBinding, origin: TypstOrigin) anyerror!Value {
-        return self.vtable.show_rule.?(self.ptr, allocator, code, bindings, origin);
-    }
-    pub inline fn setupTypst(self: Host, source_text: []const u8) anyerror!void {
-        return self.vtable.setup_typst.?(self.ptr, source_text);
-    }
-    pub fn selectModule(self: Host, index: u32) anyerror!void {
-        if (self.vtable.module) |select| try select(self.ptr, index);
+    pub inline fn typstModule(self: Host, allocator: std.mem.Allocator, module: TypstModule) anyerror!Value {
+        return self.vtable.typst_module.?(self.ptr, allocator, module);
     }
     pub fn errorMessage(self: Host) []const u8 {
         return if (self.vtable.error_message) |message| message(self.ptr) else "";
     }
 
     pub const VTable = struct {
-        module: ?*const fn (?*anyopaque, u32) anyerror!void = null,
         /// Arguments are borrowed until the first reentrant call. A host that
         /// invokes a script function must copy the values it still needs first.
         call_builtin: ?*const fn (?*anyopaque, std.mem.Allocator, builtin.Id, []const Value, ?*Machine) anyerror!Value = null,
@@ -158,10 +163,9 @@ pub const Host = struct {
         /// Success initializes every output. Errors initialize only the diagnostic's
         /// completed prefix. Neither descriptor slice may be retained by the host.
         typst_batch: ?*const fn (?*anyopaque, std.mem.Allocator, []const TypstRequest, []Value, *TypstBatchDiagnostic) anyerror!void = null,
-        /// Makes a show_rule from Typst function code, snapshotting the
-        /// bindings and the selected module's setup. Inputs are borrowed.
-        show_rule: ?*const fn (?*anyopaque, std.mem.Allocator, []const u8, []const TypstBinding, TypstOrigin) anyerror!Value = null,
-        setup_typst: ?*const fn (?*anyopaque, []const u8) anyerror!void = null,
+        /// Makes a typ.module from the content of a Typst file, snapshotting
+        /// the bindings its code reads. Inputs are borrowed.
+        typst_module: ?*const fn (?*anyopaque, std.mem.Allocator, TypstModule) anyerror!Value = null,
         error_message: ?*const fn (?*anyopaque) []const u8 = null,
     };
 
@@ -754,39 +758,35 @@ fn runUntil(self: *Machine, task_end: ?usize, depth: usize) Error!Value {
             },
             .typst => {
                 if (try self.typesetBatch(frame_index, function, ip)) continue;
-                self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
                 const text = try self.stringConstant(instruction.a);
                 if (self.host.vtable.typst == null) return self.fail("Typst content requires a host", .{});
-                const length = std.math.mul(usize, instruction.b, 2) catch return self.fail("invalid Typst capture count", .{});
+                const operands = instruction.typstCaptures();
+                const length = @as(usize, operands.pairs) * 2;
                 if (length > self.stack.items.len) return self.fail("invalid Typst capture operands", .{});
                 const offset = self.stack.items.len - length;
                 const captured = (try captures(self.gpa, self.stack.items[offset..])) orelse return self.fail(invalid_captures, .{});
                 defer captured.deinit(self.gpa);
                 self.stack.shrinkRetainingCapacity(offset);
-                const result = self.host.typeset(self.arena.allocator(), .{ .source = text, .bindings = captured.bindings, .shows = captured.shows }) catch |err| return self.nativeFailure(err);
+                const result = self.host.typeset(self.arena.allocator(), .{ .source = text, .bindings = captured.bindings, .shows = captured.shows, .whole = operands.whole }) catch |err| return self.nativeFailure(err);
                 try self.checkFiniteExternal(result);
                 try self.push(try self.coerce(result, .text));
             },
-            .show_rule => {
-                self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
+            .typst_module => {
                 const code = try self.stringConstant(instruction.a);
-                if (self.host.vtable.show_rule == null) return self.fail("show_rule requires a Typst host", .{});
-                const length = std.math.mul(usize, instruction.b, 2) catch return self.fail("invalid Typst capture count", .{});
-                if (length > self.stack.items.len) return self.fail("invalid Typst capture operands", .{});
-                const offset = self.stack.items.len - length;
-                const captured = (try captures(self.gpa, self.stack.items[offset..])) orelse return self.fail(invalid_captures, .{});
+                if (self.host.vtable.typst_module == null) return self.fail("typ.module requires a Typst host", .{});
+                const operands = instruction.typstCaptures();
+                const length = @as(usize, operands.pairs) * 2;
+                if (length >= self.stack.items.len) return self.fail("invalid Typst capture operands", .{});
+                const offset = self.stack.items.len - length - 1;
+                const name = self.stack.items[offset];
+                if (name != .string or name.string.len == 0 or !std.unicode.utf8ValidateSlice(name.string)) return self.fail("invalid Typst capture operands", .{});
+                const captured = (try captures(self.gpa, self.stack.items[offset + 1 ..])) orelse return self.fail(invalid_captures, .{});
                 defer captured.deinit(self.gpa);
                 if (captured.shows.len != 0) return self.fail("invalid Typst capture operands", .{});
                 self.stack.shrinkRetainingCapacity(offset);
                 const origin = self.typstOrigin(if (instruction.module == std.math.maxInt(u32)) function.module else instruction.module, instruction.span.start);
-                const result = self.host.showRule(self.arena.allocator(), code, captured.bindings, origin) catch |err| return self.nativeFailure(err);
-                try self.push(try self.coerce(result, .show_rule));
-            },
-            .setup_typst => {
-                self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
-                const text = try self.stringConstant(instruction.a);
-                if (self.host.vtable.setup_typst == null) return self.fail("Typst setup requires a host", .{});
-                self.host.setupTypst(text) catch |err| return self.nativeFailure(err);
+                const result = self.host.typstModule(self.arena.allocator(), .{ .code = code, .name = name.string, .bindings = captured.bindings, .whole = operands.whole, .origin = origin }) catch |err| return self.nativeFailure(err);
+                try self.push(try self.coerce(result, .typst_module));
             },
             .halt => {
                 if (self.frames.items.len != 1) return self.fail("halt is only valid in the script", .{});
@@ -921,7 +921,7 @@ fn planText(self: *Machine, allocator: std.mem.Allocator, frame_index: usize, fu
     if (position + 1 >= function.code.len) return null;
     const produce = function.code[position];
     if (produce.op != .typst or produce.a >= self.program.constants.len or self.program.constants[produce.a] != .string) return null;
-    const count = std.math.mul(usize, produce.b, 2) catch return null;
+    const count = @as(usize, produce.typstCaptures().pairs) * 2;
     const values = if (first) blk: {
         if (count > self.stack.items.len) return null;
         break :blk self.stack.items[self.stack.items.len - count ..];
@@ -935,7 +935,7 @@ fn planText(self: *Machine, allocator: std.mem.Allocator, frame_index: usize, fu
         .store_local => if (store.a >= function.local_types.len or function.local_types[store.a] != .text) return null,
         else => return null,
     }
-    return .{ .begin = begin, .produce = position, .end = position + 2, .store = store, .request = .{ .source = self.program.constants[produce.a].string, .bindings = captured.bindings, .shows = captured.shows } };
+    return .{ .begin = begin, .produce = position, .end = position + 2, .store = store, .request = .{ .source = self.program.constants[produce.a].string, .bindings = captured.bindings, .shows = captured.shows, .whole = produce.typstCaptures().whole } };
 }
 
 fn chargeText(self: *Machine, frame_index: usize, function: bytecode.Function, begin: usize, end: usize) Error!void {
@@ -973,7 +973,6 @@ fn typesetBatch(self: *Machine, frame_index: usize, function: bytecode.Function,
         next = assignment.end;
     }
     if (count < 2) return false;
-    self.host.selectModule(function.module) catch |err| return self.nativeFailure(err);
     self.stack.shrinkRetainingCapacity(self.stack.items.len - (requests[0].bindings.len + requests[0].shows.len) * 2);
     var diagnostic: TypstBatchDiagnostic = .{};
     var cause: ?anyerror = null;
@@ -1557,7 +1556,7 @@ fn checkFiniteLeaf(self: *Machine, value: Value) Error!void {
             return self.fail("arithmetic produced a non-finite vector", .{});
         },
         .handle => |handle| switch (handle.kind) {
-            .path, .shape, .color, .pen, .transform, .solver, .variable, .linear, .solution, .text, .measure, .show_rule => {},
+            .path, .shape, .color, .pen, .transform, .solver, .variable, .linear, .solution, .text, .measure, .typst_module, .anchor => {},
             else => return self.fail("host returned an invalid native handle type", .{}),
         },
         else => {},
@@ -3975,19 +3974,18 @@ test "dot calls evaluate the receiver once before arguments and use the builtin 
 }
 
 /// Pure VM probes check batching and sequencing, independently of native FFI
-/// acceptance. Source blocks in these fixtures contain no nested delimiters.
+/// acceptance.
 const TypstBatchProbe = struct {
     single_calls: usize = 0,
     batch_sizes: [256]usize = @splat(0),
     batch_count: usize = 0,
     seen: [256][]const u8 = undefined,
     captures: [256][]const TypstBinding = undefined,
-    shows: [256][]const Value = undefined,
-    rules: [16]struct { code: []const u8, bindings: []const TypstBinding, origin: TypstOrigin } = undefined,
-    rule_count: usize = 0,
-    generations: [256]usize = undefined,
+    shows: [256][]const TypstShow = undefined,
+    whole: [256]bool = @splat(false),
+    modules: [16]TypstModule = undefined,
+    module_count: usize = 0,
     seen_count: usize = 0,
-    generation: usize = 0,
     fields: usize = 0,
     effects: usize = 0,
     fatal_index: ?usize = null,
@@ -4003,8 +4001,8 @@ const TypstBatchProbe = struct {
         const index = self.seen_count;
         self.seen[index] = text;
         self.captures[index] = try allocator.dupe(TypstBinding, request.bindings);
-        self.shows[index] = try allocator.dupe(Value, request.shows);
-        self.generations[index] = self.generation;
+        self.shows[index] = try allocator.dupe(TypstShow, request.shows);
+        self.whole[index] = request.whole;
         self.seen_count += 1;
         if (std.mem.indexOf(u8, text, "FAIL") != null) return error.TypesetFailed;
         return .{ .handle = .{ .kind = .text, .index = index } };
@@ -4039,15 +4037,11 @@ const TypstBatchProbe = struct {
         }
     }
 
-    fn setup(context: ?*anyopaque, _: []const u8) !void {
-        from(context).generation += 1;
-    }
-
-    fn rule(context: ?*anyopaque, allocator: std.mem.Allocator, code: []const u8, bindings: []const TypstBinding, origin: TypstOrigin) !Value {
+    fn makeModule(context: ?*anyopaque, allocator: std.mem.Allocator, module: TypstModule) !Value {
         const self = from(context);
-        self.rules[self.rule_count] = .{ .code = code, .bindings = try allocator.dupe(TypstBinding, bindings), .origin = origin };
-        self.rule_count += 1;
-        return .{ .handle = .{ .kind = .show_rule, .index = self.rule_count - 1 } };
+        self.modules[self.module_count] = .{ .code = module.code, .name = try allocator.dupe(u8, module.name), .bindings = try allocator.dupe(TypstBinding, module.bindings), .whole = module.whole, .origin = module.origin };
+        self.module_count += 1;
+        return .{ .handle = .{ .kind = .typst_module, .index = self.module_count - 1 } };
     }
 
     fn field(context: ?*anyopaque, _: std.mem.Allocator, text: Value, _: []const u8) !Value {
@@ -4060,7 +4054,7 @@ const TypstBatchProbe = struct {
         return .unit;
     }
 
-    const host_vtable: Host.VTable = .{ .typst = one, .typst_batch = batch, .show_rule = rule, .setup_typst = setup, .field = field, .call_builtin = effect, .error_message = message };
+    const host_vtable: Host.VTable = .{ .typst = one, .typst_batch = batch, .typst_module = makeModule, .field = field, .call_builtin = effect, .error_message = message };
     const single_host_vtable = blk: {
         var table = host_vtable;
         table.typst_batch = null;
@@ -4076,27 +4070,20 @@ const TypstBatchProbe = struct {
         return self.message_storage[0..self.message_length];
     }
 
-    fn block(_: *anyopaque, text: []const u8) !usize {
-        const close: u8 = if (text[0] == '[') ']' else '}';
-        return (std.mem.indexOfScalar(u8, text, close) orelse return error.UnclosedFixture) + 1;
-    }
-
     fn compile(input: []const u8, optimize: bool) !bytecode.Program {
         const compiler = @import("compiler.zig");
-        var marker: u8 = 0;
         var diagnostic: ?source.Diagnostic = null;
-        return compiler.compile(std.testing.allocator, input, "typst-batch-vm.huak", .{ .optimize = optimize, .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = block } } }, &diagnostic) catch |err| {
+        return compiler.compile(std.testing.allocator, input, "typst-batch-vm.huak", .{ .optimize = optimize, .source_parser = @import("Parser.zig").TestSourceParser.parser }, &diagnostic) catch |err| {
             if (diagnostic) |detail| std.debug.print("{s}\n", .{detail.text()});
             return err;
         };
     }
 };
 
-test "adjacent text assignments batch across neither settings nor result observations" {
+test "adjacent text assignments batch until a result is observed" {
     const input =
         \\a:=typ[A]
         \\b:=typ[B]
-        \\setup_typst { set text(size:20pt) }
         \\c:=typ[C]
         \\d:=typ[D]
         \\width:=c.width
@@ -4112,8 +4099,7 @@ test "adjacent text assignments batch across neither settings nor result observa
         defer machine.deinit();
         _ = try machine.execute(&.{});
         try std.testing.expectEqual(@as(usize, 0), probe.single_calls);
-        try std.testing.expectEqualSlices(usize, &.{ 2, 2, 2 }, probe.batch_sizes[0..probe.batch_count]);
-        try std.testing.expectEqualSlices(usize, &.{ 0, 0, 1, 1, 1, 1 }, probe.generations[0..probe.seen_count]);
+        try std.testing.expectEqualSlices(usize, &.{ 4, 2 }, probe.batch_sizes[0..probe.batch_count]);
         try std.testing.expectEqual(@as(usize, 1), probe.fields);
         try std.testing.expectEqual(@as(usize, 1), probe.effects);
         try std.testing.expectEqual(units.fromPoints(3), machine.getGlobal("width").?.quantity);
@@ -4123,7 +4109,7 @@ test "adjacent text assignments batch across neither settings nor result observa
         _ = try serial.execute(&.{});
         try std.testing.expectEqual(serial.steps, machine.steps);
         try std.testing.expectEqualDeep(serial.globals, machine.globals);
-        try std.testing.expectEqualSlices(usize, serial_probe.generations[0..serial_probe.seen_count], probe.generations[0..probe.seen_count]);
+        try std.testing.expectEqual(serial_probe.seen_count, probe.seen_count);
     }
 }
 
@@ -4311,21 +4297,45 @@ test "text batching honors entry jumps and repeated target assignments" {
     try std.testing.expectEqual(@as(u64, 6), machine.steps);
 }
 
+test "Typst requests tell the host when the code uses huak as a whole value" {
+    const input =
+        \\title:="t"
+        \\a:=typ[#repr(huak)]
+        \\b:=typ[#huak.title]
+        \\c:=typ[#repr(huak) #huak.title]
+        \\d:=typ[plain]
+        \\lib:=typ.module[#let all = huak]
+        \\other:=typ.module[#let nothing = 1]
+    ;
+    for ([_]bool{ false, true }) |optimize| for ([_]bool{ false, true }) |batched| {
+        var program = try TypstBatchProbe.compile(input, optimize);
+        defer program.deinit();
+        var probe: TypstBatchProbe = .{};
+        var machine = try Machine.init(std.testing.allocator, &program, probe.host(batched), .{});
+        defer machine.deinit();
+        _ = try machine.execute(&.{});
+        try std.testing.expectEqualSlices(bool, &.{ true, false, true, false }, probe.whole[0..probe.seen_count]);
+        try std.testing.expectEqual(@as(usize, 0), probe.captures[0].len);
+        try std.testing.expectEqual(@as(usize, 1), probe.captures[2].len);
+        try std.testing.expectEqual(@as(usize, 2), probe.module_count);
+        try std.testing.expect(probe.modules[0].whole and !probe.modules[1].whole);
+    };
+}
+
 test "Typst captures batch current scalar snapshots and local shadows without changing VM accounting" {
     const input =
         \\param initial:int=2
         \\count:=initial
-        \\typst_expose count,title
         \\title:="first"
-        \\a:=typ[A]
-        \\b:=typ[B]
+        \\a:=typ[A #huak.count #huak.title]
+        \\b:=typ[B #huak.count #huak.title]
         \\count=7;title="second"
-        \\c:=typ[C]
-        \\d:=typ[D]
+        \\c:=typ[C #huak.count #huak.title]
+        \\d:=typ[D #huak.count #huak.title]
         \\fn make_caption(count:int)->text
         \\title:="local"
-        \\x:=typ[X]
-        \\y:=typ[Y]
+        \\x:=typ[X #huak.count #huak.title]
+        \\y:=typ[Y #huak.count #huak.title]
         \\return y
         \\end
         \\result:=make_caption(11)
@@ -4372,20 +4382,19 @@ test "Typst captures batch current scalar snapshots and local shadows without ch
     }
 }
 
-test "show rules reach the host as data snapshots and typst_show rules batch around content" {
+test "typ.module values reach the host as snapshots of their reads and typ.show paths batch around content" {
     const input =
         \\size:=2pt
-        \\typst_expose size
-        \\outer:=show_rule b => [B]
+        \\outer:=typ.module[#let style(b) = text(huak.size, b)]
         \\size=5pt
-        \\inner:=show_rule b => [I]
-        \\typst_show outer
-        \\a:=typ[A]
-        \\c:=typ[C]
+        \\inner:=typ.module[#let style(b) = text(huak.size, b)]
+        \\typ.show outer.style
+        \\a:=typ[A #huak.size]
+        \\c:=typ[C #huak.size]
         \\fn caption()->text
-        \\    typst_show inner
-        \\    first:=typ[X]
-        \\    second:=typ[Y]
+        \\    typ.show inner.page.style
+        \\    first:=typ[X #huak.size]
+        \\    second:=typ[Y #huak.size]
         \\    return second
         \\end
         \\d:=caption()
@@ -4398,26 +4407,30 @@ test "show rules reach the host as data snapshots and typst_show rules batch aro
             var machine = try Machine.init(std.testing.allocator, &program, probe.host(batched), .{});
             defer machine.deinit();
             _ = try machine.execute(&.{});
-            try std.testing.expectEqual(@as(usize, 2), probe.rule_count);
-            for (probe.rules[0..2], [_]f64{ 2, 5 }, [_][]const u8{ "b => [B]", "b => [I]" }, [_]usize{ 2, 4 }) |rule, points, code, line| {
-                try std.testing.expectEqualStrings(code, rule.code);
-                try std.testing.expectEqual(@as(usize, 1), rule.bindings.len);
-                try std.testing.expectEqualStrings("size", rule.bindings[0].name);
-                try std.testing.expectEqual(points, try units.toPoints(rule.bindings[0].value.quantity));
-                try std.testing.expectEqualStrings("typst-batch-vm.huak", rule.origin.name);
-                try std.testing.expectEqual(line, rule.origin.line);
-                try std.testing.expectEqual(@as(usize, "outer:=show_rule ".len), rule.origin.column);
+            try std.testing.expectEqual(@as(usize, 2), probe.module_count);
+            for (probe.modules[0..2], [_]f64{ 2, 5 }, [_]usize{ 1, 3 }, [_][]const u8{ "outer", "inner" }) |module, points, line, name| {
+                try std.testing.expectEqualStrings(name, module.name);
+                try std.testing.expectEqualStrings("[#let style(b) = text(huak.size, b)]", module.code);
+                try std.testing.expectEqual(@as(usize, 1), module.bindings.len);
+                try std.testing.expectEqualStrings("size", module.bindings[0].name);
+                try std.testing.expectEqual(points, try units.toPoints(module.bindings[0].value.quantity));
+                try std.testing.expectEqualStrings("typst-batch-vm.huak", module.origin.name);
+                try std.testing.expectEqual(line, module.origin.line);
+                try std.testing.expectEqual(@as(usize, "outer:=typ.module".len), module.origin.column);
             }
             if (batched) try std.testing.expectEqualSlices(usize, &.{ 2, 2 }, probe.batch_sizes[0..probe.batch_count]);
             try std.testing.expectEqual(@as(usize, 4), probe.seen_count);
             for (0..4) |index| {
-                // Content reads the data current at each typ, then the rules outermost first.
+                // Content reads the data current at each typ, then the shows outermost first.
+                try std.testing.expectEqual(@as(usize, 1), probe.captures[index].len);
                 try std.testing.expectEqual(@as(f64, 5), try units.toPoints(probe.captures[index][0].value.quantity));
                 const shows = probe.shows[index];
                 try std.testing.expectEqual(@as(usize, if (index < 2) 1 else 2), shows.len);
-                for (shows, 0..) |rule, position| {
-                    try std.testing.expectEqual(Type.show_rule, rule.handle.kind);
-                    try std.testing.expectEqual(position, rule.handle.index);
+                const paths = [_][]const u8{ "style", "page.style" };
+                for (shows, paths[0..shows.len], 0..) |show, path, position| {
+                    try std.testing.expectEqual(Type.typst_module, show.value.handle.kind);
+                    try std.testing.expectEqual(position, show.value.handle.index);
+                    try std.testing.expectEqualStrings(path, show.path);
                 }
             }
         }
@@ -4425,7 +4438,7 @@ test "show rules reach the host as data snapshots and typst_show rules batch aro
 }
 
 test "Typst captured batch failure publishes only its successful prefix and does not read later operands early" {
-    var program = try TypstBatchProbe.compile("count:=4\ntypst_expose count\nfirst:=typ[First]\nsecond:=typ[FAIL second]\nthird:=typ[Third]\n", false);
+    var program = try TypstBatchProbe.compile("count:=4\nfirst:=typ[First #huak.count]\nsecond:=typ[FAIL second #huak.count]\nthird:=typ[Third #huak.count]\n", false);
     defer program.deinit();
     var probe: TypstBatchProbe = .{};
     var machine = try Machine.init(std.testing.allocator, &program, probe.host(true), .{});

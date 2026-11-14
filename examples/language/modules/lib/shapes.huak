@@ -1,5 +1,5 @@
 import paint.{rgb, pen, circle, draw}
-# Internal geometry choices stay private to this module.
+// Internal geometry choices stay private to this module.
 radius := 8
 ink := pen(rgb(0.12, 0.32, 0.65), 1.5)
 
@@ -8,9 +8,13 @@ fn marker(center: vec2) -> object
 end
 export marker
 
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(size: 14pt)
-}
+    body
+  }
+]
+typ.show theme.style
 export caption := typ[
     Imported geometry $x^2 + y^2$ Ω
 ]

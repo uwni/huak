@@ -23,9 +23,11 @@ const drawing =
     \\import paint.{picture, label, smooth, draw, pen, rgb}
     \\param offset: float=0
     \\pic:=picture(320,160)
-    \\setup_typst {
+    \\theme:=typ.module[#let style(body) = {
     \\ set text(size:14pt)
-    \\}
+    \\ body
+    \\}]
+    \\typ.show theme.style
     \\caption:=typ[
     \\ Native $sum_(i=1)^n i^2$ Ω
     \\]

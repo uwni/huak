@@ -4,11 +4,15 @@ param title = "Typed data Ω"
 param count: int = 42
 font_size := 14pt
 ink := rgb(0.15, 0.35, 0.7)
-typst_expose title, count, font_size, ink
 
-setup_typst {
-  set text(size: huak.font_size, fill: huak.ink)
-}
+// The module snapshots the size and ink its code reads when it is made.
+theme := typ.module[
+  #let style(body) = {
+    set text(size: huak.font_size, fill: huak.ink)
+    body
+  }
+]
+typ.show theme.style
 
 export plate := picture with width 110mm height 50mm
 default plate

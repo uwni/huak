@@ -1,6 +1,6 @@
 import paint.{rgb, rectangle, fill, label, picture};param title: string = "CLI selectable text"
 param size: int = 18
-setup_typst {
+theme := typ.module[#let style(body) = {
 set text(font: "Libertinus Serif", size: int(sys.inputs.size) * 1pt)
 let quoted = "first
 end
@@ -11,7 +11,9 @@ end
 /* comment
 end
 */
-}
+body
+}]
+typ.show theme.style
 export pic := picture(240, 100)
 default pic
 object.append(pic, object.fill(rectangle((0, 0), 240, 100), rgb(1, 1, 1)))

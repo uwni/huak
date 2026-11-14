@@ -1,0 +1,44 @@
+import paint.*
+import math.norm
+
+// Typst lays out the whole matrix, brackets included. A Typst label marks an
+// entry, and `m.anchors` reports where Typst put it, in the text's own
+// coordinates: the origin is the baseline start that `at` places.
+// Math has no label syntax, so `mark` boxes an entry and labels the box.
+theme := typ.module[
+  #let style(body) = {
+    set text(size: 16pt)
+    set math.mat(row-gap: 1em, column-gap: 2em)
+    body
+  }
+  #let mark(name, body) = [#box($body$)#label(name)]
+]
+typ.show theme.style
+
+m := typ[$ M = mat(huak.theme.mark("a", a), huak.theme.mark("b", b); huak.theme.mark("c", c), huak.theme.mark("d", d)) $]
+
+// An arrow from one point to another, ending short of both.
+fn arrow(from:vec2, to:vec2, gap:length, ink:color) -> picture
+    direction := (to - from) / norm(to - from)
+    normal := (-direction.y, direction.x)
+    start := from + direction * gap
+    tip := to - direction * gap
+    base := tip - direction * 1.4mm
+    result := picture()
+    drawing result do
+        +draw(start -- base, pen(ink, 0.25mm))
+        +fill(tip -- (base + normal * 0.6mm) -- (base - normal * 0.6mm) -- cycle, ink)
+    end
+    return result
+end
+
+origin := (4mm, 12mm)
+export plate := picture with width 49mm height 27mm
+default plate
+
+// The two products of the determinant, ad - bc.
+drawing plate do
+    +m at origin
+    +arrow(origin + m.anchors["a"].center, origin + m.anchors["d"].center, 1.6mm, rgb(0.1, 0.35, 0.75))
+    +arrow(origin + m.anchors["b"].center, origin + m.anchors["c"].center, 1.6mm, rgb(0.8, 0.2, 0.15))
+end

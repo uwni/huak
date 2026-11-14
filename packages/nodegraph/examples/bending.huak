@@ -10,7 +10,6 @@ fn panel(bend:bool) -> picture
     ink := rgb(0.08, 0.36, 0.66)
     for i in 0:len(kinds)-1 do
         kind := kinds[i]
-        typst_expose kind
         origin := (35pt+(i%3)*75pt, 105pt-int(i/3)*75pt)
         guide := curves.arc(origin, 26pt, 0deg, 100deg)
         items += edge(absolute(point_at(guide, 0)), absolute(point_at(guide, len(guide))), {"curve": guide, "stroke": ink, "thickness": 1.2pt, "marks": [mark(kind, 1, false, {"size": 18pt, "bend": bend})]})

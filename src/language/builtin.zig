@@ -160,6 +160,7 @@ const registry = .{
     .width = .{ .namespace = .text, .args = .{ .body = .text }, .minimum = 1, .result = length },
     .height = .{ .namespace = .text, .args = .{ .body = .text }, .minimum = 1, .result = length },
     .baseline = .{ .namespace = .text, .args = .{ .body = .text }, .minimum = 1, .result = length },
+    .anchors = .{ .namespace = .text, .args = .{ .body = .text }, .minimum = 1, .result = .dict },
     .outlines = .{ .namespace = .object, .args = .{ .object = a }, .minimum = 1, .result = .object },
     .solver = .{ .namespace = .solver, .implicit = true, .args = .{}, .minimum = 0, .result = .solver },
     .unknown = .{ .namespace = .solver, .args = .{ .solver = .solver }, .minimum = 1, .result = .variable },

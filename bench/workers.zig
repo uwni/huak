@@ -43,7 +43,8 @@ const Sample = struct { child: Report, wall_ms: f64 };
 const prelude =
     \\import math.{sin, cos}
     \\import paint.{picture, pen, rgb, draw, label, append, translate}
-    \\setup_typst { set text(size: 13pt) }
+    \\theme := typ.module[#let style(body) = { set text(size: 13pt); body }]
+    \\typ.show theme.style
     \\caption := typ[Shared book illustration $sum_(i=1)^n i^2$ Ω]
     \\ink := pen(rgb(0.16,0.38,0.75),0.4)
     \\fn figure(index:int) -> picture

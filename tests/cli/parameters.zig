@@ -12,9 +12,13 @@ pub fn run(ctx: *h.Harness) !void {
     try h.output(old_result, "");
     const native_blocks = try ctx.script("native_typst_blocks",
         \\import assertions.assert
-        \\setup_typst { let decorate(body)=strong(body); set text(size:12pt) }
+        \\theme:=typ.module[
+        \\  #let decorate(body) = strong(body)
+        \\  #let style(body) = {set text(size:12pt); body}
+        \\]
+        \\typ.show theme.style
         \\fn caption() -> text
-        \\    return typ[#decorate[end] `]` #("]")]
+        \\    return typ[#huak.theme.decorate[end] `]` #("]")]
         \\end
         \\assert(caption().width>0pt); assert(typ[A].width>0pt)
         \\print("native blocks")
@@ -22,9 +26,10 @@ pub fn run(ctx: *h.Harness) !void {
     try h.output(try ctx.command("run", native_blocks, &.{}, true), "native blocks\n");
     for ([_]struct { name: []const u8, source: []const u8, message: []const u8 }{
         .{ .name = "unclosed_typ", .source = "t=typ[Hello", .message = "cannot parse Typst block" },
-        .{ .name = "unclosed_setup", .source = "setup_typst {let x=1", .message = "cannot parse Typst block" },
+        .{ .name = "unclosed_typ_module", .source = "theme:=typ.module[#let x=1", .message = "cannot parse Typst block" },
         .{ .name = "legacy_typ", .source = "t=typ\nHello\nend", .message = "expected '['" },
-        .{ .name = "legacy_setup", .source = "setup_typst\nlet x=1\nend", .message = "expected '{'" },
+        .{ .name = "typ_module_without_block", .source = "theme:=typ.module\nlet x=1\nend", .message = "expected '['" },
+        .{ .name = "typ_show_expression", .source = "x:=typ.show theme.style", .message = "typ.show is a declaration, not an expression" },
     }) |case| {
         const path = try ctx.script(case.name, case.source);
         const result = try ctx.command("check", path, &.{}, false);

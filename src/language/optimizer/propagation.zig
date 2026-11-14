@@ -196,7 +196,7 @@ const Analysis = struct {
                     try self.push(.{});
                 }
             },
-            .call, .call_value, .call_builtin, .typst, .show_rule, .setup_typst, .import_module => {
+            .call, .call_value, .call_builtin, .typst, .typst_module, .import_module => {
                 self.forgetBindings();
                 try self.unknownResult(instruction, .{});
             },
@@ -317,7 +317,7 @@ fn valid(code: []const bc.Instruction, constants: []const Value, bindings: Bindi
     var remaining: usize = limits.work - @min(limits.work, code.len);
     for (code) |instruction| switch (instruction.op) {
         .constant => if (instruction.a >= constants.len) return false,
-        .field, .set_field, .typst, .show_rule, .setup_typst => if (instruction.a >= constants.len or constants[instruction.a] != .string) return false,
+        .field, .set_field, .typst, .typst_module => if (instruction.a >= constants.len or constants[instruction.a] != .string) return false,
         .bind_arguments => {
             if (instruction.a >= bindings.argument_bindings.len) return false;
             const binding = bindings.argument_bindings[instruction.a];
@@ -588,7 +588,7 @@ test "propagation does not bypass store conversions or mutable identities" {
 }
 
 test "propagation unknown fields imports and typography remain host barriers" {
-    const barriers = [_]bc.Instruction{ ins(.import_module, 0), ins(.setup_typst, 1), ins(.typst, 1), ins(.field, 1) };
+    const barriers = [_]bc.Instruction{ ins(.import_module, 0), ins(.typst_module, 1), ins(.typst, 1), ins(.field, 1) };
     for (barriers) |barrier| {
         var constants = try pool(t.allocator, &.{ .{ .int = 7 }, .{ .string = "x" } });
         defer constants.deinit();

@@ -1,7 +1,7 @@
 import paint.*
 import math.{abs}
 import "../../nodegraph.huak" as nodegraph
-import "../../nodegraph.huak".{scene, geometry, diagram, place, link, wire, group, matrix, anchor_node, route_edge, finish, grid, absolute, node, edge, hide, mark}
+import "../../nodegraph.huak".{scene, geometry, diagram, place, link, wire, group, part, anchor_node, route_edge, finish, grid, absolute, node, edge, hide, mark}
 import assertions.assert
 
 // Explicit UFCS scene construction and idempotent finish.
@@ -15,14 +15,15 @@ assert(finish(f) == p, "finish must be idempotent")
 assert(anchor_node(f, a, "center").x < anchor_node(f, b, "center").x, "place order")
 assert(len(route_edge(f, e)) > 0, "link must resolve an edge handle")
 
-// Drawing-block commands, group and matrix.
+// Drawing-block commands, group and a link between parts of one node.
 g := scene()
 nodegraph.drawing g do
     x := place typ[X] at grid(0, 0)
     y := place typ[Y] at grid(1, 0)
     group [x, y] containing typ[Pair]
     wire absolute((0pt, 0pt)) to absolute((20pt, 20pt))
-    matrix [[typ[M], typ[N]]]
+    pair := place typ[#box[M] <m> and #box[N] <n>] at grid(2, 0)
+    link part(pair, "m") to part(pair, "n")
 end
 assert(len(g.geometry.objects) == 6, "scene commands must all resolve")
 

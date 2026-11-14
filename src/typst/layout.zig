@@ -38,6 +38,18 @@ pub const Layout = struct {
         try self.library.check(self.library.functions.layout_bounds(try reference.nativeLayout(self.library), &result), null);
         return result;
     }
+    /// Labeled elements in document order, in frame-local y-down points.
+    /// Borrowed until this Layout releases the request's owner.
+    pub fn labels(self: *const Layout, index: usize) api.Error![]const c.TypstLabeledElement {
+        const reference = try self.frame(index);
+        if (!try self.library.supports(c.TYPST_CAP_LAYOUT_LABELS)) {
+            try self.library.setError("libtypst does not report labeled elements");
+            return error.Unsupported;
+        }
+        var view: c.TypstLabelView = undefined;
+        try self.library.check(self.library.functions.layout_labels(try reference.nativeLayout(self.library), &view), null);
+        return if (view.element_count == 0) &.{} else view.elements[0..view.element_count];
+    }
     pub fn deinit(self: *Layout) void {
         if (self.handle) |batch| {
             for (batch.frames) |owner| self.library.functions.layout_release(owner);
@@ -86,17 +98,41 @@ pub const FrameRef = struct {
     }
 };
 
-/// Formats native diagnostics against the texts the request names.
+/// Formats native diagnostics against the texts the request names, including
+/// those of the modules its modules were evaluated with.
 fn describe(library: *api.Library, report: ?*const c.TypstDiagnostics, request: api.LayoutRequest) api.Error![]u8 {
-    const named = try a.alloc(diagnostics.Source, 2 + 2 * request.templates.len);
-    defer a.free(named);
-    named[0] = .{ .name = "source", .text = request.source };
-    named[1] = .{ .name = "preamble", .text = request.preamble };
-    for (request.templates, 0..) |template, index| {
-        named[2 + 2 * index] = .{ .name = template.name, .text = template.code, .origin = template.origin };
-        named[3 + 2 * index] = .{ .name = template.setup_name, .text = template.setup };
+    var named: std.ArrayList(diagnostics.Source) = .empty;
+    defer named.deinit(a);
+    try named.ensureTotalCapacity(a, 2 + 2 * request.templates.len + request.modules.len);
+    named.appendAssumeCapacity(.{ .name = "source", .text = request.source });
+    named.appendAssumeCapacity(.{ .name = "preamble", .text = request.preamble });
+    for (request.templates) |template| {
+        named.appendAssumeCapacity(.{ .name = template.name, .text = template.code, .origin = template.origin });
+        named.appendAssumeCapacity(.{ .name = template.setup_name, .text = template.setup });
     }
-    return diagnostics.format(library, report, named);
+    try api.Module.appendSources(a, request.modules, &named);
+    return diagnostics.format(library, report, named.items);
+}
+
+/// The capability a request needs beyond plain layout, if any is missing.
+/// Value trees are not read here: the library validates them, and reports a
+/// value kind it does not know as an invalid argument.
+fn unsupported(library: *api.Library, requests: []const api.LayoutRequest) api.Error!?[]const u8 {
+    var bindings = false;
+    var templates = false;
+    var modules = false;
+    var show_values = false;
+    for (requests) |request| {
+        bindings = bindings or request.bindings.len != 0;
+        templates = templates or request.templates.len != 0;
+        modules = modules or request.modules.len != 0;
+        show_values = show_values or request.show_values.len != 0;
+    }
+    if (bindings and !try library.supports(c.TYPST_CAP_LAYOUT_BINDINGS)) return "libtypst does not support request-local layout bindings";
+    if (templates and !try library.supports(c.TYPST_CAP_LAYOUT_TEMPLATES)) return "libtypst does not support layout templates";
+    if (modules and !try library.supports(c.TYPST_CAP_MODULE_HANDLES)) return "libtypst does not support module handles";
+    if (show_values and !try library.supports(c.TYPST_CAP_SHOW_VALUES)) return "libtypst does not support show rule values";
+    return null;
 }
 
 pub fn layoutContent(engine: *api.Engine, requests: []const api.LayoutRequest, metrics: []api.Metrics, detail: ?*api.Diagnostic) api.Error!Layout {
@@ -123,22 +159,22 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
     if (engine.poisoned.load(.acquire)) return error.InvalidState;
     defer @import("Engine.zig").evict(library);
 
-    for (requests) |request| if (request.bindings.len != 0) {
-        if (!try library.supports(c.TYPST_CAP_LAYOUT_BINDINGS)) {
-            try library.setError("libtypst does not support request-local layout bindings");
-            return error.Unsupported;
-        }
-        break;
-    };
-    var template_count: usize = 0;
-    for (requests) |request| template_count += request.templates.len;
-    if (template_count != 0 and !try library.supports(c.TYPST_CAP_LAYOUT_TEMPLATES)) {
-        try library.setError("libtypst does not support layout templates");
+    if (try unsupported(library, requests)) |message| {
+        try library.setError(message);
         return error.Unsupported;
+    }
+    var template_count: usize = 0;
+    var module_count: usize = 0;
+    for (requests) |request| {
+        template_count += request.templates.len;
+        module_count += request.modules.len;
     }
     const templates = try a.alloc(c.TypstTemplate, template_count);
     defer a.free(templates);
     var next_template: usize = 0;
+    const modules = try a.alloc(?*const c.TypstModule, module_count);
+    defer a.free(modules);
+    var next_module: usize = 0;
 
     // One allocation holds the three contiguous arrays borrowed by the ABI.
     var descriptors = try std.MultiArrayList(struct {
@@ -185,6 +221,13 @@ pub fn layoutBatch(engine: *api.Engine, requests: []const api.LayoutRequest) api
         config.template_count = own.len;
         config.shows = request.shows.ptr;
         config.show_count = request.shows.len;
+        const own_modules = modules[next_module..][0..request.modules.len];
+        next_module += own_modules.len;
+        for (own_modules, request.modules) |*handle, module| handle.* = try module.native(library);
+        config.module_handles = own_modules.ptr;
+        config.module_handle_count = own_modules.len;
+        config.show_values = request.show_values.ptr;
+        config.show_value_count = request.show_values.len;
         input.* = .{ .source = binding.str(request.source), .source_name = binding.str("source"), .options = config };
     }
     @memset(results, std.mem.zeroes(c.TypstLayoutResult));

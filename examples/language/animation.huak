@@ -6,9 +6,13 @@ export pic := picture(320, 160)
 default pic
 
 pic.timeline(seconds)
-setup_typst {
-  set text(size:14pt)
-}
+theme := typ.module[
+  #let style(body) = {
+    set text(size:14pt)
+    body
+  }
+]
+typ.show theme.style
 caption := typ[
   Continuous SVG $x^2+y^2$
 ]

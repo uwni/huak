@@ -63,16 +63,24 @@ pub const Op = enum {
     slice,
     field,
     set_field,
-    /// Typst content constant a and b captured (name, value) pairs -> text. A
-    /// pair with an empty name is a show_rule applied around the content;
-    /// these follow the named pairs, outermost first.
+    /// Typst content constant a and captured (name, value) pairs -> text; b
+    /// is a TypstCaptures. A pair named `.member.path` applies that member
+    /// of its typ.module value around the content; these follow the data
+    /// pairs, outermost first.
     typst,
-    /// Typst function code constant a and b captured (name, value) pairs -> a
-    /// show_rule snapshotting that data and the module's current setup. The
-    /// span covers exactly the code in its module source.
-    show_rule,
-    setup_typst,
+    /// Typst file content constant a, a name string and captured (name,
+    /// value) pairs -> a typ.module of that name snapshotting the data; b is
+    /// a TypstCaptures. The span covers exactly the code in its module source.
+    typst_module,
     halt,
+};
+/// Operand b of typst and typst_module.
+pub const TypstCaptures = packed struct(u32) {
+    /// (name, value) pairs on the stack.
+    pairs: u31 = 0,
+    /// The code uses `huak` as a whole value, so the host binds it even when
+    /// no member is captured.
+    whole: bool = false,
 };
 pub const Instruction = struct {
     op: Op,
@@ -85,13 +93,18 @@ pub const Instruction = struct {
 
     pub const StackEffect = struct { consumed: usize, produced: usize };
 
+    pub fn typstCaptures(self: Instruction) TypstCaptures {
+        return @bitCast(self.b);
+    }
+
     /// Stack changes within the current frame. Callee/module execution is
     /// represented by its net effect, independently of the analysis being run.
     pub fn stackEffect(self: Instruction) StackEffect {
         return switch (self.op) {
             .constant, .load_global, .load_local => .{ .consumed = 0, .produced = 1 },
-            // Each exposed name is followed by its current value on the stack.
-            .typst, .show_rule => .{ .consumed = std.math.mul(usize, self.b, 2) catch std.math.maxInt(usize), .produced = 1 },
+            // Each captured name is followed by its current value on the stack.
+            .typst => .{ .consumed = @as(usize, self.typstCaptures().pairs) * 2, .produced = 1 },
+            .typst_module => .{ .consumed = @as(usize, self.typstCaptures().pairs) * 2 + 1, .produced = 1 },
             .store_global, .store_local, .pop, .jump_if_false, .return_value => .{ .consumed = 1, .produced = 0 },
             .list_append => .{ .consumed = 2, .produced = 0 },
             .list_append_items => .{ .consumed = @as(usize, self.a) + 1, .produced = 0 },
@@ -113,7 +126,7 @@ pub const Instruction = struct {
             // The compiler fills b with the count and emits only complete
             // mappings. Program-aware consumers can inspect the descriptor.
             .bind_arguments => .{ .consumed = self.b, .produced = self.b },
-            .jump, .import_module, .check_module, .setup_typst, .halt => .{ .consumed = 0, .produced = 0 },
+            .jump, .import_module, .check_module, .halt => .{ .consumed = 0, .produced = 0 },
         };
     }
 

@@ -223,7 +223,8 @@ test "subpaths preserve contour chains through namespaces UFCS lists and native 
         \\parts+=outer
         \\assert(len(parts)==5 and bounds(parts[0])[0].x==100pt)
         \\assert(bounds(open)[0].x==0pt and bounds(rejoined)==bounds(multi))
-        \\setup_typst {set text(font:"Libertinus Serif",size:30pt)}
+        \\letter_style:=typ.module[#let style(body) = {set text(font:"Libertinus Serif",size:30pt); body}]
+        \\typ.show letter_style.style
         \\letter:=region(typ[O])
         \\loops:=letter.split()
         \\assert(len(loops)==2)
@@ -274,7 +275,8 @@ test "subpaths preserve contour chains through namespaces UFCS lists and native 
 test "formatting preserves prefix binding and native SVG PDF output" {
     const source =
         \\import paint.*
-        \\setup_typst {set text(size: 11pt)}
+        \\theme:=typ.module[#let style(body) = {set text(size: 11pt); body}]
+        \\typ.show theme.style
         \\fn twice(value:int)->int return 2*value end
         \\mixfix(twice) twice _ in addition
         \\prefixed:=twice (2)+3
@@ -823,36 +825,44 @@ test "bytecode calls existing Hobby and linear solver and exports a true native 
     try t.expect(std.mem.indexOf(u8, svg.bytes(), "<svg") != null);
     try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
 }
-test "shared native Typst settings keep frame snapshots and body-local changes isolated" {
+test "Typst show rules keep frame snapshots and body-local changes isolated" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
         \\import paint.{rgb, translate, fill, label, picture};import geometry.compound;import object.outlines;import text.width;import assertions.assert
-        \\setup_typst {
-        \\ set text(size:10pt)
-        \\ let word(s) = strong(s)
+        \\words:=typ.module[#let word(s) = {
+        \\ strong(s)
         \\ /*
         \\ end
         \\ */
-        \\}
+        \\}]
+        \\small:=typ.module[#let style(body) = {
+        \\ set text(size:10pt)
+        \\ body
+        \\}]
+        \\typ.show small.style
         \\a:=typ[
-        \\ #word("Same Ω")
+        \\ #huak.words.word("Same Ω")
         \\]
         \\b:=typ[
         \\ #set text(size:30pt)
-        \\ #word("Same Ω")
+        \\ #huak.words.word("Same Ω")
         \\]
         \\c:=typ[
-        \\ #word("Same Ω")
+        \\ #huak.words.word("Same Ω")
         \\]
         \\assert(width(a)==width(c))
         \\assert(width(b)>2*width(a))
-        \\setup_typst {
+        \\large:=typ.module[#let style(body) = {
         \\ set text(size:20pt)
-        \\}
-        \\d:=typ[
-        \\ #word("Same Ω")
+        \\ body
+        \\}]
+        \\d:=block
+        \\ typ.show large.style
+        \\ return typ[
+        \\ #huak.words.word("Same Ω")
         \\]
+        \\end
         \\assert(width(d)>1.9*width(a))
         \\assert(width(a)==width(c))
         \\pic:=picture(640, 480)
@@ -918,24 +928,31 @@ test "native Typst blocks control wrapping and embed code and math without DSL w
         \\pic:=picture(640, 480); object.append(pic, object.label(x, (10,20)))
         ,
         \\import paint.{label, picture};import text.{width, height};import assertions.assert
-        \\setup_typst { let wrap(body)=strong(body); set text(size:11pt) }
-        \\x:=typ[#wrap[Inline] #("]") `]` /* ] */ #[#{ let v="}"; [#v] }]]
+        \\helpers:=typ.module[#let wrap(body) = strong(body)]
+        \\theme:=typ.module[#let style(body) = {set text(size:11pt); body}]
+        \\typ.show theme.style
+        \\x:=typ[#huak.helpers.wrap[Inline] #("]") `]` /* ] */ #[#{ let v="}"; [#v] }]]
         \\end_text:=typ[
         \\end
         \\]
         \\assert(width(x)>0pt); assert(height(end_text)>0pt)
         \\assert(typ[A].width==width(typ[A]))
         \\items:=[typ[A],typ[B]]; assert(items[0].width>0pt)
-        \\setup_typst {}; empty:=typ[]; assert(empty.width>=0pt)
+        \\blank:=typ.module[]; empty:=typ[]; assert(empty.width>=0pt)
         \\pic:=picture(640, 480); object.append(pic, object.label(typ[#strong[Argument]], (10,20))); after:=7
         \\assert(after==7)
         ,
         \\import math.abs;import paint.{label, picture};import assertions.assert
-        \\setup_typst { let word(body)=strong(body); set text(size:10pt); show "seed": "leaf" }
-        \\a:=typ[#word[seed]]; b:=typ[#strong[leaf]]
+        \\words:=typ.module[#let word(body) = strong(body)]
+        \\theme:=typ.module[#let style(body) = {set text(size:10pt); show "seed": "leaf"; body}]
+        \\typ.show theme.style
+        \\a:=typ[#huak.words.word[seed]]; b:=typ[#strong[leaf]]
         \\assert(abs(a.width-b.width)<0.000001pt)
-        \\setup_typst { set text(size:20pt) }
-        \\c:=typ[#word[seed]]
+        \\large:=typ.module[#let style(body) = {set text(size:20pt); body}]
+        \\c:=block
+        \\    typ.show large.style
+        \\    return typ[#huak.words.word[seed]]
+        \\end
         \\assert(c.width>1.9*a.width)
         \\pic:=picture(640, 480); object.append(pic, object.label(a, (10,20))); object.append(pic, object.label(c, (10,50)))
         ,
@@ -968,6 +985,69 @@ test "native Typst blocks control wrapping and embed code and math without DSL w
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         try t.expect(machine.failure != null);
     }
+}
+test "labeled typeset elements become anchors in the text's own coordinates" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const source =
+        \\import assertions.assert
+        \\import math.{abs, norm}
+        \\import text.anchors
+        \\import object.bounds
+        \\parts:=typ.module[#let mark(name, body) = [#box($body$)#label(name)]]
+        \\m:=typ[$ M = mat(huak.parts.mark("a", a), huak.parts.mark("b", b); huak.parts.mark("c", c), huak.parts.mark("d", d^2)) $]
+        \\// Typst lays out matrices column by column.
+        \\assert(m.anchors.keys()==["a","c","b","d"])
+        \\assert(text.anchors(m).keys()==m.anchors().keys() and anchors(m)==m.anchors)
+        \\a:anchor:=m.anchors["a"]
+        \\d:=m.anchors["d"]
+        \\assert(a.min.x<a.max.x and a.min.y<a.max.y)
+        \\assert(norm(a.center-(a.min+a.max)/2)<0.000001pt)
+        \\// y points up: the first row lies above the second.
+        \\assert(a.position.y>d.position.y and a.center.y>d.center.y and a.center.x<d.center.x)
+        \\// Anchors use the coordinates in which object(m) places the text.
+        \\box:=bounds(object(m))
+        \\for name in m.anchors.keys() do
+        \\  entry:anchor:=m.anchors[name]
+        \\  assert(entry.min.x>=box[0].x and entry.min.y>=box[0].y and entry.max.x<=box[1].x and entry.max.y<=box[1].y)
+        \\end
+        \\// Reads share the anchors, but each returns its own dictionary.
+        \\assert(m.anchors["a"]==a)
+        \\copy_:=m.anchors; copy_["z"]=1
+        \\assert(not dict_contains(m.anchors, "z") and len(m.anchors)==4)
+        \\inline:=typ[Hi #box[X] <x> and #metadata(1) <meta>]
+        \\x:=inline.anchors["x"]
+        \\assert(abs(x.position.y)<0.001pt and x.min.y<0.001pt and x.max.y>5pt)
+        \\assert(abs(x.position.x-x.min.x)<0.001pt and x.position.x>inline.width/10)
+        \\meta:=inline.anchors["meta"]
+        \\assert(meta.min==meta.position and meta.max==meta.position and norm(meta.center-meta.position)<0.000001pt)
+        \\assert(len(typ[Plain].anchors)==0)
+    ;
+    var program = try compile(&library, source);
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try execute(&machine);
+
+    const failures = [_]struct { source: []const u8, message: []const u8 }{
+        .{ .source = "x:=typ[#box[A] <same> and #box[B] <same>].anchors", .message = "label <same> occurs more than once" },
+        .{ .source = "x:=typ[#box[A] <a>].anchors[\"b\"]", .message = "dictionary has no key 'b'" },
+    };
+    for (failures) |failure| {
+        var failing = try compile(&library, failure.source);
+        defer failing.deinit();
+        var failing_runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer failing_runtime.deinit();
+        var failing_machine = try l.Machine.init(t.allocator, &failing, failing_runtime.host(), .{});
+        defer failing_machine.deinit();
+        try t.expectError(error.RuntimeFailed, failing_machine.execute(&.{}));
+        const detail = failing_machine.failure.?;
+        try t.expect(std.mem.indexOf(u8, detail.text(), failure.message) != null or std.mem.indexOf(u8, detail.native_message, failure.message) != null);
+    }
+    var diagnostic: ?l.compiler.Diagnostic = null;
+    try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, "p:=picture(); x:=p.anchors", "anchors-invalid.huak", .{ .source_parser = .init(&library) }, &diagnostic));
 }
 test "library and compiled bytecode are reused across isolated native runtime executions" {
     var library = try typst.Library.open(options.library_path);
@@ -1291,7 +1371,7 @@ test "deep or exponentially shared lists have bounded formatting work" {
     try t.expect(text.len > 0);
 }
 
-test "shared Typst preamble preserves raw markup with embedded math code and trailing comments" {
+test "a shown style preserves raw markup with embedded math code and trailing comments" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
@@ -1307,11 +1387,15 @@ test "shared Typst preamble preserves raw markup with embedded math code and tra
         \\#{ 1 // trailing comment
         \\}
         \\]
-        \\setup_typst {
+        \\words:=typ.module[#let strong_word(s) = strong(s)]
+        \\theme:=typ.module[#let style(body) = {
         \\ set text(size:11pt)
-        \\ let strong_word(s)=strong(s)
         \\ show "before": "after"
-        \\}
+        \\ body
+        \\}]
+        \\pic:=picture(640, 480)
+        \\block
+        \\typ.show theme.style
         \\bracket:=typ[
         \\\[
         \\]
@@ -1327,9 +1411,10 @@ test "shared Typst preamble preserves raw markup with embedded math code and tra
         \\assert(abs(width(math_shared)-width(math_plain))<0.00001pt)
         \\assert(abs(width(code_shared)-width(code_plain))<0.00001pt)
         \\rich:=typ[
-        \\#strong_word[Hello] before
+        \\#huak.words.strong_word[Hello] before
         \\]
-        \\pic:=picture(640, 480); object.append(pic, object.label(rich, (10,20))); object.append(pic, object.label(bracket, (10,40)))
+        \\object.append(pic, object.label(rich, (10,20))); object.append(pic, object.label(bracket, (10,40)))
+        \\end
     ;
     var program = try compile(&library, source);
     defer program.deinit();
@@ -1714,12 +1799,13 @@ test "block imports retain the settings of each text source module" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const sources = [_]ModuleSource{
-        .{ .name = "/native/large.huak", .source = "setup_typst {set text(size:24pt)}\nexport caption:=typ[Scope Ω]" },
-        .{ .name = "/native/small.huak", .source = "setup_typst {set text(size:8pt)}\nexport caption:=typ[Scope Ω]" },
+        .{ .name = "/native/large.huak", .source = "theme:=typ.module[#let style(body) = {set text(size:24pt); body}]\ntyp.show theme.style\nexport caption:=typ[Scope Ω]" },
+        .{ .name = "/native/small.huak", .source = "theme:=typ.module[#let style(body) = {set text(size:8pt); body}]\ntyp.show theme.style\nexport caption:=typ[Scope Ω]" },
     };
     const source =
         \\import math.abs;import assertions.assert
-        \\setup_typst {set text(size:12pt)}
+        \\theme:=typ.module[#let style(body) = {set text(size:12pt); body}]
+        \\typ.show theme.style
         \\before:=typ[Scope Ω]
         \\fn captions()->list
         \\    import "large.huak".caption as label
@@ -2060,13 +2146,16 @@ test "selection privacy conflicts and invalid exported bodies survive optimizati
     };
 }
 
-test "module namespaces share native frames while isolating Typst setup by function source" {
+test "module namespaces share native frames while isolating Typst show rules by function source" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const imported_source =
-        \\import paint.{label, picture};setup_typst {
+        \\import paint.{label, picture}
+        \\theme:=typ.module[#let style(body) = {
         \\ set text(size:24pt)
-        \\}
+        \\ body
+        \\}]
+        \\typ.show theme.style
         \\export caption:=typ[
         \\Same Ω
         \\]
@@ -2081,9 +2170,11 @@ test "module namespaces share native frames while isolating Typst setup by funct
     ;
     var program = try compileModules(&library,
         \\import math.abs;import paint.{label, picture, append};import assertions.assert
-        \\setup_typst {
+        \\theme:=typ.module[#let style(body) = {
         \\ set text(size:8pt)
-        \\}
+        \\ body
+        \\}]
+        \\typ.show theme.style
         \\before:=typ[
         \\Same Ω
         \\]
@@ -2455,8 +2546,8 @@ test "exposed data preserves typed values immutable text snapshots and repeated 
         \\title:="Ω #panic(\"not evaluated\")"
         \\font_size:=12pt
         \\ink:=rgb(0.2,0.4,0.6,0.5)
-        \\typst_expose count,scale,enabled,title,font_size,ink
-        \\setup_typst {
+        \\theme:=typ.module[#let style(body) = {
+        \\  assert(type(huak)==module)
         \\  assert(type(huak.count)==int)
         \\  assert(type(huak.scale)==float and huak.scale==1.25)
         \\  assert(type(huak.enabled)==bool and huak.enabled)
@@ -2464,7 +2555,9 @@ test "exposed data preserves typed values immutable text snapshots and repeated 
         \\  assert(type(huak.font_size)==length and huak.font_size==12pt)
         \\  assert(type(huak.ink)==color and huak.ink==rgb(20%,40%,60%,50%))
         \\  set text(size:huak.font_size,fill:huak.ink)
-        \\}
+        \\  body
+        \\}]
+        \\typ.show theme.style
         \\first:=typ[Count #huak.count; #huak.title]
         \\again:=typ[Count #huak.count; #huak.title]
         \\count=count+2
@@ -2512,28 +2605,139 @@ test "exposed data preserves typed values immutable text snapshots and repeated 
     }
 }
 
-test "exposed data respects local shadowing aliases block restoration and module boundaries" {
+test "huak data typ.module and typ.show each need a library with the matching capability" {
+    const cases = [_]struct { capability: u64, source: []const u8, message: []const u8 }{
+        .{ .capability = typst.c.TYPST_CAP_BINDING_MODULES, .source = "x:=1\nread:=typ[#huak.x]", .message = "module bindings" },
+        .{ .capability = typst.c.TYPST_CAP_MODULE_HANDLES, .source = "theme:=typ.module[#let style(body) = body]", .message = "module handles" },
+        .{ .capability = typst.c.TYPST_CAP_SHOW_VALUES, .source = "theme:=typ.module[#let style(body) = body]\ntyp.show theme.style\nshown:=typ[x]", .message = "show rule values" },
+    };
+    for (cases) |case| {
+        var library = try typst.Library.open(options.library_path);
+        defer library.deinit();
+        library.capabilities = library.capabilities.? & ~case.capability;
+        var program = try compile(&library, case.source);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
+        try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, case.message) != null);
+    }
+    // Without the member-use query the front end cannot tell what a block reads.
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
-    const sources = [_]ModuleSource{.{ .name = "/native/exposure-library.huak", .source =
+    library.capabilities = library.capabilities.? & ~@as(u64, typst.c.TYPST_CAP_MEMBER_USES);
+    var diagnostic: ?l.compiler.Diagnostic = null;
+    try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, "caption:=typ[plain]", "member-uses.huak", .{ .source_parser = .init(&library) }, &diagnostic));
+    try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), "cannot read the Huak names in a Typst block") != null);
+}
+
+test "Typst code that uses huak as a whole value sees exactly the members it reads" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const source =
+        \\title:="private"
+        \\other:=1
+        \\bare:=typ[#assert(type(huak) == module and dictionary(huak) == (:))ok]
+        \\imported:=typ[#import huak: *
+        \\ok]
+        \\passed:=typ[#let count(m) = dictionary(m).len()
+        \\#assert(count(huak) == 0)ok]
+        \\one:=typ[#assert(dictionary(huak).keys() == ("title",))#huak.title]
+        \\theme:=typ.module[#let members = dictionary(huak).len()]
+        \\checked:=typ[#assert(huak.theme.members == 0 and dictionary(huak).keys() == ("theme",))ok]
+        \\fn local()->text return typ[#assert(dictionary(huak) == (:))ok] end
+        \\made:=local()
+    ;
+    {
+        var program = try compile(&library, source);
+        defer program.deinit();
+        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer runtime.deinit();
+        var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+        defer machine.deinit();
+        try execute(&machine);
+    }
+    // Code that does not mention `huak` has none to see.
+    var program = try compile(&library, "title:=\"private\"\ncaption:=typ[#eval(\"huak\")]");
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
+    try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, "unknown variable: huak") != null);
+}
+
+test "a typ.module is evaluated when it is made and reused by the modules and blocks that read it" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const source =
+        \\size:=30pt
+        \\base:=typ.module[#let scale = huak.size
+        \\#let fail() = panic("inside base")]
+        \\size=1pt
+        \\theme:=typ.module[#let style(body) = { set text(size: huak.base.scale); body }
+        \\#let fail = huak.base.fail]
+        \\plain:=typ[Hello]
+        \\shown:=block
+        \\    typ.show theme.style
+        \\    return typ[Hello]
+        \\end
+        \\ratio:=shown.width/plain.width
+        \\again:=typ[#assert(huak.base.scale == 30pt and huak.theme.style != none)Hello]
+    ;
+    var program = try compile(&library, source);
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try execute(&machine);
+    try t.expect(machine.getGlobal("ratio").?.number > 2);
+
+    // An error inside a module that another module read is placed in the
+    // text of the module that raised it.
+    const failing = source ++ "\nbroken:=typ[#huak.theme.fail()]";
+    var failed_program = try compile(&library, failing);
+    defer failed_program.deinit();
+    var failed_runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer failed_runtime.deinit();
+    var failed = try l.Machine.init(t.allocator, &failed_program, failed_runtime.host(), .{});
+    defer failed.deinit();
+    try t.expectError(error.RuntimeFailed, failed.execute(&.{}));
+    try t.expect(std.mem.indexOf(u8, failed.failure.?.native_message, "native-test.huak:3:15: panicked with: inside base") != null);
+    // A module with an error is reported where it is made.
+    var early_program = try compile(&library, "broken:=typ.module[#let x = missing]\nlater:=typ[never]");
+    defer early_program.deinit();
+    var early_runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer early_runtime.deinit();
+    var early = try l.Machine.init(t.allocator, &early_program, early_runtime.host(), .{});
+    defer early.deinit();
+    try t.expectError(error.RuntimeFailed, early.execute(&.{}));
+    try t.expect(std.mem.indexOf(u8, early.failure.?.native_message, "native-test.huak:1:29: unknown variable: missing") != null);
+}
+
+test "Typst reads respect local shadowing aliases block restoration and module boundaries" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    const sources = [_]ModuleSource{.{ .name = "/native/reads-library.huak", .source =
         \\export item:="module"
-        \\typst_expose item
-        \\export caption:=typ[#assert(huak.keys()==("item",))#huak.item]
+        \\export caption:=typ[#assert(dictionary(huak).keys()==("item",))#huak.item]
     }};
     const source =
-        \\import paint.{label, picture};import "exposure-library.huak".{item as imported,caption as module_text}
+        \\import paint.{label, picture};import "reads-library.huak".{item as imported,caption as module_text}
         \\title:="root"
-        \\typst_expose title,imported
         \\fn make_caption(title:string)->text
         \\    return typ[#assert(huak.title=="local")#assert(huak.imported=="module")#huak.title]
         \\end
         \\local_text:=make_caption("local"); branch_text:=local_text
         \\if true then
         \\    branch:="branch"
-        \\    typst_expose branch
-        \\    branch_text=typ[#assert("branch" in huak)#huak.branch]
+        \\    branch_text=typ[#assert(dictionary(huak).keys()==("branch",))#huak.branch]
         \\end
-        \\root_text:=typ[#assert(not ("branch" in huak))#assert(not ("item" in huak))#huak.title #huak.imported]
+        \\root_text:=typ[#assert(dictionary(huak).keys()==("title","imported"))#huak.title #huak.imported]
         \\pic:=picture(240,160)
         \\object.append(pic, object.label(module_text, (5,135)))
         \\object.append(pic, object.label(local_text, (5,100)))
@@ -2557,7 +2761,7 @@ test "exposed data respects local shadowing aliases block restoration and module
     }
 }
 
-test "exposed data in template call bodies matches ordinary reads" {
+test "Typst reads in template call bodies match ordinary reads" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     // Huak assertions check the ordinary reads; Typst assertions check that the
@@ -2579,13 +2783,11 @@ test "exposed data in template call bodies matches ordinary reads" {
         \\caption := typ[placeholder]
         \\bar do
         \\    assert(gap == 1pt and c == 3 and width == 2pt and a == 1 and e == "five")
-        \\    typst_expose gap, c, width, a, e
         \\    caption = typ[#assert.eq(huak.gap, 1pt)#assert.eq(huak.c, 3)#assert.eq(huak.width, 2pt)#assert.eq(huak.a, 1)#assert.eq(huak.e, "five")#huak.e]
         \\end
         \\fn framed()->text
         \\    result := typ[placeholder]
         \\    bar do
-        \\        typst_expose gap
         \\        result = typ[#assert.eq(huak.gap, 1pt)#huak.gap]
         \\    end
         \\    return result
@@ -2605,10 +2807,10 @@ test "exposed data in template call bodies matches ordinary reads" {
     }
 }
 
-test "exposed data batches preserve earlier native errors before later length conversion failure" {
+test "Typst read batches preserve earlier native errors before later length conversion failure" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
-    const source = "huge:=1e308mm\nfirst:=typ[#missing]\nif true then typst_expose huge;second:=typ[] end\n";
+    const source = "huge:=1e308mm\nfirst:=typ[#missing]\nif true then second:=typ[#huak.huge] end\n";
     for ([_]bool{ false, true }) |optimize| for ([_]bool{ false, true }) |batched| {
         var program = try compileModulesOptimized(&library, source, &.{}, optimize);
         defer program.deinit();
@@ -2626,7 +2828,7 @@ test "exposed data batches preserve earlier native errors before later length co
         try t.expect(machine.getGlobal("second") == null);
     };
     for ([_][]const u8{ "[1]", "1deg", "picture(640, 480)" }) |bad| {
-        const input = try std.fmt.allocPrint(t.allocator, "import paint.picture;fn expose_any(value:any)->text\ntypst_expose value\nreturn typ[]\nend\ncaption:=expose_any({s})\n", .{bad});
+        const input = try std.fmt.allocPrint(t.allocator, "import paint.picture;fn read_any(value:any)->text\nreturn typ[#huak.value]\nend\ncaption:=read_any({s})\n", .{bad});
         defer t.allocator.free(input);
         var program = try compile(&library, input);
         defer program.deinit();
@@ -2636,7 +2838,7 @@ test "exposed data batches preserve earlier native errors before later length co
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         try t.expect(machine.getGlobal("caption") == null);
-        try t.expect(std.mem.indexOf(u8, machine.failure.?.text(), "typst_expose requires") != null);
+        try t.expect(std.mem.indexOf(u8, machine.failure.?.text(), "Typst code can read") != null);
     }
 }
 
@@ -2989,18 +3191,16 @@ test "exported block templates preserve definition and caller scopes through ali
     }
 }
 
-test "show rules carry data snapshots and their own setups into other modules and nest by scope" {
+test "typ.module values carry data snapshots into other modules and nest by scope" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const modules = [_]ModuleSource{.{ .name = "/native/styles.huak", .source =
-        \\setup_typst { let face = "DejaVu Sans Mono" }
-        \\export fn sized(size:length)->show_rule
-        \\    typst_expose size
-        \\    return show_rule body => { set text(font: face, size: huak.size); body }
+        \\FACE:="DejaVu Sans Mono"
+        \\export fn sized(size:length)->typ.module
+        \\    return typ.module[#let style(body) = { set text(font: huak.FACE, size: huak.size); body }]
         \\end
-        \\export fn labelled(value:string, style:show_rule)->text
-        \\    typst_expose value
-        \\    typst_show style
+        \\export fn labelled(value:string, theme:typ.module)->text
+        \\    typ.show theme.style
         \\    return typ[#huak.value]
         \\end
     }};
@@ -3008,10 +3208,9 @@ test "show rules carry data snapshots and their own setups into other modules an
         \\import assertions.assert
         \\import math.abs
         \\import "styles.huak" as styles
-        \\setup_typst { let shout(it) = upper(it) }
         \\size:=20pt
-        \\typst_expose size
-        \\loud:=show_rule body => { set text(size: huak.size); shout(body) }
+        \\shout:=typ.module[#let shout(it) = upper(it)]
+        \\loud:=typ.module[#let style(body) = { set text(size: huak.size); huak.shout.shout(body) }]
         \\size=6pt
         \\plain:=typ[hello]
         \\big:=styles.labelled("hello", loud)
@@ -3019,26 +3218,37 @@ test "show rules carry data snapshots and their own setups into other modules an
         \\same:=styles.labelled("hello", mono)
         \\nested:=typ[]
         \\block
-        \\    typst_show loud, mono
+        \\    typ.show loud.style
+        \\    typ.show mono.style
         \\    nested=typ[hello]
         \\end
         \\upper_mono:=styles.labelled("HELLO", mono)
         \\called:=typ[]
         \\composed:=typ[]
         \\block
-        \\    typst_expose loud
-        \\    called=typ[#(huak.loud)[hello] hello]
-        \\    both:=show_rule body => { show: huak.loud; strong(body) }
+        \\    called=typ[#(huak.loud.style)[hello] hello]
+        \\    both:=typ.module[#let style(body) = { show: huak.loud.style; strong(body) }]
         \\    block
-        \\        typst_show both
+        \\        typ.show both.style
         \\        composed=typ[hello]
         \\    end
         \\end
-        \\assert(big.width > 2*plain.width, "a caller's rule styles text typeset by another module")
-        \\assert(abs(same.width-plain.width) > 0.1pt, "a rule uses the setup of the module that made it")
-        \\assert(abs(nested.width-upper_mono.width) < 0.001pt, "the inner rule's settings win while the outer rule still applies")
-        \\assert(called.width > big.width and called.width < big.width+plain.width+5pt, "an exposed rule is a Typst function")
-        \\assert(composed.width > big.width, "a rule applies a rule it captured")
+        \\struct Styled
+        \\    theme: typ.module
+        \\end
+        \\typed: typ.module := Styled(theme: loud).theme
+        \\typed_text:=block
+        \\    typ.show typed.style
+        \\    return typ[hello]
+        \\end
+        \\imported:=typ[#import huak: loud;#loud.style[hello]]
+        \\assert(abs(typed_text.width-big.width) < 0.001pt, "a typ.module passes through typed fields and declarations")
+        \\assert(big.width > 2*plain.width, "a caller's module styles text typeset by another module")
+        \\assert(abs(same.width-plain.width) > 0.1pt, "a module keeps the data it read where it was made")
+        \\assert(abs(nested.width-upper_mono.width) < 0.001pt, "the inner show's settings win while the outer show still applies")
+        \\assert(called.width > big.width and called.width < big.width+plain.width+5pt, "a module member is a Typst function")
+        \\assert(composed.width > big.width, "a module applies a module it read")
+        \\assert(abs(imported.width-big.width) < 0.001pt, "Typst code imports a module from huak")
     ;
     for ([_]bool{ false, true }) |optimize| {
         var program = try compileModulesOptimized(&library, source, &modules, optimize);
@@ -3056,11 +3266,11 @@ test "show rules carry data snapshots and their own setups into other modules an
         }
     }
 
-    // Errors name the rule's own lines: Typst syntax where the rule is made,
-    // and evaluation where another module applies it.
+    // Errors name the module's own lines: Typst syntax where the module is
+    // made, and evaluation where another module applies its member.
     const failures = [_]struct { source: []const u8, location: []const u8, message: []const u8 }{
-        .{ .source = "rule:=show_rule body => { let = 1; body }", .location = "/native/main.huak:1:", .message = "expected pattern" },
-        .{ .source = "import \"styles.huak\" as styles\nbroken:=show_rule body => {\n    set text(size: huak.missing)\n    body\n}\nvalue:=styles.labelled(\"x\", broken)", .location = "/native/main.huak:3:20: ", .message = "unknown variable: huak" },
+        .{ .source = "theme:=typ.module[#let = 1]", .location = "/native/main.huak:1:", .message = "expected pattern" },
+        .{ .source = "import \"styles.huak\" as styles\nbroken:=typ.module[#let style(body) = {\n    set text(size: missing_size)\n    body\n}]\nvalue:=styles.labelled(\"x\", broken)", .location = "/native/main.huak:3:20: ", .message = "unknown variable: missing_size" },
     };
     for (failures) |failure| {
         var program = try compileModulesOptimized(&library, failure.source, &modules, true);

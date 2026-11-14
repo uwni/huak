@@ -27,8 +27,8 @@ fn snap_priority(value:any) -> float
     return float(value)
 end
 
-fn snap_time(curve:path, target:any, from_start:bool) -> float
-    hit_times := intersection_times(curve, target.snapping)
+fn snap_time(curve:path, outline:path, from_start:bool) -> float
+    hit_times := intersection_times(curve, outline)
     selected := float(len(curve))
     if not from_start then selected = 0 end
     for i in 0:len(hit_times)-1 do
@@ -44,7 +44,11 @@ fn snapped(curve:path, coordinate:any, objects:layout.Geometry, from_start:bool)
     if coordinate.kind == "named" then
         target := layout.find(objects, coordinate.name)
         if target.kind == "edge" or coordinate.anchor != "center" or opt.get(target.options, "snap", true) == false then return endpoint end
-        return snap_time(curve, target, from_start)
+        return snap_time(curve, target.snapping, from_start)
+    end
+    if coordinate.kind == "part" then
+        if opt.get(layout.find(objects, coordinate.name).options, "snap", true) == false then return endpoint end
+        return snap_time(curve, layout.part_snapping(objects, coordinate.name, coordinate.label), from_start)
     end
     // Relative coordinates and ports are exact anchors (for example a device
     // pin); they never search nearby nodes.
@@ -135,7 +139,7 @@ fn route(item:model.EdgeDescription, objects:layout.Geometry, cells:list, axes:l
     if opt.get(options, "snap", true) then
         start := snapped(curve, item.first, objects, true)
         stop := snapped(curve, item.last, objects, false)
-        assert(start < stop, "connector is fully enclosed by its nodes")
+        assert(start < stop, "connector is fully enclosed by the nodes or parts it joins")
         curve = trimmed(curve, start, stop)
     end
     dodge:list := opt.get(options, "dodge", [0pt, 0pt])

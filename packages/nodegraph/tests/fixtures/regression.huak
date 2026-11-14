@@ -187,11 +187,9 @@ labels := [
 ]
 assert(len(bounds(diagram(labels))) == 2)
 
-// Automatic endpoints, matrix construction, hide and caller-owned descriptions.
+// Automatic endpoints, hide and caller-owned descriptions.
 g = geometry([circle_node, edge(automatic(), automatic(), {"name": "auto"}), rect_node])
 near(point_at(route(g, "auto"), 0), (10pt, 0pt))
-rows := matrix_nodes([[typ[A], typ[B]], [typ[C]]])
-assert(len(rows) == 3 and rows[2].name == "r1c0")
 hidden := hide(a)
 assert(not options.has(a.options, "hidden") and options.get(hidden.options, "hidden", false))
 // Hidden items keep their layout box. Hidden floating items and debug

@@ -2,9 +2,13 @@ import math.sin
 import paint.*
 import pen.profile_outline
 
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 11pt)
-}
+    body
+  }
+]
+typ.show theme.style
 
 export pic := picture(180mm, 150mm)
 default pic

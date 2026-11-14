@@ -78,7 +78,10 @@ const State = struct {
 };
 
 const Analysis = struct {
+    /// The working arena of this analysis.
     allocator: Allocator,
+    /// Backs the working arenas of the context analyses it starts.
+    scratch_allocator: Allocator,
     program: *const bc.Program,
     summaries: []const Summary,
     budget: *Budget,
@@ -93,10 +96,10 @@ const Analysis = struct {
     observes_identity: bool = false,
     depth: usize = 0,
 
-    fn init(allocator: Allocator, program: *const bc.Program, summaries: []const Summary, budget: *Budget) !Analysis {
+    fn init(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary, budget: *Budget) !Analysis {
         const reads = try allocator.alloc(bool, program.global_types.len);
         @memset(reads, false);
-        return .{ .allocator = allocator, .program = program, .summaries = summaries, .budget = budget, .reads = reads };
+        return .{ .allocator = allocator, .scratch_allocator = scratch_allocator, .program = program, .summaries = summaries, .budget = budget, .reads = reads };
     }
 
     fn observe(self: *Analysis, value: Value) void {
@@ -341,7 +344,7 @@ const Analysis = struct {
                 const object = state.pop(self);
                 if (instruction_.a >= self.program.constants.len or self.program.constants[instruction_.a] != .string) return self.invalid();
                 const name = self.program.constants[instruction_.a].string;
-                if (!object.kind.isVector() and object.kind != .text and object.kind != .picture and object.kind != .object and object.kind != .measure) self.safe = false;
+                if (!object.kind.isVector() and object.kind != .text and object.kind != .picture and object.kind != .object and object.kind != .measure and object.kind != .anchor) self.safe = false;
                 if (object.kind == .text) self.uses_typst = true;
                 const raw_paths = object.kind.isObject() and std.mem.eql(u8, name, "paths");
                 if (raw_paths) self.uses_typst = true;
@@ -353,23 +356,27 @@ const Analysis = struct {
                 if (kind.isObject()) value.fresh_owner = object.fresh_owner;
                 try self.push(state, value);
             },
-            // Workers read the rules made before their group; a rule made in a
-            // task stays in the worker, since only the task's picture escapes.
-            .typst, .show_rule => {
+            // Workers read the modules made before their group; a module made
+            // in a task stays in the worker, since only the task's picture escapes.
+            .typst, .typst_module => {
                 self.uses_typst = true;
-                const count = std.math.mul(u32, instruction_.b, 2) catch return self.invalid();
-                const captures = self.args(state, count);
-                if (captures.len != count) return self.invalid();
+                // A module's name precedes its captured pairs.
+                const named = instruction_.op == .typst_module;
+                const count = @as(u32, instruction_.typstCaptures().pairs) * 2 + @intFromBool(named);
+                const operands = self.args(state, count);
+                if (operands.len != count) return self.invalid();
+                if (named and operands[0].kind != .string) self.safe = false;
+                const captures = operands[@intFromBool(named)..];
                 var index: usize = 0;
                 while (index < captures.len) : (index += 2) {
                     if (captures[index].kind != .string) self.safe = false;
                     switch (captures[index + 1].kind) {
-                        .int, .number, .boolean, .string, .scalar, .length, .quantity, .color, .show_rule, .any => {},
+                        .int, .number, .boolean, .string, .scalar, .length, .quantity, .color, .typst_module, .any => {},
                         else => self.safe = false,
                     }
                 }
-                state.stack.shrinkRetainingCapacity(state.stack.items.len - captures.len);
-                try self.push(state, Value.ordinary(if (instruction_.op == .typst) .text else .show_rule));
+                state.stack.shrinkRetainingCapacity(state.stack.items.len - operands.len);
+                try self.push(state, Value.ordinary(if (named) .typst_module else .text));
             },
             .check_module, .jump => {},
             .return_value => {
@@ -383,9 +390,9 @@ const Analysis = struct {
                 _ = state.pop(self);
                 self.safe = false;
             },
-            // Import/setup/observable effects and global writes cannot be
+            // Import/observable effects and global writes cannot be
             // replayed by an isolated worker. Unknown opcodes stay barriers.
-            .import_module, .setup_typst, .halt => self.safe = false,
+            .import_module, .halt => self.safe = false,
         }
     }
 
@@ -398,7 +405,7 @@ const Analysis = struct {
         var summary = self.summaries[index];
         if (!summary.safe and self.depth < limits.rounds) for (arguments) |arg| {
             if (arg.fresh_owner or arg.callable != null or arg.bound != null) {
-                summary = try analyzeFunction(self.allocator, self.program, self.summaries, index, self.budget, arguments, self.depth + 1);
+                summary = try analyzeFunction(self.allocator, self.scratch_allocator, self.program, self.summaries, index, self.budget, arguments, self.depth + 1);
                 break;
             }
         };
@@ -549,7 +556,7 @@ const Analysis = struct {
                 // Collection copies are shallow; copying an object clones its subtree.
                 if (!supportedType(result.kind)) self.safe = false;
             },
-            .width, .height, .baseline => self.uses_typst = true,
+            .width, .height, .baseline, .anchors => self.uses_typst = true,
             .bounds => {
                 if (arguments.len != 0 and arguments[0].kind.isObject()) self.uses_typst = true;
             },
@@ -633,7 +640,7 @@ const Analysis = struct {
 
 fn supportedType(kind: Type) bool {
     return switch (kind) {
-        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .pen, .transform, .text, .show_rule, .picture, .function, .measure, .object => true,
+        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .pen, .transform, .text, .typst_module, .picture, .function, .measure, .anchor, .object => true,
         else => false,
     };
 }
@@ -671,7 +678,7 @@ fn same(a: Summary, b: Summary) bool {
 /// Isolated workers do not retain unused object allocations. Until allocation
 /// identity has an independent representation, a program that observes native
 /// handle/token numbering must keep its original ordered execution throughout.
-pub fn observesIdentity(allocator: Allocator, program: *const bc.Program, summaries: []const Summary) Allocator.Error!bool {
+pub fn observesIdentity(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary) Allocator.Error!bool {
     // Library definitions do not execute merely because their module was
     // imported. Follow executable references before applying the barrier.
     const reachable = try allocator.alloc(bool, program.functions.len);
@@ -701,7 +708,7 @@ pub fn observesIdentity(allocator: Allocator, program: *const bc.Program, summar
             else => {},
         };
         for (function.default_functions) |default| if (default) |callee| try pending.append(allocator, callee);
-        const summary = if (program.isEntry(index)) try analyzeFunction(allocator, program, summaries, index, &budget, null, 0) else summaries[index];
+        const summary = if (program.isEntry(index)) try analyzeFunction(allocator, scratch_allocator, program, summaries, index, &budget, null, 0) else summaries[index];
         if (budget.exhausted) return true;
         if (summary.observes_identity) return true;
     }
@@ -710,14 +717,16 @@ pub fn observesIdentity(allocator: Allocator, program: *const bc.Program, summar
 
 /// The least fixed point admits only proven callees. Recursive SCCs therefore
 /// remain serial in this first version, including recursion hidden by helpers.
-pub fn analyze(allocator: Allocator, program: *const bc.Program) Allocator.Error!?[]const Summary {
+/// The summaries belong to `allocator`. Working state lives in arenas over
+/// `scratch_allocator`, which must return freed memory, and is gone on return.
+pub fn analyze(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program) Allocator.Error!?[]const Summary {
     if (program.functions.len > limits.functions or program.global_types.len > limits.globals) return null;
     var instruction_count: usize = 0;
     for (program.functions) |function| {
         if (function.code.len > limits.instructions - instruction_count) return null;
         instruction_count += function.code.len;
     }
-    var temporary: std.heap.ArenaAllocator = .init(allocator);
+    var temporary: std.heap.ArenaAllocator = .init(scratch_allocator);
     defer temporary.deinit();
     const scratch = temporary.allocator();
     const summaries = try scratch.alloc(Summary, program.functions.len);
@@ -731,7 +740,7 @@ pub fn analyze(allocator: Allocator, program: *const bc.Program) Allocator.Error
         changed = false;
         for (program.functions, 0..) |_, index| {
             if (program.isEntry(index)) continue;
-            const result = try analyzeFunction(scratch, program, summaries, @intCast(index), &budget, null, 0);
+            const result = try analyzeFunction(scratch, scratch_allocator, program, summaries, @intCast(index), &budget, null, 0);
             if (budget.exhausted) return null;
             if (!same(result, summaries[index])) {
                 summaries[index] = result;
@@ -751,15 +760,15 @@ pub fn analyze(allocator: Allocator, program: *const bc.Program) Allocator.Error
     return output;
 }
 
-fn analyzeFunction(allocator: Allocator, program: *const bc.Program, summaries: []const Summary, index: u32, budget: *Budget, arguments: ?[]const Value, depth: usize) Allocator.Error!Summary {
-    // Discard the per-function CFG after every pass instead of retaining its
-    // stacks in the compilation arena across interprocedural iterations.
-    var temporary: std.heap.ArenaAllocator = .init(allocator);
+fn analyzeFunction(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary, index: u32, budget: *Budget, arguments: ?[]const Value, depth: usize) Allocator.Error!Summary {
+    // Release the per-function CFG after every pass. Only the summary goes to
+    // `allocator`; the stacks do not stay across interprocedural iterations.
+    var temporary: std.heap.ArenaAllocator = .init(scratch_allocator);
     defer temporary.deinit();
     const scratch = temporary.allocator();
     const function = program.functions[index];
     if (!budget.consume(function.code.len) or !budget.consume(function.local_types.len) or !budget.consume(program.global_types.len)) return .{};
-    var analysis = try Analysis.init(scratch, program, summaries, budget);
+    var analysis = try Analysis.init(scratch, scratch_allocator, program, summaries, budget);
     analysis.local_types = function.local_types;
     analysis.depth = depth;
     if (function.code.len == 0 or function.parameters.len > function.local_types.len) return .{};
@@ -814,13 +823,13 @@ fn propagate(analysis: *Analysis, states: []?State, pending: *std.ArrayList(usiz
 
 /// Analyze one straight RHS with an initially empty stack. Local execution
 /// frames, jumps and settings changes must stay with the coordinating VM.
-pub fn expression(allocator: Allocator, program: *const bc.Program, summaries: []const Summary, code: []const bc.Instruction, remaining: *usize) Allocator.Error!?Summary {
-    var temporary: std.heap.ArenaAllocator = .init(allocator);
+pub fn expression(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary, code: []const bc.Instruction, remaining: *usize) Allocator.Error!?Summary {
+    var temporary: std.heap.ArenaAllocator = .init(scratch_allocator);
     defer temporary.deinit();
     var budget: Budget = .{ .remaining = remaining.* };
     defer remaining.* = budget.remaining;
     if (!budget.consume(program.global_types.len) or !budget.consume(code.len)) return null;
-    var analysis = try Analysis.init(temporary.allocator(), program, summaries, &budget);
+    var analysis = try Analysis.init(temporary.allocator(), scratch_allocator, program, summaries, &budget);
     var state: State = .{ .locals = &.{} };
     for (code) |instruction| {
         switch (instruction.op) {
@@ -851,7 +860,7 @@ test "dictionary reads and shallow copies never create fresh picture provenance"
     };
     defer program.deinit();
     var budget: Budget = .{};
-    var analysis = try Analysis.init(arena.allocator(), &program, &.{}, &budget);
+    var analysis = try Analysis.init(arena.allocator(), std.testing.allocator, &program, &.{}, &budget);
     const dictionary = Value.ordinary(.dict);
     const key = Value.ordinary(.string);
     const contains = analysis.builtinResult(&builtin.signature(.dict_contains), &.{ dictionary, key });

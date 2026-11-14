@@ -21,3 +21,9 @@ pub struct TypstDiagnostics {
 pub struct TypstBuffer {
     pub(crate) inner: Vec<u8>,
 }
+pub struct TypstMemberUses {
+    pub(crate) inner: crate::syntax::MemberUses,
+}
+pub struct TypstModule {
+    pub(crate) inner: crate::layout::EvaluatedModule,
+}

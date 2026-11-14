@@ -67,13 +67,25 @@ pub const Expr = struct {
         slice: struct { object: *Expr, range: Range },
         member: struct { object: *Expr, name: []const u8 },
         /// Original content block, including its brackets, borrowed from module source.
-        typst: []const u8,
-        /// Typst function code `parameter => {...}`, borrowed from module source.
-        show_rule: struct { code: []const u8, parameter: Span },
+        typst: Typst,
+        /// `typ.module[…]`: the content of a Typst file, including the brackets.
+        typst_module: Typst,
         block: []const *Stmt,
         expansion: struct { name: OperatorName, definition: *Stmt, module: u32, args: []const *Expr, argument_names: []const ?[]const u8, body: []const *Stmt, scope: u32 },
     },
 };
+/// Typst code borrowed from module source, with the places where it reads
+/// Huak values as `huak.name` or `import huak: name`, in source order.
+pub const Typst = struct {
+    code: []const u8,
+    uses: []const TypstUse = &.{},
+    /// The code binds `huak` itself, so a use may not name a Huak value.
+    rebound: bool = false,
+    /// The code also uses `huak` as a whole value, as in `dictionary(huak)`.
+    whole: bool = false,
+};
+/// `name` is the member identifier in the code, borrowed from module source.
+pub const TypstUse = struct { name: []const u8, span: Span };
 pub const DictEntry = struct { key: []const u8, value: *Expr, span: Span };
 pub const Annotation = struct { name: []const u8, span: Span };
 pub const Parameter = struct { name: []const u8, annotation: Annotation, span: Span, variadic: bool = false, default: ?*Expr = null };
@@ -108,10 +120,9 @@ pub const Stmt = struct {
         return_value: ?*Expr,
         exported: struct { names: []const ExportName, value: ?*Expr },
         default_output: *Expr,
-        /// Original code block, including its braces, borrowed from module source.
-        setup_typst: []const u8,
-        typst_expose: []const ExportName,
-        /// Show rules applied around every `typ` in this lexical scope.
+        /// `typ.show value.member…`: a member of a typ.module value applied as
+        /// a show rule around every `typ` in this lexical scope. The path
+        /// starts with Huak names and ends with Typst members.
         typst_show: []const ExportName,
         imported: struct { path: []const u8, bare: bool = false, namespace_path: []const []const u8 = &.{}, form: ImportForm },
         precedence_group: struct { name: []const u8, relations: []const Relation, associativity: Associativity = .none },

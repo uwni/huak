@@ -1,4 +1,6 @@
 //! Independent content layout through Typst's evaluator and frame layout API.
+use std::sync::OnceLock;
+
 use comemo::Track;
 use typst_core::diag::SourceResult;
 use typst_core::engine::{Engine, Route, Sink, Traced};
@@ -8,7 +10,7 @@ use typst_core::foundations::{
 use typst_core::introspection::{EmptyIntrospector, Locator};
 use typst_core::layout::{Abs, Axes, Frame, Region, Size};
 use typst_core::routines::SpanMode;
-use typst_core::syntax::{RangeMapper, Span, SyntaxMode};
+use typst_core::syntax::{RangeMapper, Source, Span, SyntaxMode};
 use typst_core::utils::Protected;
 use typst_core::World;
 
@@ -18,10 +20,13 @@ use crate::diagnostics::Report;
 use crate::error::Error;
 
 mod bounds;
+mod labels;
 mod setup;
 
 pub(crate) struct Layout {
     pub(crate) frame: Frame,
+    /// Read from the frame when first requested.
+    labels: OnceLock<Option<labels::Labels>>,
 }
 
 /// Template code and its optional setup. Requests keep these sources in their
@@ -34,15 +39,65 @@ pub(crate) struct TemplateSource<'a> {
     pub(crate) setup_source_name: &'a str,
 }
 
-/// The templates a request refers to, and the functions it applies around its
-/// content as `#show:` rules, outermost first.
+/// Code to evaluate into a module, with the source name that names the
+/// module and locates its diagnostics.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Templates<'a> {
-    pub(crate) sources: &'a [TemplateSource<'a>],
+pub(crate) struct ModuleSource<'a> {
+    pub(crate) code: &'a str,
+    pub(crate) source_name: &'a str,
+}
+
+/// A module evaluated once and kept for many requests, with the sources that
+/// diagnostics raised inside its functions refer to: its own first, then
+/// those of the modules it was evaluated with.
+pub(crate) struct EvaluatedModule {
+    pub(crate) value: Value,
+    pub(crate) sources: Vec<Source>,
+}
+
+/// Adds `source` unless it is already there. Two texts under one name would
+/// leave the spans of one of them without a source.
+pub(crate) fn retain_source(sources: &mut Vec<Source>, source: &Source) -> Result<(), Error> {
+    match sources.iter().find(|known| known.id() == source.id()) {
+        Some(known) if known.text() == source.text() => Ok(()),
+        Some(_) => Err(Error::invalid(
+            "module handles used together must have distinct source names",
+        )),
+        None => {
+            sources.push(source.clone());
+            Ok(())
+        }
+    }
+}
+
+/// What a request prepares before its content: the template sources it
+/// refers to, the sources of the evaluated modules it uses, and the
+/// functions it applies around its content as `#show:` rules, outermost
+/// first.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Prepared<'a> {
+    pub(crate) templates: &'a [TemplateSource<'a>],
+    pub(crate) retained: &'a [Source],
     pub(crate) shows: &'a [Value],
 }
 
 impl Layout {
+    pub(crate) fn new(frame: Frame) -> Self {
+        Self {
+            frame,
+            labels: OnceLock::new(),
+        }
+    }
+
+    /// Labeled elements in document order, borrowed for the layout's lifetime.
+    pub(crate) fn labels(&self) -> Result<&[TypstLabeledElement], Error> {
+        self.labels
+            .get_or_init(|| labels::collect(&self.frame))
+            .as_ref()
+            .map(labels::Labels::elements)
+            .ok_or_else(|| Error::invalid("non-finite label geometry"))
+    }
+
     pub(crate) fn metrics(&self) -> TypstMetrics {
         metrics(&self.frame)
     }
@@ -81,23 +136,77 @@ impl Context {
             "",
             "",
             Scope::new(),
-            Templates::default(),
+            Prepared::default(),
             request_index,
         )
     }
 
+    /// Evaluates module code like an imported file, with `bindings` visible
+    /// from an enclosing scope. `retained` are the sources of the evaluated
+    /// modules those bindings refer to. Warnings are returned for the caller's
+    /// report.
+    pub(crate) fn module(
+        &self,
+        module: ModuleSource<'_>,
+        bindings: Scope,
+        retained: &[Source],
+    ) -> Result<(EvaluatedModule, Report), Error> {
+        let mut world = self.world(module.code, module.source_name)?;
+        world.add_parsed(retained)?;
+        let library = world.library();
+        let traced = Traced::default();
+        let introspector = EmptyIntrospector;
+        let mut sink = Sink::new();
+        let eval_context = EvalContext::none();
+        let result = {
+            let world: &dyn World = &world;
+            let source = world
+                .source(world.main())
+                .expect("the module source is present");
+            let engine = Engine {
+                world: world.track(),
+                library,
+                introspector: Protected::new(introspector.track()),
+                traced: traced.track(),
+                sink: sink.track_mut(),
+                route: Route::default(),
+            };
+            setup::module(engine, &eval_context, &source, bindings).map(|(module, _)| module)
+        };
+        let mut report = Report::from_native(&world, &sink.warnings(), usize::MAX);
+        match result {
+            Ok(module) => {
+                let mut sources = Vec::with_capacity(1 + retained.len());
+                sources.push(world.source.clone());
+                sources.extend_from_slice(retained);
+                let module = EvaluatedModule {
+                    value: Value::Module(module),
+                    sources,
+                };
+                Ok((module, report))
+            }
+            Err(errors) => {
+                report.merge(Report::from_native(&world, &errors, usize::MAX));
+                Err(Error::compile(report))
+            }
+        }
+    }
+
     /// Evaluates template code into its function value with its own bindings,
-    /// before a request that refers to it. Warnings are returned for that
-    /// request's report; the function itself owns its syntax and captures.
+    /// before a request that refers to it. `retained` are the sources of the
+    /// evaluated modules those bindings refer to. Warnings are returned for
+    /// that request's report; the function itself owns its syntax and captures.
     pub(crate) fn template(
         &self,
         template: TemplateSource<'_>,
         bindings: Scope,
+        retained: &[Source],
     ) -> Result<(Value, Report), Error> {
         let mut world = self.world(template.code, template.source_name)?;
         if !template.setup_code.is_empty() {
             world.set_setup(template.setup_code, template.setup_source_name)?;
         }
+        world.add_parsed(retained)?;
         let library = world.library();
         let traced = Traced::default();
         let introspector = EmptyIntrospector;
@@ -143,7 +252,7 @@ impl Context {
         setup_code: &str,
         setup_source_name: &str,
         bindings: Scope,
-        templates: Templates<'_>,
+        prepared: Prepared<'_>,
         request_index: usize,
     ) -> Result<(Layout, Report), Error> {
         let (mode, region) = region_and_syntax(options)?;
@@ -151,14 +260,15 @@ impl Context {
         if !setup_code.is_empty() {
             world.set_setup(setup_code, setup_source_name)?;
         }
-        for template in templates.sources {
-            world.add_template(template.code, template.source_name)?;
+        for template in prepared.templates {
+            world.add_source(template.code, template.source_name)?;
             if !template.setup_code.is_empty() {
-                world.add_template(template.setup_code, template.setup_source_name)?;
+                world.add_source(template.setup_code, template.setup_source_name)?;
             }
         }
+        world.add_parsed(prepared.retained)?;
         let mut sink = Sink::new();
-        let result = layout_in_world(&world, mode, region, bindings, templates.shows, &mut sink);
+        let result = layout_in_world(&world, mode, region, bindings, prepared.shows, &mut sink);
         let needs_document = !sink.introspections().is_empty();
         let delayed = sink.delayed();
         let mut report = Report::from_native(&world, &sink.warnings(), request_index);
@@ -166,7 +276,7 @@ impl Context {
             report.merge(Report::message(TYPST_DIAGNOSTIC_ERROR, "independent content cannot query document state; compile a complete document instead").with_source(source_name).with_request(request_index));
         }
         match result {
-            Ok(frame) if delayed.is_empty() && !needs_document => Ok((Layout { frame }, report)),
+            Ok(frame) if delayed.is_empty() && !needs_document => Ok((Layout::new(frame), report)),
             result => {
                 if let Err(errors) = result {
                     report.merge(Report::from_native(&world, &errors, request_index));
@@ -186,12 +296,8 @@ fn region_and_syntax(options: &TypstLayoutOptions) -> Result<(SyntaxMode, Region
             "unknown layout flags or nonzero reserved field",
         ));
     }
-    let mode = match options.syntax {
-        TYPST_SYNTAX_MARKUP => SyntaxMode::Markup,
-        TYPST_SYNTAX_CODE => SyntaxMode::Code,
-        TYPST_SYNTAX_MATH => SyntaxMode::Math,
-        _ => return Err(Error::invalid("unknown layout syntax")),
-    };
+    let mode = crate::syntax::syntax_mode(options.syntax)
+        .map_err(|_| Error::invalid("unknown layout syntax"))?;
     let dimension = |value: f64, expand: bool, bound: bool| -> Result<Abs, Error> {
         if !value.is_finite() || value < 0.0 {
             return Err(Error::invalid(
@@ -293,7 +399,7 @@ fn layout_in_world(
     // receives the content first and nearer rules take precedence.
     for rule in shows.iter().rev() {
         let Value::Func(function) = rule else {
-            unreachable!("templates are checked to be functions when made");
+            unreachable!("show rules are checked to be functions before layout");
         };
         content = function
             .call(&mut engine, eval_context.track(), [content])?
@@ -309,7 +415,7 @@ fn layout_in_world(
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use typst_core::foundations::{Array, Binding, Dict, IntoValue, Value};
+    use typst_core::foundations::{Array, Binding, Dict, IntoValue, Module, Value};
     use typst_core::layout::FrameItem;
 
     fn glyph_count(frame: &Frame) -> usize {
@@ -345,7 +451,7 @@ mod tests {
                 setup,
                 "setup.typ",
                 bindings,
-                Templates::default(),
+                Prepared::default(),
                 0,
             )
             .unwrap()
@@ -369,12 +475,13 @@ mod tests {
             setup_code: setup,
             setup_source_name: "template-setup.typ",
         };
-        let (style, _) = context.template(template, own)?;
+        let (style, _) = context.template(template, own, &[])?;
         let mut bindings = data(&[("word", "Hello".into_value())]);
         bindings.bind("style".into(), Binding::detached(style.clone()));
         let shows = [style];
-        let templates = Templates {
-            sources: &[template],
+        let templates = Prepared {
+            templates: &[template],
+            retained: &[],
             shows: if apply { &shows } else { &[] },
         };
         context.layout_with_setup(
@@ -506,14 +613,14 @@ mod tests {
             source_name: "number.typ",
             ..Default::default()
         };
-        let error = context.template(number, Scope::new()).err().unwrap();
+        let error = context.template(number, Scope::new(), &[]).err().unwrap();
         assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
         let broken = TemplateSource {
             code: "body => {",
             source_name: "broken.typ",
             ..Default::default()
         };
-        let error = context.template(broken, Scope::new()).err().unwrap();
+        let error = context.template(broken, Scope::new(), &[]).err().unwrap();
         assert_eq!(error.status, TYPST_COMPILE_FAILED);
         assert!(mentions(&error, "broken.typ", ""));
         // Body, setup and template sources keep distinct names.
@@ -522,8 +629,9 @@ mod tests {
             source_name: "source.typ",
             ..Default::default()
         };
-        let templates = Templates {
-            sources: &[clash],
+        let templates = Prepared {
+            templates: &[clash],
+            retained: &[],
             shows: &[],
         };
         let options = Default::default();
@@ -538,6 +646,135 @@ mod tests {
             0,
         );
         assert_eq!(result.err().unwrap().status, TYPST_INVALID_ARGUMENT);
+    }
+
+    #[test]
+    fn module_bindings_call_template_functions_in_markup_and_math() {
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
+        let mark = TemplateSource {
+            code: "(name, body) => [#box(body)#label(name)]",
+            source_name: "mark.typ",
+            ..Default::default()
+        };
+        let (function, _) = context.template(mark, Scope::new(), &[]).unwrap();
+        let mut members = Scope::new();
+        members.bind("mark".into(), Binding::detached(function));
+        members.bind("count".into(), Binding::detached(2i64));
+        let mut bindings = Scope::new();
+        bindings.bind(
+            "lib".into(),
+            Binding::detached(Value::Module(Module::new("lib", members))),
+        );
+        let templates = Prepared {
+            templates: &[mark],
+            retained: &[],
+            shows: &[],
+        };
+        let (layout, _) = context
+            .layout_with_setup(
+                "#lib.mark(\"x\")[Text] $mat(lib.mark(\"a\", a), b) $ #lib.count",
+                "source.typ",
+                &Default::default(),
+                "",
+                "",
+                bindings,
+                templates,
+                0,
+            )
+            .unwrap();
+        let labels = layout.labels().unwrap();
+        let names: Vec<_> = labels
+            .iter()
+            .map(|element| unsafe {
+                std::str::from_utf8(std::slice::from_raw_parts(
+                    element.label.data,
+                    element.label.len,
+                ))
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(names, ["x", "a"]);
+    }
+
+    #[test]
+    fn evaluated_modules_keep_their_values_and_the_sources_their_errors_name() {
+        let context = Context::new(vec![], vec![], vec![], "", 0).unwrap();
+        let mut own = Scope::new();
+        own.bind("size".into(), Binding::detached(Abs::pt(30.0)));
+        let base = ModuleSource {
+            code: "#let scale = size\n#let fail() = panic(\"inside base\")",
+            source_name: "base.typ",
+        };
+        let (base, _) = context.module(base, own, &[]).unwrap();
+        assert_eq!(base.sources.len(), 1);
+        let mut uses = Scope::new();
+        uses.bind("base".into(), Binding::detached(base.value.clone()));
+        let theme = ModuleSource {
+            code: "#let twice = base.scale * 2\n#let fail = base.fail",
+            source_name: "theme.typ",
+        };
+        let (theme, _) = context.module(theme, uses, &base.sources).unwrap();
+        // Its own source comes first, then those it was evaluated with.
+        assert_eq!(theme.sources.len(), 2);
+        assert!(theme.sources[0]
+            .id()
+            .vpath()
+            .get_with_slash()
+            .ends_with("theme.typ"));
+        drop(base);
+
+        let mut bindings = Scope::new();
+        bindings.bind("lib".into(), Binding::detached(theme.value.clone()));
+        let prepared = Prepared {
+            retained: &theme.sources,
+            ..Default::default()
+        };
+        let layout = |body: &str, name: &str, prepared: Prepared<'_>| {
+            context.layout_with_setup(
+                body,
+                name,
+                &Default::default(),
+                "",
+                "",
+                bindings.clone(),
+                prepared,
+                0,
+            )
+        };
+        let (frame, _) = layout(
+            "#assert(lib.twice == 60pt and \"base\" not in dictionary(lib))Hello",
+            "source.typ",
+            prepared,
+        )
+        .unwrap();
+        assert!(glyph_count(&frame.frame) > 0);
+        // An error inside the first module's function has a range in its text
+        // only when the request's world keeps that source.
+        let located = |prepared: Prepared<'_>| {
+            let error = layout("#lib.fail()", "source.typ", prepared).err().unwrap();
+            assert!(mentions(&error, "base.typ", "inside base"));
+            error.report.entries[0].range.is_some()
+        };
+        assert!(located(prepared));
+        assert!(!located(Prepared::default()));
+        // Evaluated modules share the distinct-name rule with request sources.
+        let clash = layout("Hello", "theme.typ", prepared).err().unwrap();
+        assert_eq!(clash.status, TYPST_INVALID_ARGUMENT);
+
+        let mut sources = Vec::new();
+        for source in theme.sources.iter().chain(&theme.sources) {
+            retain_source(&mut sources, source).unwrap();
+        }
+        assert_eq!(sources.len(), 2);
+        let other = ModuleSource {
+            code: "#let twice = 1pt",
+            source_name: "theme.typ",
+        };
+        let (other, _) = context.module(other, Scope::new(), &[]).unwrap();
+        let error = retain_source(&mut sources, &other.sources[0])
+            .err()
+            .unwrap();
+        assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
     }
 
     #[test]
@@ -635,7 +872,7 @@ mod tests {
                 "",
                 "setup.typ",
                 scope,
-                Templates::default(),
+                Prepared::default(),
                 9,
             )
             .err()
@@ -664,7 +901,7 @@ mod tests {
                     setup,
                     "setup.typ",
                     data(&[("title", "available".into_value())]),
-                    Templates::default(),
+                    Prepared::default(),
                     13,
                 )
                 .err()

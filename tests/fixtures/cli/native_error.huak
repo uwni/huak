@@ -1,6 +1,8 @@
-setup_typst {
+theme := typ.module[#let style(body) = {
 set text(size: )
-}
+body
+}]
+typ.show theme.style
 t := typ[
 trigger layout
 ]

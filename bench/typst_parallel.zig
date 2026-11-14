@@ -24,8 +24,8 @@ fn script(allocator: std.mem.Allocator, count: usize, trial: usize, exposed: boo
     errdefer writer.deinit();
     try writer.writer.writeAll("import paint.{rgb, picture, label}\n");
     if (exposed) {
-        try writer.writer.print("trial:={d}\nfont_size:=13pt\nink:=rgb(0,0,0)\ntypst_expose trial,font_size,ink\nsetup_typst {{ set text(size:huak.font_size,fill:huak.ink) }}\n", .{trial});
-    } else try writer.writer.writeAll("setup_typst { set text(size: 13pt) }\n");
+        try writer.writer.print("trial:={d}\nfont_size:=13pt\nink:=rgb(0,0,0)\ntheme:=typ.module[#let style(body) = {{ set text(size:huak.font_size,fill:huak.ink); body }}]\ntyp.show theme.style\n", .{trial});
+    } else try writer.writer.writeAll("theme:=typ.module[#let style(body) = { set text(size: 13pt); body }]\ntyp.show theme.style\n");
     // Sources differ within and between trials. Both modes execute the exact
     // same Program in each trial; alternating their order balances cache reuse.
     for (0..count) |index| {

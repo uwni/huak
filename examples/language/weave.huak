@@ -1,9 +1,13 @@
 import paint.*
 import weave.weave
 
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 10pt)
-}
+    body
+  }
+]
+typ.show theme.style
 
 export plate := picture with width 210mm height 100mm
 default plate

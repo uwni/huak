@@ -36,7 +36,7 @@ const Profile = struct {
     fn context(pointer: ?*anyopaque) *Profile {
         return @ptrCast(@alignCast(pointer.?));
     }
-    const host_vtable: l.Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .module = module, .setup_typst = setup, .typst = typeset, .typst_batch = batch, .error_message = message };
+    const host_vtable: l.Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = batch, .typst_module = typstModule, .error_message = message };
     const single_host_vtable = blk: {
         var table = host_vtable;
         table.typst_batch = null;
@@ -69,17 +69,11 @@ const Profile = struct {
         defer self.other.finish(self.io, start, 1);
         return self.base.binary(a, op, left, right);
     }
-    fn module(pointer: ?*anyopaque, index: u32) anyerror!void {
+    fn typstModule(pointer: ?*anyopaque, a: std.mem.Allocator, module: l.Machine.TypstModule) anyerror!Value {
         const self = context(pointer);
         const start = std.Io.Clock.awake.now(self.io);
         defer self.other.finish(self.io, start, 1);
-        return self.base.selectModule(index);
-    }
-    fn setup(pointer: ?*anyopaque, source: []const u8) anyerror!void {
-        const self = context(pointer);
-        const start = std.Io.Clock.awake.now(self.io);
-        defer self.other.finish(self.io, start, 1);
-        return self.base.setupTypst(source);
+        return self.base.typstModule(a, module);
     }
     fn typeset(pointer: ?*anyopaque, a: std.mem.Allocator, request: l.Machine.TypstRequest) anyerror!Value {
         const self = context(pointer);

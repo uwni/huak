@@ -3,7 +3,7 @@ import geometry.{circle, compound}
 import object.draw
 import color.rgb
 import assertions.assert
-import "nodegraph/model.huak".{GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, BetweenCoordinate, AutomaticCoordinate, PortCoordinate, NodeDescription, EnclosureDescription, EdgeDescription, MarkDescription, grid, absolute, named, relative, polar, between, automatic, shift, node, enclose, edge, connect, hide, mark, port}
+import "nodegraph/model.huak".{GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, BetweenCoordinate, AutomaticCoordinate, PortCoordinate, PartCoordinate, NodeDescription, EnclosureDescription, EdgeDescription, MarkDescription, grid, absolute, named, relative, polar, between, automatic, shift, node, enclose, edge, connect, hide, mark, port, part}
 import "nodegraph/marks.huak".arrows
 import "nodegraph/shapes.huak".{shape_outline, ellipse_shape, stretched_glyph}
 import "nodegraph/options.huak" as opt
@@ -204,9 +204,15 @@ export fn place(target:Scene, body:text, position:any, options:dict = {}) -> Nod
     return NodeHandle(name: name)
 end
 
-export fn link(target:Scene, first:NodeHandle, last:NodeHandle, options:dict = {}) -> EdgeHandle
+// Each end is a node handle or a coordinate, such as part(node, label).
+fn endpoint(value:any) -> any
+    if value.kind == "node_handle" then return named(value.name) end
+    return value
+end
+
+export fn link(target:Scene, first:any, last:any, options:dict = {}) -> EdgeHandle
     name := fresh(target, "e")
-    target.items += [connect(first.name, last.name, opt.setting(options, "name", name))]
+    target.items += [edge(endpoint(first), endpoint(last), opt.setting(options, "name", name))]
     return EdgeHandle(name: name)
 end
 
@@ -226,17 +232,6 @@ export fn group(target:Scene, members:list, body:text, options:dict = {}) -> Nod
     name := fresh(target, "g")
     target.items += [enclose(name, names, body, options)]
     return NodeHandle(name: name)
-end
-
-export fn matrix(target:Scene, rows:list, options:dict = {}) -> list
-    result := []
-    for row in 0:len(rows)-1 do
-        cells:list := rows[row]
-        for column in 0:len(cells)-1 do
-            result += [place(target, cells[column], grid(column, row), options)]
-        end
-    end
-    return result
 end
 
 export fn anchor_node(target:Scene, node:NodeHandle, side:string = "center") -> vec2
@@ -266,28 +261,13 @@ export expand_block drawing(target:Scene)
     link := link.with(target: target)
     wire := wire.with(target: target)
     group := group.with(target: target)
-    matrix := matrix.with(target: target)
     // The trailing options are optional; omitting them uses the defaults.
     mixfix(place) place _ at _ with _ in unary
     mixfix(link) link _ to _ with _ in unary
     mixfix(wire) wire _ to _ in unary
     mixfix(group) group _ containing _ with _ in unary
-    mixfix(matrix) matrix _ in unary
     ...
     return finish(target)
-end
-
-// Huak owns the matrix, so Typst mathematical content needs no inspection.
-// Rows may be ragged. Stable names are r0c0, r0c1, r1c0, ... .
-export fn matrix_nodes(rows:list, options:dict = {}) -> list
-    result := []
-    for row in 0:len(rows)-1 do
-        cells:list := rows[row]
-        for column in 0:len(cells)-1 do
-            result += [node("r"+str(row)+"c"+str(column), grid(column, row), cells[column], options)]
-        end
-    end
-    return result
 end
 
 mixfix(node) node named _ at _ containing _ in unary
@@ -295,8 +275,8 @@ mixfix(connect) connect from _ to _ in unary
 mixfix(edge) edge from _ to _ with _ in unary
 mixfix(enclose) enclose named _ around _ containing _ in unary
 mixfix(diagram) diagram of _ in unary
-export GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, BetweenCoordinate, AutomaticCoordinate
+export GridCoordinate, AbsoluteCoordinate, NamedCoordinate, RelativeCoordinate, BetweenCoordinate, AutomaticCoordinate, PartCoordinate
 export NodeDescription, EnclosureDescription, EdgeDescription, MarkDescription
-export grid, absolute, named, relative, polar, between, automatic, shift, port
+export grid, absolute, named, relative, polar, between, automatic, shift, port, part
 export node, enclose, edge, connect, hide, mark, arrows
 export shape_outline, ellipse_shape, stretched_glyph

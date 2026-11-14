@@ -78,7 +78,7 @@ fn horizontal(byte: u8) bool {
 
 fn spaced(kind: ?Lexer.Kind) bool {
     return switch (kind orelse return false) {
-        .assign, .declare, .plus_assign, .fat_arrow, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => true,
+        .assign, .declare, .plus_assign, .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => true,
         else => false,
     };
 }
@@ -259,7 +259,7 @@ test "formatter leaves the distinct execution results of spaced prefixes and adj
 
 test "formatter indents branches and explicit header delimiters without changing line boundaries" {
     try expectFormat("fn f(x:int)->int\nif x>0\nthen\nreturn x\nelseif x<0 then\nreturn -x\nelse\nreturn 0\nend\nend\n", "fn f(x:int)->int\n    if x > 0\n    then\n        return x\n    elseif x < 0 then\n        return -x\n    else\n        return 0\n    end\nend\n", .{});
-    try expectFormat("x:=(1,2)\n\n# a=b,c  \n", "x := (1, 2)\n\n# a=b,c  \n", .{});
+    try expectFormat("x:=(1,2)\n\n// a=b,c  \n", "x := (1, 2)\n\n// a=b,c  \n", .{});
 }
 
 test "formatter preserves CRLF endings and comments between multiline arguments" {

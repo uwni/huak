@@ -16,66 +16,69 @@ pub(super) fn bounds(frame: &Frame) -> Option<Rect> {
     while let Some((frame, parent)) = pending.pop() {
         for (position, item) in frame.items() {
             let at = parent.pre_concat(Transform::translate(position.x, position.y));
-            match item {
-                FrameItem::Group(group) => {
-                    pending.push((&group.frame, at.pre_concat(group.transform)));
-                }
-                FrameItem::Text(text) => {
-                    let bbox = text.bbox();
-                    // Empty/space-only runs have no font bounding box.
-                    if bbox.min.x.is_finite() && bbox.max.x.is_finite() {
-                        let bbox = Rect::new(bbox.min.min(bbox.max), bbox.min.max(bbox.max));
-                        include(&mut result, with_stroke(bbox, text.stroke.as_ref()), at)?;
-                    }
-                    let mut cursor = Point::zero();
-                    for glyph in &text.glyphs {
-                        if !should_outline(&text.font, ttf_parser::GlyphId(glyph.id)) {
-                            if let Some(frame) = glyph_frame(&text.font, glyph.id) {
-                                let offset = cursor
-                                    + Point::new(
-                                        glyph.x_offset.at(text.size),
-                                        glyph.y_offset.at(text.size),
-                                    );
-                                let scale =
-                                    Ratio::new(text.size.to_pt() / text.font.units_per_em());
-                                let transform = at
-                                    .pre_concat(Transform::translate(offset.x, -offset.y))
-                                    .pre_concat(Transform::scale(scale, scale));
-                                let (position, bbox) = match frame.item {
-                                    GlyphFrameItem::Tofu(pos, shape) => {
-                                        (pos, with_stroke(shape.bbox(false), shape.stroke.as_ref()))
-                                    }
-                                    GlyphFrameItem::Image(pos, _, size) => {
-                                        (pos, Rect::from_pos_size(Point::zero(), size))
-                                    }
-                                };
-                                include(
-                                    &mut result,
-                                    bbox,
-                                    transform
-                                        .pre_concat(Transform::translate(position.x, position.y)),
-                                )?;
-                            }
-                        }
-                        cursor += Point::new(
-                            glyph.x_advance.at(text.size),
-                            glyph.y_advance.at(text.size),
-                        );
-                    }
-                }
-                FrameItem::Shape(shape, _) => include(
-                    &mut result,
-                    with_stroke(shape.bbox(false), shape.stroke.as_ref()),
-                    at,
-                )?,
-                FrameItem::Image(_, size, _) => {
-                    include(&mut result, Rect::from_pos_size(Point::zero(), *size), at)?
-                }
-                FrameItem::Link(_, _) | FrameItem::Tag(_) => {}
+            if let FrameItem::Group(group) = item {
+                pending.push((&group.frame, at.pre_concat(group.transform)));
+            } else {
+                painted(&mut result, item, at)?;
             }
         }
     }
     Some(result)
+}
+
+/// Includes what an item placed at `at` paints. A group paints nothing itself;
+/// its frame's items are visited on their own.
+pub(super) fn painted(result: &mut Rect, item: &FrameItem, at: Transform) -> Option<()> {
+    match item {
+        FrameItem::Text(text) => {
+            let bbox = text.bbox();
+            // Empty/space-only runs have no font bounding box.
+            if bbox.min.x.is_finite() && bbox.max.x.is_finite() {
+                let bbox = Rect::new(bbox.min.min(bbox.max), bbox.min.max(bbox.max));
+                include(result, with_stroke(bbox, text.stroke.as_ref()), at)?;
+            }
+            let mut cursor = Point::zero();
+            for glyph in &text.glyphs {
+                if !should_outline(&text.font, ttf_parser::GlyphId(glyph.id)) {
+                    if let Some(frame) = glyph_frame(&text.font, glyph.id) {
+                        let offset = cursor
+                            + Point::new(
+                                glyph.x_offset.at(text.size),
+                                glyph.y_offset.at(text.size),
+                            );
+                        let scale = Ratio::new(text.size.to_pt() / text.font.units_per_em());
+                        let transform = at
+                            .pre_concat(Transform::translate(offset.x, -offset.y))
+                            .pre_concat(Transform::scale(scale, scale));
+                        let (position, bbox) = match frame.item {
+                            GlyphFrameItem::Tofu(pos, shape) => {
+                                (pos, with_stroke(shape.bbox(false), shape.stroke.as_ref()))
+                            }
+                            GlyphFrameItem::Image(pos, _, size) => {
+                                (pos, Rect::from_pos_size(Point::zero(), size))
+                            }
+                        };
+                        include(
+                            result,
+                            bbox,
+                            transform.pre_concat(Transform::translate(position.x, position.y)),
+                        )?;
+                    }
+                }
+                cursor += Point::new(glyph.x_advance.at(text.size), glyph.y_advance.at(text.size));
+            }
+            Some(())
+        }
+        FrameItem::Shape(shape, _) => include(
+            result,
+            with_stroke(shape.bbox(false), shape.stroke.as_ref()),
+            at,
+        ),
+        FrameItem::Image(_, size, _) => {
+            include(result, Rect::from_pos_size(Point::zero(), *size), at)
+        }
+        FrameItem::Group(_) | FrameItem::Link(_, _) | FrameItem::Tag(_) => Some(()),
+    }
 }
 
 // Native curve stroke bounding reconstructs an approximate offset curve.
@@ -90,7 +93,9 @@ fn with_stroke(mut bbox: Rect, stroke: Option<&FixedStroke>) -> Rect {
     bbox
 }
 
-fn include(result: &mut Rect, bbox: Rect, transform: Transform) -> Option<()> {
+/// Includes the corners of `bbox` mapped by `transform`. None marks a
+/// non-finite corner.
+pub(super) fn include(result: &mut Rect, bbox: Rect, transform: Transform) -> Option<()> {
     for point in [
         bbox.min,
         bbox.max,

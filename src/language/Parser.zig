@@ -10,24 +10,91 @@ pub const SourceParser = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
-    /// Borrow a host that implements sourceBlock(input). The host must outlive parsing.
+    /// Borrow a host that implements sourceBlock(input) and
+    /// sourceMemberUses(allocator, code, syntax, name). The host must outlive
+    /// parsing.
     pub fn init(provider: anytype) SourceParser {
         const Adapter = struct {
             fn parse(context: *anyopaque, input: []const u8) anyerror!usize {
                 const host: @TypeOf(provider) = @ptrCast(@alignCast(context));
                 return host.sourceBlock(input);
             }
+            fn uses(context: *anyopaque, allocator: std.mem.Allocator, code: []const u8, name: []const u8) anyerror!MemberUses {
+                const host: @TypeOf(provider) = @ptrCast(@alignCast(context));
+                const found = try host.sourceMemberUses(allocator, code, .code, name);
+                const copied = try allocator.alloc(MemberUse, found.uses.len);
+                for (copied, found.uses) |*use, native| use.* = .{ .member = native.member, .start = native.start, .end = native.end };
+                allocator.free(found.uses);
+                return .{ .uses = copied, .rebound = found.rebound, .whole = found.whole };
+            }
         };
-        return .{ .ptr = provider, .vtable = &.{ .block = Adapter.parse } };
+        return .{ .ptr = provider, .vtable = &.{ .block = Adapter.parse, .uses = Adapter.uses } };
     }
 
     pub inline fn block(self: SourceParser, input: []const u8) anyerror!usize {
         return self.vtable.block(self.ptr, input);
     }
 
+    /// Where Typst code, given as a code-mode block, reads members of `name`;
+    /// none when the provider does not report them. Results live in `allocator`.
+    pub fn memberUses(self: SourceParser, allocator: std.mem.Allocator, code: []const u8, name: []const u8) anyerror!MemberUses {
+        const query = self.vtable.uses orelse return .{ .uses = &.{}, .rebound = false, .whole = false };
+        return query(self.ptr, allocator, code, name);
+    }
+
+    /// `start` and `end` are byte offsets into the queried code.
+    pub const MemberUse = struct { member: []const u8, start: usize, end: usize };
+    /// `rebound`: the code binds the name itself. `whole`: it also uses the
+    /// name as a whole value rather than through a member.
+    pub const MemberUses = struct { uses: []const MemberUse, rebound: bool, whole: bool };
+
     pub const VTable = struct {
         block: *const fn (*anyopaque, []const u8) anyerror!usize,
+        uses: ?*const fn (*anyopaque, std.mem.Allocator, []const u8, []const u8) anyerror!MemberUses = null,
     };
+};
+
+/// A stand-in for the native source parser in unit tests: a block runs to
+/// its matching bracket, `huak.name` is found by text, `#let huak` marks a
+/// rebinding and any other `huak` is a whole-value use. Native parsing is
+/// covered by the integration suites.
+pub const TestSourceParser = struct {
+    var marker: u8 = 0;
+    pub const parser: SourceParser = .{ .ptr = &marker, .vtable = &.{ .block = block, .uses = uses } };
+
+    fn block(_: *anyopaque, input: []const u8) !usize {
+        if (input.len == 0 or input[0] != '[') return error.UnexpectedTestBlock;
+        var depth: usize = 0;
+        for (input, 0..) |byte, index| switch (byte) {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if (depth == 0) return index + 1;
+            },
+            else => {},
+        };
+        return error.UnexpectedTestBlock;
+    }
+    fn word(byte: u8) bool {
+        return std.ascii.isAlphanumeric(byte) or byte == '_';
+    }
+    fn uses(_: *anyopaque, allocator: std.mem.Allocator, code: []const u8, name: []const u8) !SourceParser.MemberUses {
+        var found: std.ArrayList(SourceParser.MemberUse) = .empty;
+        errdefer found.deinit(allocator);
+        var from: usize = 0;
+        var whole = false;
+        const binding = "#let ";
+        while (std.mem.indexOfPos(u8, code, from, name)) |at| {
+            from = at + name.len;
+            if ((at > 0 and word(code[at - 1])) or (from < code.len and word(code[from]))) continue;
+            var end = from + 1;
+            while (end < code.len and word(code[end])) end += 1;
+            if (from < code.len and code[from] == '.' and end > from + 1) {
+                try found.append(allocator, .{ .member = code[from + 1 .. end], .start = from + 1, .end = end });
+            } else if (!std.mem.endsWith(u8, code[0..at], binding)) whole = true;
+        }
+        return .{ .uses = try found.toOwnedSlice(allocator), .rebound = std.mem.indexOf(u8, code, "#let huak") != null, .whole = whole };
+    }
 };
 
 /// Lookup can combine local forms with a caller-provided fallback.
@@ -87,7 +154,7 @@ pub const Headers = struct {
     scopes: []const Scope,
     imports: []const ScopedHeader,
     operators: []const ScopedHeader,
-    /// typst_expose and typst_show statements, in source order.
+    /// typ.show statements, in source order.
     typst_declarations: []const ScopedHeader = &.{},
     records: []const ScopedHeader = &.{},
     expansions: []const ScopedHeader = &.{},
@@ -176,6 +243,7 @@ fn statement(self: *Parser) anyerror!*ast.Stmt {
     defer self.depth -= 1;
     if (self.depth > 256) return self.fail(self.current.span, "block nesting exceeds 256", .{});
     const start = self.current.span;
+    if (self.current.kind == .kw_typ and self.lexer.startsMember("show")) return self.typstShow();
     switch (self.current.kind) {
         .kw_precedence => return self.precedenceGroup(),
         .kw_mixfix => return self.mixfixBinding(),
@@ -354,25 +422,6 @@ fn statement(self: *Parser) anyerror!*ast.Stmt {
                 if (self.current.kind == .comma) return self.fail(self.current.span, "an initialized export cannot contain multiple names", .{});
             }
             return self.createStmt(.join(start, if (value) |expression_| expression_.span else names.items[names.items.len - 1].span), .{ .exported = .{ .names = try names.toOwnedSlice(), .value = value } });
-        },
-        .kw_setup_typst => {
-            const raw = try self.typstBlock('{');
-            return self.createStmt(raw.span, .{ .setup_typst = raw.code });
-        },
-        .kw_typst_expose, .kw_typst_show => {
-            const keyword = self.current.kind;
-            try self.advance();
-            var names: std.array_list.Managed(ast.ExportName) = .init(self.allocator);
-            const first = try self.expect(.identifier, if (keyword == .kw_typst_show) "expected a Huak variable name after typst_show" else "expected a Huak variable name after typst_expose");
-            try names.append(.{ .name = self.text(first), .span = first.span });
-            while (try self.accept(.comma)) {
-                while (self.current.kind == .newline) try self.advance();
-                const next = try self.expect(.identifier, "expected a Huak variable name after ','");
-                try names.append(.{ .name = self.text(next), .span = next.span });
-            }
-            const span: source.Span = .join(start, names.items[names.items.len - 1].span);
-            const list = try names.toOwnedSlice();
-            return self.createStmt(span, if (keyword == .kw_typst_show) .{ .typst_show = list } else .{ .typst_expose = list });
         },
         else => {
             const expr = try self.expression(0);
@@ -682,11 +731,7 @@ fn prefix(self: *Parser) anyerror!*ast.Expr {
             const finish = try self.expect(.kw_end, "expected 'end' for block");
             return self.createExpr(.join(token.span, finish.span), .{ .block = statements });
         },
-        .kw_typ => {
-            const value = try self.typstBlock('[');
-            return self.createExpr(value.span, .{ .typst = value.code });
-        },
-        .kw_show_rule => return self.showRule(),
+        .kw_typ => return self.typstExpression(),
         .ellipsis => return self.fail(token.span, "spread expressions are not supported; '...' is only valid as a parameter suffix or block insertion", .{}),
         else => return self.fail(token.span, "expected an expression", .{}),
     }
@@ -960,7 +1005,39 @@ fn operatorName(self: *Parser) !ast.OperatorName {
     return try callHead(self.allocator, &self.lexer, &self.current) orelse self.fail(self.current.span, "expected a name after namespace '.'", .{});
 }
 
-fn typstBlock(self: *Parser, opening: u8) anyerror!struct { span: source.Span, code: []const u8 } {
+/// The name under which Typst code reads Huak values.
+pub const typst_namespace = "huak";
+
+/// A block's Typst code with the places where it reads `huak` members. The
+/// native parser finds them; Huak reads no Typst syntax itself.
+fn typstCode(self: *Parser, block: TypstBlock) anyerror!ast.Typst {
+    const provider = (self.options.source_parser catch unreachable) orelse unreachable;
+    // The provider's records are temporary. A block reads few names, so they
+    // fit this buffer instead of staying behind in the syntax arena.
+    var storage: [1024]u8 = undefined;
+    var scratch: std.heap.BufferFirstAllocator = .init(&storage, self.allocator);
+    const found = provider.memberUses(scratch.allocator(), block.code, typst_namespace) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        const failure = self.fail(block.span, "cannot read the Huak names in a Typst block: {s}", .{@errorName(err)});
+        self.diagnostic.*.?.cause = .{ .source_block = err };
+        return failure;
+    };
+    if (found.uses.len == 0) return .{ .code = block.code, .rebound = found.rebound, .whole = found.whole };
+    const uses = try self.allocator.alloc(ast.TypstUse, found.uses.len);
+    for (uses, found.uses) |*use, member| {
+        if (member.start > member.end or member.end > block.code.len) return self.fail(block.span, "Typst source-block provider returned an invalid range", .{});
+        // A member is named by its identifier in the code. The AST borrows it
+        // from the module source, as it borrows the code.
+        const written = block.code[member.start..member.end];
+        if (!std.mem.eql(u8, written, member.member)) return self.fail(block.span, "Typst source-block provider returned an invalid range", .{});
+        use.* = .{ .name = written, .span = .{ .start = block.start + member.start, .end = block.start + member.end } };
+    }
+    return .{ .code = block.code, .uses = uses, .rebound = found.rebound, .whole = found.whole };
+}
+
+const TypstBlock = struct { span: source.Span, code: []const u8, start: usize };
+
+fn typstBlock(self: *Parser, opening: u8) anyerror!TypstBlock {
     const start = self.current.span;
     var beginning = self.lexer.pos;
     while (beginning < self.lexer.source.len and (self.lexer.source[beginning] == ' ' or self.lexer.source[beginning] == '\t' or self.lexer.source[beginning] == '\r')) beginning += 1;
@@ -989,29 +1066,52 @@ fn typstBlock(self: *Parser, opening: u8) anyerror!struct { span: source.Span, c
     if (self.source_block_sink) |sink| try sink.append(self.allocator, .{ .start = beginning, .end = finish });
     self.lexer.pos = finish;
     self.current = try self.lexer.next();
-    return .{ .span = .{ .start = start.start, .end = finish }, .code = self.lexer.source[beginning..finish] };
+    return .{ .span = .{ .start = start.start, .end = finish }, .code = self.lexer.source[beginning..finish], .start = beginning };
 }
 
-/// `show_rule parameter => {code}` or `=> [markup]`: a Typst function kept
-/// as its source text. The native Typst parser decides where the block ends.
-fn showRule(self: *Parser) anyerror!*ast.Expr {
-    const keyword = try self.expect(.kw_show_rule, "expected 'show_rule'");
-    const parameter = try self.expect(.identifier, "expected the content parameter name after show_rule");
-    if (self.current.kind != .fat_arrow) return self.fail(self.current.span, "expected '=>' after the show_rule parameter", .{});
-    const text_ = self.lexer.source;
-    var opening = self.lexer.pos;
-    while (opening < text_.len and (text_[opening] == ' ' or text_[opening] == '\t' or text_[opening] == '\r')) opening += 1;
-    if (opening == text_.len or (text_[opening] != '{' and text_[opening] != '['))
-        return self.fail(self.current.span, "expected a Typst code block '{{' or content block '[' after '=>'", .{});
-    const block = try self.typstBlock(text_[opening]);
-    return self.createExpr(.join(keyword.span, block.span), .{ .show_rule = .{ .code = text_[parameter.span.start..block.span.end], .parameter = parameter.span } });
+/// Consumes `typ.` when `member` follows, leaving the member as the current
+/// token, and returns its span. A Typst block may begin right after it.
+fn acceptTypMember(self: *Parser, member: []const u8) anyerror!?source.Span {
+    if (self.current.kind != .kw_typ or !self.lexer.startsMember(member)) return null;
+    try self.advance();
+    try self.advance();
+    return self.current.span;
+}
+
+/// `typ[markup]` or `typ.module[file content]`.
+fn typstExpression(self: *Parser) anyerror!*ast.Expr {
+    const keyword = self.current;
+    const module = try self.acceptTypMember("module") != null;
+    if (!module and self.lexer.startsMember("show")) return self.fail(keyword.span, "typ.show is a declaration, not an expression", .{});
+    const block = try self.typstBlock('[');
+    const code = try self.typstCode(block);
+    const span: source.Span = .join(keyword.span, block.span);
+    return self.createExpr(span, if (module) .{ .typst_module = code } else .{ .typst = code });
+}
+
+/// `typ.show value.member`: Huak names, then the Typst members of the module.
+fn typstShow(self: *Parser) anyerror!*ast.Stmt {
+    const keyword = self.current;
+    _ = try self.acceptTypMember("show") orelse return self.fail(keyword.span, "expected typ.show", .{});
+    try self.advance();
+    var path: std.array_list.Managed(ast.ExportName) = .init(self.allocator);
+    const first = try self.expect(.identifier, "expected a typ.module value after typ.show");
+    try path.append(.{ .name = self.text(first), .span = first.span });
+    while (try self.accept(.dot)) {
+        const next = try self.expect(.identifier, "expected a member name after '.' in typ.show");
+        try path.append(.{ .name = self.text(next), .span = next.span });
+    }
+    if (path.items.len < 2) return self.fail(first.span, "typ.show needs a member of a typ.module value, such as {s}.style", .{self.text(first)});
+    const names = try path.toOwnedSlice();
+    return self.createStmt(.join(keyword.span, names[names.len - 1].span), .{ .typst_show = names });
 }
 
 fn parseAnnotation(self: *Parser) !ast.Annotation {
-    if (self.current.kind == .kw_show_rule) {
+    if (self.current.kind == .kw_typ) {
         const keyword = self.current;
+        const member = try self.acceptTypMember("module") orelse return self.fail(keyword.span, "expected typ.module", .{});
         try self.advance();
-        return .{ .name = "show_rule", .span = keyword.span };
+        return .{ .name = "typ.module", .span = .join(keyword.span, member) };
     }
     const first = try self.expect(.identifier, "expected a type name");
     var name = self.text(first);
@@ -1149,23 +1249,19 @@ const HeaderScanner = struct {
     fn scanToken(self: *HeaderScanner) anyerror!void {
         const token = self.parser.current;
         switch (token.kind) {
-            .kw_typ, .kw_setup_typst => {
-                _ = try self.parser.typstBlock(if (token.kind == .kw_typ) '[' else '{');
+            // typ.show is a lexical declaration; typ[…] and typ.module[…] are
+            // Typst blocks, and an annotation's typ.module names a type.
+            .kw_typ => {
+                if (self.parser.lexer.startsMember("show")) {
+                    try self.typst_declarations.append(self.allocator, .{ .scope = self.active, .statement = try self.parser.statement() });
+                } else if (try self.parser.acceptTypMember("module") == null or self.parser.lexer.startsBlock('[')) {
+                    _ = try self.parser.typstBlock('[');
+                } else try self.parser.advance();
                 self.statement_start = false;
                 return;
             },
             .kw_import => {
                 try self.imports.append(self.allocator, .{ .scope = self.active, .statement = try self.parser.statement() });
-                self.statement_start = false;
-                return;
-            },
-            .kw_show_rule => {
-                _ = try self.parser.showRule();
-                self.statement_start = false;
-                return;
-            },
-            .kw_typst_expose, .kw_typst_show => {
-                try self.typst_declarations.append(self.allocator, .{ .scope = self.active, .statement = try self.parser.statement() });
                 self.statement_start = false;
                 return;
             },
@@ -1396,7 +1492,7 @@ const HeaderScanner = struct {
 
 fn startsOperand(kind: Lexer.Kind) bool {
     return Lexer.isOperator(kind) or switch (kind) {
-        .identifier, .integer, .float, .string, .kw_true, .kw_false, .kw_cycle, .minus, .plus, .kw_not, .lparen, .lbracket, .lbrace, .kw_typ, .kw_show_rule, .kw_block => true,
+        .identifier, .integer, .float, .string, .kw_true, .kw_false, .kw_cycle, .minus, .plus, .kw_not, .lparen, .lbracket, .lbrace, .kw_typ, .kw_block => true,
         else => false,
     };
 }
@@ -1564,7 +1660,7 @@ test "qualified prefix lookup preserves namespaced ordinary calls" {
 test "header scans reuse native Typst block ranges and ignore embedded declarations" {
     const Blocks = struct {
         fn block(_: *anyopaque, input: []const u8) !usize {
-            const fixture = if (input[0] == '{') "{\nimport \"ignored\" as ignored\nmixfix(hidden) hidden _ in addition\n}" else "[\n#let prefix = \"@\"\n]";
+            const fixture = if (std.mem.startsWith(u8, input, "[\nimport")) "[\nimport \"ignored\" as ignored\nmixfix(hidden) hidden _ in addition\n]" else "[\n#let prefix = \"@\"\n]";
             try std.testing.expect(std.mem.startsWith(u8, input, fixture));
             return fixture.len;
         }
@@ -1576,10 +1672,10 @@ test "header scans reuse native Typst block ranges and ignore embedded declarati
     const options: Options = .{ .source_parser = .{ .ptr = &context, .vtable = &.{ .block = Blocks.block } } };
     const headers = try scanHeaders(arena.allocator(),
         \\mixfix(visible) visible _ in addition
-        \\setup_typst {
+        \\theme:=typ.module[
         \\import "ignored" as ignored
         \\mixfix(hidden) hidden _ in addition
-        \\}
+        \\]
         \\text:=typ[
         \\#let prefix = "@"
         \\]
@@ -1892,7 +1988,7 @@ test "native Typst ellipses remain opaque inside variadic functions" {
     const script = try parser.parse();
     const declaration = script.statements[0].value.function;
     try std.testing.expect(declaration.params[0].variadic);
-    try std.testing.expectEqualStrings("[#f(..args) ... end]", declaration.body[0].value.return_value.?.value.typst);
+    try std.testing.expectEqualStrings("[#f(..args) ... end]", declaration.body[0].value.return_value.?.value.typst.code);
     try std.testing.expect(script.statements[1].value.imported.form == .all);
     const headers = try scanHeaders(arena.allocator(), input, options, &diagnostic);
     try std.testing.expectEqual(@as(usize, 1), headers.imports.len);
@@ -2389,7 +2485,7 @@ test "embedded source requires a native source-block provider" {
 test "native Typst blocks preserve their source and resume host expressions" {
     const Blocks = struct {
         fn block(_: *anyopaque, input: []const u8) !usize {
-            const fixture = if (input[0] == '{') "{let x=2}" else "[Hello]";
+            const fixture = if (std.mem.startsWith(u8, input, "[#let")) "[#let x=2]" else "[Hello]";
             try std.testing.expect(std.mem.startsWith(u8, input, fixture));
             return fixture.len;
         }
@@ -2403,16 +2499,16 @@ test "native Typst blocks preserve their source and resume host expressions" {
     const script = try parser.parse();
     try std.testing.expectEqual(@as(usize, 2), script.statements.len);
     try std.testing.expectEqualStrings("typst", script.statements[0].value.assignment.name);
-    try std.testing.expectEqualStrings("[Hello]", script.statements[1].value.assignment.value.value.typst);
-    parser = try Parser.init(arena.allocator(), "setup_typst {let x=2}; value:=measure(typ [Hello],2)", options, &diagnostic);
+    try std.testing.expectEqualStrings("[Hello]", script.statements[1].value.assignment.value.value.typst.code);
+    parser = try Parser.init(arena.allocator(), "theme:=typ.module [#let x=2]; value:=measure(typ [Hello],2)", options, &diagnostic);
     const inline_script = try parser.parse();
-    try std.testing.expectEqualStrings("{let x=2}", inline_script.statements[0].value.setup_typst);
+    try std.testing.expectEqualStrings("[#let x=2]", inline_script.statements[0].value.assignment.value.value.typst_module.code);
     const call = inline_script.statements[1].value.assignment.value.value.call;
     try std.testing.expectEqual(@as(usize, 2), call.args.len);
-    try std.testing.expectEqualStrings("[Hello]", call.args[0].value.typst);
+    try std.testing.expectEqualStrings("[Hello]", call.args[0].value.typst.code);
     parser = try Parser.init(arena.allocator(), "value:=typst\nHello\nend\n", options, &diagnostic);
     try std.testing.expectError(error.LanguageError, parser.parse());
-    for ([_][]const u8{ "value=typ\nHello\nend\n", "value=typ;\nend\n", "value=typ{Hello}", "setup_typst[let x=2]" }) |input| {
+    for ([_][]const u8{ "value=typ\nHello\nend\n", "value=typ;\nend\n", "value=typ{Hello}" }) |input| {
         diagnostic = null;
         parser = try Parser.init(arena.allocator(), input, options, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
@@ -2663,8 +2759,8 @@ test "mixfix providers support qualified names and reject malformed external tem
     try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "invalid mixfix template") != null);
 }
 
-test "Typst exposure declarations retain exact names and lexical header scopes" {
-    const input = "typst_expose title,\ncount\nfn label(value:int)->void\ntypst_expose value\nif true then\ntypst_expose inside\nelse\ntypst_expose other\nend\nend\n";
+test "typ.show declarations retain their paths and lexical header scopes" {
+    const input = "typ.show theme.style\nfn label(value:int)->void\ntyp.show theme.label.style\nif true then\ntyp.show inside.style\nelse\ntyp.show other.style\nend\nend\n";
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
@@ -2676,72 +2772,89 @@ test "Typst exposure declarations retain exact names and lexical header scopes" 
     try std.testing.expect(headers.typst_declarations[2].scope != headers.typst_declarations[3].scope);
     var frontend = try Parser.init(arena.allocator(), input, .{}, &diagnostic);
     const script = try frontend.parse();
-    const names = script.statements[0].value.typst_expose;
-    try std.testing.expectEqual(@as(usize, 2), names.len);
-    for (names, [_][]const u8{ "title", "count" }) |name, expected| {
-        try std.testing.expectEqualStrings(expected, name.name);
-        try std.testing.expectEqualStrings(expected, input[name.span.start..name.span.end]);
+    for ([_][]const []const u8{ &.{ "theme", "style" }, &.{ "theme", "label", "style" } }, [_]*const ast.Stmt{ script.statements[0], script.statements[1].value.function.body[0] }) |expected, declared| {
+        const path = declared.value.typst_show;
+        try std.testing.expectEqual(expected.len, path.len);
+        for (path, expected) |segment, name| {
+            try std.testing.expectEqualStrings(name, segment.name);
+            try std.testing.expectEqualStrings(name, input[segment.span.start..segment.span.end]);
+        }
     }
-    for ([_][]const u8{ "typst_expose", "typst_expose value,", "typst_expose module.value", "typst_expose 42", "typst_expose value=1" }) |invalid| {
+    for ([_][]const u8{ "typ.show", "typ.show theme", "typ.show theme.", "typ.show 42", "typ.show theme.style=1", "typ.show theme.style, other.style", "x:=typ.show theme.style" }) |invalid| {
         var broken = try Parser.init(arena.allocator(), invalid, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, broken.parse());
     }
 }
 
-test "show rules keep opaque Typst code while typst_show shares exposure header scopes" {
-    const Blocks = struct {
-        // Balanced delimiters stand in for the native Typst parser.
-        fn block(_: *anyopaque, input: []const u8) !usize {
-            var depth: usize = 0;
-            for (input, 0..) |byte, index| switch (byte) {
-                '{', '[' => depth += 1,
-                '}', ']' => {
-                    depth -= 1;
-                    if (depth == 0) return index + 1;
-                },
-                else => {},
-            };
-            return error.UnclosedBlock;
-        }
-    };
+test "typ.module keeps opaque Typst code and Typst blocks record the huak members they read" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var diagnostic: ?source.Diagnostic = null;
-    var context: u8 = 0;
-    const options: Options = .{ .source_parser = .{ .ptr = &context, .vtable = &.{ .block = Blocks.block } } };
+    const options: Options = .{ .source_parser = TestSourceParser.parser };
     const input =
-        \\fn style(size:length)->show_rule
-        \\    typst_expose size
-        \\    return show_rule body=>{ end struct Bogus import fake typst_show field; body }
+        \\fn style(size:length)->typ.module
+        \\    return typ.module[#let style(body) = text(huak.size, body) end struct Bogus import fake typ.show field]
         \\end
-        \\marked:=show_rule it => [*#it* end]
-        \\typst_show marked,
-        \\    other
+        \\marked:=typ.module[#let style(it) = [*#it* end]]
+        \\typ.show marked.style
         \\if true then
-        \\    typst_show inside
+        \\    typ.show inside.style
         \\end
+        \\caption:=typ[#huak.size $huak.mark(1)$ #huak.size]
     ;
     const headers = try scanHeaders(arena.allocator(), input, options, &diagnostic);
     try std.testing.expectEqual(@as(usize, 0), headers.records.len);
     try std.testing.expectEqual(@as(usize, 0), headers.imports.len);
-    try std.testing.expectEqual(@as(usize, 3), headers.typst_declarations.len);
-    try std.testing.expect(headers.typst_declarations[0].statement.value == .typst_expose);
-    try std.testing.expect(headers.scopes[headers.typst_declarations[0].scope].kind == .function);
-    try std.testing.expectEqual(@as(ScopeId, 0), headers.typst_declarations[1].scope);
-    try std.testing.expect(headers.scopes[headers.typst_declarations[2].scope].kind == .branch);
+    try std.testing.expectEqual(@as(usize, 2), headers.typst_declarations.len);
+    try std.testing.expectEqual(@as(ScopeId, 0), headers.typst_declarations[0].scope);
+    try std.testing.expect(headers.scopes[headers.typst_declarations[1].scope].kind == .branch);
     var frontend = try Parser.init(arena.allocator(), input, options, &diagnostic);
     const script = try frontend.parse();
     const function = script.statements[0].value.function;
-    try std.testing.expectEqualStrings("show_rule", function.result.?.name);
-    const rule = function.body[1].value.return_value.?.value.show_rule;
-    try std.testing.expectEqualStrings("body=>{ end struct Bogus import fake typst_show field; body }", rule.code);
-    try std.testing.expectEqualStrings("body", input[rule.parameter.start..rule.parameter.end]);
-    try std.testing.expectEqualStrings("it => [*#it* end]", script.statements[1].value.assignment.value.value.show_rule.code);
-    const shown = script.statements[2].value.typst_show;
-    try std.testing.expectEqual(@as(usize, 2), shown.len);
-    try std.testing.expectEqualStrings("other", input[shown[1].span.start..shown[1].span.end]);
-    for ([_][]const u8{ "r:=show_rule", "r:=show_rule body", "r:=show_rule body = {body}", "r:=show_rule body => body", "r:=show_rule (body) => {body}", "r:=show_rule body =>\n{body}", "typst_show", "typst_show rule,", "typst_show 1", "typst_show a.b" }) |invalid| {
+    try std.testing.expectEqualStrings("typ.module", function.result.?.name);
+    const module = function.body[0].value.return_value.?.value.typst_module;
+    try std.testing.expectEqualStrings("[#let style(body) = text(huak.size, body) end struct Bogus import fake typ.show field]", module.code);
+    try std.testing.expectEqual(@as(usize, 1), module.uses.len);
+    try std.testing.expectEqualStrings("size", module.uses[0].name);
+    try std.testing.expectEqualStrings("size", input[module.uses[0].span.start..module.uses[0].span.end]);
+    const marked = script.statements[1].value.assignment.value.value.typst_module;
+    try std.testing.expectEqualStrings("[#let style(it) = [*#it* end]]", marked.code);
+    try std.testing.expectEqual(@as(usize, 0), marked.uses.len);
+    const caption = script.statements[4].value.assignment.value.value.typst;
+    try std.testing.expectEqual(@as(usize, 3), caption.uses.len);
+    try std.testing.expect(!caption.rebound);
+    for (caption.uses, [_][]const u8{ "size", "mark", "size" }) |use, name| {
+        try std.testing.expectEqualStrings(name, use.name);
+        try std.testing.expectEqualStrings(name, input[use.span.start..use.span.end]);
+    }
+    for ([_][]const u8{ "r:=typ.module", "r:=typ.module{body}", "r:=typ.modules[x]", "r:=typ.show theme.style", "r:=typ.module[x" }) |invalid| {
         var broken = try Parser.init(arena.allocator(), invalid, options, &diagnostic);
+        try std.testing.expectError(error.LanguageError, broken.parse());
+    }
+}
+
+test "typ.module names the type in declaration and field annotations" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    var diagnostic: ?source.Diagnostic = null;
+    const input =
+        \\typed: typ.module := given
+        \\struct Styled
+        \\    style: typ.module
+        \\end
+        \\block
+        \\    local: typ.module := typed
+        \\end
+    ;
+    const headers = try scanHeaders(arena.allocator(), input, .{}, &diagnostic);
+    try std.testing.expectEqual(@as(usize, 1), headers.records.len);
+    try std.testing.expectEqual(@as(usize, 0), headers.source_blocks.len);
+    var parser = try Parser.init(arena.allocator(), input, .{}, &diagnostic);
+    const script = try parser.parse();
+    try std.testing.expectEqualStrings("typ.module", script.statements[0].value.assignment.annotation.?.name);
+    try std.testing.expectEqualStrings("typ.module", script.statements[1].value.structure.fields[0].annotation.name);
+    for ([_][]const u8{ "x: typ := y", "x: typ.show := y", "x: typ.module.style := y" }) |invalid| {
+        var broken = try Parser.init(arena.allocator(), invalid, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, broken.parse());
     }
 }
@@ -2855,7 +2968,7 @@ test "aggregate syntax rejects malformed fields dictionaries calls and lvalues" 
 test "record headers ignore fields and opaque Typst while retaining their containing scope" {
     const Blocks = struct {
         fn block(_: *anyopaque, input: []const u8) !usize {
-            const fixture = "[end struct Bogus import fake typst_expose field]";
+            const fixture = "[end struct Bogus import fake typ.show field]";
             try std.testing.expect(std.mem.startsWith(u8, input, fixture));
             return fixture.len;
         }
@@ -2868,7 +2981,7 @@ test "record headers ignore fields and opaque Typst while retaining their contai
     const input =
         \\export struct Style
         \\    field:int=1
-        \\    label:text=typ[end struct Bogus import fake typst_expose field]
+        \\    label:text=typ[end struct Bogus import fake typ.show field]
         \\end
         \\fn f()
         \\    struct Local local:int=2 end
@@ -2889,7 +3002,7 @@ test "record headers ignore fields and opaque Typst while retaining their contai
     try std.testing.expectEqual(@as(usize, 0), headers.typst_declarations.len);
     var frontend = try Parser.init(arena.allocator(), input, options, &diagnostic);
     const script = try frontend.parse();
-    try std.testing.expectEqualStrings("[end struct Bogus import fake typst_expose field]", script.statements[0].value.structure.fields[1].default.?.value.typst);
+    try std.testing.expectEqualStrings("[end struct Bogus import fake typ.show field]", script.statements[0].value.structure.fields[1].default.?.value.typst.code);
 }
 
 test "scope lookup preserves empty equal-start nested sibling and outside boundaries" {
@@ -3017,13 +3130,13 @@ test "call heads probe one mixfix table and preserve ordinary member calls" {
 // Fixed provider fixtures test host bookkeeping only. Native block parsing is
 // exercised through libtypst by the editor and language integration suites.
 const OpaqueBlockFixture = struct {
-    const setup = "{let word = [end typ[ignored]]}";
+    const code = "[#let word = [end typ[ignored]]; body]";
     const default = "[Default [nested]]";
     const body_source = "[Body #let word = \"end\"]";
     const record = "[Record /* ] end */ [nested]]";
     const tail = "[Trailing // end\n text]";
-    const blocks = [_][]const u8{ setup, default, body_source, record, tail };
-    const input = "setup_typst " ++ setup ++ "\nfn label(value:text=typ" ++ default ++ ")->text\nreturn typ" ++ body_source ++ "\nend\nstruct Label\nvalue:text=typ" ++ record ++ "\nend\nlast=typ" ++ tail ++ "\n";
+    const blocks = [_][]const u8{ code, default, body_source, record, tail };
+    const input = "theme:=typ.module" ++ code ++ "\nfn label(value:text=typ" ++ default ++ ")->text\nreturn typ" ++ body_source ++ "\nend\nstruct Label\nvalue:text=typ" ++ record ++ "\nend\nlast=typ" ++ tail ++ "\n";
     calls: usize = 0,
     failure: ?anyerror = null,
 
@@ -3049,8 +3162,8 @@ fn opaqueBlockAllocationExercise(allocator: std.mem.Allocator) !void {
     const script = try parser.parse();
     try std.testing.expectEqual(OpaqueBlockFixture.blocks.len, fixture.calls);
     try std.testing.expectEqual(OpaqueBlockFixture.blocks.len, parser.headers.?.source_blocks.len);
-    try std.testing.expectEqualStrings("[Default [nested]]", script.statements[1].value.function.params[0].default.?.value.typst);
-    try std.testing.expectEqualStrings("[Record /* ] end */ [nested]]", script.statements[2].value.structure.fields[0].default.?.value.typst);
+    try std.testing.expectEqualStrings("[Default [nested]]", script.statements[1].value.function.params[0].default.?.value.typst.code);
+    try std.testing.expectEqualStrings("[Record /* ] end */ [nested]]", script.statements[2].value.structure.fields[0].default.?.value.typst.code);
     for (parser.headers.?.source_blocks, 0..) |block, index| {
         try std.testing.expectEqualStrings(OpaqueBlockFixture.blocks[index], OpaqueBlockFixture.input[block.start..block.end]);
         if (index != 0) try std.testing.expect(parser.headers.?.source_blocks[index - 1].end <= block.start);

@@ -1,10 +1,12 @@
 import paint.{rgb, path, bounds, circle}
 import object.region
-import geometry.region_intersection
+import geometry.{point_at, region_intersection}
+import math.{abs, norm}
 import assertions.assert
 import "../../nodegraph.huak".*
 import "../../nodegraph/marks.huak" as marks
 import "../../nodegraph/model.huak" as model
+import "../../nodegraph/render.huak" as render
 a := marks.render(model.mark("head", 1, false, {"size": 8pt}), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 8pt)
 b := marks.render(model.mark("head", 1, false, {"size": 8pt, "sharpness": 30deg, "delta": 40deg, "stroke": rgb(1, 0, 0)}), path((-100pt, 0pt), (0pt, 0pt)), rgb(0, 0, 0), 1pt, 8pt)
 assert(len(bounds(a.content)) == 2 and len(bounds(b.content)) == 2, "mark properties must render")
@@ -25,3 +27,58 @@ slash := region(marks.render(model.mark("slash", 0.5), guide, rgb(0, 0, 0), 1pt,
 assert(len(bounds(region_intersection(slash, circle((5pt, 8.66pt), 0.2pt), 0.01pt))) == 2, "slash must rise to the right")
 assert(len(bounds(region_intersection(slash, circle((-5pt, 8.66pt), 0.2pt), 0.01pt))) == 0, "slash must not mirror into a cross")
 print("cross and slash checks passed")
+
+// A hook leaves the end of the edge stroke and curls back to its left: at the
+// tail of hook-> it turns back outside the edge, as in ↪; at the tip it steps
+// back by its radius so that its apex meets the end, and the stroke stops
+// where it starts. Bounds cannot tell a hook bulging the wrong way, so the
+// start, the turning point and the end of the curve are checked.
+fn near(actual:vec2, expected:vec2, message:string)
+    assert(norm(actual-expected) < 0.001pt, message)
+end
+line := path((0pt, 0pt), (100pt, 0pt))
+fn curls(description:model.MarkDescription) -> list
+    result := []
+    for curve in marks.render(description, line, rgb(0, 0, 0), 1pt, 8pt).content.paths do
+        result += [[point_at(curve, 0), point_at(curve, len(curve)/2), point_at(curve, len(curve))]]
+    end
+    return result
+end
+tail := curls(arrows("hook->")[0])
+assert(len(tail) == 1, "a hook is one curve")
+near(tail[0][0], (0pt, 0pt), "a tail hook starts where the stroke starts")
+near(tail[0][1], (-4pt, 4pt), "a tail hook turns back outside the edge")
+near(tail[0][2], (0pt, 8pt), "a tail hook ends above the start of the stroke")
+tip := curls(mark("hook"))
+near(tip[0][0], (96pt, 0pt), "a tip hook starts one radius before the end")
+near(tip[0][1], (100pt, 4pt), "a tip hook's apex meets the end")
+near(tip[0][2], (96pt, 8pt), "a tip hook ends above its start")
+pair := curls(mark("hooks"))
+assert(len(pair) == 2, "hooks are two curves")
+near(pair[1][0], (96pt, 0pt), "the second hook starts with the first")
+near(pair[1][1], (100pt, -4pt), "the second hook mirrors the first")
+near(pair[1][2], (96pt, -8pt), "the second hook ends below its start")
+// A reversed hook set through the tail option keeps the side of hook->.
+near(curls(model.mark("hook", 0, true))[0][1], (-4pt, 4pt), "a reversed hook is mirrored, not turned")
+
+// On an edge the stroke stops where a tip hook starts, also for the head
+// option, and runs to the start under a tail hook.
+// The stroke is the one long straight curve on the axis; marks are short.
+fn stroke_ends(options:dict) -> list
+    resolved := geometry([edge(absolute((0pt, 0pt)), absolute((100pt, 0pt)), options)])
+    for curve in render.edge_object(resolved.objects[0]).content.paths do
+        first := point_at(curve, 0)
+        last := point_at(curve, len(curve))
+        if abs(first.y) < 0.001pt and abs(last.y) < 0.001pt and abs(last.x-first.x) > 50pt then return [first, last] end
+    end
+    return []
+end
+for options in [{"marks": [mark("hook")], "mark_size": 8pt}, {"head": "hook", "mark_size": 8pt}] do
+    shaft := stroke_ends(options)
+    assert(len(shaft) == 2, "the edge keeps a stroke")
+    near(shaft[1], (96pt, 0pt), "the stroke stops where a tip hook starts")
+end
+hooked := stroke_ends({"marks": arrows("hook->"), "mark_size": 8pt})
+near(hooked[0], (0pt, 0pt), "the stroke starts where a tail hook starts")
+near(hooked[1], (100pt, 0pt), "a tail hook leaves the far end alone")
+print("hook checks passed")

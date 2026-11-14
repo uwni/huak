@@ -4,9 +4,13 @@ import geometry.{offset, clip_region, clip_lines}
 import pen.stroke_path
 import regions.*
 param tolerance: length = 0.01mm
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#26354b"))
-}
+    body
+  }
+]
+typ.show theme.style
 
 export plate := picture(210mm, 160mm)
 default plate

@@ -157,16 +157,20 @@ const Graph = struct {
 };
 
 fn projectedPath(rt: *Runtime, commands: []const c.HuakPathCommand) !Value {
-    var path = Path.init(rt.mem());
-    try path.segments.ensureTotalCapacityPrecise(path.allocator, commands.len);
-    for (commands) |command| switch (command.op) {
-        c.HUAK_MOVE => try path.moveTo(point(command.p[0])),
-        c.HUAK_LINE => try path.lineTo(point(command.p[0])),
-        c.HUAK_BEZIER => try path.cubicTo(point(command.p[0]), point(command.p[1]), point(command.p[2])),
-        c.HUAK_CLOSE => try path.close(),
-        else => return error.InvalidProjectedPath,
+    const projected = projected: {
+        var path = Path.init(rt.gpa);
+        errdefer path.deinit();
+        try path.segments.ensureTotalCapacityPrecise(path.allocator, commands.len);
+        for (commands) |command| switch (command.op) {
+            c.HUAK_MOVE => try path.moveTo(point(command.p[0])),
+            c.HUAK_LINE => try path.lineTo(point(command.p[0])),
+            c.HUAK_BEZIER => try path.cubicTo(point(command.p[0]), point(command.p[1]), point(command.p[2])),
+            c.HUAK_CLOSE => try path.close(),
+            else => return error.InvalidProjectedPath,
+        };
+        break :projected path;
     };
-    return rt.pathResult(path);
+    return rt.pathResult(projected);
 }
 
 pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Value {
@@ -208,7 +212,7 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
         0 => {},
         2 => return error.OutOfMemory,
         else => {
-            rt.native_message = try rt.mem().dupe(u8, std.mem.sliceTo(&message, 0));
+            rt.setMessage(std.mem.sliceTo(&message, 0));
             return error.ProjectionFailed;
         },
     }

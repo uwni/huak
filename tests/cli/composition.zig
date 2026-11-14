@@ -136,7 +136,8 @@ fn nativeClip(ctx: *h.Harness) !void {
 fn batch(ctx: *h.Harness) !void {
     const script = try ctx.script("composition/batch",
         \\import paint.*;import geometry.compound
-        \\setup_typst { set text(size:4pt) }
+        \\theme := typ.module[#let style(body) = { set text(size:4pt); body }]
+        \\typ.show theme.style
         \\caption:=typ[Tile]
         \\source:=picture(400pt,180pt)
         \\drawing source do

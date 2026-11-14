@@ -45,15 +45,14 @@ pub const Diagnostic = source.Diagnostic;
 const Symbol = struct { index: u32, kind: Type, readonly: bool = false, inferable: bool = false, available_after: usize = 0 };
 const Names = std.StringHashMapUnmanaged(Symbol);
 const Binding = struct { symbol: Symbol, local: bool, declaration: usize = 0, module: ?u32 = null, initializer: ?u32 = null };
-/// A `typst_expose` or `typst_show` name resolved where its declaration
-/// compiles, which may be inside a template expansion. Its environment is the
-/// declaring module.
-const Exposure = struct { binding: Binding, environment: *Environment, name: []const u8, span: Span, show: bool };
-const unreadable_exposure = "typst_expose requires a readable Huak variable, found '{s}'";
-const unsupported_exposure = "typst_expose supports numeric, bool, string, length, color, and show_rule values; '{s}' has type {s}";
-const unreadable_show = "typst_show requires a readable Huak variable, found '{s}'";
-const unsupported_show = "typst_show requires a show_rule; '{s}' has type {s}";
-const unreadable_rule_data = "show_rule snapshots every typst_expose name in scope when it is made, but '{s}' has no value here";
+/// A Huak value read by Typst code or a `typ.show` path, resolved where the
+/// read compiles, which may be inside a template expansion. Its environment
+/// is the reading module.
+const TypstRead = struct { binding: Binding, environment: *Environment, name: []const u8, span: Span, show: bool };
+const unreadable_typst_value = "Typst code reads huak.{s}, which names no readable Huak value here";
+const unsupported_typst_value = "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.{s} has type {s}";
+const unreadable_show = "typ.show needs a readable typ.module value, found '{s}'";
+const unsupported_show = "typ.show needs a typ.module value; '{s}' has type {s}";
 const CallableTarget = struct { target: CallTarget, module: ?u32 = null, initializer: ?u32 = null };
 const CallTarget = @FieldType(bc.Export, "target");
 const ExpressionDefault = struct { expression: *ast.Expr, function: u32, kind: Type, span: Span };
@@ -105,8 +104,9 @@ const Context = struct {
     return_block: ?*ReturnBlock = null,
     expansion: ?*Expansion = null,
     insertion: ?*Expansion = null,
-    /// Checked after this body is compiled, when forward types are inferred.
-    exposures: std.ArrayList(Exposure) = .empty,
+    /// Huak values read by Typst code in this body, checked again once its
+    /// forward declarations are inferred.
+    typst_reads: std.ArrayList(TypstRead) = .empty,
 
     fn init(compiler: *Compiler, entry: bool, result: Type) Context {
         return .{ .compiler = compiler, .code = .init(compiler.allocator), .local_types = .init(compiler.allocator), .loops = .init(compiler.allocator), .entry = entry, .result = result };
@@ -641,7 +641,8 @@ const Compiler = struct {
         if (binding.local and span.start < binding.declaration)
             return self.fail(span, "local variable assigned before its declaration", .{});
         if (binding.symbol.readonly) return self.fail(span, "cannot assign readonly parameter '{s}'", .{name});
-        const actual = try self.compileExpression(context, value);
+        // A module assigned to a name is named after it, like a file.
+        const actual = if (value.value == .typst_module) try self.compileTypstModule(context, value.value.typst_module, value.span, name) else try self.compileExpression(context, value);
         if (binding.symbol.inferable) {
             if (binding.local) {
                 context.locals.getPtr(binding.declaration).?.kind = actual;
@@ -1038,20 +1039,10 @@ const Compiler = struct {
                         return self.fail(span, "mixfix function used before its declaration is complete", .{});
                 };
             },
-            .setup_typst => |block| {
-                if (!context.entry or context.block_depth != 1) return self.fail(span, "setup_typst must be at script top level", .{});
-                _ = try context.emit(.setup_typst, try self.addConstant(.{ .string = block[1 .. block.len - 1] }, span), 0, span);
-            },
-            // Exposure is lexical metadata, not an evaluated statement. Names
-            // resolve here, where template bodies still see the expansion's
-            // locals; types are checked once forward declarations are inferred.
-            .typst_expose, .typst_show => |names| {
-                const show = statement_.value == .typst_show;
-                for (names) |name| {
-                    const binding = context.resolve(name.name, name.span) orelse return if (show) self.fail(name.span, unreadable_show, .{name.name}) else self.fail(name.span, unreadable_exposure, .{name.name});
-                    try context.exposures.append(self.build.syntax_allocator, .{ .binding = binding, .environment = self.environment, .name = name.name, .span = name.span, .show = show });
-                }
-            },
+            // A show path is lexical metadata, not an evaluated statement. It
+            // is checked here, where template bodies still see the expansion's
+            // locals, and loaded again by each typ block in its scope.
+            .typst_show => |path| _ = try self.typstShowBase(context, path, span),
             .return_value => |value| {
                 if (context.entry and context.return_block == null) return self.fail(span, "return is only valid inside a function or block", .{});
                 const actual = if (value) |expression| try self.compileExpression(context, expression) else blk: {
@@ -1423,20 +1414,29 @@ const Compiler = struct {
                 return self.finishBlock(context, &block, !definitelyReturns(body), span);
             },
             .typst => |block| {
-                const count = try self.compileTypstCaptures(context, span, .content);
-                _ = try context.emit(.typst, try self.addConstant(.{ .string = block }, span), count, span);
+                var count: u32 = 0;
+                try self.compileTypstReads(context, block, &count);
+                try self.compileTypstShows(context, span, &count);
+                const captures: bc.TypstCaptures = .{ .pairs = @intCast(count), .whole = block.whole };
+                _ = try context.emit(.typst, try self.addConstant(.{ .string = block.code }, span), @bitCast(captures), span);
                 return .text;
             },
-            .show_rule => |rule| {
-                // typst_show rules style typ content, not the rules made here.
-                const count = try self.compileTypstCaptures(context, span, .rule);
-                // The instruction spans exactly the code, which locates
-                // native diagnostics within this module's source.
-                const code: Span = .{ .start = rule.parameter.start, .end = span.end };
-                _ = try context.emit(.show_rule, try self.addConstant(.{ .string = rule.code }, code), count, code);
-                return .show_rule;
-            },
+            .typst_module => |block| return self.compileTypstModule(context, block, span, null),
         }
+    }
+
+    /// The typ.module's Typst name is the name it is assigned to, as a file's
+    /// stem names the module it holds, or "module".
+    fn compileTypstModule(self: *Compiler, context: *Context, block: ast.Typst, span: Span, name: ?[]const u8) !Type {
+        try context.constant(.{ .string = try self.allocator.dupe(u8, name orelse "module") }, span);
+        var count: u32 = 0;
+        try self.compileTypstReads(context, block, &count);
+        // The instruction spans exactly the code, which locates
+        // native diagnostics within this module's source.
+        const code: Span = .{ .start = span.end - block.code.len, .end = span.end };
+        const captures: bc.TypstCaptures = .{ .pairs = @intCast(count), .whole = block.whole };
+        _ = try context.emit(.typst_module, try self.addConstant(.{ .string = block.code }, code), @bitCast(captures), code);
+        return .typst_module;
     }
 
     fn finishBlock(self: *Compiler, context: *Context, block: *ReturnBlock, fallthrough: bool, span: Span) !Type {
@@ -1549,98 +1549,181 @@ const Compiler = struct {
         return kind;
     }
 
-    /// Any/scalar bindings receive the same check on their actual value when
-    /// captured. Forward declarations need not be initialized yet.
-    fn exposable(kind: Type) bool {
+    /// Whether Typst can receive a value of this type: as data, or as the
+    /// typ.module a show path starts with. Any/scalar bindings receive the
+    /// same check on their actual value when captured. Forward declarations
+    /// need not be initialized yet.
+    fn passable(read: TypstRead, kind: Type) bool {
         return switch (kind) {
-            .any, .scalar, .quantity, .int, .number, .boolean, .string, .length, .color, .show_rule => true,
+            .any, .typst_module => true,
+            .scalar, .quantity, .int, .number, .boolean, .string, .length, .color => !read.show,
             else => false,
         };
     }
 
-    fn showable(kind: Type) bool {
-        return kind == .any or kind == .show_rule;
+    fn failTypstRead(self: *Compiler, read: TypstRead, kind: Type) error{LanguageError} {
+        return if (read.show)
+            self.fail(read.span, unsupported_show, .{ read.name, self.typeName(kind) })
+        else
+            self.fail(read.span, unsupported_typst_value, .{ read.name, self.typeName(kind) });
     }
 
-    /// What a captured name supplies: data for typ content or for a show_rule
-    /// being made, or a rule applied around typ content.
-    const Capture = enum { data, rule_data, show };
-
-    fn exposedBinding(self: *Compiler, context: *Context, name: []const u8, capture: Capture, span: Span) !Binding {
-        const resolved = context.resolve(name, span);
-        if (capture == .rule_data) if (resolved == null or (resolved.?.local and span.start < resolved.?.symbol.available_after))
-            return self.fail(span, unreadable_rule_data, .{name});
-        const binding = resolved orelse return if (capture == .show) self.fail(span, unreadable_show, .{name}) else self.fail(span, unreadable_exposure, .{name});
-        const kind = binding.symbol.kind;
-        if (capture == .show) {
-            if (!showable(kind)) return self.fail(span, unsupported_show, .{ name, self.typeName(kind) });
-        } else if (!exposable(kind)) return self.fail(span, unsupported_exposure, .{ name, self.typeName(kind) });
-        return binding;
+    /// Rejects a type already known to be unsupported. A binding whose type
+    /// is still to be inferred is kept for the check after this body is
+    /// compiled.
+    fn recordTypstRead(self: *Compiler, context: *Context, read: TypstRead) !void {
+        if (!passable(read, read.binding.symbol.kind)) return self.failTypstRead(read, read.binding.symbol.kind);
+        if (read.binding.symbol.inferable) try context.typst_reads.append(self.build.syntax_allocator, read);
     }
 
-    /// Checks the declarations recorded while compiling this body against the
-    /// types inferred for the whole body. Diagnostics name the declaring module.
-    fn checkTypstExposures(self: *Compiler, context: *Context) !void {
+    /// Checks each read against the type its binding has once this body is
+    /// compiled, since a forward declaration may be inferred after the read.
+    /// Diagnostics name the reading module.
+    fn checkTypstReads(self: *Compiler, context: *Context) !void {
         const current = self.environment;
         defer self.environment = current;
-        for (context.exposures.items) |exposure| {
-            const binding = exposure.binding;
+        for (context.typst_reads.items) |read| {
+            const binding = read.binding;
             const kind = if (binding.local)
                 context.local_types.items[binding.symbol.index]
             else if (binding.module != null)
                 binding.symbol.kind
             else
-                exposure.environment.globals.get(exposure.name).?.kind;
-            if (if (exposure.show) showable(kind) else exposable(kind)) continue;
-            self.environment = exposure.environment;
-            return if (exposure.show) self.fail(exposure.span, unsupported_show, .{ exposure.name, self.typeName(kind) }) else self.fail(exposure.span, unsupported_exposure, .{ exposure.name, self.typeName(kind) });
+                read.environment.globals.get(read.name).?.kind;
+            if (passable(read, kind)) continue;
+            self.environment = read.environment;
+            return self.failTypstRead(read, kind);
         }
     }
 
-    /// Pushes a (name, value) pair for each typst_expose name visible at span,
-    /// for typ content and show_rule code alike. For typ content, ("", rule)
-    /// pairs follow for the visible typst_show names: outer scopes first, each
-    /// in source order, so the outermost applies outermost. Names resolve at
-    /// the site.
-    fn compileTypstCaptures(self: *Compiler, context: *Context, span: Span, site: enum { content, rule }) !u32 {
-        const headers = self.environment.unit.headers;
-        if (headers.typst_declarations.len == 0) return 0;
-        const allocator = self.build.syntax_allocator;
-        var chain: std.ArrayList(Parser.ScopeId) = .empty; // innermost first
-        defer chain.deinit(allocator);
-        var scope: ?Parser.ScopeId = self.environment.unit.scopeAt(span.start);
-        while (scope) |id| : (scope = headers.scopes[id].parent) try chain.append(allocator, id);
-        var seen: std.StringHashMapUnmanaged(void) = .{};
-        defer seen.deinit(allocator);
-        var count: u32 = 0;
-        // Source order keeps failed captures deterministic.
-        for (headers.typst_declarations) |header| {
-            if (header.statement.value != .typst_expose or std.mem.indexOfScalar(Parser.ScopeId, chain.items, header.scope) == null) continue;
-            for (header.statement.value.typst_expose) |name| try self.compileTypstCapture(context, &seen, &count, name.name, if (site == .rule) .rule_data else .data, span);
-        }
-        // typst_show rules apply around typ content, not to a rule made here.
-        if (site == .rule) return count;
-        seen.clearRetainingCapacity();
-        var depth = chain.items.len;
-        while (depth != 0) {
-            depth -= 1;
-            for (headers.typst_declarations) |header| {
-                if (header.scope != chain.items[depth] or header.statement.value != .typst_show) continue;
-                for (header.statement.value.typst_show) |name| try self.compileTypstCapture(context, &seen, &count, name.name, .show, span);
-            }
-        }
-        return count;
-    }
-
-    fn compileTypstCapture(self: *Compiler, context: *Context, seen: *std.StringHashMapUnmanaged(void), count: *u32, name: []const u8, capture: Capture, span: Span) !void {
-        const entry = try seen.getOrPut(self.build.syntax_allocator, name);
-        if (entry.found_existing) return;
-        if (count.* == std.math.maxInt(u32) / 2) return self.fail(span, "Typst exposure exceeds bytecode stack capacity", .{});
-        const binding = try self.exposedBinding(context, name, capture, span);
-        // An empty name marks a show rule; Huak names are never empty.
-        try context.constant(.{ .string = if (capture == .show) "" else try self.allocator.dupe(u8, name) }, span);
-        try context.load(binding, span);
+    fn countCapture(self: *Compiler, count: *u32, span: Span) !void {
+        if (count.* == std.math.maxInt(u32) / 2) return self.fail(span, "Typst code reads more Huak values than the bytecode stack holds", .{});
         count.* += 1;
+    }
+
+    /// Pushes a (name, value) pair for each Huak name the Typst code reads,
+    /// in order of first use. When the code binds `huak` itself, a use may
+    /// name that binding, so only names that are readable here and passable
+    /// to Typst are captured.
+    fn compileTypstReads(self: *Compiler, context: *Context, block: ast.Typst, count: *u32) !void {
+        for (block.uses, 0..) |use, index| {
+            // A block reads few names; an earlier use of this one captured it.
+            const repeated = for (block.uses[0..index]) |earlier| {
+                if (std.mem.eql(u8, earlier.name, use.name)) break true;
+            } else false;
+            if (repeated) continue;
+            const read: TypstRead = .{
+                .binding = context.resolve(use.name, use.span) orelse {
+                    if (block.rebound) continue;
+                    return self.fail(use.span, unreadable_typst_value, .{use.name});
+                },
+                .environment = self.environment,
+                .name = use.name,
+                .span = use.span,
+                .show = false,
+            };
+            if (block.rebound) {
+                const binding = read.binding;
+                if (!passable(read, binding.symbol.kind) or (binding.local and use.span.start < binding.symbol.available_after)) continue;
+            }
+            try self.recordTypstRead(context, read);
+            try self.countCapture(count, use.span);
+            // The name is a slice of the module source, which the program keeps.
+            try context.constant(.{ .string = use.name }, use.span);
+            try context.load(read.binding, use.span);
+        }
+    }
+
+    const ShowBase = struct { binding: Binding, taken: usize };
+
+    /// Resolves at `site` the Huak value a `typ.show` path starts with: a
+    /// readable binding, or an export reached through import namespaces.
+    /// The remaining segments name members of that typ.module.
+    fn typstShowBase(self: *Compiler, context: *Context, path: []const ast.ExportName, site: Span) !ShowBase {
+        const first = path[0];
+        const base: ShowBase = if (context.resolve(first.name, site)) |binding| .{ .binding = binding, .taken = 1 } else found: {
+            var module = self.imported(first.name, site) orelse return self.fail(first.span, unreadable_show, .{first.name});
+            const unit = self.environment.unit;
+            const initializer = unit.resolverAt(site.start).namespaceInitializer(unit.scopeAt(site.start), first.name);
+            for (path[1..], 2..) |segment, taken| {
+                if (self.build.graph.exportedNamespace(module, segment.name)) |inner| {
+                    module = inner;
+                    continue;
+                }
+                const exposed = try self.importedExport(module, segment.name, segment.span);
+                if (exposed.target != .global) return self.fail(segment.span, unreadable_show, .{segment.name});
+                const global = exposed.target.global;
+                break :found .{ .binding = .{ .symbol = .{ .index = global, .kind = self.build.types.items[global], .readonly = true }, .local = false, .module = module, .initializer = initializer }, .taken = taken };
+            }
+            return self.fail(first.span, unreadable_show, .{first.name});
+        };
+        const value = path[base.taken - 1];
+        if (base.taken == path.len) return self.fail(value.span, "typ.show needs a member of the typ.module value, such as {s}.style", .{value.name});
+        try self.recordTypstRead(context, .{ .binding = base.binding, .environment = self.environment, .name = value.name, .span = value.span, .show = true });
+        return base;
+    }
+
+    fn samePath(a: []const ast.ExportName, b: []const ast.ExportName) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |x, y| if (!std.mem.eql(u8, x.name, y.name)) return false;
+        return true;
+    }
+
+    /// Pushes a (".member.path", value) pair for each `typ.show` in scope at
+    /// span: outer scopes first, each in source order, so the outermost
+    /// applies outermost. Paths resolve at the typ block; a repeated path
+    /// applies once, where it first appears.
+    fn compileTypstShows(self: *Compiler, context: *Context, span: Span, count: *u32) !void {
+        const unit = self.environment.unit;
+        if (unit.headers.typst_declarations.len == 0) return;
+        try self.compileScopeShows(context, unit.scopeAt(span.start), span, count);
+    }
+
+    fn compileScopeShows(self: *Compiler, context: *Context, scope: Parser.ScopeId, span: Span, count: *u32) !void {
+        const headers = self.environment.unit.headers;
+        if (headers.scopes[scope].parent) |parent| try self.compileScopeShows(context, parent, span, count);
+        for (headers.typst_declarations, 0..) |header, index| {
+            if (header.scope != scope or self.shownBefore(scope, index)) continue;
+            const path = header.statement.value.typst_show;
+            const base = try self.typstShowBase(context, path, span);
+            try self.countCapture(count, span);
+            try context.constant(.{ .string = try self.showMembers(path, base.taken) }, header.statement.span);
+            try context.load(base.binding, span);
+        }
+    }
+
+    /// Whether an enclosing scope, or this scope earlier, declares the same path.
+    fn shownBefore(self: *const Compiler, scope: Parser.ScopeId, index: usize) bool {
+        const headers = self.environment.unit.headers;
+        const path = headers.typst_declarations[index].statement.value.typst_show;
+        for (headers.typst_declarations, 0..) |other, other_index| {
+            if (other_index == index or !samePath(other.statement.value.typst_show, path)) continue;
+            if (other.scope == scope) {
+                if (other_index < index) return true;
+                continue;
+            }
+            var enclosing = headers.scopes[scope].parent;
+            while (enclosing) |id| : (enclosing = headers.scopes[id].parent) if (id == other.scope) return true;
+        }
+        return false;
+    }
+
+    /// The members after the path's Huak names, as ".a.b". The leading '.'
+    /// marks a show pair; Huak names never start with one. A path written
+    /// without spaces is borrowed from the module source.
+    fn showMembers(self: *Compiler, path: []const ast.ExportName, taken: usize) ![]const u8 {
+        var length: usize = 0;
+        for (path[taken..]) |segment| length += 1 + segment.name.len;
+        const written = self.environment.unit.source_text[path[taken - 1].span.end..path[path.len - 1].span.end];
+        if (written.len == length) return written;
+        const text = try self.allocator.alloc(u8, length);
+        var at: usize = 0;
+        for (path[taken..]) |segment| {
+            text[at] = '.';
+            @memcpy(text[at + 1 ..][0..segment.name.len], segment.name);
+            at += 1 + segment.name.len;
+        }
+        return text;
     }
 
     fn compilePathLiteral(self: *Compiler, context: *Context, expression_: *ast.Expr) anyerror!Type {
@@ -2320,7 +2403,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
     }
     try compiler.collectLocals(&entry, unit.script.statements);
     try compiler.compileStatements(&entry, unit.script.statements);
-    try compiler.checkTypstExposures(&entry);
+    try compiler.checkTypstReads(&entry);
     const finish = Span{ .start = unit.source_text.len, .end = unit.source_text.len };
     if (module_index == 0) {
         _ = try entry.emit(.halt, 0, 0, finish);
@@ -2340,7 +2423,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         }
         try compiler.collectLocals(&context, function.body);
         try compiler.compileStatements(&context, function.body);
-        try compiler.checkTypstExposures(&context);
+        try compiler.checkTypstReads(&context);
         if (result != .unit and !definitelyReturns(function.body)) return compiler.fail(statement.span, "function '{s}' may finish without returning {s}", .{ function.name, compiler.typeName(result) });
         try context.constant(.unit, statement.span);
         _ = try context.emit(.return_value, 0, 0, statement.span);
@@ -2353,7 +2436,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         try ast.walk(&declarations, .{ .expression = default.expression });
         const actual = try compiler.compileExpression(&context, default.expression);
         try compiler.require(default.kind, actual, default.expression.span);
-        try compiler.checkTypstExposures(&context);
+        try compiler.checkTypstReads(&context);
         _ = try context.emit(.return_value, 0, 0, default.span);
         const index = default.function - compiler.function_base;
         compiler.output.items[index].code = try context.code.toOwnedSlice();
@@ -2491,8 +2574,10 @@ pub fn compile(allocator: std.mem.Allocator, input: []const u8, name: []const u8
     const readonly = try build.readonly.toOwnedSlice();
     var program: bc.Program = .{ .arena = undefined, .source_text = build.modules[0].source_text, .name = build.modules[0].name, .functions = functions, .constants = constants, .records = records, .argument_bindings = argument_bindings, .parameters = parameters, .exports = build.modules[0].exports, .outputs = build.outputs, .modules = build.modules, .groups = groups, .global_names = global_names, .global_types = global_types, .readonly_globals = readonly, .entry = build.modules[0].entry };
     program.argument_names = try build.argument_names.toOwnedSlice(memory);
-    program.task_regions = try task_plan.build(memory, &program);
-    // Planning also allocates in memory; copy the arena owner only afterwards.
+    // Planning works in the caller's allocator and releases its state here;
+    // only the regions join Program memory.
+    program.task_regions = try task_plan.build(memory, allocator, &program);
+    // The regions are allocated in memory; copy the arena owner only afterwards.
     program.arena = arena;
     return program;
 }
@@ -2513,7 +2598,7 @@ test "check preserves semantic and imported diagnostics without producing a Prog
         "export missing",
         "fn broken(",
         "import \"middle.huak\" as middle",
-        "typst_expose missing\nvalue:=typ[]",
+        "typ.show missing.style\nvalue:=typ[]",
         "value:=typ[invalid fixture]",
     };
     for (cases) |input| for ([_]bool{ false, true }) |optimize| {
@@ -3619,11 +3704,11 @@ test "task planning skips ordinary scripts without allocating and bounds helper 
     var ordinary = try compile(std.testing.allocator, "n:=1\nfn unused()->picture;return picture(640, 480);end;", "task-no-candidates.huak", .{}, &diagnostic);
     defer ordinary.deinit();
     var no_allocations = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
-    const regions = try task_plan.build(no_allocations.allocator(), &ordinary);
+    const regions = try task_plan.build(no_allocations.allocator(), no_allocations.allocator(), &ordinary);
     try std.testing.expectEqual(@as(usize, 0), regions.len);
     var single = try compile(std.testing.allocator, "a:=figure()\nfn figure()->picture;return picture(640, 480);end;", "task-one-candidate.huak", .{}, &diagnostic);
     defer single.deinit();
-    try std.testing.expectEqual(@as(usize, 0), (try task_plan.build(no_allocations.allocator(), &single)).len);
+    try std.testing.expectEqual(@as(usize, 0), (try task_plan.build(no_allocations.allocator(), no_allocations.allocator(), &single)).len);
 
     // A reverse dependency chain needs one summary round per helper. Exceeding
     // the proof budget must preserve valid source as ordinary serial bytecode.
@@ -4323,70 +4408,107 @@ fn emptyTypstFixture(_: *anyopaque, input: []const u8) !usize {
     return 2;
 }
 
-fn exposedCompile(allocator: std.mem.Allocator, input: []const u8, optimize: bool) !bc.Program {
-    var marker: u8 = 0;
+fn typstOptions(optimize: bool) CompileOptions {
+    return .{ .optimize = optimize, .source_parser = Parser.TestSourceParser.parser };
+}
+
+fn typstCompile(allocator: std.mem.Allocator, input: []const u8, optimize: bool) !bc.Program {
     var diagnostic: ?Diagnostic = null;
-    return compile(allocator, input, "exposure.huak", .{ .optimize = optimize, .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } } }, &diagnostic) catch |err| {
-        if (diagnostic) |detail| std.debug.print("exposure compiler: {s}\n", .{detail.text()});
+    return compile(allocator, input, "typst-reads.huak", typstOptions(optimize), &diagnostic) catch |err| {
+        if (diagnostic) |detail| std.debug.print("typst reads compiler: {s}\n", .{detail.text()});
         return err;
     };
 }
 
-test "Typst exposures inherit lexical scopes deduplicate names and emit explicit reads" {
-    const input =
-        \\outer:=1
-        \\first:=typ[]
-        \\typst_expose outer, outer
-        \\if true then
-        \\    inside:="inside"
-        \\    middle:=typ[]
-        \\    typst_expose inside
-        \\else
-        \\    other:=2
-        \\    typst_expose other
-        \\    alternate:=typ[]
-        \\end
-        \\last:=typ[]
-        \\fn make_caption(outer:int)->text
-        \\    local_value:="local"
-        \\    typst_expose local_value
-        \\    return typ[]
-        \\end
-    ;
-    var program = try exposedCompile(std.testing.allocator, input, false);
-    defer program.deinit();
-    const counts = [_]u32{ 1, 2, 2, 1 };
-    const captured_names = [_][]const []const u8{ &.{"outer"}, &.{ "outer", "inside" }, &.{ "outer", "other" }, &.{"outer"} };
+const ExpectedRequest = struct {
+    op: bc.Op = .typst,
+    /// Huak names, or ".member" for a show value.
+    names: []const []const u8,
+    loads: ?[]const bc.Op = null,
+    /// Globals loaded for the captures.
+    globals: ?[]const []const u8 = null,
+    /// The code uses `huak` as a whole value.
+    whole: bool = false,
+    /// The name a typ.module is made with.
+    module: ?[]const u8 = null,
+};
+
+/// Checks the Typst requests of `function` in code order.
+fn expectTypstRequests(program: *const bc.Program, function: bc.Function, expected: []const ExpectedRequest) !void {
     var index: usize = 0;
-    for (program.functions[0].code, 0..) |instruction, position| if (instruction.op == .typst) {
-        try std.testing.expectEqual(counts[index], instruction.b);
-        try std.testing.expectEqual(@as(usize, instruction.b) * 2, instruction.stackEffect().consumed);
+    for (function.code, 0..) |instruction, position| if (instruction.op == .typst or instruction.op == .typst_module) {
+        try std.testing.expect(index < expected.len);
+        const want = expected[index];
+        try std.testing.expectEqual(want.op, instruction.op);
+        const pairs: usize = instruction.typstCaptures().pairs;
+        try std.testing.expectEqual(want.names.len, pairs);
+        try std.testing.expectEqual(want.whole, instruction.typstCaptures().whole);
+        // A module's name precedes its captured pairs.
+        const named = instruction.op == .typst_module;
+        try std.testing.expectEqual(pairs * 2 + @intFromBool(named), instruction.stackEffect().consumed);
+        if (want.module) |name| {
+            const constant = function.code[position - pairs * 2 - 1];
+            try std.testing.expectEqual(bc.Op.constant, constant.op);
+            try std.testing.expectEqualStrings(name, program.constants[constant.a].string);
+        }
         try std.testing.expectEqual(@as(usize, 1), instruction.stackEffect().produced);
-        const inputs = program.functions[0].code[position - instruction.b * 2 .. position];
-        for (0..instruction.b) |capture| {
+        const inputs = function.code[position - pairs * 2 .. position];
+        for (want.names, 0..) |name, capture| {
             try std.testing.expectEqual(bc.Op.constant, inputs[capture * 2].op);
-            try std.testing.expect(program.constants[inputs[capture * 2].a] == .string);
-            try std.testing.expectEqualStrings(captured_names[index][capture], program.constants[inputs[capture * 2].a].string);
-            try std.testing.expectEqual(if (capture == 0) bc.Op.load_global else bc.Op.load_local, inputs[capture * 2 + 1].op);
+            try std.testing.expectEqualStrings(name, program.constants[inputs[capture * 2].a].string);
+            const load = inputs[capture * 2 + 1];
+            if (want.loads) |loads| try std.testing.expectEqual(loads[capture], load.op);
+            if (want.globals) |globals| {
+                try std.testing.expectEqual(bc.Op.load_global, load.op);
+                try std.testing.expectEqualStrings(globals[capture], program.global_names[load.a]);
+            }
         }
         index += 1;
     };
-    try std.testing.expectEqual(counts.len, index);
-    const function = program.functions[1];
-    var found = false;
-    for (function.code, 0..) |instruction, position| if (instruction.op == .typst) {
-        found = true;
-        try std.testing.expectEqual(@as(u32, 2), instruction.b);
-        try std.testing.expectEqual(bc.Op.load_local, function.code[position - 1].op);
-        try std.testing.expectEqual(bc.Op.load_local, function.code[position - 3].op);
-    };
-    try std.testing.expect(found);
+    try std.testing.expectEqual(expected.len, index);
 }
 
-test "Typst exposure declarations add no runtime work without a content request" {
-    var original = try exposedCompile(std.testing.allocator, "value:=1", false);
+fn expectTypstFailure(input: []const u8, message: []const u8) !void {
+    var diagnostic: ?Diagnostic = null;
+    try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, input, "typst-errors.huak", typstOptions(false), &diagnostic));
+    std.testing.expectEqualStrings(message, diagnostic.?.text()) catch |err| {
+        std.debug.print("input: {s}\n", .{input});
+        return err;
+    };
+}
+
+test "Typst reads capture the names the code uses once each from their scopes" {
+    const input =
+        \\outer:=1
+        \\first:=typ[#huak.outer #huak.outer]
+        \\if true then
+        \\    inside:="inside"
+        \\    middle:=typ[#huak.outer #huak.inside]
+        \\else
+        \\    other:=2
+        \\    alternate:=typ[#huak.other]
+        \\end
+        \\none:=typ[#other.outer]
+        \\fn make_caption(outer:int)->text
+        \\    local_value:="local"
+        \\    return typ[#huak.local_value $huak.outer$]
+        \\end
+    ;
+    var program = try typstCompile(std.testing.allocator, input, false);
+    defer program.deinit();
+    try expectTypstRequests(&program, program.functions[0], &.{
+        .{ .names = &.{"outer"}, .loads = &.{.load_global} },
+        .{ .names = &.{ "outer", "inside" }, .loads = &.{ .load_global, .load_local } },
+        .{ .names = &.{"other"}, .loads = &.{.load_local} },
+        .{ .names = &.{} },
+    });
+    try expectTypstRequests(&program, program.functions[1], &.{.{ .names = &.{ "local_value", "outer" }, .loads = &.{ .load_local, .load_local } }});
+}
+
+test "typ.show declarations add no runtime work without a typ block" {
+    var original = try typstCompile(std.testing.allocator, "theme:=typ.module[]", false);
     defer original.deinit();
-    var declared = try exposedCompile(std.testing.allocator, "typst_expose value\nvalue:=1", false);
+    var declared = try typstCompile(std.testing.allocator, "theme:=typ.module[]\ntyp.show theme.style", false);
     defer declared.deinit();
     try std.testing.expectEqual(original.constants.len, declared.constants.len);
     try std.testing.expectEqual(original.functions[0].code.len, declared.functions[0].code.len);
@@ -4395,114 +4517,151 @@ test "Typst exposure declarations add no runtime work without a content request"
         try std.testing.expectEqual(left.a, right.a);
         try std.testing.expectEqual(left.b, right.b);
     }
-    var uninitialized = try exposedCompile(std.testing.allocator, "if false then typst_expose future; future:=1 end", true);
-    defer uninitialized.deinit();
-    for (uninitialized.functions[0].code) |instruction| try std.testing.expect(instruction.op != .load_global);
+    var future = try typstCompile(std.testing.allocator, "if false then typ.show future.style; future:=typ.module[] end", true);
+    defer future.deinit();
+    for (future.functions[0].code) |instruction| try std.testing.expect(instruction.op != .load_global and instruction.op != .load_local);
 }
 
-test "Typst exposures reject unknown function and non-data variables without requests" {
-    const cases = [_]struct { input: []const u8, message: []const u8 }{
-        .{ .input = "typst_expose missing", .message = "readable Huak variable" },
-        .{ .input = "fn function()->int return 1 end\ntypst_expose function", .message = "readable Huak variable" },
-        .{ .input = "typst_expose pi", .message = "readable Huak variable" },
-        .{ .input = "value:=[1]\ntypst_expose value", .message = "numeric, bool, string, length, color, and show_rule" },
-        .{ .input = "typst_expose value\nvalue:=[1]", .message = "numeric, bool, string, length, color, and show_rule" },
-        .{ .input = "value:=picture(640, 480)\ntypst_expose value\n", .message = "numeric, bool, string, length, color, and show_rule" },
-        .{ .input = "value:=1deg\ntypst_expose value", .message = "numeric, bool, string, length, color, and show_rule" },
-    };
-    for (cases) |fixture| {
-        var diagnostic: ?Diagnostic = null;
-        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, fixture.input, "exposure-errors.huak", .{}, &diagnostic));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), fixture.message) != null);
+test "Typst reads reject unknown names functions and values Typst cannot receive" {
+    try expectTypstFailure("value:=typ[#huak.missing]", "Typst code reads huak.missing, which names no readable Huak value here");
+    try expectTypstFailure("fn function()->int return 1 end\nvalue:=typ[#huak.function]", "Typst code reads huak.function, which names no readable Huak value here");
+    try expectTypstFailure("value:=typ[#huak.pi]", "Typst code reads huak.pi, which names no readable Huak value here");
+    try expectTypstFailure("items:=[1]\nvalue:=typ[#huak.items]", "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.items has type list");
+    // A forward declaration is checked with its inferred type.
+    try expectTypstFailure("if false then value:=typ[#huak.later] end\nlater:=[1]", "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.later has type list");
+    try expectTypstFailure("value:=picture(640, 480)\ncaption:=typ[#huak.value]", "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.value has type picture");
+    try expectTypstFailure("value:=1deg\ncaption:=typ[#huak.value]", "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.value has type angle");
+    // Code that binds `huak` itself may read its own members, so only
+    // readable values Typst can receive are captured.
+    var rebound = try typstCompile(std.testing.allocator, "items:=[1]\ncount:=2\nvalue:=typ[#let huak = (items: 1); #huak.items #huak.unknown #huak.count]", false);
+    defer rebound.deinit();
+    try expectTypstRequests(&rebound, rebound.functions[0], &.{.{ .names = &.{"count"} }});
+}
+
+test "Typst instructions record whether the code uses huak as a whole value" {
+    const input =
+        \\count:=2
+        \\bare:=typ[#repr(huak)]
+        \\both:=typ[#repr(huak) #huak.count]
+        \\member:=typ[#huak.count]
+        \\plain:=typ[text]
+        \\lib:=typ.module[#let all = huak]
+    ;
+    for ([_]bool{ false, true }) |optimize| {
+        var program = try typstCompile(std.testing.allocator, input, optimize);
+        defer program.deinit();
+        try expectTypstRequests(&program, program.functions[0], &.{
+            .{ .names = &.{}, .whole = true },
+            .{ .names = &.{"count"}, .whole = true },
+            .{ .names = &.{"count"} },
+            .{ .names = &.{} },
+            .{ .op = .typst_module, .names = &.{}, .whole = true, .module = "lib" },
+        });
     }
 }
 
-test "typst_show rules follow exposed data outermost first while show rules capture data only" {
+test "typ.show paths apply outermost first while typ.module captures reads only" {
     const input =
         \\size:=2pt
-        \\typst_expose size
-        \\outer:=show_rule b => []
-        \\inner:=show_rule b => []
-        \\typst_show outer
+        \\outer:=typ.module[#let style(b) = b]
+        \\inner:=typ.module[#let style(b) = text(huak.size, b)]
+        \\typ.show outer.style
         \\fn caption()->text
-        \\    typst_show inner, outer
-        \\    return typ[]
+        \\    typ.show inner.style
+        \\    typ.show outer.style
+        \\    return typ[#huak.size]
         \\end
         \\plain:=typ[]
     ;
-    var program = try exposedCompile(std.testing.allocator, input, false);
+    var program = try typstCompile(std.testing.allocator, input, false);
     defer program.deinit();
-    const Expected = struct { op: bc.Op, names: []const []const u8, rules: []const []const u8 = &.{} };
-    const Check = struct {
-        fn run(compiled: *const bc.Program, function: bc.Function, expected: []const Expected) !void {
-            var index: usize = 0;
-            for (function.code, 0..) |instruction, position| if (instruction.op == .typst or instruction.op == .show_rule) {
-                const want = expected[index];
-                try std.testing.expectEqual(want.op, instruction.op);
-                try std.testing.expectEqual(want.names.len + want.rules.len, instruction.b);
-                const inputs = function.code[position - instruction.b * 2 .. position];
-                for (0..instruction.b) |capture| {
-                    const name = compiled.constants[inputs[capture * 2].a].string;
-                    const value = compiled.global_names[inputs[capture * 2 + 1].a];
-                    if (capture < want.names.len) {
-                        try std.testing.expectEqualStrings(want.names[capture], name);
-                        try std.testing.expectEqualStrings(want.names[capture], value);
-                    } else {
-                        // An empty name marks a rule applied around the content.
-                        try std.testing.expectEqualStrings("", name);
-                        try std.testing.expectEqualStrings(want.rules[capture - want.names.len], value);
-                    }
-                }
-                if (instruction.op == .show_rule) try std.testing.expectEqualStrings("b => []", compiled.source_text[instruction.span.start..instruction.span.end]);
-                index += 1;
-            };
-            try std.testing.expectEqual(expected.len, index);
+    try expectTypstRequests(&program, program.functions[0], &.{
+        .{ .op = .typst_module, .names = &.{}, .module = "outer" },
+        .{ .op = .typst_module, .names = &.{"size"}, .globals = &.{"size"}, .module = "inner" },
+        .{ .names = &.{".style"}, .globals = &.{"outer"} },
+    });
+    try expectTypstRequests(&program, program.functions[1], &.{.{ .names = &.{ "size", ".style", ".style" }, .globals = &.{ "size", "outer", "inner" } }});
+    // A module's instruction spans exactly its code.
+    for (program.functions[0].code) |instruction| if (instruction.op == .typst_module) {
+        try std.testing.expect(std.mem.startsWith(u8, program.source_text[instruction.span.start..instruction.span.end], "[#let style(b) = "));
+        try std.testing.expect(program.source_text[instruction.span.end - 1] == ']');
+    };
+}
+
+test "typ.module reads only the names its code uses and never itself" {
+    const input =
+        \\size:=2pt
+        \\mark:=typ.module[#let mark(body) = text(huak.size, body)]
+        \\shout:=typ.module[#let shout(body) = huak.mark.mark(upper(body))]
+        \\fn make()->typ.module return typ.module[] end
+    ;
+    var program = try typstCompile(std.testing.allocator, input, false);
+    defer program.deinit();
+    // A module is named after the name it is assigned to.
+    try expectTypstRequests(&program, program.functions[0], &.{
+        .{ .op = .typst_module, .names = &.{"size"}, .module = "mark" },
+        .{ .op = .typst_module, .names = &.{"mark"}, .module = "shout" },
+    });
+    try expectTypstRequests(&program, program.functions[1], &.{.{ .op = .typst_module, .names = &.{}, .module = "module" }});
+    try expectTypstFailure("theme:=typ.module[#huak.theme]", "Typst code reads huak.theme, which names no readable Huak value here");
+    try expectTypstFailure("fn make()->typ.module\n    theme:=typ.module[#huak.theme]\n    return theme\nend", "Typst code reads huak.theme, which names no readable Huak value here");
+}
+
+test "typ.show and typ.module reject values Typst cannot receive" {
+    try expectTypstFailure("count:=1\ntyp.show count.style\nvalue:=typ[]", "typ.show needs a typ.module value; 'count' has type int");
+    try expectTypstFailure("count:=1\nblock\n    typ.show count.style\nend", "typ.show needs a typ.module value; 'count' has type int");
+    try expectTypstFailure("typ.show missing.style", "typ.show needs a readable typ.module value, found 'missing'");
+    try expectTypstFailure("theme:=typ.module[]\ntyp.show theme", "typ.show needs a member of a typ.module value, such as theme.style");
+    try expectTypstFailure("items:=[1]\nrule:=typ.module[#huak.items]", "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.items has type list");
+    try expectTypstFailure("fn make()->text return typ.module[] end", "expected text, found typ.module");
+}
+
+test "typ.show paths reach typ.module exports through import namespaces" {
+    const Resolver = struct {
+        fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
+            if (std.mem.eql(u8, path, "themes")) return .{ .name = "themes.huak", .source = "export theme:=typ.module[#let style(b) = b]\nexport count:=1\nexport fn helper()->int return 1 end\n" };
+            return .{ .name = "outer.huak", .source = "import \"themes\" as themes\nexport themes\n" };
         }
     };
-    try Check.run(&program, program.functions[0], &.{
-        .{ .op = .show_rule, .names = &.{"size"} },
-        .{ .op = .show_rule, .names = &.{"size"} },
-        .{ .op = .typst, .names = &.{"size"}, .rules = &.{"outer"} },
-    });
-    try Check.run(&program, program.functions[1], &.{.{ .op = .typst, .names = &.{"size"}, .rules = &.{ "outer", "inner" } }});
-}
-
-test "typst_show and show_rule captures reject values Typst cannot receive" {
-    const cases = [_]struct { input: []const u8, message: []const u8 }{
-        .{ .input = "count:=1\ntypst_show count\nvalue:=typ[]", .message = "typst_show requires a show_rule; 'count' has type int" },
-        .{ .input = "count:=1\nblock\n    typst_show count\nend", .message = "typst_show requires a show_rule; 'count' has type int" },
-        .{ .input = "typst_show missing", .message = "typst_show requires a readable Huak variable, found 'missing'" },
-        .{ .input = "rule:=show_rule b => []\ntypst_expose rule", .message = "show_rule snapshots every typst_expose name in scope when it is made, but 'rule' has no value here" },
-        .{ .input = "fn make()->show_rule\n    rule:=show_rule b => []\n    typst_expose rule\n    return rule\nend", .message = "show_rule snapshots every typst_expose name in scope when it is made, but 'rule' has no value here" },
-        .{ .input = "items:=[1]\ntypst_expose items\nrule:=show_rule b => []", .message = "typst_expose supports numeric, bool, string, length, color, and show_rule values; 'items' has type list" },
-        .{ .input = "fn make()->text return show_rule b => [] end", .message = "show_rule" },
+    var marker: u8 = 0;
+    var options = typstOptions(false);
+    options.import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } };
+    var diagnostic: ?Diagnostic = null;
+    var program = try compile(std.testing.allocator, "import \"themes\" as themes\nimport \"outer\" as outer\ntyp.show themes.theme.style\ntyp.show outer.themes.theme.page.style\na:=typ[]", "show-root.huak", options, &diagnostic);
+    defer program.deinit();
+    const root = program.functions[program.entry];
+    var found = false;
+    for (root.code, 0..) |instruction, position| if (instruction.op == .typst) {
+        found = true;
+        try std.testing.expectEqual(@as(u32, 2), instruction.b);
+        // Each show value is checked for its initialized module, then loaded.
+        try std.testing.expectEqual(bc.Op.load_global, root.code[position - 1].op);
+        try std.testing.expectEqualStrings("themes.huak::theme", program.global_names[root.code[position - 1].a]);
+        var members: [2][]const u8 = undefined;
+        var count: usize = 0;
+        for (root.code[0..position]) |earlier| if (earlier.op == .constant and program.constants[earlier.a] == .string and program.constants[earlier.a].string.len > 0 and program.constants[earlier.a].string[0] == '.') {
+            members[count] = program.constants[earlier.a].string;
+            count += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 2), count);
+        try std.testing.expectEqualStrings(".style", members[0]);
+        try std.testing.expectEqualStrings(".page.style", members[1]);
     };
-    for (cases) |fixture| {
-        var marker: u8 = 0;
-        var diagnostic: ?Diagnostic = null;
-        const options: CompileOptions = .{ .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } } };
-        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, fixture.input, "show-errors.huak", options, &diagnostic));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), fixture.message) != null);
+    try std.testing.expect(found);
+    const failures = [_]struct { input: []const u8, message: []const u8 }{
+        .{ .input = "import \"themes\" as themes\ntyp.show themes.style", .message = "module 'themes.huak' does not export 'style'" },
+        .{ .input = "import \"themes\" as themes\ntyp.show themes.theme", .message = "typ.show needs a member of the typ.module value, such as theme.style" },
+        .{ .input = "import \"themes\" as themes\ntyp.show themes.count.style", .message = "typ.show needs a typ.module value; 'count' has type int" },
+        .{ .input = "import \"themes\" as themes\ntyp.show themes.helper.style", .message = "typ.show needs a readable typ.module value, found 'helper'" },
+    };
+    for (failures) |failure| {
+        var detail: ?Diagnostic = null;
+        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, failure.input, "show-root.huak", options, &detail));
+        try std.testing.expectEqualStrings(failure.message, detail.?.text());
     }
 }
 
-/// The last content request reads every exposed name from a local slot.
-fn expectLocalCaptures(program: bc.Program, function: bc.Function, names: []const []const u8) !void {
-    var request: ?usize = null;
-    for (function.code, 0..) |instruction, position| {
-        if (instruction.op == .typst) request = position;
-    }
-    const position = request orelse return error.TestExpectedTypstRequest;
-    const count = function.code[position].b;
-    try std.testing.expectEqual(names.len, count);
-    const inputs = function.code[position - count * 2 .. position];
-    for (names, 0..) |name, capture| {
-        try std.testing.expectEqualStrings(name, program.constants[inputs[capture * 2].a].string);
-        try std.testing.expectEqual(bc.Op.load_local, inputs[capture * 2 + 1].op);
-    }
-}
-
-test "Typst exposures in template call bodies resolve like ordinary reads" {
+test "Typst reads in template call bodies resolve like ordinary reads" {
     // The body sees template parameters and locals, including the parameter
     // that shadows a caller global and names forwarded by a nested insertion.
     const forwarded =
@@ -4519,46 +4678,46 @@ test "Typst exposures in template call bodies resolve like ordinary reads" {
         \\end
         \\gap := 9pt
         \\bar do
-        \\    typst_expose gap, c, width, a, e
-        \\    caption := typ[]
+        \\    caption := typ[#huak.gap #huak.c #huak.width #huak.a #huak.e]
         \\end
     ;
-    var program = try exposedCompile(std.testing.allocator, forwarded, false);
+    var program = try typstCompile(std.testing.allocator, forwarded, false);
     defer program.deinit();
-    try expectLocalCaptures(program, program.functions[0], &.{ "gap", "c", "width", "a", "e" });
-    var optimized = try exposedCompile(std.testing.allocator, forwarded, true);
+    const locals: []const bc.Op = &.{ .load_local, .load_local, .load_local, .load_local, .load_local };
+    try expectTypstRequests(&program, program.functions[0], &.{.{ .names = &.{ "gap", "c", "width", "a", "e" }, .loads = locals }});
+    var optimized = try typstCompile(std.testing.allocator, forwarded, true);
     optimized.deinit();
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
             if (!std.mem.eql(u8, path, "frames")) return error.UnknownModule;
-            return .{ .name = "frames.huak", .source = "export expand_block frame(gap:length = 1pt)\n    inner := 3\n    ...\nend\nexport expand_block broken()\n    typst_expose missing\n    ...\nend\n" };
+            return .{ .name = "frames.huak", .source = "export expand_block frame(gap:length = 1pt)\n    inner := 3\n    ...\nend\nexport expand_block broken()\n    value := typ[#huak.missing]\n    ...\nend\n" };
         }
     };
     var marker: u8 = 0;
-    const options: CompileOptions = .{ .optimize = false, .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } }, .import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } } };
+    var options = typstOptions(false);
+    options.import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } };
     var diagnostic: ?Diagnostic = null;
-    var imported = try compile(std.testing.allocator, "import \"frames\".frame\ngap := 9pt\nfn caption()->text\n    result := typ[]\n    frame do\n        typst_expose gap, inner\n        result = typ[]\n    end\n    return result\nend", "frames-root.huak", options, &diagnostic);
+    var imported = try compile(std.testing.allocator, "import \"frames\".frame\ngap := 9pt\nfn caption()->text\n    result := typ[]\n    frame do\n        result = typ[#huak.gap #huak.inner]\n    end\n    return result\nend", "frames-root.huak", options, &diagnostic);
     defer imported.deinit();
     var function: ?bc.Function = null;
     for (imported.functions) |candidate| if (std.mem.eql(u8, candidate.name, "caption")) {
         function = candidate;
     };
-    try expectLocalCaptures(imported, function.?, &.{ "gap", "inner" });
+    try expectTypstRequests(&imported, function.?, &.{ .{ .names = &.{} }, .{ .names = &.{ "gap", "inner" }, .loads = &.{ .load_local, .load_local } } });
 
-    const Failure = struct { input: []const u8, message: []const u8, file: []const u8 = "exposure-template.huak", line: usize, column: usize };
+    const Failure = struct { input: []const u8, message: []const u8, file: []const u8 = "typst-template.huak", line: usize, column: usize };
     const failures = [_]Failure{
-        // An invoked template validates the declarations in its own body,
-        // and an imported template reports them in its defining module.
-        .{ .input = "expand_block frame()\n    typst_expose missing\n    ...\nend\nframe do\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .line = 2, .column = 18 },
-        .{ .input = "import \"frames\".broken\nbroken do\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .file = "frames.huak", .line = 6, .column = 18 },
-        .{ .input = "expand_block frame()\n    items := [1]\n    ...\nend\nframe do\n    typst_expose items\nend", .message = "typst_expose supports numeric, bool, string, length, color, and show_rule values; 'items' has type list", .line = 6, .column = 18 },
-        // Forward declarations are checked with their inferred types.
-        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose later\n    later := [1]\nend", .message = "typst_expose supports numeric, bool, string, length, color, and show_rule values; 'later' has type list", .line = 5, .column = 18 },
-        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    typst_expose missing\nend", .message = "typst_expose requires a readable Huak variable, found 'missing'", .line = 5, .column = 18 },
+        // An invoked template checks the reads in its own body, and an
+        // imported template reports them in its defining module.
+        .{ .input = "expand_block frame()\n    value := typ[#huak.missing]\n    ...\nend\nframe do\nend", .message = "Typst code reads huak.missing, which names no readable Huak value here", .line = 2, .column = 24 },
+        .{ .input = "import \"frames\".broken\nbroken do\nend", .message = "Typst code reads huak.missing, which names no readable Huak value here", .file = "frames.huak", .line = 6, .column = 24 },
+        .{ .input = "expand_block frame()\n    items := [1]\n    ...\nend\nframe do\n    caption := typ[#huak.items]\nend", .message = "Typst code can read numeric, bool, string, length, color, and typ.module values from huak; huak.items has type list", .line = 6, .column = 26 },
+        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    if false then caption := typ[#huak.later] end\n    later := [1]\nend", .message = "local variable used before its declaration is complete", .line = 5, .column = 40 },
+        .{ .input = "expand_block frame()\n    ...\nend\nframe do\n    caption := typ[#huak.missing]\nend", .message = "Typst code reads huak.missing, which names no readable Huak value here", .line = 5, .column = 26 },
     };
     for (failures) |failure| {
         var detail: ?Diagnostic = null;
-        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, failure.input, "exposure-template.huak", options, &detail));
+        try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, failure.input, "typst-template.huak", options, &detail));
         try std.testing.expectEqualStrings(failure.message, detail.?.text());
         try std.testing.expectEqualStrings(failure.file, detail.?.fileName().?);
         const position = detail.?.position("");
@@ -4567,16 +4726,18 @@ test "Typst exposures in template call bodies resolve like ordinary reads" {
     }
 }
 
-test "Typst exposures preserve imported aliases initialization checks and module isolation" {
+test "Typst reads preserve imported aliases initialization checks and module isolation" {
     const Resolver = struct {
         fn resolve(_: *anyopaque, _: std.mem.Allocator, _: []const u8, path: []const u8) !ResolvedSource {
             if (!std.mem.eql(u8, path, "library")) return error.UnknownModule;
-            return .{ .name = "library.huak", .source = "export title:=\"title\"\ntypst_expose title\nlabel:=typ[]\n" };
+            return .{ .name = "library.huak", .source = "export title:=\"title\"\nlabel:=typ[#huak.title]\n" };
         }
     };
     var marker: u8 = 0;
+    var options = typstOptions(false);
+    options.import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } };
     var diagnostic: ?Diagnostic = null;
-    var program = try compile(std.testing.allocator, "import \"library\".title as caption\ntypst_expose caption\na:=typ[]", "exposure-root.huak", .{ .optimize = false, .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } }, .import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } } }, &diagnostic);
+    var program = try compile(std.testing.allocator, "import \"library\".title as caption\na:=typ[#huak.caption]", "typst-root.huak", options, &diagnostic);
     defer program.deinit();
     const root = program.functions[program.entry];
     var root_found = false;
@@ -4587,7 +4748,7 @@ test "Typst exposures preserve imported aliases initialization checks and module
         try std.testing.expectEqualStrings("caption", program.constants[root.code[position - 3].a].string);
     };
     try std.testing.expect(root_found);
-    var bare = try compile(std.testing.allocator, "import \"library\" as library\na:=typ[]", "unexposed-root.huak", .{ .optimize = false, .source_parser = .{ .ptr = &marker, .vtable = &.{ .block = emptyTypstFixture } }, .import_resolver = .{ .ptr = &marker, .vtable = &.{ .resolve = Resolver.resolve } } }, &diagnostic);
+    var bare = try compile(std.testing.allocator, "import \"library\" as library\na:=typ[]", "unread-root.huak", options, &diagnostic);
     defer bare.deinit();
     var seen: [2]bool = @splat(false);
     for (bare.functions) |function| for (function.code) |instruction| if (instruction.op == .typst) {
@@ -4597,28 +4758,23 @@ test "Typst exposures preserve imported aliases initialization checks and module
     try std.testing.expect(seen[0] and seen[1]);
 }
 
-fn exposedAllocationExercise(allocator: std.mem.Allocator) !void {
+fn typstReadAllocationExercise(allocator: std.mem.Allocator) !void {
     for ([_]bool{ false, true }) |optimize| {
-        var program = try exposedCompile(allocator, "count:=1\ntypst_expose count\nfn make_caption(count:int)->text\ntypst_expose count\nreturn typ[]\nend\nfirst:=typ[]\nif true then local:=2;typst_expose local;second:=typ[] end", optimize);
+        var program = try typstCompile(allocator, "count:=1\nfn make_caption(count:int)->text\ntyp.show style.style\nreturn typ[#huak.count]\nend\nstyle:=typ.module[#huak.count]\nfirst:=typ[#huak.count]\nif true then local:=2;second:=typ[#huak.local #huak.count] end", optimize);
         defer program.deinit();
     }
 }
 
-test "Typst exposure metadata and capture lowering release every failed allocation" {
-    try exposedAllocationExercise(std.testing.allocator);
+test "Typst read lowering releases every failed allocation" {
+    try typstReadAllocationExercise(std.testing.allocator);
     var stable = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
-    try std.testing.checkAllAllocationFailures(stable.allocator(), exposedAllocationExercise, .{});
+    try std.testing.checkAllAllocationFailures(stable.allocator(), typstReadAllocationExercise, .{});
 }
 
-test "Typst exposures include native lengths colors and runtime checked quantities" {
-    var program = try exposedCompile(std.testing.allocator, "import color.rgb\ndistance:=2cm\nink:=rgb(0.1,0.2,0.3)\nflexible:quantity:=3mm\ntypst_expose distance,ink,flexible\ncaption:=typ[]", false);
+test "Typst reads include native lengths colors and runtime checked quantities" {
+    var program = try typstCompile(std.testing.allocator, "import color.rgb\ndistance:=2cm\nink:=rgb(0.1,0.2,0.3)\nflexible:quantity:=3mm\ncaption:=typ[#huak.distance #huak.ink #huak.flexible]", false);
     defer program.deinit();
-    var found = false;
-    for (program.functions[program.entry].code) |instruction| if (instruction.op == .typst) {
-        found = true;
-        try std.testing.expectEqual(@as(u32, 3), instruction.b);
-    };
-    try std.testing.expect(found);
+    try expectTypstRequests(&program, program.functions[program.entry], &.{.{ .names = &.{ "distance", "ink", "flexible" } }});
 }
 
 test "struct export modifiers retain nominal constructors beside value bindings through aliases" {

@@ -284,6 +284,114 @@ test "host templates apply as show rules and report positions in their originati
     try testing.expect(std.mem.indexOf(u8, detail.text(), "styles.huak:8:18: unknown variable: missing") != null);
 }
 
+test "binding inputs are validated by the library, which reads only the fields their kind selects" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var engine = try library.createEngine();
+    defer engine.deinit();
+    const c = typst.c;
+    var metrics: [1]typst.Metrics = undefined;
+    // A scalar's collection fields are outside its contract: counts without
+    // storage behind them are not read.
+    var count = std.mem.zeroes(c.TypstValueInput);
+    count.kind = c.TYPST_VALUE_INT;
+    count.integer = 7;
+    count.item_count = 3;
+    count.binding_count = 5;
+    const scalar = [_]c.TypstBinding{.{ .name = .{ .data = "count", .len = 5 }, .value = &count }};
+    var layout = try engine.layoutContent(&.{.{ .source = "#assert(count == 7) ok", .bindings = &scalar }}, &metrics, null);
+    layout.deinit();
+    // A missing value and a tree beyond the depth limit are the library's errors.
+    const missing = [_]c.TypstBinding{.{ .name = .{ .data = "count", .len = 5 }, .value = null }};
+    try testing.expectError(error.InvalidArgument, engine.layoutContent(&.{.{ .source = "x", .bindings = &missing }}, &metrics, null));
+    var levels: [70]c.TypstValueInput = undefined;
+    for (&levels, 0..) |*level, index| {
+        level.* = std.mem.zeroes(c.TypstValueInput);
+        level.kind = c.TYPST_VALUE_ARRAY;
+        if (index + 1 < levels.len) {
+            level.items = &levels[index + 1];
+            level.item_count = 1;
+        }
+    }
+    const deep = [_]c.TypstBinding{.{ .name = .{ .data = "deep", .len = 4 }, .value = &levels[0] }};
+    try testing.expectError(error.InvalidArgument, engine.layoutContent(&.{.{ .source = "x", .bindings = &deep }}, &metrics, null));
+}
+
+test "evaluated modules bind into requests, apply as show rules and place errors in their own file" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var engine = try library.createEngine();
+    defer engine.deinit();
+    const c = typst.c;
+    var size = std.mem.zeroes(c.TypstValueInput);
+    size.kind = c.TYPST_VALUE_LENGTH;
+    size.number = 30;
+    const own = [_]c.TypstBinding{.{ .name = .{ .data = "size", .len = 4 }, .value = &size }};
+    var base = try engine.evalModule(.{
+        .code = "#let scale = size\n#let style(body) = { set text(size: scale); body }\n#let fail() = panic(\"inside base\")",
+        .name = "base.typ",
+        .bindings = &own,
+        .origin = .{ .name = "styles.huak", .line = 4, .column = 10 },
+    });
+    defer base.deinit();
+    // The first handle of whichever options a value belongs to.
+    var first = std.mem.zeroes(c.TypstValueInput);
+    first.kind = c.TYPST_VALUE_MODULE_HANDLE;
+    const uses_base = [_]c.TypstBinding{.{ .name = .{ .data = "base", .len = 4 }, .value = &first }};
+    var theme = try engine.evalModule(.{
+        .code = "#import calc as calc\n#let style = base.style\n#let fail = base.fail",
+        .name = "theme.typ",
+        .bindings = &uses_base,
+        .modules = &.{&base},
+    });
+    defer theme.deinit();
+    var warnings = try theme.warnings();
+    defer warnings.deinit();
+    try testing.expect(std.mem.indexOf(u8, warnings.bytes(), "theme.typ:1:") != null);
+    var quiet = try base.warnings();
+    defer quiet.deinit();
+    try testing.expectEqual(@as(usize, 0), quiet.bytes().len);
+
+    const root = [_]c.TypstBinding{.{ .name = .{ .data = "lib", .len = 3 }, .value = &first }};
+    const style_path = [_]c.TypstStr{.{ .data = "style", .len = 5 }};
+    const show = [_]c.TypstShowValue{.{ .value = &first, .path = &style_path, .path_count = 1 }};
+    const plain: typst.LayoutRequest = .{ .source = "#assert(repr(lib) == \"<module theme>\")Hello", .bindings = &root, .modules = &.{&theme} };
+    var shown = plain;
+    shown.show_values = &show;
+    var metrics: [2]typst.Metrics = undefined;
+    var layout = try engine.layoutContent(&.{ plain, shown }, &metrics, null);
+    layout.deinit();
+    try testing.expect(metrics[1].width > 2 * metrics[0].width);
+
+    // An error raised inside the module that `theme` was evaluated with is
+    // placed in that module's file; the request lists only `theme`.
+    var failing = plain;
+    failing.source = "#lib.fail()";
+    var single: [1]typst.Metrics = undefined;
+    var detail: typst.Diagnostic = .{};
+    defer detail.deinit();
+    try testing.expectError(error.CompileFailed, engine.layoutContent(&.{failing}, &single, &detail));
+    try testing.expect(std.mem.indexOf(u8, detail.text(), "styles.huak:7:") != null);
+    // An evaluation error is the library's last error, in the module's file.
+    try testing.expectError(error.CompileFailed, engine.evalModule(.{
+        .code = "#let broken = missing",
+        .name = "broken.typ",
+        .origin = .{ .name = "styles.huak", .line = 9, .column = 3 },
+    }));
+    var message = try library.lastError();
+    defer message.deinit();
+    try testing.expect(std.mem.indexOf(u8, message.bytes(), "styles.huak:10:18: unknown variable: missing") != null);
+    // A module belongs to the library that evaluated it.
+    var other = try typst.Library.open(options.library_path);
+    defer other.deinit();
+    var fixture = try std.DynLib.open(options.incomplete_path);
+    defer fixture.close();
+    var foreign = other;
+    foreign.functions.layout_release = fixture.lookup(@TypeOf(foreign.functions.layout_release), "typst_layout_release") orelse return error.MissingSymbol;
+    try testing.expectError(error.InvalidArgument, theme.native(&foreign));
+    _ = try theme.native(&other);
+}
+
 test "engine inputs are immutable strings copied before the caller releases storage" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();

@@ -19,12 +19,12 @@ const Pieces = std.MultiArrayList(Piece);
 const Run = struct { first: usize, end: usize, closed: bool };
 
 /// Return one independently owned nonzero-fill coverage per requested range.
-/// Each path uses result_allocator; the outer slice uses scratch_allocator.
-/// Deinitialize every path, then free that slice with scratch_allocator.
+/// The paths and the slice use `allocator`, which also holds the working data
+/// until it returns. Deinitialize every path, then free the slice.
 /// Inputs stay borrowed. Real dash/path endpoints retain their original cap;
 /// artificial cuts are butt boundaries. Original joins belong to both adjacent
 /// closed ranges. Union coverage before clipping the original stroke once.
-pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, paint: DisplayList.Pen, ranges: []const Range, options: outline.Options) ![]Path {
+pub fn extract(allocator: Allocator, source: Path, paint: DisplayList.Pen, ranges: []const Range, options: outline.Options) ![]Path {
     try DisplayList.validateStyle(&.{ .pen = paint });
     if (paint.motion != null) return error.UnsupportedMotionSections;
     if (ranges.len > options.max_segments or source.segments.items.len > options.max_segments *| 2 +| 1) return error.StrokeWorkLimit;
@@ -45,7 +45,7 @@ pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, 
     if (ranges.len == 0) return allocator.alloc(Path, 0);
     if (paint.color.a == 0) {
         const result = try allocator.alloc(Path, ranges.len);
-        for (result) |*path| path.* = Path.init(result_allocator);
+        for (result) |*path| path.* = Path.init(allocator);
         return result;
     }
     var pieces: Pieces = .empty;
@@ -104,7 +104,7 @@ pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, 
     };
     defer full.deinit();
     const results = try allocator.alloc(Path, ranges.len);
-    for (results) |*path| path.* = Path.init(result_allocator);
+    for (results) |*path| path.* = Path.init(allocator);
     errdefer {
         for (results) |*path| path.deinit();
         allocator.free(results);
@@ -162,11 +162,9 @@ pub fn extract(allocator: Allocator, result_allocator: Allocator, source: Path, 
         // A MetaPost tracing is not distributive over centerline splits: its
         // retrograde inner joins can remove ink that overlapping pieces would
         // fill back in. Bound every contribution by the one original tracing.
-        var clipped = try region.combine(allocator, tracing, full, .intersect, .{ .tolerance = options.tolerance, .max_segments = options.max_segments, .max_vertices = options.max_vertices, .max_depth = options.max_depth });
-        defer clipped.deinit();
-        // Only retained geometry crosses the allocator/ownership boundary;
-        // PathOps graphs and the shared source tracing remain scratch-owned.
-        result.* = try clipped.clone(result_allocator);
+        // The empty placeholder owns no memory, so the clipped coverage
+        // replaces it directly.
+        result.* = try region.combine(allocator, tracing, full, .intersect, .{ .tolerance = options.tolerance, .max_segments = options.max_segments, .max_vertices = options.max_vertices, .max_depth = options.max_depth });
     }
     return results;
 }
@@ -228,7 +226,7 @@ test "source stroke sections retain real caps and do not cap artificial boundari
     defer source.deinit();
     try source.moveTo(.zero);
     try source.lineTo(.{ .x = 10, .y = 0 });
-    const result = try extract(t.allocator, t.allocator, source, .{ .width = 2, .cap = .round }, &.{ .{ .contour = 0, .begin = 0, .end = 0.5 }, .{ .contour = 0, .begin = 0.5, .end = 1 } }, .{});
+    const result = try extract(t.allocator, source, .{ .width = 2, .cap = .round }, &.{ .{ .contour = 0, .begin = 0, .end = 0.5 }, .{ .contour = 0, .begin = 0.5, .end = 1 } }, .{});
     defer {
         for (result) |*path| path.deinit();
         t.allocator.free(result);
@@ -241,12 +239,12 @@ test "source stroke sections retain real caps and do not cap artificial boundari
 
 fn checkPartition(allocator: Allocator, source: Path, paint: DisplayList.Pen, ranges: []const Range, whole: Range) !void {
     const options: outline.Options = .{ .tolerance = 1e-4 };
-    const pieces = try extract(allocator, allocator, source, paint, ranges, options);
+    const pieces = try extract(allocator, source, paint, ranges, options);
     defer {
         for (pieces) |*path| path.deinit();
         allocator.free(pieces);
     }
-    const full = try extract(allocator, allocator, source, paint, &.{whole}, options);
+    const full = try extract(allocator, source, paint, &.{whole}, options);
     defer {
         full[0].deinit();
         allocator.free(full);
@@ -317,7 +315,7 @@ test "source section phase true dash caps and contour identities stay on the ori
     try source.lineTo(.{ .x = 20, .y = 0 });
     try source.moveTo(.{ .x = 100, .y = 0 });
     try source.lineTo(.{ .x = 120, .y = 0 });
-    const output = try extract(t.allocator, t.allocator, source, .{ .width = 2, .cap = .round, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &.{ .{ .contour = 0, .begin = 0.5, .end = 1 }, .{ .contour = 1, .begin = 1, .end = 1.5 } }, .{});
+    const output = try extract(t.allocator, source, .{ .width = 2, .cap = .round, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &.{ .{ .contour = 0, .begin = 0.5, .end = 1 }, .{ .contour = 1, .begin = 1, .end = 1.5 } }, .{});
     defer {
         for (output) |*path| path.deinit();
         t.allocator.free(output);
@@ -326,8 +324,8 @@ test "source section phase true dash caps and contour identities stay on the ori
     try t.expectApproxEqAbs(@as(f64, 21), output[0].bounds().?.max.x, 1e-3);
     try t.expectApproxEqAbs(@as(f64, 99), output[1].bounds().?.min.x, 1e-3);
     try t.expectApproxEqAbs(@as(f64, 110), output[1].bounds().?.max.x, 1e-9);
-    try t.expectError(error.InvalidSection, extract(t.allocator, t.allocator, source, .{}, &.{.{ .contour = 1, .begin = 0, .end = 1 }}, .{}));
-    try t.expectError(error.InvalidSection, extract(t.allocator, t.allocator, source, .{}, &.{.{ .contour = 0, .begin = 0.5, .end = 0.5 }}, .{}));
+    try t.expectError(error.InvalidSection, extract(t.allocator, source, .{}, &.{.{ .contour = 1, .begin = 0, .end = 1 }}, .{}));
+    try t.expectError(error.InvalidSection, extract(t.allocator, source, .{}, &.{.{ .contour = 0, .begin = 0.5, .end = 0.5 }}, .{}));
 }
 
 test "source closed cubic circle halves retain the full round stroke" {
@@ -345,7 +343,7 @@ test "source closed cubic circle halves retain the full round stroke" {
         const point: g.Point = .{ .x = 8.37 + 2 * @as(f64, @floatFromInt(x)), .y = 18.59 + 2 * @as(f64, @floatFromInt(y)) };
         try t.expectEqual(try winding.windingAt(original, point) != 0, try winding.windingAt(whole, point) != 0);
     };
-    const result = try extract(t.allocator, t.allocator, source, paint, &.{ .{ .contour = 0, .begin = 0, .end = 2 }, .{ .contour = 0, .begin = 2, .end = 4 } }, settings);
+    const result = try extract(t.allocator, source, paint, &.{ .{ .contour = 0, .begin = 0, .end = 2 }, .{ .contour = 0, .begin = 2, .end = 4 } }, settings);
     defer {
         for (result) |*path| path.deinit();
         t.allocator.free(result);
@@ -385,7 +383,7 @@ test "source section offset retains a long inactive boundary" {
     const t = std.testing;
     var source = try Path.circle(t.allocator, .{ .x = 40, .y = 50 }, 25);
     defer source.deinit();
-    const result = try extract(t.allocator, t.allocator, source, .{ .width = 6, .cap = .round, .join = .round }, &.{.{ .contour = 0, .begin = 0, .end = 2 }}, .{ .tolerance = 0.001 });
+    const result = try extract(t.allocator, source, .{ .width = 6, .cap = .round, .join = .round }, &.{.{ .contour = 0, .begin = 0, .end = 2 }}, .{ .tolerance = 0.001 });
     defer {
         result[0].deinit();
         t.allocator.free(result);
@@ -408,9 +406,7 @@ fn allocationCase(allocator: Allocator) !void {
     try source.moveTo(.zero);
     try source.lineTo(.{ .x = 10, .y = 0 });
     try source.lineTo(.{ .x = 10, .y = 10 });
-    var retained: std.heap.ArenaAllocator = .init(allocator);
-    defer retained.deinit();
-    const result = try extract(allocator, retained.allocator(), source, .{ .nib = @import("nib.zig").Nib.square(), .cap = .round, .join = .bevel, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &.{ .{ .contour = 0, .begin = 0, .end = 1 }, .{ .contour = 0, .begin = 1, .end = 2 } }, .{});
+    const result = try extract(allocator, source, .{ .nib = @import("nib.zig").Nib.square(), .cap = .round, .join = .bevel, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &.{ .{ .contour = 0, .begin = 0, .end = 1 }, .{ .contour = 0, .begin = 1, .end = 2 } }, .{});
     defer {
         for (result) |*path| path.deinit();
         allocator.free(result);
@@ -418,18 +414,18 @@ fn allocationCase(allocator: Allocator) !void {
     try std.testing.expect(result[0].segments.items.len != 0 and result[1].segments.items.len != 0);
 }
 
-test "source section coverage separates scratch and result ownership at every allocation failure" {
+test "source section coverage releases working data and partial results at every allocation failure" {
     try allocationCase(std.testing.allocator);
     var moving = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
     try std.testing.checkAllAllocationFailures(moving.allocator(), allocationCase, .{});
-    var scratch: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    // The coverage owns its geometry and outlives the source.
     var source = Path.init(std.testing.allocator);
     try source.moveTo(.zero);
     try source.lineTo(.{ .x = 10, .y = 0 });
-    const results = try extract(scratch.allocator(), std.testing.allocator, source, .{ .width = 2, .cap = .square }, &.{.{ .contour = 0, .begin = 0, .end = 1 }}, .{});
+    const results = try extract(std.testing.allocator, source, .{ .width = 2, .cap = .square }, &.{.{ .contour = 0, .begin = 0, .end = 1 }}, .{});
+    defer std.testing.allocator.free(results);
     var retained = results[0];
     source.deinit();
-    scratch.deinit();
     defer retained.deinit();
     try std.testing.expectApproxEqAbs(@as(f64, 24), retained.signedArea(), 1e-5);
 }
@@ -472,7 +468,7 @@ test "source sections preserve actual millimetre trefoil stroke coverage" {
     const paint: DisplayList.Pen = .{ .width = 3 * mm, .cap = .round, .join = .round };
     const raw = try outline.strokeOutline(a, .{ .ellipse = g.Transform.scaling(paint.width, paint.width) }, source, .{ .tolerance = tolerance, .cap = .round, .join = .round });
     const full = try region.combine(a, raw, Path.init(a), .unite, .{ .tolerance = tolerance });
-    const parts = try extract(a, a, source, paint, &ranges, .{ .tolerance = tolerance });
+    const parts = try extract(a, source, paint, &ranges, .{ .tolerance = tolerance });
     var combined = Path.init(a);
     for (parts) |part| combined = try region.combine(a, combined, part, .unite, .{ .tolerance = tolerance });
     // This oracle only uses bounded path subdivision and half-open line rays;

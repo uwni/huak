@@ -17,7 +17,7 @@
       ]
     },
     "import-alias": { "begin": "\\bas\\b", "beginCaptures": { "0": { "name": "keyword.control.huak" } }, "end": "[A-Za-z_][A-Za-z_0-9]*|(?=[,};])", "patterns": [{ "include": "#comments" }] },
-    "comments": { "patterns": [{ "name": "comment.line.double-slash.huak", "match": "//.*$" }, { "name": "comment.line.number-sign.huak", "match": "#.*$" }] },
+    "comments": { "patterns": [{ "name": "comment.line.double-slash.huak", "match": "//.*$" }] },
     "strings": { "name": "string.quoted.double.huak", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.huak", "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})" }] },
     "dictionary-keys": { "match": "(\"(?:\\\\.|[^\"\\\\])*\")([ \\t]*:)", "captures": { "1": { "name": "string.quoted.double.huak meta.mapping.key.huak" }, "2": { "name": "punctuation.separator.huak" } } },
     "structures": {
@@ -37,9 +37,8 @@
     "typst": {
       "patterns": [
         { "name": "meta.embedded.block.typst", "begin": "\\b(typ)(?=\\s*\\[)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\])", "patterns": [{ "include": "source.typst#contentBlock" }] },
-        { "name": "meta.embedded.block.typst-code", "begin": "\\b(setup_typst)(?=\\s*\\{)", "beginCaptures": { "1": { "name": "keyword.control.huak" } }, "end": "(?<=\\})", "patterns": [{ "include": "source.typst#codeBlock" }] },
-        { "name": "meta.embedded.block.typst-code", "begin": "\\b(show_rule)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(=>)(?=[ \\t]*\\{)", "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "variable.parameter.huak" }, "3": { "name": "keyword.operator.huak" } }, "end": "(?<=\\})", "patterns": [{ "include": "source.typst#codeBlock" }] },
-        { "name": "meta.embedded.block.typst", "begin": "\\b(show_rule)[ \\t]+([A-Za-z_][A-Za-z_0-9]*)[ \\t]*(=>)(?=[ \\t]*\\[)", "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "variable.parameter.huak" }, "3": { "name": "keyword.operator.huak" } }, "end": "(?<=\\])", "patterns": [{ "include": "source.typst#contentBlock" }] }
+        { "name": "meta.embedded.block.typst", "begin": "\\b(typ)[ \\t]*(\\.)[ \\t]*(module)(?=\\s*\\[)", "beginCaptures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "punctuation.accessor.huak" }, "3": { "name": "keyword.control.huak" } }, "end": "(?<=\\])", "patterns": [{ "include": "source.typst#contentBlock" }] },
+        { "match": "\\b(typ)[ \\t]*(\\.)[ \\t]*(show)\\b", "captures": { "1": { "name": "keyword.control.huak" }, "2": { "name": "punctuation.accessor.huak" }, "3": { "name": "keyword.control.huak" } } }
       ]
     },
     "call-forms": { "patterns": [
@@ -82,7 +81,7 @@
       { "begin": "\\{", "end": "\\}", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] }
     ] },
     "keywords": { "patterns": [
-      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|precedence|mixfix|and|or|not|typ|setup_typst|typst_expose|typst_show|show_rule|cycle)\\b" },
+      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|precedence|mixfix|and|or|not|typ|cycle)\\b" },
       { "name": "constant.language.boolean.huak", "match": "\\b(?:true|false)\\b" }
     ] },
     "numbers": { "patterns": [

@@ -3,13 +3,12 @@ const std = @import("std");
 const t = std.testing;
 const h = @import("harness.zig");
 
-pub const process_count = 10;
+pub const process_count = 12;
 
 pub fn run(ctx: *h.Harness) !void {
     _ = try ctx.script("exposures/library",
         \\export name:="module"
-        \\typst_expose name
-        \\export caption:=typ[#assert(huak.keys()==("name",))#huak.name]
+        \\export caption:=typ[#assert(dictionary(huak).keys()==("name",))#huak.name]
     );
     const source = try ctx.script("exposures/main",
         \\import paint.{rgb, label, picture};import "library.huak".{name as imported,caption as module_text}
@@ -18,15 +17,16 @@ pub fn run(ctx: *h.Harness) !void {
         \\current:=count
         \\font_size:=12pt
         \\ink:=rgb(0.2,0.4,0.6,0.5)
-        \\typst_expose title,count,current,font_size,ink,imported
-        \\setup_typst {
+        \\theme:=typ.module[#let style(body) = {
         \\  assert(type(huak.count)==int)
         \\  assert(type(huak.font_size)==length and huak.font_size==12pt)
         \\  assert(type(huak.ink)==color)
-        \\  assert(not ("name" in huak))
+        \\  assert(dictionary(huak).keys()==("count","font_size","ink"))
         \\  set text(size:huak.font_size,fill:huak.ink)
-        \\}
-        \\first:=typ[#huak.title: #huak.current #huak.imported]
+        \\  body
+        \\}]
+        \\typ.show theme.style
+        \\first:=typ[#assert(dictionary(huak).keys()==("title","current","imported"))#huak.title: #huak.current #huak.imported]
         \\current=current+2
         \\second:=typ[#huak.title: #huak.current #huak.imported]
         \\export plate :=picture(700,130)
@@ -60,35 +60,39 @@ pub fn run(ctx: *h.Harness) !void {
     try h.contains(bytecode.stdout, "typst");
     try h.contains(bytecode.stdout, "load_global");
 
-    const invalid_static = try ctx.script("exposures/static_list", "items:=[1]\ntypst_expose items\n");
-    try h.contains((try ctx.command("check", invalid_static, &.{}, false)).stderr, "numeric, bool, string, length, color, and show_rule");
-    const unknown = try ctx.script("exposures/unknown", "typst_expose missing\n");
-    try h.contains((try ctx.command("check", unknown, &.{}, false)).stderr, "readable Huak variable");
+    const invalid_static = try ctx.script("exposures/static_list", "items:=[1]\ncaption:=typ[#huak.items]\n");
+    try h.contains((try ctx.command("check", invalid_static, &.{}, false)).stderr, "numeric, bool, string, length, color, and typ.module");
+    const unknown = try ctx.script("exposures/unknown", "caption:=typ[#huak.missing]\n");
+    try h.contains((try ctx.command("check", unknown, &.{}, false)).stderr, "names no readable Huak value");
     const dynamic = try ctx.script("exposures/dynamic",
         \\fn make_caption(value:any)->text
-        \\ typst_expose value
-        \\ return typ[]
+        \\ return typ[#huak.value]
         \\end
         \\caption:=make_caption([1])
     );
-    try h.contains((try ctx.command("run", dynamic, &.{}, false)).stderr, "typst_expose requires");
-    const implicit = try ctx.script("exposures/no_implicit", "title:=\"private\"\ncaption:=typ[#huak.title]\n");
-    try h.contains((try ctx.command("run", implicit, &.{}, false)).stderr, "unknown variable: huak");
+    try h.contains((try ctx.command("run", dynamic, &.{}, false)).stderr, "Typst code can read");
+    // `huak` holds only the members the code reads, and exists only in code
+    // that mentions it.
+    const written = try ctx.script("exposures/written", "title:=\"private\"\nother:=1\ncaption:=typ[#assert(dictionary(huak).keys()==(\"title\",))#huak.title]\n");
+    try h.output(try ctx.command("run", written, &.{}, true), "");
+    const whole = try ctx.script("exposures/whole", "title:=\"private\"\ncaption:=typ[#assert(dictionary(huak) == (:))#repr(huak)]\n");
+    try h.output(try ctx.command("run", whole, &.{}, true), "");
+    const unread = try ctx.script("exposures/unread", "title:=\"private\"\ncaption:=typ[#eval(\"huak\")]\n");
+    try h.contains((try ctx.command("run", unread, &.{}, false)).stderr, "unknown variable: huak");
 
     const ordered = try ctx.script("exposures/ordered",
         \\huge:=1e308mm
         \\first:=typ[#missing_first]
-        \\if true then typst_expose huge;second:=typ[] end
+        \\if true then second:=typ[#huak.huge] end
     );
     const ordered_failure = try ctx.command("run", ordered, &.{"--jobs=4"}, false);
     try h.contains(ordered_failure.stderr, "missing_first");
-    try h.excludes(ordered_failure.stderr, "typst_expose requires");
+    try h.excludes(ordered_failure.stderr, "Typst code can read");
     const early = try ctx.script("exposures/early",
-        \\typst_expose imported
-        \\caption:=typ[#missing_native]
+        \\caption:=typ[#huak.imported #missing_native]
         \\import "library.huak".name as imported
     );
     const early_failure = try ctx.command("run", early, &.{}, false);
-    try h.contains(early_failure.stderr, "readable Huak variable");
+    try h.contains(early_failure.stderr, "names no readable Huak value");
     try h.excludes(early_failure.stderr, "unknown variable: missing_native");
 }

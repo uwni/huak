@@ -1,10 +1,14 @@
 import drawing.drawing
 import paint.{rgb, pen, translate, scale, rotate, rectangle, transformed, draw, fill, label, picture}
 import pen.{pencircle, pensquare, makepen, makepath}
-# Five physical nibs, one unchanged Hobby centerline.
-setup_typst {
+// Five physical nibs, one unchanged Hobby centerline.
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#273449"))
-}
+    body
+  }
+]
+typ.show theme.style
 
 export plate := picture(180mm, 150mm)
 default plate

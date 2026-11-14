@@ -2,6 +2,7 @@
 //! These are host values, not records exported by the libtypst C ABI.
 const std = @import("std");
 const c = @import("typst_binding").c;
+const Module = @import("Module.zig");
 
 pub const FontSource = struct { data: []const u8 };
 pub const Input = struct { key: []const u8, value: []const u8 };
@@ -40,6 +41,45 @@ pub const LayoutRequest = struct {
     templates: []const Template = &.{},
     /// Indices of templates applied around the content, outermost first.
     shows: []const usize = &.{},
+    /// Evaluated modules the request uses. TYPST_VALUE_MODULE_HANDLE inputs
+    /// index them; diagnostics raised inside their functions are located in
+    /// the text of the module that raised them, including modules these were
+    /// evaluated with.
+    modules: []const *const Module = &.{},
+    /// Show rules given as values, applied inside `shows`, outermost first.
+    show_values: []const c.TypstShowValue = &.{},
+};
+/// Typst code evaluated like an imported file into a module named after
+/// `name`'s file stem; `bindings` are visible to it from an enclosing scope.
+/// Names differ from "source", "preamble", the templates' and those of the
+/// other modules used in the same request.
+pub const ModuleSource = struct {
+    code: []const u8,
+    name: []const u8,
+    /// Its TYPST_VALUE_MODULE_HANDLE inputs index `modules`.
+    bindings: []const c.TypstBinding = &.{},
+    /// Evaluated modules the bindings refer to. The new module borrows them,
+    /// so they outlive it.
+    modules: []const *const Module = &.{},
+    /// Where the code lies in a larger file that diagnostics name instead.
+    origin: ?SourceOrigin = null,
+};
+/// One place where Typst code reads a member of a name, with the member's byte
+/// range in the queried source.
+pub const MemberUse = struct { member: []const u8, start: usize, end: usize };
+/// The member uses of one name in one source, owned by one allocator.
+pub const MemberUses = struct {
+    uses: []MemberUse,
+    /// The source binds the name itself, so some uses may not refer to the
+    /// outer value.
+    rebound: bool,
+    /// The source also uses the name as a whole value, as in `f(name)`.
+    whole: bool,
+
+    pub fn deinit(self: MemberUses, allocator: std.mem.Allocator) void {
+        for (self.uses) |use| allocator.free(use.member);
+        allocator.free(self.uses);
+    }
 };
 /// Typst code whose value is a function, evaluated for the request in its own
 /// scope after its setup. Names differ from "source", "preamble" and each other.

@@ -2,9 +2,13 @@ import paint.*
 import pen_motion.*
 import pen.{pencircle, makepen}
 
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 12pt, fill: rgb("#193f43"))
-}
+    body
+  }
+]
+typ.show theme.style
 
 paper := rgb(0.98, 0.97, 0.94)
 ink := rgb(0.10, 0.25, 0.26)

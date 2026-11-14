@@ -151,7 +151,7 @@ impl Context {
             bytes: Bytes::from_string(source.clone()),
             source,
             setup: None,
-            templates: Vec::new(),
+            sources: Vec::new(),
         })
     }
 }
@@ -203,8 +203,8 @@ pub(crate) struct JobWorld {
     pub(crate) source: Source,
     bytes: Bytes,
     pub(crate) setup: Option<Source>,
-    /// Template code, so diagnostics raised inside a template call resolve.
-    templates: Vec<Source>,
+    /// Template and module code, so diagnostics raised inside their functions resolve.
+    sources: Vec<Source>,
 }
 
 impl JobWorld {
@@ -214,27 +214,43 @@ impl JobWorld {
         Ok(())
     }
 
-    pub(crate) fn add_template(&mut self, text: &str, name: &str) -> Result<(), Error> {
+    pub(crate) fn add_source(&mut self, text: &str, name: &str) -> Result<(), Error> {
         let source = self.request_source(text, name)?;
-        self.templates.push(source);
+        self.sources.push(source);
         Ok(())
     }
 
-    /// Body, setup and template code keep their own file IDs for diagnostics.
+    /// Sources parsed earlier, those of evaluated modules, so diagnostics
+    /// raised inside their functions resolve. They share the distinct-name
+    /// rule with the request's own sources.
+    pub(crate) fn add_parsed(&mut self, sources: &[Source]) -> Result<(), Error> {
+        for source in sources {
+            self.distinct(source.id())?;
+            self.sources.push(source.clone());
+        }
+        Ok(())
+    }
+
+    /// Body, setup, template and module code keep their own file IDs for diagnostics.
     fn request_source(&self, text: &str, name: &str) -> Result<Source, Error> {
         let id = file_id(name)?;
+        self.distinct(id)?;
+        Ok(parsed_source(id, text))
+    }
+
+    fn distinct(&self, id: FileId) -> Result<(), Error> {
         if id == self.source.id() || self.auxiliary(id).is_some() {
             return Err(Error::invalid(
-                "body, setup and templates must have distinct source names",
+                "body, setup, templates and module handles must have distinct source names",
             ));
         }
-        Ok(parsed_source(id, text))
+        Ok(())
     }
 
     fn auxiliary(&self, id: FileId) -> Option<&Source> {
         self.setup
             .iter()
-            .chain(&self.templates)
+            .chain(&self.sources)
             .find(|source| source.id() == id)
     }
 }

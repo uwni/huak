@@ -45,6 +45,22 @@ export struct PortCoordinate
     kind:string = "port"
 end
 
+// An element of a node's body that carries a Typst label, such as
+// `#box[$a$] <a>`, so that edges can reach into typeset content.
+export struct PartCoordinate
+    name:string
+    label:string
+    kind:string = "part"
+end
+
+// The node is a scene handle or named(name).
+export fn part(node:any, label:string) -> PartCoordinate
+    kind:string := node.kind
+    assert(kind == "node_handle" or kind == "named", "part needs a node handle or named(name)")
+    assert(label != "", "part label must not be empty")
+    return PartCoordinate(name: node.name, label: label)
+end
+
 export fn port(name:string, side:string, index:int) -> PortCoordinate
     assert(side == "west" or side == "east", "port side must be west or east")
     assert(index >= 0, "port index must be nonnegative")

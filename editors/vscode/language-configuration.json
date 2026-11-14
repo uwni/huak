@@ -7,5 +7,5 @@
     "increaseIndentPattern": "^\\s*(?:(?:if|elseif)\\b.*\\bthen|(?:for|while|drawing)\\b.*\\bdo|(?:export\\s+)?(?:fn|struct)\\b|precedence\\b|else\\b)(?!.*\\bend\\b).*$",
     "decreaseIndentPattern": "^\\s*(?:end|else|elseif)\\b"
   },
-  "folding": { "markers": { "start": "^\\s*(?://|#)\\s*region\\b", "end": "^\\s*(?://|#)\\s*endregion\\b" } }
+  "folding": { "markers": { "start": "^\\s*//\\s*region\\b", "end": "^\\s*//\\s*endregion\\b" } }
 }

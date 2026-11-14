@@ -28,7 +28,6 @@ drawing plate do
     +marker((60mm, 37mm), accent)
 end
 caption: string := options["caption"]
-typst_expose caption
 drawing plate do
     +typ[#huak.caption] at (28mm, 5mm)
 end

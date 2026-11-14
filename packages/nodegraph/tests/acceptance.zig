@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.Dir.cwd().createDirPath(init.io, "target/nodegraph/acceptance");
     const probe = try check.write("no-std-dependency.huak", "import \"std/nodegraph.huak\".*\n");
     try contains(try check.huak(&.{ "check", probe }, false), "unknown standard library module");
-    for ([_][]const u8{ "regression", "api", "mark_trim", "filled_marks", "relative_snap", "grid_snap", "offset", "shapes", "shift", "mark_inherit", "defocus", "mark_extrude", "cylinder", "brace_shape", "ports", "bus", "snap_priority", "mark_props", "label_anchor" }) |name| {
+    for ([_][]const u8{ "regression", "api", "mark_trim", "filled_marks", "relative_snap", "grid_snap", "offset", "shapes", "shift", "mark_inherit", "defocus", "mark_extrude", "cylinder", "brace_shape", "ports", "bus", "snap_priority", "mark_props", "label_anchor", "parts" }) |name| {
         const output = try check.huak(&.{ "run", try check.fmt("tests/fixtures/{s}.huak", .{name}) }, true);
         try contains(output, "checks passed");
     }
@@ -120,6 +120,11 @@ pub fn main(init: std.process.Init) !void {
         .{ "port-pitch", "node(\"a\",grid(0,0),typ[A],{\"ports\": {\"west\": 3}})", "node port pitch must be positive" },
         .{ "port-height", "geometry([node(\"a\",grid(0,0),typ[A],{\"ports\": {\"west\": 4}, \"port_pitch\": 10pt, \"height\": 20pt})])", "node height must contain its ports" },
         .{ "port-index", "geometry([node(\"a\",absolute((0pt,0pt)),typ[A],{\"ports\": {\"west\": 2}, \"port_pitch\": 10pt}),edge(port(\"a\",\"west\",5),absolute((-40pt,0pt)))])", "port index out of range" },
+        .{ "part-target", "part(node(\"a\",grid(0,0),typ[A]),\"x\")", "part needs a node handle or named(name)" },
+        .{ "part-edge", "geometry([node(\"a\",grid(0,0),typ[#box[A] <x>]),edge(part(named(\"a\"),\"x\"),absolute((40pt,0pt)),{\"name\": \"e\"}),edge(part(named(\"e\"),\"x\"),absolute((0pt,40pt)))])", "edges have no parts: e" },
+        .{ "part-label", "geometry([node(\"a\",grid(0,0),typ[#box[A] <x>]),edge(part(named(\"a\"),\"y\"),absolute((40pt,0pt)))])", "node a has no part labeled y" },
+        .{ "part-repeated", "geometry([node(\"a\",grid(0,0),typ[#box[A] <x> #box[B] <x>]),edge(part(named(\"a\"),\"x\"),absolute((40pt,0pt)))])", "label <x> occurs more than once" },
+        .{ "part-enclosed", "geometry([node(\"a\",grid(0,0),typ[#box[A] <x>#box[B] <y>]),edge(part(named(\"a\"),\"x\"),part(named(\"a\"),\"y\"))])", "fully enclosed by the nodes or parts it joins" },
     };
     for (negative_cases) |case| {
         const file = try check.write(try check.fmt("{s}.huak", .{case[0]}), try check.fmt("import paint.rgb\nimport math.*\nimport \"../../../nodegraph.huak\".*\n{s}\n", .{case[1]}));

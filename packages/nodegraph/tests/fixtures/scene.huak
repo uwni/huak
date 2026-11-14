@@ -2,7 +2,7 @@ import paint.*
 import geometry.point_at
 import math.{abs, norm}
 import "../../nodegraph.huak" as nodegraph
-import "../../nodegraph.huak".{scene, geometry, anchor, place, link, group, matrix, anchor_node, route_edge, finish, grid, edge, arrows}
+import "../../nodegraph.huak".{scene, geometry, anchor, place, link, group, part, anchor_node, route_edge, finish, grid, edge, arrows}
 import assertions.assert
 
 fn near(a:vec2, b:vec2)
@@ -30,9 +30,14 @@ p := route_edge(s, e)
 near(point_at(p, 0), anchor_node(s, a, "east"))
 near(point_at(p, len(p)), anchor_node(s, b, "west"))
 
+// Typst lays out the matrix; the scene links its labeled entries. The typ
+// block inside the template body reads the module like any other name.
+parts := typ.module[#let mark(name, body) = [#box($body$)#label(name)]]
 m := scene()
 nodegraph.drawing m do
-    nodes := matrix [[typ[A], typ[B]], [typ[C]]]
+    square := place typ[$mat(column-gap: #3em, row-gap: #2em, huak.parts.mark("a", A), huak.parts.mark("b", B); huak.parts.mark("c", C), D)$] at grid(0, 0)
+    link part(square, "a") to part(square, "b")
+    link part(square, "a") to part(square, "c")
 end
 assert(len(m.geometry.objects) == 3)
 

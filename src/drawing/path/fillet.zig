@@ -45,9 +45,9 @@ const Corner = struct {
 /// Fillet one closed polygon. `radii` is either one value applied to every
 /// corner or exactly one value per vertex, in path order. A zero radius leaves
 /// that corner sharp. Returns null when every radius is zero, so a caller can
-/// keep `source` instead of copying it. The result uses `allocator`; per-corner
-/// construction data uses `scratch` and is freed before returning.
-pub fn fillet(allocator: Allocator, scratch: Allocator, source: Path, radii: []const f64) !?Path {
+/// keep `source` instead of copying it. The result uses `allocator`, which
+/// also holds the per-corner construction data until it returns.
+pub fn fillet(allocator: Allocator, source: Path, radii: []const f64) !?Path {
     if (radii.len == 0) return error.InvalidRadii;
     for (radii) |radius| {
         if (!std.math.isFinite(radius) or radius < 0) return error.InvalidRadii;
@@ -63,8 +63,8 @@ pub fn fillet(allocator: Allocator, scratch: Allocator, source: Path, radii: []c
     if (!std.math.isFinite(area) or @abs(area) <= epsilon) return error.DegeneratePolygon;
     const orientation: f64 = if (area > 0) 1 else -1;
 
-    const corners = try scratch.alloc(Corner, vertices.len);
-    defer scratch.free(corners);
+    const corners = try allocator.alloc(Corner, vertices.len);
+    defer allocator.free(corners);
     for (corners, 0..) |*corner, index| {
         corner.* = try fitCorner(vertices, index, if (uniform) radii[0] else radii[index], orientation);
     }
@@ -210,7 +210,7 @@ fn polygonPath(points: []const g.Point) !Path {
 }
 
 fn rounded(source: Path, radii: []const f64) !Path {
-    return (try fillet(testing.allocator, testing.allocator, source, radii)).?;
+    return (try fillet(testing.allocator, source, radii)).?;
 }
 
 test "rectangle fillet keeps its outer bounds and allocates the result once" {
@@ -391,15 +391,15 @@ test "clockwise reflex polygon uses the same notch-side construction" {
 test "zero radii report an unchanged polygon without building a copy" {
     var source = try polygonPath(&.{ .zero, .{ .x = 20, .y = 0 }, .{ .x = 8, .y = 12 } });
     defer source.deinit();
-    try testing.expect(try fillet(testing.allocator, testing.allocator, source, &.{0}) == null);
-    try testing.expect(try fillet(testing.allocator, testing.allocator, source, &.{ 0, 0, 0 }) == null);
+    try testing.expect(try fillet(testing.allocator, source, &.{0}) == null);
+    try testing.expect(try fillet(testing.allocator, source, &.{ 0, 0, 0 }) == null);
 
     var open = Path.init(testing.allocator);
     defer open.deinit();
     try open.moveTo(.zero);
     try open.lineTo(.{ .x = 10, .y = 0 });
     try open.lineTo(.{ .x = 0, .y = 10 });
-    try testing.expectError(error.OpenPath, fillet(testing.allocator, testing.allocator, open, &.{0}));
+    try testing.expectError(error.OpenPath, fillet(testing.allocator, open, &.{0}));
 }
 
 test "large coordinates round as they do near the origin" {
@@ -437,18 +437,18 @@ test "fillet rejects open, curved, multi-contour, oversized, spiked, and mismatc
     const a = testing.allocator;
     var empty = Path.init(a);
     defer empty.deinit();
-    try testing.expectError(error.TooFewVertices, fillet(a, a, empty, &.{1}));
+    try testing.expectError(error.TooFewVertices, fillet(a, empty, &.{1}));
 
     var open = Path.init(a);
     defer open.deinit();
     try open.moveTo(.zero);
     try open.lineTo(.{ .x = 10, .y = 0 });
     try open.lineTo(.{ .x = 0, .y = 10 });
-    try testing.expectError(error.OpenPath, fillet(a, a, open, &.{1}));
+    try testing.expectError(error.OpenPath, fillet(a, open, &.{1}));
 
     var curved = try Path.circle(a, .zero, 5);
     defer curved.deinit();
-    try testing.expectError(error.CurvedSegment, fillet(a, a, curved, &.{1}));
+    try testing.expectError(error.CurvedSegment, fillet(a, curved, &.{1}));
 
     var multiple = try polygonPath(&.{ .zero, .{ .x = 10, .y = 0 }, .{ .x = 0, .y = 10 } });
     defer multiple.deinit();
@@ -456,18 +456,18 @@ test "fillet rejects open, curved, multi-contour, oversized, spiked, and mismatc
     try multiple.lineTo(.{ .x = 30, .y = 0 });
     try multiple.lineTo(.{ .x = 20, .y = 10 });
     try multiple.close();
-    try testing.expectError(error.MultipleContours, fillet(a, a, multiple, &.{1}));
+    try testing.expectError(error.MultipleContours, fillet(a, multiple, &.{1}));
 
     var square = try polygonPath(&.{ .zero, .{ .x = 10, .y = 0 }, .{ .x = 10, .y = 10 }, .{ .x = 0, .y = 10 } });
     defer square.deinit();
-    try testing.expectError(error.RadiusTooLarge, fillet(a, a, square, &.{8}));
-    try testing.expectError(error.InvalidRadii, fillet(a, a, square, &.{ 1, 2 }));
-    try testing.expectError(error.InvalidRadii, fillet(a, a, square, &.{-1}));
+    try testing.expectError(error.RadiusTooLarge, fillet(a, square, &.{8}));
+    try testing.expectError(error.InvalidRadii, fillet(a, square, &.{ 1, 2 }));
+    try testing.expectError(error.InvalidRadii, fillet(a, square, &.{-1}));
 
     // The edge at (20,0) reverses onto its predecessor: no radius fits it.
     var spike = try polygonPath(&.{ .zero, .{ .x = 20, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 10, .y = 10 } });
     defer spike.deinit();
-    try testing.expectError(error.DegenerateCorner, fillet(a, a, spike, &.{0.001}));
+    try testing.expectError(error.DegenerateCorner, fillet(a, spike, &.{0.001}));
 }
 
 fn filletUnderFailure(allocator: Allocator) !void {
@@ -479,11 +479,11 @@ fn filletUnderFailure(allocator: Allocator) !void {
     try source.lineTo(.{ .x = 10, .y = 4 });
     try source.lineTo(.{ .x = 0, .y = 10 });
     try source.close();
-    var result = (try fillet(allocator, allocator, source, &.{1})).?;
+    var result = (try fillet(allocator, source, &.{1})).?;
     result.deinit();
 }
 
-test "fillet releases scratch and partial results on every allocation failure" {
+test "fillet releases working data and partial results on every allocation failure" {
     try testing.checkAllAllocationFailures(testing.allocator, filletUnderFailure, .{});
 }
 

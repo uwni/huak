@@ -24,22 +24,22 @@ pub fn motionOutline(allocator: std.mem.Allocator, path: Path, pen: *const Pen, 
 pub const Representation = enum { outline, normalized_stroke };
 pub const Stroke = struct { path: Path, transform: ?Transform = null };
 
-pub fn footprint(allocator: std.mem.Allocator, scratch: std.mem.Allocator, source: Path, pen: *const Pen, tolerance: ?f64) !Path {
+pub fn footprint(allocator: std.mem.Allocator, source: Path, pen: *const Pen, tolerance: ?f64) !Path {
     var options: StrokeOptions = .{};
     if (pen.motion) |motion| options.tolerance = motion.tolerance;
     if (tolerance) |value| options.tolerance = value;
-    return (try resolveStroke(allocator, scratch, source, pen, options, .outline)).path;
+    return (try resolveStroke(allocator, source, pen, options, .outline)).path;
 }
 
 /// A normalized ellipse retains its centerline and placement. All other
 /// results are closed outlines in the coordinates of the input path.
-pub fn resolveStroke(allocator: std.mem.Allocator, scratch: std.mem.Allocator, source: Path, pen: *const Pen, options: StrokeOptions, representation: Representation) !Stroke {
+pub fn resolveStroke(allocator: std.mem.Allocator, source: Path, pen: *const Pen, options: StrokeOptions, representation: Representation) !Stroke {
     if (pen.motion != null) return .{ .path = try motionOutline(allocator, source, pen, options) };
     var geometry = options;
     geometry.cap = pen.cap;
     geometry.join = pen.join;
     geometry.miter_limit = pen.miter_limit;
-    var dash = if (pen.dash.len == 0) null else try dashed(scratch, source, pen.dash, pen.dash_phase, geometry);
+    var dash = if (pen.dash.len == 0) null else try dashed(allocator, source, pen.dash, pen.dash_phase, geometry);
     defer if (dash) |*value| value.deinit();
     const center = dash orelse source;
     const nib = try pen.fixedNib();

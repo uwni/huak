@@ -5,7 +5,8 @@ import geometry.compound
 import pen.pensquare
 import object.outlines
 
-setup_typst { set text(size: 11pt) }
+theme := typ.module[#let style(body) = { set text(size: 11pt); body }]
+typ.show theme.style
 cutter := picture with width 54mm height 55mm
 nib := transformed(pensquare(2.2mm), rotate(25deg))
 ink := pen(rgb(0.75, 0.14, 0.12), 1mm, "round", "round", 4, [4mm, 1.5mm], 1mm, nib)

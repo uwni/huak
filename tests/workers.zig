@@ -20,7 +20,9 @@ fn compile(library: *typst.Library, source: []const u8, optimize: bool) !l.bytec
 }
 
 const drawing =
-    \\import math.{sin, cos};import paint.{rgb, pen, translate, draw, label, picture, append};setup_typst { set text(size: 13pt) }
+    \\import math.{sin, cos};import paint.{rgb, pen, translate, draw, label, picture, append}
+    \\theme := typ.module[#let style(body) = { set text(size: 13pt); body }]
+    \\typ.show theme.style
     \\caption := typ[Shared worker text Ω $x^2$]
     \\ink := pen(rgb(0.15,0.35,0.7),0.4)
     \\fn figure(index: int) -> picture
@@ -721,19 +723,23 @@ test "future globals remain uninitialized reads instead of introducing future wr
     try t.expect(!parallel.third_initialized);
 }
 
-test "Typst setup changes delimit task snapshots and shared Program runs stay isolated" {
+test "typ.show module changes delimit task snapshots and shared Program runs stay isolated" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     var program = try compile(&library,
-        \\import paint.{label, picture};setup_typst { set text(size: 10pt) }
+        \\import paint.{label, picture}
+        \\small := typ.module[#let style(body) = { set text(size: 10pt); body }]
+        \\large := typ.module[#let style(body) = { set text(size: 24pt); body }]
+        \\theme := small
         \\fn figure() -> picture
+        \\ typ.show theme.style
         \\ p := picture(200,100)
         \\ object.append(p, object.label(typ[MMMM Ω], (5,40)))
         \\ return p
         \\end
         \\first := figure()
         \\second := figure()
-        \\setup_typst { set text(size: 24pt) }
+        \\theme = large
         \\third := figure()
         \\fourth := figure()
     , true);
@@ -785,7 +791,6 @@ test "worker snapshots publication diagnostics and moved owners survive every al
     var program = try compile(&library,
         \\import paint.{draw, label, picture};caption:=typ[Owned worker text Ω]
         \\fn figure(index:int) -> picture
-        \\ typst_expose index
         \\ local:=typ[Worker #huak.index]
         \\ p:=picture(100,80)
         \\ object.append(p, object.draw((0,0)~~(25,index*1.0)~~(75,50)))
@@ -864,7 +869,8 @@ test "imported builders share module text while initialization and local setting
     defer library.deinit();
     const module =
         \\import paint.{draw, label, picture};print("worker library initialized")
-        \\setup_typst { set text(size: 24pt) }
+        \\theme:=typ.module[#let style(body) = { set text(size: 24pt); body }]
+        \\typ.show theme.style
         \\export caption:=typ[Imported worker Ω]
         \\fn figure(index:int) -> picture
         \\ p:=picture(200,100)
@@ -882,7 +888,9 @@ test "imported builders share module text while initialization and local setting
         }
     };
     const source =
-        \\import paint.{label, picture};setup_typst { set text(size: 8pt) }
+        \\import paint.{label, picture}
+        \\theme:=typ.module[#let style(body) = { set text(size: 8pt); body }]
+        \\typ.show theme.style
         \\import "figures.huak" as art
         \\import "./figures.huak" as again
         \\fn local() -> picture
@@ -1002,19 +1010,18 @@ test "custom host callbacks retain their behavior when construction workers are 
     try t.expectEqual(@as(usize, 0), executor.stats.tasks);
 }
 
-test "exposed typed data retains construction workers capture dependencies and grouped root typography" {
+test "typed Typst reads retain construction workers capture dependencies and grouped root typography" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
         \\import paint.{rgb, translate, draw, label, picture, append};title:="Data workers Ω"
         \\font_size:=11pt
         \\ink:=rgb(0.1,0.3,0.7,0.75)
-        \\typst_expose title,font_size,ink
-        \\setup_typst { set text(size:huak.font_size,fill:huak.ink) }
+        \\theme:=typ.module[#let style(body) = { set text(size:huak.font_size,fill:huak.ink); body }]
+        \\typ.show theme.style
         \\shared:=typ[#huak.title]
         \\shared_again:=typ[#huak.title]
         \\fn figure(index:int)->picture
-        \\    typst_expose index
         \\    caption:=typ[#huak.title: #huak.index]
         \\    p:=picture(220,100)
         \\    object.append(p, object.draw((5,5)--(200,index*10)))
@@ -1044,15 +1051,15 @@ test "exposed typed data retains construction workers capture dependencies and g
             const target = program.global_names[task.global];
             if (std.mem.eql(u8, target, "first")) {
                 try t.expect(task.uses_typst);
+                // The module already holds the size and ink it read when made.
                 var title_read = false;
-                var size_read = false;
-                var ink_read = false;
+                var theme_read = false;
                 for (task.reads) |read| {
                     title_read = title_read or std.mem.eql(u8, program.global_names[read], "title");
-                    size_read = size_read or std.mem.eql(u8, program.global_names[read], "font_size");
-                    ink_read = ink_read or std.mem.eql(u8, program.global_names[read], "ink");
+                    theme_read = theme_read or std.mem.eql(u8, program.global_names[read], "theme");
+                    try t.expect(!std.mem.eql(u8, program.global_names[read], "font_size") and !std.mem.eql(u8, program.global_names[read], "ink"));
                 }
-                try t.expect(title_read and size_read and ink_read);
+                try t.expect(title_read and theme_read);
                 observed_capture_reads = true;
             }
             if (std.mem.eql(u8, target, "plate")) {
@@ -1260,17 +1267,17 @@ test "workers publish detached object subtrees and retain text through dependent
     }
 }
 
-test "show rules made before and inside workers keep parallel typography identical" {
+test "typ.module values made before and inside workers keep parallel typography identical" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     const source =
         \\import paint.{label, picture}
-        \\setup_typst { let shout(it) = upper(it) }
-        \\loud:=show_rule body => { set text(size: 14pt); shout(body) }
+        \\shout:=typ.module[#let shout(it) = upper(it)]
+        \\loud:=typ.module[#let style(body) = { set text(size: 14pt); huak.shout.shout(body) }]
         \\fn figure(index:int)->picture
-        \\    typst_expose index
-        \\    tint:=show_rule body => { set text(fill: rgb(huak.index * 100, 0, 0)); body }
-        \\    typst_show loud, tint
+        \\    tint:=typ.module[#let style(body) = { set text(fill: rgb(huak.index * 100, 0, 0)); body }]
+        \\    typ.show loud.style
+        \\    typ.show tint.style
         \\    caption:=typ[Worker #huak.index]
         \\    p:=picture(220,60)
         \\    object.append(p, object.label(caption, (5,30)))

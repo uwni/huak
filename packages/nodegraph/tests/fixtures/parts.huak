@@ -1,0 +1,86 @@
+// Edges reach labeled elements inside a node's typeset body. The expected
+// points come from the body's own anchors and the documented placement:
+// text_center puts the baseline start at (-width/2, height/2-baseline) around
+// where the body is centered, then rotates with the node.
+import paint.*
+import math.{abs, norm}
+import geometry.point_at
+import transform.{apply, compose, rotate, translate}
+import assertions.assert
+import "../../nodegraph.huak" as nodegraph
+
+fn near(actual:vec2, expected:vec2, message:string)
+    assert(norm(actual-expected) < 0.001pt, message)
+end
+
+fn placed(content:text, center:vec2, angle:angle, point:vec2) -> vec2
+    origin := (-content.width/2, content.height/2-content.baseline)
+    return apply(compose(rotate(angle), translate(center)), origin+point)
+end
+
+parts := typ.module[#let mark(name, body) = [#box($body$)#label(name)]]
+body := typ[$mat(column-gap: #4em, row-gap: #3em, huak.parts.mark("a", a), huak.parts.mark("b", b^2); huak.parts.mark("c", c), d)$]
+inset := 6pt
+a:anchor := body.anchors["a"]
+b:anchor := body.anchors["b"]
+c:anchor := body.anchors["c"]
+// Entries of one row share the mean height of their centers.
+row := (a.center.y+b.center.y)/2
+assert(abs(a.center.y-b.center.y) > 0.1pt, "the row needs entries of different heights")
+square := nodegraph.named("square")
+center := (10pt, 20pt)
+g := nodegraph.geometry([
+    nodegraph.node("square", nodegraph.absolute(center), body),
+    nodegraph.edge(nodegraph.part(square, "a"), nodegraph.part(square, "b"), {"name": "across"}),
+    nodegraph.edge(nodegraph.part(square, "a"), nodegraph.part(square, "c"), {"name": "down"}),
+])
+across := nodegraph.route(g, "across")
+near(point_at(across, 0), placed(body, center, 0deg, (a.max.x+inset, row)), "a row edge leaves a's padded box level")
+near(point_at(across, len(across)), placed(body, center, 0deg, (b.min.x-inset, row)), "a row edge reaches b's padded box level")
+down := nodegraph.route(g, "down")
+near(point_at(down, 0), placed(body, center, 0deg, (a.center.x, a.min.y-inset)), "a column edge leaves the bottom of a's padded box")
+near(point_at(down, len(down)), placed(body, center, 0deg, (c.center.x, c.max.y+inset)), "a column edge reaches the top of c's padded box")
+
+// Rotation turns the parts with the body.
+turned := nodegraph.geometry([
+    nodegraph.node("square", nodegraph.absolute((0pt, 0pt)), body, {"rotate": 90deg}),
+    nodegraph.edge(nodegraph.part(square, "a"), nodegraph.part(square, "b"), {"name": "across"}),
+])
+rotated := nodegraph.route(turned, "across")
+near(point_at(rotated, 0), placed(body, (0pt, 0pt), 90deg, (a.max.x+inset, row)), "rotated parts start where the rotated box ends")
+near(point_at(rotated, len(rotated)), placed(body, (0pt, 0pt), 90deg, (b.min.x-inset, row)), "rotated parts end where the rotated box begins")
+
+// Turning snapping off on the node keeps the aim points, and outset widens
+// the padded box as it widens the node's own outline.
+exact := nodegraph.geometry([
+    nodegraph.node("square", nodegraph.absolute((0pt, 0pt)), body, {"snap": false}),
+    nodegraph.edge(nodegraph.part(square, "a"), nodegraph.part(square, "c"), {"name": "down"}),
+])
+near(point_at(nodegraph.route(exact, "down"), 0), placed(body, (0pt, 0pt), 0deg, (a.center.x, row)), "an unsnapped part keeps its aim point")
+widened := nodegraph.geometry([
+    nodegraph.node("square", nodegraph.absolute((0pt, 0pt)), body, {"outset": 2pt}),
+    nodegraph.edge(nodegraph.part(square, "a"), nodegraph.part(square, "b"), {"name": "across"}),
+])
+near(point_at(nodegraph.route(widened, "across"), 0), placed(body, (0pt, 0pt), 0deg, (a.max.x+inset+2pt, row)), "outset widens a part's box")
+
+// A group's title is its body too.
+title := typ[Group #box[title] <t>]
+t:anchor := title.anchors["t"]
+members := [nodegraph.node("x", nodegraph.absolute((0pt, 0pt)), typ[X]), nodegraph.enclose("box", ["x"], title)]
+heading:vec2 := nodegraph.geometry(members).by_name["box"].body_center
+aim := placed(title, heading, 0deg, t.center)
+members += [
+    nodegraph.node("note", nodegraph.absolute(aim+(0pt, 60pt)), typ[note], {"snap": false}),
+    nodegraph.edge(nodegraph.named("note"), nodegraph.part(nodegraph.named("box"), "t"), {"name": "title"}),
+]
+titled := nodegraph.route(nodegraph.geometry(members), "title")
+near(point_at(titled, len(titled)), placed(title, heading, 0deg, (t.center.x, t.max.y+inset)), "an edge reaches a part of a group's title")
+
+// Scene handles name nodes for parts as well.
+s := nodegraph.scene()
+nodegraph.drawing s do
+    pair := place typ[#box[M] <m> #h(3em) #box[N] <n>] at nodegraph.grid(0, 0)
+    link nodegraph.part(pair, "m") to nodegraph.part(pair, "n")
+end
+assert(len(s.geometry.objects) == 2, "a scene links two parts of one node")
+print("parts checks passed")

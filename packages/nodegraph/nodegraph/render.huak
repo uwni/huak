@@ -183,14 +183,20 @@ export fn edge_object(item:edges.ResolvedEdge) -> PaintedObject
     ink:color := opt.get(options, "stroke", rgb(0, 0, 0))
     width:length := opt.get(options, "thickness", 0.6pt)
     assert(width > 0pt, "edge thickness must be positive")
-    // Mark end offsets trim the stroke; they do not move the mark itself.
+    // Mark end offsets trim the stroke; they do not move the mark itself. A
+    // tip mark that sits back from the end, such as a hook, ends the stroke
+    // where it starts unless tip_end says otherwise.
     descriptions:list := opt.get(options, "marks", [model.mark("head")])
+    if opt.has(options, "head") or opt.has(options, "tail") then
+        descriptions = [model.mark(opt.get(options, "tail", "none"), 0, true), model.mark(opt.get(options, "head", "head"))]
+    end
+    size:length := opt.get(options, "mark_size", 7*width)
     trim_start:length := 0pt
     trim_end:length := 0pt
     for i in 0:len(descriptions)-1 do
         mark_options:dict := descriptions[i].options
         if descriptions[i].position <= 0 then trim_start = opt.get(mark_options, "tail_end", 0pt)+max(0pt, opt.get(mark_options, "cap_offset", 0pt)) end
-        if descriptions[i].position >= 1 then trim_end = opt.get(mark_options, "tip_end", 0pt)+max(0pt, opt.get(mark_options, "cap_offset", 0pt)) end
+        if descriptions[i].position >= 1 then trim_end = opt.get(mark_options, "tip_end", marks.tip_inset(descriptions[i], size))+max(0pt, opt.get(mark_options, "cap_offset", 0pt)) end
     end
     if trim_start > 0pt or trim_end > 0pt then
         total := arclength(curve)
@@ -209,10 +215,6 @@ export fn edge_object(item:edges.ResolvedEdge) -> PaintedObject
     tail_masks := []
     head_masks := []
     decorations := picture()
-    if opt.has(options, "head") or opt.has(options, "tail") then
-        descriptions = [model.mark(opt.get(options, "tail", "none"), 0, true), model.mark(opt.get(options, "head", "head"))]
-    end
-    size:length := opt.get(options, "mark_size", 7*width)
     for i in 0:len(descriptions)-1 do
         symbol := marks.render(descriptions[i], curve, ink, width, size)
         append(decorations, copy(symbol.content))

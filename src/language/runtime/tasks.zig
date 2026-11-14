@@ -6,18 +6,38 @@ const Runtime = @import("../Runtime.zig");
 const types = @import("../types.zig");
 const Scene = @import("../../drawing/Scene.zig");
 
+/// Each registry's length when a child was forked, named like the Runtime
+/// field. The child shares those entries with its parent and owns only the
+/// entries it appends.
+pub const Lengths = struct {
+    path_values: usize = 0,
+    measures: usize = 0,
+    colors: usize = 0,
+    pens: usize = 0,
+    transforms: usize = 0,
+    models: usize = 0,
+    solvers: usize = 0,
+    variables: usize = 0,
+    expressions: usize = 0,
+    solutions: usize = 0,
+    texts: usize = 0,
+    anchors: usize = 0,
+    typst_modules: usize = 0,
+    layouts: usize = 0,
+    frames: usize = 0,
+    scene_values: usize = 0,
+};
+
 pub const Borrowed = struct {
     parent: *Runtime,
-    layouts: usize,
-    frames: usize,
-    scenes: usize,
-    solvers: usize,
-    measures: usize,
+    lengths: Lengths,
+    /// Storage owners moved to the parent, allocated with the child's
+    /// allocator and released with the child.
     adopted: ?Scene.Owners = null,
 };
 
-/// Only coordinator-side ownership additions are rolled back. Arena capacity
-/// and native read-only caches may remain until the parent runtime is freed.
+/// Only coordinator-side ownership additions are rolled back. Native
+/// read-only caches may remain until the parent runtime is freed.
 pub const Checkpoint = struct {
     scenes: usize,
     layouts: usize,
@@ -44,7 +64,8 @@ pub fn rollback(parent: *Runtime, marker: Checkpoint) void {
         target.animation_state.deinit();
         parent.gpa.destroy(target);
     }
-    for (parent.layouts.items[marker.layouts..]) |layout| layout.deinit();
+    for (parent.layouts.items[marker.layouts..]) |layout| Runtime.releaseLayout(parent.gpa, layout);
+    for (parent.texts.items[marker.texts..]) |*text| Runtime.releaseText(parent.gpa, text);
     parent.scene_values.shrinkRetainingCapacity(marker.scenes);
     parent.layouts.shrinkRetainingCapacity(marker.layouts);
     parent.frames.shrinkRetainingCapacity(marker.frames);
@@ -53,32 +74,24 @@ pub fn rollback(parent: *Runtime, marker: Checkpoint) void {
 
 pub fn fork(parent: *Runtime) !Runtime {
     if (parent.outputs_taken or parent.task_borrow != null) return error.InvalidState;
+    var lengths: Lengths = .{};
+    inline for (@typeInfo(Lengths).@"struct".field_names) |name| @field(lengths, name) = @field(parent, name).items.len;
+    // The borrow is recorded first, so a failed copy releases only the
+    // child's own list buffers.
     var child: Runtime = .{
         .gpa = parent.gpa,
         .scene_allocator = parent.scene_allocator,
-        .arena = .init(parent.gpa),
         .backends = parent.backends,
         .options = parent.options,
-        .current_module = parent.current_module,
         .shared_engine = if (parent.engine) |*engine| engine else null,
+        .task_borrow = .{ .parent = parent, .lengths = lengths },
     };
-    // No child-owned resources exist while these metadata copies can fail.
-    errdefer child.arena.deinit();
-    inline for (.{
-        "module_setups", "path_values", "colors",       "pens",      "transforms", "models",
-        "solvers",       "variables",   "expressions",  "solutions", "texts",      "layouts",
-        "show_rules",    "frames",      "scene_values", "measures",
-    }) |name| {
-        try @field(child, name).appendSlice(child.arena.allocator(), @field(parent, name).items);
+    errdefer child.deinit();
+    inline for (@typeInfo(Lengths).@"struct".field_names) |name| {
+        try @field(child, name).appendSlice(child.gpa, @field(parent, name).items);
     }
-    child.task_borrow = .{
-        .parent = parent,
-        .layouts = child.layouts.items.len,
-        .frames = child.frames.items.len,
-        .scenes = child.scene_values.items.len,
-        .solvers = child.solvers.items.len,
-        .measures = child.measures.items.len,
-    };
+    // Cached anchors belong to the runtime that made them.
+    for (child.texts.items) |*text| text.anchors = null;
     return child;
 }
 
@@ -93,14 +106,16 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
     if (value != .object) return error.InvalidTaskResult;
     const object: *Runtime.SceneOwner = @ptrCast(@alignCast(@constCast(value.object.owner)));
     const index = object.owner_index;
-    if (index < borrowed.scenes or index >= child.scene_values.items.len) return error.InvalidTaskResult;
+    if (index < borrowed.lengths.scene_values or index >= child.scene_values.items.len) return error.InvalidTaskResult;
     const source = child.scene_values.items[index];
     if (source != object) return error.InvalidTaskResult;
     if ((value.object.kind == .picture) != ((try source.scene.getNode(value.object.index)).* == .picture)) return error.InvalidTaskResult;
-    const owners = try source.scene.storageClosure(child.arena.allocator());
+    var owners = try source.scene.storageClosure(child.gpa);
+    var owners_moved = false;
+    defer if (!owners_moved) owners.deinit(child.gpa);
     for (owners.keys()) |scene| {
         const owner = Runtime.SceneOwner.fromScene(scene);
-        if (owner.owner_index < borrowed.scenes or owner.owner_index >= child.scene_values.items.len or child.scene_values.items[owner.owner_index] != owner) return error.InvalidTaskResult;
+        if (owner.owner_index < borrowed.lengths.scene_values or owner.owner_index >= child.scene_values.items.len or child.scene_values.items[owner.owner_index] != owner) return error.InvalidTaskResult;
         if (owner.animation_state.tracks.first != null) return error.TaskAnimationNotSupported;
     }
     var temporary: std.heap.ArenaAllocator = .init(parent.gpa);
@@ -118,7 +133,7 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
         if (reference >= child.frames.items.len) return error.InvalidFrameReference;
         if (references.contains(reference)) continue;
         const frame = child.frames.items[reference];
-        if (reference < borrowed.frames) {
+        if (reference < borrowed.lengths.frames) {
             // Snapshot prefixes retain their parent indices even when other
             // completed tasks have since appended their own metadata.
             if (reference >= parent.frames.items.len) return error.InvalidFrameReference;
@@ -138,15 +153,20 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
     };
 
     if (owners.count() > std.math.maxInt(u32) - parent.scene_values.items.len) return error.TooManyObjects;
-    const own = parent.arena.allocator();
+    const own = parent.gpa;
     var moved: usize = 0;
     var resolved: usize = 0;
+    // Layout owners created for the parent are released if any later step
+    // fails; borrowed layouts map to themselves.
+    errdefer for (layouts.keys(), layouts.values()) |source_layout, destination| {
+        if (destination) |target| if (target != source_layout) own.destroy(target);
+    };
     // Resolve the requested layout owners in one pass. Geometry-only results
     // have no layouts to resolve and retain no typography index.
     if (layouts.count() != 0) {
         for (child.layouts.items, 0..) |source_layout, layout_index| {
             const target = layouts.getPtr(source_layout) orelse continue;
-            if (layout_index < borrowed.layouts) {
+            if (layout_index < borrowed.lengths.layouts) {
                 target.* = source_layout;
             } else {
                 if (source_layout.handle == null) return error.InvalidFrameReference;
@@ -181,7 +201,7 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
     var iterator = references.iterator();
     while (iterator.next()) |entry| {
         const reference = entry.key_ptr.*;
-        if (reference < borrowed.frames) continue;
+        if (reference < borrowed.lengths.frames) continue;
         const text = child.texts.items[reference];
         const layout = layouts.get(text.layout).?.?;
         parent.frames.items[entry.value_ptr.*] = .{ .layout = layout, .index = text.frame };
@@ -196,12 +216,14 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
         parent.scene_values.appendAssumeCapacity(owner);
     }
     child.task_borrow.?.adopted = owners;
+    owners_moved = true;
     return value;
 }
 
+/// These builtins return handles, so nothing lands in the result allocator.
 fn invoke(owner: *Runtime, id: @import("../builtin.zig").Id, arguments: []const types.Value) !types.Value {
     const host = owner.host();
-    return host.callBuiltin(owner.arena.allocator(), id, arguments, null);
+    return host.callBuiltin(owner.gpa, id, arguments, null);
 }
 
 test "task snapshots isolate metadata and prohibit writes through borrowed owners" {
@@ -213,9 +235,6 @@ test "task snapshots isolate metadata and prohibit writes through borrowed owner
     const picture = try invoke(&parent, .picture, &.{});
     _ = try invoke(&parent, .append, &.{ picture, try invoke(&parent, .draw, &.{curve}) });
     const solver = try invoke(&parent, .solver, &.{});
-    const original_host = parent.host();
-    try original_host.selectModule(2);
-    try original_host.setupTypst("#set text(size: 10pt)");
     try parent.prepareTasks(false);
     var child = try parent.forkTask();
     defer child.deinit();
@@ -225,15 +244,12 @@ test "task snapshots isolate metadata and prohibit writes through borrowed owner
     try std.testing.expectEqual(parent.path_values.items[0].segments.items.ptr, child.path_values.items[0].segments.items.ptr);
     try std.testing.expectEqual(parent.scene_values.items[0], child.scene_values.items[0]);
     try std.testing.expectEqual(parent.options.inputs.ptr, child.options.inputs.ptr);
-    try std.testing.expectEqual(parent.module_setups.items[2].ptr, child.module_setups.items[2].ptr);
     try std.testing.expectError(error.TaskCannotMutateBorrowedPicture, invoke(&child, .append, &.{ picture, try invoke(&child, .draw, &.{curve}) }));
     try std.testing.expectError(error.TaskCannotMutateBorrowedSolver, invoke(&child, .unknown, &.{solver}));
     try std.testing.expectError(error.TaskSideEffect, invoke(&child, .print, &.{.{ .string = "not observable" }}));
     try std.testing.expectError(error.InvalidTaskResult, parent.adoptTask(&child, picture));
     const child_host = child.host();
-    try std.testing.expectError(error.TaskTypographyNotPrepared, child_host.typeset(child.arena.allocator(), .{ .source = "hello" }));
-    try child_host.selectModule(1);
-    try std.testing.expectEqual(@as(u32, 2), parent.current_module);
+    try std.testing.expectError(error.TaskTypographyNotPrepared, child_host.typeset(child.gpa, .{ .source = "hello" }));
     var original = try parent.scene_values.items[0].scene.snapshot(a, 0, null);
     defer original.deinit();
     try std.testing.expectEqual(@as(usize, 3), original.picture.commands.items.len);
@@ -320,7 +336,7 @@ fn allocationFailureAdoption(allocator: std.mem.Allocator, object_result: bool) 
     if (object_result) {
         try std.testing.expectEqual(item.object, adopted.object);
         const host = parent.host();
-        try std.testing.expectEqual(group.object, (try host.field(parent.arena.allocator(), adopted, "parent")).object);
+        try std.testing.expectEqual(group.object, (try host.field(parent.gpa, adopted, "parent")).object);
     }
 }
 
@@ -356,7 +372,7 @@ test "task adoption moves the connected storage graph and preserves foreign hand
     try std.testing.expectEqual(geometry, item_owner.scene.storage.segments.items.ptr);
     try std.testing.expectEqual(canvas, testOwner(result));
     const host = parent.host();
-    try std.testing.expectEqual(group.object, (try host.field(parent.arena.allocator(), item, "parent")).object);
+    try std.testing.expectEqual(group.object, (try host.field(parent.gpa, item, "parent")).object);
     var view = try canvas.scene.snapshot(a, output.object.index, null);
     defer view.deinit();
     try std.testing.expectEqual(expected.count(), view.owners.count());

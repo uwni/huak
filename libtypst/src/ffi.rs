@@ -195,6 +195,78 @@ pub unsafe extern "C" fn typst_source_block(
     }
 }
 
+/// Finds where `source`, parsed in `syntax` mode (a TYPST_SYNTAX_* value), reads
+/// members of the identifier `name`: each `name.member` in code, markup or math,
+/// and each member listed in `import name: …`, in source order. A wildcard
+/// import or other use of `name` as a whole value names no member; the view
+/// reports it with TYPST_MEMBER_USES_WHOLE. Uses through another
+/// value, as in `let m = name; m.x`, are not found. Syntax errors do not stop
+/// the query. Available since ABI 1.8 with TYPST_CAP_MEMBER_USES.
+///
+/// # Safety
+/// `source` and `name` must be readable views for the call. `out` must be a
+/// non-null writable handle slot; release the handle with
+/// `typst_member_uses_release`. The optional diagnostics slot follows the module
+/// pointer contract.
+#[no_mangle]
+pub unsafe extern "C" fn typst_source_member_uses(
+    source: TypstStr,
+    syntax: u32,
+    name: TypstStr,
+    out: *mut *mut TypstMemberUses,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let mode = crate::syntax::syntax_mode(syntax)?;
+            let uses = crate::syntax::member_uses(
+                text(source, "source")?,
+                mode,
+                text(name, "member owner name")?,
+            );
+            out.write(owned(TypstMemberUses { inner: uses }));
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Borrows the uses a `typst_source_member_uses` handle found.
+///
+/// # Safety
+/// `uses` must be live. `out` must point to aligned writable storage for one
+/// `TypstMemberUseView`. Keep the handle alive for every access to the view.
+#[no_mangle]
+pub unsafe extern "C" fn typst_member_uses_view(
+    uses: *const TypstMemberUses,
+    out: *mut TypstMemberUseView,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "member use output")?;
+            out.write(TypstMemberUseView::default());
+            let uses = &required(uses, "member uses")?.inner;
+            let records = uses.records();
+            out.write(TypstMemberUseView {
+                uses: records.as_ptr(),
+                use_count: records.len(),
+                flags: uses.flags(),
+                reserved: 0,
+            });
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Releases a member-use handle; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a handle owned by the caller from this library.
+#[no_mangle]
+pub unsafe extern "C" fn typst_member_uses_release(value: *const TypstMemberUses) {
+    unsafe { release(value) }
+}
+
 /// The returned strings are static and remain valid while the library is mapped.
 ///
 /// # Safety
@@ -218,6 +290,11 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_LAYOUT_BINDINGS
             | TYPST_CAP_PDF_IMPORT
             | TYPST_CAP_LAYOUT_TEMPLATES
+            | TYPST_CAP_LAYOUT_LABELS
+            | TYPST_CAP_BINDING_MODULES
+            | TYPST_CAP_SHOW_VALUES
+            | TYPST_CAP_MEMBER_USES
+            | TYPST_CAP_MODULE_HANDLES
             | crate::context::FONT_DISCOVERY,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),
@@ -318,6 +395,8 @@ struct Request<'a> {
     setup_source_name: &'a str,
     bindings: typst_core::foundations::Scope,
     templates: Vec<crate::layout::TemplateSource<'a>>,
+    /// Sources of the evaluated modules behind the request's handles.
+    retained: Vec<typst_core::syntax::Source>,
     shows: Vec<typst_core::foundations::Value>,
     /// Warnings raised while the request's templates were made.
     warnings: Report,
@@ -340,8 +419,96 @@ impl Request<'_> {
     }
 }
 
-/// Template functions are made first, so that bindings and show rules can
-/// refer to them by index.
+/// The modules behind borrowed handles, for inputs to refer to by index, and
+/// the sources that diagnostics raised inside their functions refer to.
+unsafe fn module_handles(
+    data: *const *const TypstModule,
+    count: usize,
+) -> Result<
+    (
+        Vec<typst_core::foundations::Value>,
+        Vec<typst_core::syntax::Source>,
+    ),
+    Error,
+> {
+    let mut modules = Vec::with_capacity(count);
+    let mut sources = Vec::new();
+    for handle in unsafe { values(data, count, "module handles")? } {
+        let module = &unsafe { required(*handle, "module handle")? }.inner;
+        modules.push(module.value.clone());
+        for source in &module.sources {
+            crate::layout::retain_source(&mut sources, source)?;
+        }
+    }
+    Ok((modules, sources))
+}
+
+/// Evaluates `source` like an imported file and retains the resulting module:
+/// the file's top-level definitions become the members of a module named by
+/// the source name's file stem, and the content it produces is kept with the
+/// module, unused. List the handle in the `module_handles` of layout or later
+/// evaluation options, where TYPST_VALUE_MODULE_HANDLE inputs refer to it;
+/// the source is not evaluated again. The module owns its values and the
+/// source text that diagnostics raised later inside its functions refer to, so
+/// it can outlive `context`, the options and the handles it was made with.
+/// A source name must be nonempty and differ from those of the requests,
+/// templates and other handles the module is used with. Warnings are
+/// returned with success. Available since ABI 1.8 with
+/// TYPST_CAP_MODULE_HANDLES.
+///
+/// # Safety
+/// `context` must be live. Both source views must follow the module pointer
+/// contract, and so must `config` unless it is null, which selects defaults,
+/// with its nested views and live module handles. `out` must be a non-null
+/// writable handle slot; `diagnostics` is optional. Release the returned
+/// module with `typst_module_release` and any diagnostic owner separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_context_eval(
+    context: *const TypstContext,
+    source: TypstStr,
+    source_name: TypstStr,
+    config: *const TypstEvalOptions,
+    out: *mut *mut TypstModule,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let context = required(context, "context")?;
+            let source_name = text(source_name, "source name")?;
+            let attribute = |error: Error| error.with_source(source_name);
+            if source_name.is_empty() {
+                return Err(Error::invalid("module source name must not be empty"));
+            }
+            let config: TypstEvalOptions = options(config).map_err(attribute)?;
+            if config.flags != 0 {
+                return Err(attribute(Error::unsupported("unknown evaluation flags")));
+            }
+            let (handles, retained) =
+                module_handles(config.module_handles, config.module_handle_count)
+                    .map_err(attribute)?;
+            let references = self::value::References {
+                handles: &handles,
+                ..Default::default()
+            };
+            let bindings = self::value::bindings(config.bindings, config.binding_count, references)
+                .map_err(attribute)?;
+            let module = crate::layout::ModuleSource {
+                code: text(source, "source").map_err(attribute)?,
+                source_name,
+            };
+            let (module, warnings) = context
+                .inner
+                .module(module, bindings, &retained)
+                .map_err(attribute)?;
+            out.write(owned(TypstModule { inner: module }));
+            Ok(warnings)
+        })
+    }
+}
+
+/// The modules of the handles exist already. Template functions are made
+/// next, so that bindings and show rules can refer to both by index.
 unsafe fn request<'a>(
     context: &crate::context::Context,
     value: &'a TypstLayoutRequest,
@@ -358,6 +525,9 @@ unsafe fn request<'a>(
             Ok(name)
         }
     };
+    let (handles, retained) =
+        unsafe { module_handles(options.module_handles, options.module_handle_count) }
+            .map_err(attribute)?;
     let mut templates = Vec::new();
     let mut functions = Vec::new();
     let mut warnings = Report::default();
@@ -380,17 +550,25 @@ unsafe fn request<'a>(
             },
         };
         // Earlier templates are already evaluated; later ones cannot be referenced.
+        let references = self::value::References {
+            templates: &functions,
+            handles: &handles,
+        };
         let bindings =
-            unsafe { self::value::bindings(record.bindings, record.binding_count, &functions) }
+            unsafe { self::value::bindings(record.bindings, record.binding_count, references) }
                 .map_err(attribute)?;
-        let (function, report) = context.template(template, bindings)?;
+        let (function, report) = context.template(template, bindings, &retained)?;
         warnings.merge(report);
         templates.push(template);
         functions.push(function);
     }
+    let references = self::value::References {
+        templates: &functions,
+        handles: &handles,
+    };
     let indices =
         unsafe { values(options.shows, options.show_count, "show rules") }.map_err(attribute)?;
-    let shows = indices
+    let mut shows = indices
         .iter()
         .map(|&index| {
             functions.get(index).cloned().ok_or_else(|| {
@@ -398,16 +576,36 @@ unsafe fn request<'a>(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let records = unsafe { values(options.show_values, options.show_value_count, "show values") };
+    for record in records.map_err(attribute)? {
+        let input = unsafe { required(record.value, "show rule value") }.map_err(attribute)?;
+        let mut rule = unsafe { self::value::value(input, references) }.map_err(attribute)?;
+        let path = unsafe { values(record.path, record.path_count, "show rule path") };
+        for field in path.map_err(attribute)? {
+            let field = unsafe { text(*field, "show rule field") }.map_err(attribute)?;
+            rule = rule
+                .field(field, ())
+                .map_err(|message| attribute(Error::invalid(message.to_string())))?;
+        }
+        if !matches!(rule, typst_core::foundations::Value::Func(_)) {
+            return Err(attribute(Error::invalid(format!(
+                "a show rule value must be a function, found {}",
+                rule.ty()
+            ))));
+        }
+        shows.push(rule);
+    }
     Ok(Request {
         source: unsafe { text(value.source, "source") }.map_err(attribute)?,
         setup_code: unsafe { text(options.setup_code, "setup code") }.map_err(attribute)?,
         setup_source_name: unsafe { text(options.setup_source_name, "setup source name") }
             .map_err(attribute)?,
         bindings: unsafe {
-            self::value::bindings(options.bindings, options.binding_count, &functions)
+            self::value::bindings(options.bindings, options.binding_count, references)
         }
         .map_err(attribute)?,
         templates,
+        retained,
         shows,
         warnings,
         flags: options.flags,
@@ -438,8 +636,9 @@ pub unsafe extern "C" fn typst_context_layout(
             output(out)?;
             let context = required(context, "context")?;
             let input = request(&context.inner, required(input, "layout request")?)?;
-            let templates = crate::layout::Templates {
-                sources: &input.templates,
+            let prepared = crate::layout::Prepared {
+                templates: &input.templates,
+                retained: &input.retained,
                 shows: &input.shows,
             };
             let (layout, warnings) = context
@@ -451,7 +650,7 @@ pub unsafe extern "C" fn typst_context_layout(
                     input.setup_code,
                     input.setup_source_name,
                     input.bindings,
-                    templates,
+                    prepared,
                     usize::MAX,
                 )
                 .map_err(|error| error.with_source(input.source_name))?;
@@ -501,8 +700,9 @@ pub unsafe extern "C" fn typst_context_layout_many(
                 .map(|(index, input)| {
                     catch_unwind(AssertUnwindSafe(|| {
                         let input = input?;
-                        let templates = crate::layout::Templates {
-                            sources: &input.templates,
+                        let prepared = crate::layout::Prepared {
+                            templates: &input.templates,
+                            retained: &input.retained,
                             shows: &input.shows,
                         };
                         let (layout, warnings) = context
@@ -514,7 +714,7 @@ pub unsafe extern "C" fn typst_context_layout_many(
                                 input.setup_code,
                                 input.setup_source_name,
                                 input.bindings,
-                                templates,
+                                prepared,
                                 index,
                             )
                             .map_err(|error| error.with_source(input.source_name))?;
@@ -596,6 +796,34 @@ pub unsafe extern "C" fn typst_layout_bounds(
             out.add(1).write(TypstPoint::default());
             let bounds = required(layout, "layout")?.inner.bounds()?;
             ptr::copy_nonoverlapping(bounds.as_ptr(), out, bounds.len());
+            Ok(Report::default())
+        })
+    }
+}
+
+/// Borrows every labeled element of a layout, read from the start and end tags
+/// Typst places around content that carries a label. Elements appear in
+/// document order, a label as often as it occurs. Records are made on the
+/// first call and live as long as the layout. Available since ABI 1.6.
+///
+/// # Safety
+/// `layout` must be live. `out` must point to aligned writable storage for one
+/// `TypstLabelView`, disjoint from the layout. Keep a layout reference alive
+/// for every access to the returned view; do not mutate or free it.
+#[no_mangle]
+pub unsafe extern "C" fn typst_layout_labels(
+    layout: *const TypstLayout,
+    out: *mut TypstLabelView,
+) -> TypstStatus {
+    unsafe {
+        call(ptr::null_mut(), || {
+            check_ptr(out, "labels output")?;
+            out.write(TypstLabelView::default());
+            let elements = required(layout, "layout")?.inner.labels()?;
+            out.write(TypstLabelView {
+                elements: elements.as_ptr(),
+                element_count: elements.len(),
+            });
             Ok(Report::default())
         })
     }
@@ -1272,6 +1500,24 @@ pub unsafe extern "C" fn typst_diagnostics_retain(value: *const TypstDiagnostics
 /// library. This consumes that reference; keep another owner for any live views.
 #[no_mangle]
 pub unsafe extern "C" fn typst_diagnostics_release(value: *const TypstDiagnostics) {
+    unsafe { release(value) }
+}
+/// Acquires one additional module reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a live module from this library, with an existing
+/// reference held through the call. Release the new reference exactly once.
+#[no_mangle]
+pub unsafe extern "C" fn typst_module_retain(value: *const TypstModule) {
+    unsafe { retain(value) }
+}
+/// Releases one owned module reference; null is a no-op.
+///
+/// # Safety
+/// A non-null `value` must be a module reference owned by the caller from this
+/// library. This consumes that reference; do not reuse it without another owner.
+#[no_mangle]
+pub unsafe extern "C" fn typst_module_release(value: *const TypstModule) {
     unsafe { release(value) }
 }
 

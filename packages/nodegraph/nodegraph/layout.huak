@@ -235,10 +235,60 @@ fn port_point(nodes:Geometry, name:string, side:string, index:int) -> vec2
     return (edge.x, item.center.y+offset)
 end
 
+// A part keeps the anchor Typst reports in the body's own coordinates. The
+// body is placed as text_center draws it: its baseline start at body_origin,
+// then the node's rotation and the move to where the body is centered.
+fn labeled(nodes:Geometry, name:string, label:string) -> anchor
+    item := find(nodes, name)
+    assert(item.kind != "edge", "edges have no parts: " + name)
+    body:text := item.body
+    anchors := body.anchors
+    assert(dict_contains(anchors, label), "node " + name + " has no part labeled " + label)
+    return anchors[label]
+end
+
+fn body_placement(item:any) -> transform
+    return compose(translate(shapes.body_origin(item.body)), compose(rotate(opt.get(item.options, "rotate", 0deg)), translate(item.body_center)))
+end
+
+// Edges aim at a part's center. Parts that start on one baseline, such as the
+// entries of a matrix row, share the mean height of their centers, so edges
+// along the row stay parallel to it however tall each entry is.
+export fn part_point(nodes:Geometry, name:string, label:string) -> vec2
+    item := find(nodes, name)
+    element := labeled(nodes, name, label)
+    body:text := item.body
+    anchors := body.anchors
+    total := 0pt
+    count := 0
+    for other_label in anchors.keys() do
+        other:anchor := anchors[other_label]
+        if abs(other.position.y-element.position.y) < 0.001pt then
+            total = total+other.center.y
+            count = count+1
+        end
+    end
+    height := min(max(total/count, element.min.y), element.max.y)
+    return apply(body_placement(item), (element.center.x, height))
+end
+
+// Edges reaching a part snap to its box, padded by the node's inset and
+// widened by its outset, as a node pads and widens its own outline.
+export fn part_snapping(nodes:Geometry, name:string, label:string) -> path
+    item := find(nodes, name)
+    element := labeled(nodes, name, label)
+    inset:length := opt.get(item.options, "inset", 6pt)
+    size := element.max-element.min+(2*inset, 2*inset)
+    outline := transformed(rectangle(element.min-(inset, inset), size.x, size.y), body_placement(item))
+    outset:length := opt.get(item.options, "outset", 0pt)
+    if outset > 0pt then return offset(outline, outset, "round") end
+    return outline
+end
+
 export fn ready(coordinate:any, nodes:Geometry) -> bool
     kind:string := coordinate.kind
     if kind == "grid" or kind == "absolute" then return true end
-    if kind == "named" or kind == "port" then return known(nodes, coordinate.name) end
+    if kind == "named" or kind == "port" or kind == "part" then return known(nodes, coordinate.name) end
     if kind == "relative" then return ready(coordinate.origin, nodes) end
     if kind == "between" then return ready(coordinate.first, nodes) and ready(coordinate.last, nodes) end
     panic("unknown coordinate kind: " + kind)
@@ -254,6 +304,7 @@ export fn resolve(coordinate:any, nodes:Geometry, cells:list, axes:list) -> vec2
     end
     if kind == "named" then return anchor(nodes, coordinate.name, coordinate.anchor) end
     if kind == "port" then return port_point(nodes, coordinate.name, coordinate.side, coordinate.index) end
+    if kind == "part" then return part_point(nodes, coordinate.name, coordinate.label) end
     if kind == "relative" then return resolve(coordinate.origin, nodes, cells, axes)+coordinate.delta end
     if kind == "between" then
         return lerp(resolve(coordinate.first, nodes, cells, axes), resolve(coordinate.last, nodes, cells, axes), coordinate.position)

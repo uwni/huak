@@ -11,9 +11,11 @@ const Digest = [std.crypto.hash.Blake3.digest_length]u8;
 const source =
     \\import math.{sin, cos}
     \\import paint.{picture, pen, rgb, draw, label}
-    \\setup_typst {
+    \\theme := typ.module[#let style(body) = {
     \\ set text(size: 14pt)
-    \\}
+    \\ body
+    \\}]
+    \\typ.show theme.style
     \\title := typ[Huak batch $sum_(i=1)^n i^2$ Ω]
     \\fn figure(index: int) -> picture
     \\ pic := picture(320, 200)

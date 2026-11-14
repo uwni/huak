@@ -643,7 +643,7 @@ fn paint_layer(dst:picture, panel:Panel, item:Layer, ink:color, width:length)
         if alignment == "left" then anchor = (0, 0.5)
         elseif alignment == "right" then anchor = (1, 0.5)
         elseif alignment != "center" then panic("unknown annotation align: "+alignment) end
-        if retained(panel, p) then labels.place(dst, item.data["body"], p, anchor) end
+        if retained(panel, p) then labels.place(dst, item.data["body"], p, anchor, 0deg, get(item.options, "part", "")) end
     elseif item.kind == "errorbars" then
         upper:list := get(item.options, "upper", item.data["errors"])
         assert(len(upper) == len(item.x), "upper errors length differs from data")

@@ -3,7 +3,7 @@ use comemo::Track;
 use typst_core::{
     diag::{At, SourceResult},
     engine::{Engine, Sink},
-    foundations::{Content, Context, Scope, Scopes, Value},
+    foundations::{Content, Context, Module, Scope, Scopes, Value},
     syntax::{ast, FileId, RangeMapper, Source, Span, SyntaxKind, SyntaxMode, SyntaxNode},
 };
 use typst_eval::{Eval, Vm};
@@ -117,6 +117,40 @@ pub(super) fn template<'a>(
     }
     let value = statements(&code, &mut vm)?;
     Ok((value, vm.engine))
+}
+
+/// Evaluates a source as upstream evaluates an imported file, except that
+/// `bindings` form an enclosing scope: the file sees them, but only its own
+/// top-level definitions become members of the module, named after the file.
+pub(super) fn module<'a>(
+    mut engine: Engine<'a>,
+    context: &'a Context<'a>,
+    source: &Source,
+    bindings: Scope,
+) -> SourceResult<(Module, Engine<'a>)> {
+    let root = source.root();
+    let errors = diagnostics(root, &mut engine.sink);
+    if !errors.is_empty() {
+        return Err(errors.into());
+    }
+    let mut scopes = Scopes::new(Some(engine.library));
+    if bindings.iter().next().is_some() {
+        scopes.scopes.push(bindings);
+    }
+    let mut vm = Vm::new(engine, context.track(), scopes, root.span());
+    let output = root
+        .cast::<ast::Markup>()
+        .expect("a source root is markup")
+        .eval(&mut vm)?;
+    if let Some(flow) = vm.flow.take() {
+        return Err(vec![flow.forbidden()].into());
+    }
+    let id = source.id();
+    let name = id.vpath().file_stem().unwrap_or_default();
+    let module = Module::new(name, std::mem::take(&mut vm.scopes.top))
+        .with_content(output)
+        .with_file_id(id);
+    Ok((module, vm.engine))
 }
 
 fn statements(tree: &SyntaxNode, vm: &mut Vm) -> SourceResult<Value> {

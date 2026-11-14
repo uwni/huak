@@ -8,7 +8,8 @@ pub const process_count = 8;
 
 pub fn run(ctx: *h.Harness) !void {
     _ = try ctx.script("batch/shared",
-        \\setup_typst { set text(size: 15pt) }
+        \\theme := typ.module[#let style(body) = { set text(size: 15pt); body }]
+        \\typ.show theme.style
         \\export caption := typ[Batch shared $x^2$]
     );
     _ = try ctx.script("batch/first",

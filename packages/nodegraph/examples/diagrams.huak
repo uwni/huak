@@ -2,18 +2,32 @@
 //   --output commutative=commutative.svg --output flowchart=flowchart.pdf
 // Explicit source import is intentional while the Zig catalog is unchanged.
 import paint.*
-import "../nodegraph.huak".{anchor, diagram, wire, matrix, finish, matrix_nodes, grid, absolute, named, automatic, shift, node, enclose, edge, connect, arrows}
-setup_typst {
+import "../nodegraph.huak".{anchor, diagram, wire, finish, grid, absolute, named, automatic, shift, node, enclose, edge, connect, arrows, part}
+// Math has no label syntax, so mark boxes an entry and labels the box. The
+// box sets its fill so that the red boxes below do not reach it.
+parts := typ.module[#let mark(name, body) = [#box(fill: none, $body$)#label(name)]]
+red_boxes := typ.module[
+  #let style(body) = {
     set block(fill: red)
     set box(fill: red)
-}
+    body
+  }
+]
+typ.show red_boxes.style
 
-matrix := matrix_nodes([[typ[$G$], typ[$"im"(f)$]], [typ[$G / "ker"(f)$], typ[$H$]]])
-matrix += [connect("r0c0", "r0c1", {"label": typ[$f$]})]
-matrix += [connect("r0c0", "r1c0", {"label": typ[$pi$], "marks": arrows("->>")})]
-matrix += [connect("r1c0", "r0c1", {"label": typ[$tilde(f)$], "marks": arrows("hook->")})]
-matrix += [connect("r1c0", "r1c1", {"marks": arrows("-|>")})]
-export commutative := diagram of matrix
+// Typst lays out the whole square as one matrix; edges reach its labeled
+// entries with part(...).
+square := named("square")
+commuting := [
+    node("square", grid(0, 0), typ[$mat(delim: #none, column-gap: #4em, row-gap: #3.5em,
+        huak.parts.mark("G", G), huak.parts.mark("image", "im"(f));
+        huak.parts.mark("quotient", G / "ker"(f)), huak.parts.mark("H", H))$]),
+    edge(part(square, "G"), part(square, "image"), {"label": typ[$f$]}),
+    edge(part(square, "G"), part(square, "quotient"), {"label": typ[$pi$], "marks": arrows("->>")}),
+    edge(part(square, "quotient"), part(square, "image"), {"label": typ[$tilde(f)$], "marks": arrows("hook->")}),
+    edge(part(square, "quotient"), part(square, "H"), {"marks": arrows("-|>")}),
+]
+export commutative := diagram of commuting
 default commutative
 
 

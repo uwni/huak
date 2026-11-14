@@ -3,9 +3,13 @@
 import paint.*
 import pen.{pensquare, makepen, makepath, stroke_outline}
 
-setup_typst {
+theme := typ.module[
+  #let style(body) = {
     set text(font: "Libertinus Serif", size: 10pt, fill: rgb("#26354b"))
-}
+    body
+  }
+]
+typ.show theme.style
 
 PAPER := rgb(1, 1, 1)
 INK := rgb(0.13, 0.35, 0.68)

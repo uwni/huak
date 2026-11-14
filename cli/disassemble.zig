@@ -40,7 +40,12 @@ pub fn write(program: *const bc.Program, writer: *std.Io.Writer) !void {
             const origin = if (source_module < program.modules.len) program.modules[source_module].source_text else program.source_text;
             const diagnostic: bc.source.Diagnostic = .{ .span = instruction.span };
             const position = diagnostic.position(origin);
-            try writer.print("  {d:0>5} {s: <20} {d} {d}  ; {d}:{d}\n", .{ address, @tagName(instruction.op), instruction.a, instruction.b, position.line, position.column });
+            // A Typst operand counts its captured pairs and tells whether the
+            // code uses `huak` as a whole value.
+            const captures: ?bc.TypstCaptures = if (instruction.op == .typst or instruction.op == .typst_module) instruction.typstCaptures() else null;
+            const operand = if (captures) |typst| typst.pairs else instruction.b;
+            const whole = if (captures) |typst| typst.whole else false;
+            try writer.print("  {d:0>5} {s: <20} {d} {d}{s}  ; {d}:{d}\n", .{ address, @tagName(instruction.op), instruction.a, operand, if (whole) " huak" else "", position.line, position.column });
         }
     }
 }

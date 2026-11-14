@@ -35,8 +35,10 @@ pub const Type = enum(u32) {
     vector,
     shape,
     path_or_shape,
-    /// A Typst function that a typst_show declaration applies around content.
-    show_rule,
+    /// A Typst module made from a typ.module[…] block, written typ.module.
+    typst_module,
+    /// Where a labeled element of typeset content lies.
+    anchor,
     _,
 
     pub const record_base: u32 = 0x10000;
@@ -55,6 +57,7 @@ pub const Type = enum(u32) {
 
     pub fn name(self: Type) []const u8 {
         if (self == .path_or_shape) return "path | shape";
+        if (self == .typst_module) return "typ.module";
         const info = @typeInfo(Type).@"enum";
         inline for (info.field_names, info.field_values) |field_name, value| {
             if (@backingInt(self) == value) return field_name;
@@ -63,7 +66,8 @@ pub const Type = enum(u32) {
     }
 
     pub fn parse(text: []const u8) ?Type {
-        if (std.mem.eql(u8, text, "vector") or std.mem.eql(u8, text, "path_or_shape")) return null;
+        if (std.mem.eql(u8, text, "vector") or std.mem.eql(u8, text, "path_or_shape") or std.mem.eql(u8, text, "typst_module")) return null;
+        if (std.mem.eql(u8, text, "typ.module")) return .typst_module;
         if (std.mem.eql(u8, text, "float") or std.mem.eql(u8, text, "numeric")) return .number;
         if (std.mem.eql(u8, text, "bool")) return .boolean;
         if (std.mem.eql(u8, text, "void")) return .unit;
@@ -89,6 +93,11 @@ pub const Type = enum(u32) {
             .{ .owner = .text, .name = "width", .kind = .length },
             .{ .owner = .text, .name = "height", .kind = .length },
             .{ .owner = .text, .name = "baseline", .kind = .length },
+            .{ .owner = .text, .name = "anchors", .kind = .dict },
+            .{ .owner = .anchor, .name = "position", .kind = .vec2 },
+            .{ .owner = .anchor, .name = "min", .kind = .vec2 },
+            .{ .owner = .anchor, .name = "max", .kind = .vec2 },
+            .{ .owner = .anchor, .name = "center", .kind = .vec2 },
             .{ .owner = .picture, .name = "width", .kind = .length },
             .{ .owner = .picture, .name = "height", .kind = .length },
             .{ .owner = .object, .name = "kind", .kind = .string },

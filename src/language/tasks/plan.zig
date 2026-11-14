@@ -7,15 +7,19 @@ const bc = @import("../bytecode.zig");
 const effects = @import("effects.zig");
 const Allocator = std.mem.Allocator;
 
-pub fn build(allocator: Allocator, program: *const bc.Program) Allocator.Error![]const bc.TaskRegion {
+/// The regions belong to `allocator`. Planning state lives in arenas over
+/// `scratch_allocator` and is released before returning, so none of it stays
+/// with a Program. That allocator must return freed memory; an arena would
+/// keep every analysis until its own end.
+pub fn build(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program) Allocator.Error![]const bc.TaskRegion {
     // Most scripts contain no user picture builders at all. Avoid constructing
     // a function CFG (and multiplying allocation-failure test cases) for them.
     if (!hasCandidate(program)) return &.{};
-    var temporary: std.heap.ArenaAllocator = .init(allocator);
+    var temporary: std.heap.ArenaAllocator = .init(scratch_allocator);
     defer temporary.deinit();
     const scratch = temporary.allocator();
-    const summaries = (try effects.analyze(scratch, program)) orelse return &.{};
-    if (try effects.observesIdentity(scratch, program, summaries)) return &.{};
+    const summaries = (try effects.analyze(scratch, scratch_allocator, program)) orelse return &.{};
+    if (try effects.observesIdentity(scratch, scratch_allocator, program, summaries)) return &.{};
     var regions: std.ArrayList(bc.TaskRegion) = .empty;
     var remaining: usize = effects.limits.work;
     for (program.functions, 0..) |function, index| {
@@ -45,7 +49,7 @@ pub fn build(allocator: Allocator, program: *const bc.Program) Allocator.Error![
             while (end < function.code.len) : (end += 1) {
                 if (end != start and boundary[end]) break;
                 switch (function.code[end].op) {
-                    .jump, .jump_if_false, .return_value, .halt, .import_module, .setup_typst, .typst, .show_rule, .store_local, .load_local, .list_append, .list_append_items, .make_dict, .make_record, .set_index, .set_field => break,
+                    .jump, .jump_if_false, .return_value, .halt, .import_module, .typst, .typst_module, .store_local, .load_local, .list_append, .list_append_items, .make_dict, .make_record, .set_index, .set_field => break,
                     else => {},
                 }
                 if (function.code[end].op == .store_global or function.code[end].op == .pop) break;
@@ -60,7 +64,7 @@ pub fn build(allocator: Allocator, program: *const bc.Program) Allocator.Error![
                     const cost = end - start + program.global_types.len + tasks.items.len;
                     if (cost > remaining) return &.{};
                     remaining -= cost;
-                    const result = try effects.expression(scratch, program, summaries, function.code[start..end], &remaining);
+                    const result = try effects.expression(scratch, scratch_allocator, program, summaries, function.code[start..end], &remaining);
                     if (remaining == 0) return &.{};
                     if (result) |summary| {
                         if (summary.reads.len > remaining) return &.{};
@@ -220,7 +224,7 @@ const ProofTest = struct {
 fn namedAllocationExercise(allocator: Allocator) !void {
     var program = ProofTest.program(allocator);
     defer program.deinit();
-    const regions = try build(allocator, &program);
+    const regions = try build(allocator, allocator, &program);
     defer ProofTest.freeRegions(allocator, regions);
     try std.testing.expectEqual(@as(usize, 1), regions.len);
     try std.testing.expectEqual(@as(usize, 2), regions[0].tasks.len);
@@ -230,6 +234,24 @@ fn namedAllocationExercise(allocator: Allocator) !void {
 test "named argument permutations preserve picture proofs and every allocation failure cleans up" {
     try namedAllocationExercise(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, namedAllocationExercise, .{});
+}
+
+test "planning leaves only the regions in the result allocator" {
+    var program = ProofTest.program(std.testing.allocator);
+    defer program.deinit();
+    // The result allocator stands for Program memory, which lasts as long as
+    // the Program. Working state must come from the scratch allocator.
+    var kept = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const regions = try build(kept.allocator(), std.testing.allocator, &program);
+    defer ProofTest.freeRegions(kept.allocator(), regions);
+    var expected: usize = regions.len * @sizeOf(bc.TaskRegion);
+    for (regions) |region| {
+        expected += region.tasks.len * @sizeOf(bc.Task);
+        for (region.tasks) |task| expected += task.reads.len * @sizeOf(u32);
+    }
+    try std.testing.expectEqual(@as(usize, 2), regions[0].tasks.len);
+    try std.testing.expectEqual(expected, kept.allocated_bytes);
+    try std.testing.expectEqual(@as(usize, 0), kept.freed_bytes);
 }
 
 test "aggregate statements stay serial while following picture construction remains parallel" {
@@ -244,7 +266,7 @@ test "aggregate statements stay serial while following picture construction rema
         const functions = try a.dupe(bc.Function, program.functions);
         functions[0].code = root;
         program.functions = functions;
-        const regions = try build(std.testing.allocator, &program);
+        const regions = try build(std.testing.allocator, std.testing.allocator, &program);
         defer ProofTest.freeRegions(std.testing.allocator, regions);
         try std.testing.expectEqual(@as(usize, 1), regions.len);
         try std.testing.expectEqual(@as(u32, 2), regions[0].start);
@@ -254,7 +276,7 @@ test "aggregate statements stay serial while following picture construction rema
         builder[1] = root[1];
         @memcpy(builder[2..], &ProofTest.builder);
         functions[1].code = builder;
-        const serial = try build(std.testing.allocator, &program);
+        const serial = try build(std.testing.allocator, std.testing.allocator, &program);
         defer ProofTest.freeRegions(std.testing.allocator, serial);
         try std.testing.expectEqual(@as(usize, 0), serial.len);
     }
@@ -270,7 +292,7 @@ test "malformed permutations and exhausted proof budgets fall back to ordered ex
         var program = ProofTest.program(std.testing.allocator);
         defer program.deinit();
         program.argument_bindings = &.{ invalid, ProofTest.bindings[1] };
-        const regions = try build(std.testing.allocator, &program);
+        const regions = try build(std.testing.allocator, std.testing.allocator, &program);
         defer ProofTest.freeRegions(std.testing.allocator, regions);
         try std.testing.expectEqual(@as(usize, 0), regions.len);
     }
@@ -278,8 +300,8 @@ test "malformed permutations and exhausted proof budgets fall back to ordered ex
     defer program.deinit();
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const summaries = (try effects.analyze(arena.allocator(), &program)).?;
+    const summaries = (try effects.analyze(arena.allocator(), std.testing.allocator, &program)).?;
     var remaining: usize = 1;
-    try std.testing.expect((try effects.expression(arena.allocator(), &program, summaries, ProofTest.root[0..4], &remaining)) == null);
+    try std.testing.expect((try effects.expression(arena.allocator(), std.testing.allocator, &program, summaries, ProofTest.root[0..4], &remaining)) == null);
     try std.testing.expectEqual(@as(usize, 0), remaining);
 }
