@@ -434,7 +434,7 @@ mod tests {
         )
         .unwrap();
         let frame = Frame::hard(Size::new(Abs::pt(50.0), Abs::pt(30.0)));
-        let bytes = crate::export::pdf(&crate::export::from_frame(&frame), None).unwrap();
+        let bytes = crate::export::pdf(&crate::export::from_frame(&frame), "", "").unwrap();
         assert!(Scene::from_pdf(&context, b"not a PDF", 0).is_err());
         assert!(Scene::from_pdf(&context, &bytes, 1).is_err());
         assert!(Scene::from_pdf(&context, &bytes, usize::MAX).is_err());
@@ -443,11 +443,11 @@ mod tests {
         drop(bytes);
         drop(context);
         let document = crate::export::from_frame(&scene.frame);
-        assert!(crate::export::pdf(&document, None)
+        assert!(crate::export::pdf(&document, "", "")
             .unwrap()
             .starts_with(b"%PDF-"));
         // Upstream explicitly rejects imported PDF pages for these standards.
-        assert!(crate::export::pdf(&document, Some("a-2b")).is_err());
+        assert!(crate::export::pdf(&document, "a-2b", "").is_err());
     }
 
     fn line() -> Vec<TypstPathSegment> {
@@ -582,7 +582,7 @@ mod tests {
         let svg = crate::export::svg(&document, 0).unwrap();
         assert!(svg.starts_with(b"<svg"));
         assert!(svg.windows(b"<use".len()).any(|part| part == b"<use"));
-        let pdf = crate::export::pdf(&document, None).unwrap();
+        let pdf = crate::export::pdf(&document, "", "").unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(pdf
             .windows(b"/ToUnicode".len())

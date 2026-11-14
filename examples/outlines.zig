@@ -106,7 +106,7 @@ pub fn main(init: std.process.Init) !void {
     try picture.labelAtBaseline(3, metrics(measured[3]), .{ .x = 34, .y = 42 }, .{});
     var document = try backend.submit(allocator, &library, &picture, width, height, .{ .frames = &frames });
     defer document.deinit();
-    var bytes = if (is_pdf) try document.exportPdf() else try document.exportSvg(0);
+    var bytes = if (is_pdf) try @import("huak").render.exportPdf(allocator, &document) else try document.exportSvg(0);
     defer bytes.deinit();
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = output, .data = bytes.bytes() });
     std.debug.print("editable lettering: {d} labels, {d} bytes at {s}\n", .{ batch.labels.len, bytes.bytes().len, output });

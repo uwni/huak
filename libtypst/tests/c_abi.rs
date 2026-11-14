@@ -61,6 +61,26 @@ fn check_selectable_pdf(path: &Path) {
     );
 }
 
+fn check_pdf_creator(path: &Path, expected: &str) {
+    let info = checked(
+        Command::new("pdfinfo").arg(path),
+        "read PDF information dictionary",
+    );
+    let info = String::from_utf8(info.stdout).expect("pdfinfo emits UTF-8");
+    let creator = info.lines().find_map(|line| line.strip_prefix("Creator:"));
+    assert_eq!(creator.map(str::trim), Some(expected));
+    let metadata = checked(
+        Command::new("pdfinfo").arg("-meta").arg(path),
+        "read PDF XMP metadata",
+    );
+    let metadata = String::from_utf8(metadata.stdout).expect("XMP emits UTF-8");
+    let escaped = expected
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    assert!(metadata.contains(&format!("<xmp:CreatorTool>{escaped}</xmp:CreatorTool>")));
+}
+
 #[test]
 fn independent_c_host_exercises_stable_abi() {
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -72,6 +92,10 @@ fn independent_c_host_exercises_stable_abi() {
         "native-scene.svg",
         "native-scene.pdf",
         "outlined.svg",
+        "creator-document.pdf",
+        "creator-layout.pdf",
+        "creator-scene.pdf",
+        "legacy-pdf-options.pdf",
     ] {
         match std::fs::remove_file(directory.join(name)) {
             Ok(()) => {}
@@ -134,4 +158,19 @@ fn independent_c_host_exercises_stable_abi() {
     check_svg(&directory.join("outlined.svg"));
     check_selectable_pdf(&directory.join("acceptance.pdf"));
     check_selectable_pdf(&directory.join("native-scene.pdf"));
+    let default_creator = format!("Typst {}", typst_core::utils::version().raw());
+    for name in [
+        "acceptance.pdf",
+        "native-scene.pdf",
+        "legacy-pdf-options.pdf",
+    ] {
+        check_pdf_creator(&directory.join(name), &default_creator);
+    }
+    for name in [
+        "creator-document.pdf",
+        "creator-layout.pdf",
+        "creator-scene.pdf",
+    ] {
+        check_pdf_creator(&directory.join(name), "C host café <&> (test)");
+    }
 }

@@ -35,15 +35,18 @@ pub fn svg(document: &PagedDocument, page: usize) -> Result<Vec<u8>, Error> {
     Ok(typst_svg::svg(page, &typst_svg::SvgOptions::default()).into_bytes())
 }
 
-pub fn pdf(document: &PagedDocument, standard: Option<&str>) -> Result<Vec<u8>, Error> {
+pub fn pdf(document: &PagedDocument, standard: &str, creator: &str) -> Result<Vec<u8>, Error> {
     let mut options = PdfOptions::default();
-    if let Some(standard) = standard.filter(|value| !value.is_empty()) {
+    if !standard.is_empty() {
         let value = PdfStandard::deserialize(serde::de::value::BorrowedStrDeserializer::<
             serde::de::value::Error,
         >::new(standard))
         .map_err(|error| Error::invalid(error.to_string()))?;
         options.standards = PdfStandards::new(&[value])
             .map_err(|error| Error::invalid(error.message().to_string()))?;
+    }
+    if !creator.is_empty() {
+        options.creator = Smart::Custom(Some(creator.into()));
     }
     typst_pdf::pdf(document, &options)
         .map_err(|errors| Error::compile(Report::from_native_unlocated(&errors, usize::MAX)))
@@ -84,16 +87,14 @@ mod tests {
         assert!(svg.windows(b"<path".len()).any(|part| part == b"<path"));
         let document = from_frame(&frame);
         assert_eq!(svg, super::svg(&document, 0).unwrap());
-        assert!(pdf(&document, None).unwrap().starts_with(b"%PDF-"));
-        assert!(pdf(&document, Some("1.4"))
-            .unwrap()
-            .starts_with(b"%PDF-1.4"));
+        assert!(pdf(&document, "", "").unwrap().starts_with(b"%PDF-"));
+        assert!(pdf(&document, "1.4", "").unwrap().starts_with(b"%PDF-1.4"));
     }
 
     #[test]
     fn options_use_upstream_standard_names_and_range_errors() {
         let document = from_frame(&frame());
-        assert!(pdf(&document, Some("not-a-pdf-standard")).is_err());
+        assert!(pdf(&document, "not-a-pdf-standard", "").is_err());
         assert!(svg(&document, 1).is_err());
     }
 }

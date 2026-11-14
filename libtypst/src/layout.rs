@@ -809,7 +809,7 @@ mod tests {
         let svg = crate::export::svg(&crate::export::from_frame(&layout.frame), 0).unwrap();
         assert!(svg.starts_with(b"<svg"));
         assert!(
-            crate::export::pdf(&crate::export::from_frame(&layout.frame), None)
+            crate::export::pdf(&crate::export::from_frame(&layout.frame), "", "")
                 .unwrap()
                 .starts_with(b"%PDF-")
         );
@@ -1017,7 +1017,7 @@ mod tests {
         assert!(crate::export::svg(&document, 0)
             .unwrap()
             .starts_with(b"<svg"));
-        assert!(crate::export::pdf(&document, None)
+        assert!(crate::export::pdf(&document, "", "")
             .unwrap()
             .starts_with(b"%PDF-"));
     }

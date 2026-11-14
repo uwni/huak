@@ -37,7 +37,7 @@ test "generated native symbols load with the stable ABI and capabilities" {
     try t.expectEqual(@as(u32, 1), version.abi_major);
     try t.expect(binding.bytes(version.library_version).len > 0);
     try t.expect(binding.bytes(version.typst_version).len > 0);
-    const required: u64 = c.TYPST_CAP_PDF | c.TYPST_CAP_NATIVE_SCENE | c.TYPST_CAP_BATCH_LAYOUT | c.TYPST_CAP_TEXT_OUTLINE;
+    const required: u64 = c.TYPST_CAP_PDF | c.TYPST_CAP_NATIVE_SCENE | c.TYPST_CAP_BATCH_LAYOUT | c.TYPST_CAP_TEXT_OUTLINE | c.TYPST_CAP_PDF_CREATOR;
     try t.expectEqual(required, version.capabilities & required);
 }
 

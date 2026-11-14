@@ -92,7 +92,7 @@ pub const Scene = struct {
         defer document.deinit();
         var buffer = switch (format) {
             .svg => document.exportSvg(0),
-            .pdf => document.exportPdf(),
+            .pdf => exportPdf(allocator, &document),
         } catch |err| {
             diagnostic.* = library.lastError() catch null;
             return err;
@@ -104,3 +104,13 @@ pub const Scene = struct {
         return .{ .native = buffer };
     }
 };
+
+/// Export a prepared huak document with the host and loaded backend versions.
+pub fn exportPdf(allocator: std.mem.Allocator, document: *const typst.Document) !typst.Buffer {
+    const creator = try std.fmt.allocPrint(allocator, "huak {s} (Typst {s})", .{
+        @import("build_options").version,
+        try document.library.typstVersion(),
+    });
+    defer allocator.free(creator);
+    return document.exportPdfWithOptions(.{ .creator = creator });
+}

@@ -24,6 +24,6 @@ pub fn render(allocator: std.mem.Allocator, engine: *typst.Engine, delta: f64, f
     defer document.deinit();
     return switch (format) {
         .svg => document.exportSvg(0),
-        .pdf => document.exportPdf(),
+        .pdf => @import("huak").render.exportPdf(allocator, &document),
     };
 }

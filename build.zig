@@ -73,6 +73,9 @@ fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const csv: Import = .{ .name = "csvzero", .module = b.dependency("csvzero", .{ .target = target, .optimize = optimize }).module("csvzero") };
     const standard_library: Import = .{ .name = "huak_std", .module = b.createModule(.{ .root_source_file = b.path("stdlib/catalog.zig"), .target = target, .optimize = optimize }) };
     const engine = engineModule(b, public, "huak", .{ .root_source_file = b.path("src/huak.zig"), .target = target, .optimize = optimize, .imports = &.{ native, loader, .{ .name = "xml_parser", .module = xml }, standard_library, csv } });
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+    engine.module.addOptions("build_options", build_options);
     const projection: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("src/drawing/space/projection.h"), .target = target, .optimize = optimize });
     engine.module.addImport("space_c", projection.mod);
     return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml };
@@ -273,12 +276,13 @@ fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixtures
     const cli_options = b.addOptions();
     cli_options.addOptionPath("executable_path", cli.getEmittedBin());
     cli_options.addOptionPathUntracked("library_path", config.library);
+    cli_options.addOption([]const u8, "huak_version", @import("build.zig.zon").version);
     const all_tests = b.step("test", "Run all unit and native integration tests");
     const language_tests = b.step("test-language", "Test the script language and native rendering");
     const animation_tests = b.step("test-animation", "Test animation encoding and native rendering");
     const region_tests = b.step("test-region-geometry", "Test curve regions with their drawing dependencies");
     const suites = [_]struct { source: []const u8, name: []const u8, imports: []const Import, native: bool = true, group: ?*std.Build.Step = null }{
-        .{ .source = "tests/cli.zig", .name = "test-cli", .imports = &.{ .{ .name = "test_options", .module = cli_options.createModule() }, .{ .name = "xml_parser", .module = libraries.xml } }, .group = language_tests },
+        .{ .source = "tests/cli.zig", .name = "test-cli", .imports = &.{ native, .{ .name = "test_options", .module = cli_options.createModule() }, .{ .name = "xml_parser", .module = libraries.xml } }, .group = language_tests },
         .{ .source = "tests/native_binding.zig", .name = "test-native-binding", .imports = &.{ libraries.binding, test_options } },
         .{ .source = "tests/typst.zig", .name = "test-typst", .imports = &.{ native, sample, loader_options } },
         .{ .source = "tests/language.zig", .name = "test-language-native", .imports = &.{ native, huak, test_options }, .group = language_tests },

@@ -134,7 +134,7 @@ static void load_api(char const *path) {
                             TYPST_CAP_NATIVE_SCENE | TYPST_CAP_TEXT_OUTLINE |
                             TYPST_CAP_LAYOUT_BINDINGS | TYPST_CAP_LAYOUT_LABELS |
                             TYPST_CAP_BINDING_MODULES | TYPST_CAP_MODULE_HANDLES |
-                            TYPST_CAP_SHOW_VALUES | TYPST_CAP_MEMBER_USES;
+                            TYPST_CAP_SHOW_VALUES | TYPST_CAP_MEMBER_USES | TYPST_CAP_PDF_CREATOR;
     require((version.capabilities & capabilities) == capabilities, "all accepted capabilities advertised");
     /* Rust worker/TLS destructors can reference this DSO. Keep it resident until
        process exit; all individual native owners are still released below. */
@@ -830,6 +830,41 @@ static TypstScene *outline_scene(TypstOutline const *outline, TypstMetrics metri
     return scene;
 }
 
+static void pdf_creators(TypstDocument const *document, TypstLayout const *layout,
+                         TypstScene const *scene, char const *directory) {
+    TypstDiagnostics *diagnostics = NULL;
+    TypstBuffer *buffer = NULL;
+    TypstPdfOptions options = { .struct_size = sizeof options,
+        .standard = str("1.7"), .creator = str("C host café <&> (test)") };
+    CHECK(api.document_export_pdf(document, &options, &buffer, &diagnostics));
+    save_buffer(directory, "creator-document.pdf", buffer, "%PDF-");
+    CHECK(api.layout_export_pdf(layout, &options, &buffer, &diagnostics));
+    save_buffer(directory, "creator-layout.pdf", buffer, "%PDF-");
+    CHECK(api.scene_export_pdf(scene, &options, &buffer, &diagnostics));
+    save_buffer(directory, "creator-scene.pdf", buffer, "%PDF-");
+
+    /* The old allocation ends before creator; the library must not read it. */
+    struct { uint32_t struct_size; uint32_t flags; TypstStr standard; } legacy = {
+        .struct_size = sizeof legacy,
+    };
+    _Static_assert(sizeof legacy == offsetof(TypstPdfOptions, creator), "original PDF options prefix");
+    CHECK(api.document_export_pdf(document, (TypstPdfOptions const *)&legacy, &buffer, &diagnostics));
+    save_buffer(directory, "legacy-pdf-options.pdf", buffer, "%PDF-");
+
+    uint8_t invalid_utf8[] = { 0xff };
+    options.creator = (TypstStr){ .data = invalid_utf8, .len = sizeof invalid_utf8 };
+    require(api.document_export_pdf(document, &options, &buffer, &diagnostics) == TYPST_INVALID_UTF8,
+            "PDF creator validates UTF-8");
+    require(buffer == NULL && diagnostics != NULL, "invalid creator clears output and reports error");
+    api.diagnostics_release(diagnostics);
+    diagnostics = NULL;
+    options.creator = (TypstStr){ .len = 1 };
+    require(api.scene_export_pdf(scene, &options, &buffer, &diagnostics) == TYPST_INVALID_ARGUMENT,
+            "nonempty PDF creator requires readable bytes");
+    require(buffer == NULL, "invalid creator pointer clears output");
+    api.diagnostics_release(diagnostics);
+}
+
 int main(int argc, char **argv) {
     require(argc == 3, "usage: c-abi-host library output-directory");
     load_api(argv[1]);
@@ -844,6 +879,7 @@ int main(int argc, char **argv) {
     TypstDocument *document = compile_document(context);
     TypstLayout *layout = batch_layout(context);
     TypstScene *scene = create_scene(layout);
+    pdf_creators(document, layout, scene, argv[2]);
     TypstOutline *outline = NULL;
     TypstDiagnostics *diagnostics = NULL;
     TypstMetrics metrics = {0};

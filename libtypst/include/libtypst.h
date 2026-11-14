@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65544
+#define TYPST_ABI_VERSION 65545
 
 #define TYPST_CAP_PDF 1
 
@@ -66,6 +66,11 @@
  * `typst_source_member_uses`.
  */
 #define TYPST_CAP_MEMBER_USES 4096
+
+/**
+ * Custom PDF Creator metadata in TypstPdfOptions.
+ */
+#define TYPST_CAP_PDF_CREATOR 8192
 
 #define TYPST_VALUE_NONE 0
 
@@ -523,6 +528,12 @@ typedef struct TypstPdfOptions {
   uint32_t struct_size;
   uint32_t flags;
   struct TypstStr standard;
+  /**
+   * Borrowed UTF-8 application name, written to PDF Creator and XMP
+   * CreatorTool. Empty or omitted selects Typst's default, including its
+   * version. Requires TYPST_CAP_PDF_CREATOR.
+   */
+  struct TypstStr creator;
 } TypstPdfOptions;
 
 typedef struct TypstTransform {
@@ -923,7 +934,7 @@ TypstStatus typst_document_export_svg(const struct TypstDocument *document,
  *
  * # Safety
  * `document` must be live. A non-null `config`, its declared options prefix and
- * its standard-name view must remain readable for the call. `out` and the
+ * its string views must remain readable for the call. `out` and the
  * optional diagnostic slot follow the module pointer contract. Release the
  * returned buffer and diagnostic owners separately.
  */
@@ -948,7 +959,7 @@ TypstStatus typst_layout_export_svg(const struct TypstLayout *layout,
  * Exports an independent layout into an owned PDF buffer.
  *
  * # Safety
- * `layout` must be live. A non-null `config` and its nested standard-name view
+ * `layout` must be live. A non-null `config` and its nested string views
  * must follow the module options contract. `out` must be a non-null writable
  * buffer slot; `diagnostics` is optional. Release both returned owners separately.
  */
@@ -1013,7 +1024,7 @@ TypstStatus typst_scene_export_svg(const struct TypstScene *scene,
  * Exports a scene into an independently owned PDF buffer.
  *
  * # Safety
- * `scene` must be live. A non-null `config` and its nested standard-name view
+ * `scene` must be live. A non-null `config` and its nested string views
  * must follow the module options contract. `out` must be a non-null writable
  * buffer slot; `diagnostics` is optional. Release both returned owners separately.
  */

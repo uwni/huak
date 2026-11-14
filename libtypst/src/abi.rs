@@ -7,7 +7,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0008;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_0009;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -33,6 +33,8 @@ pub const TYPST_CAP_MODULE_HANDLES: u64 = 1024;
 pub const TYPST_CAP_SHOW_VALUES: u64 = 2048;
 /// `typst_source_member_uses`.
 pub const TYPST_CAP_MEMBER_USES: u64 = 4096;
+/// Custom PDF Creator metadata in TypstPdfOptions.
+pub const TYPST_CAP_PDF_CREATOR: u64 = 8192;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;
@@ -527,6 +529,10 @@ pub struct TypstPdfOptions {
     pub struct_size: u32,
     pub flags: u32,
     pub standard: TypstStr,
+    /// Borrowed UTF-8 application name, written to PDF Creator and XMP
+    /// CreatorTool. Empty or omitted selects Typst's default, including its
+    /// version. Requires TYPST_CAP_PDF_CREATOR.
+    pub creator: TypstStr,
 }
 impl Default for TypstPdfOptions {
     fn default() -> Self {
@@ -534,6 +540,7 @@ impl Default for TypstPdfOptions {
             struct_size: std::mem::size_of::<Self>() as u32,
             flags: 0,
             standard: TypstStr::default(),
+            creator: TypstStr::default(),
         }
     }
 }

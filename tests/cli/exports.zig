@@ -12,6 +12,22 @@ pub fn run(ctx: *h.Harness) !void {
     _ = try ctx.command("run", drawing, &.{ "--output", "default=drawing.pdf" }, true);
     try t.expect(std.mem.startsWith(u8, try ctx.read("drawing.pdf"), "%PDF-"));
     try h.contains(try ctx.pdfText("drawing.pdf", true), "CLI selectable text");
+    var library = try @import("libtypst").Library.open(ctx.library);
+    defer library.deinit();
+    const creator = try ctx.fmt("huak {s} (Typst {s})", .{
+        @import("test_options").huak_version,
+        try library.typstVersion(),
+    });
+    const info = try ctx.process(&.{ "pdfinfo", try ctx.path("drawing.pdf") });
+    try t.expect(info.term == .exited and info.term.exited == 0);
+    var info_lines = std.mem.splitScalar(u8, info.stdout, '\n');
+    const actual_creator = while (info_lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "Creator:")) break std.mem.trim(u8, line["Creator:".len..], " \t\r");
+    } else return error.MissingPdfCreator;
+    try t.expectEqualStrings(creator, actual_creator);
+    const metadata = try ctx.process(&.{ "pdfinfo", "-meta", try ctx.path("drawing.pdf") });
+    try t.expect(metadata.term == .exited and metadata.term.exited == 0);
+    try h.contains(metadata.stdout, try ctx.fmt("<xmp:CreatorTool>{s}</xmp:CreatorTool>", .{creator}));
     const fonts = try ctx.process(&.{ "pdffonts", try ctx.path("drawing.pdf") });
     try t.expect(fonts.term == .exited and fonts.term.exited == 0);
     var lines = std.mem.splitScalar(u8, fonts.stdout, '\n');

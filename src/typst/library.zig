@@ -93,6 +93,12 @@ pub const Library = struct {
         try self.check(self.functions.version_info(&info), null);
         return info.capabilities & feature == feature;
     }
+    /// Borrowed from the loaded library; valid while it remains mapped.
+    pub fn typstVersion(self: *Library) Error![]const u8 {
+        var info: c.TypstVersionInfo = undefined;
+        try self.check(self.functions.version_info(&info), null);
+        return binding.bytes(info.typst_version);
+    }
     pub fn deinit(self: *Library) void {
         self.functions.context_release(self.shared_context);
         var messages = self.diagnostics.valueIterator();
@@ -164,6 +170,12 @@ pub const Library = struct {
     }
 };
 
+pub const PdfOptions = struct {
+    standard: []const u8 = "",
+    /// Empty preserves Typst's default Creator. Borrowed only during export.
+    creator: []const u8 = "",
+};
+
 /// Complete native documents and assembled scenes share the export interface.
 pub const Document = struct {
     library: *Library,
@@ -208,16 +220,26 @@ pub const Document = struct {
         return Buffer.fromOwned(self.library, output orelse return error.InvalidResult);
     }
     pub fn exportPdf(self: *const Document) Error!Buffer {
+        return self.exportPdfWithOptions(.{});
+    }
+    pub fn exportPdfWithOptions(self: *const Document, options: PdfOptions) Error!Buffer {
         self.library.clearError();
         const handle = self.handle orelse return error.InvalidState;
+        if (options.creator.len != 0 and !try self.library.supports(c.TYPST_CAP_PDF_CREATOR)) return error.Unsupported;
         defer @import("Engine.zig").evict(self.library);
+        const config: c.TypstPdfOptions = .{
+            .struct_size = @sizeOf(c.TypstPdfOptions),
+            .flags = 0,
+            .standard = binding.str(options.standard),
+            .creator = binding.str(options.creator),
+        };
         var output: ?*c.TypstBuffer = null;
         errdefer self.library.functions.buffer_release(output);
         var report: ?*c.TypstDiagnostics = null;
         defer self.library.functions.diagnostics_release(report);
         const result = switch (handle) {
-            .document => |owner| self.library.functions.document_export_pdf(owner, null, &output, &report),
-            .scene => |owner| self.library.functions.scene_export_pdf(owner, null, &output, &report),
+            .document => |owner| self.library.functions.document_export_pdf(owner, &config, &output, &report),
+            .scene => |owner| self.library.functions.scene_export_pdf(owner, &config, &output, &report),
         };
         self.library.check(result, report) catch |err| return if (err == error.CompileFailed) error.ExportFailed else err;
         return Buffer.fromOwned(self.library, output orelse return error.InvalidResult);

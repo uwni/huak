@@ -295,6 +295,7 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_SHOW_VALUES
             | TYPST_CAP_MEMBER_USES
             | TYPST_CAP_MODULE_HANDLES
+            | TYPST_CAP_PDF_CREATOR
             | crate::context::FONT_DISCOVERY,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),
@@ -872,13 +873,19 @@ pub unsafe extern "C" fn typst_document_page_metrics(
     }
 }
 
-unsafe fn pdf_standard<'a>(config: *const TypstPdfOptions) -> Result<Option<&'a str>, Error> {
+unsafe fn export_pdf(
+    document: &typst_layout::PagedDocument,
+    config: *const TypstPdfOptions,
+) -> Result<Vec<u8>, Error> {
     let config: TypstPdfOptions = unsafe { options(config)? };
     if config.flags != 0 {
         return Err(Error::unsupported("unknown PDF flags"));
     }
-    let standard = unsafe { text(config.standard, "PDF standard")? };
-    Ok((!standard.is_empty()).then_some(standard))
+    crate::export::pdf(
+        document,
+        unsafe { text(config.standard, "PDF standard")? },
+        unsafe { text(config.creator, "PDF creator")? },
+    )
 }
 
 /// Exports one document page into an independently owned SVG buffer.
@@ -908,7 +915,7 @@ pub unsafe extern "C" fn typst_document_export_svg(
 ///
 /// # Safety
 /// `document` must be live. A non-null `config`, its declared options prefix and
-/// its standard-name view must remain readable for the call. `out` and the
+/// its string views must remain readable for the call. `out` and the
 /// optional diagnostic slot follow the module pointer contract. Release the
 /// returned buffer and diagnostic owners separately.
 #[no_mangle]
@@ -922,7 +929,7 @@ pub unsafe extern "C" fn typst_document_export_pdf(
         call(diagnostics, || {
             output(out)?;
             let document = required(document, "document")?;
-            let bytes = crate::export::pdf(&document.inner.document, pdf_standard(config)?)?;
+            let bytes = export_pdf(&document.inner.document, config)?;
             out.write(owned(TypstBuffer { inner: bytes }));
             Ok(Report::default())
         })
@@ -954,7 +961,7 @@ pub unsafe extern "C" fn typst_layout_export_svg(
 /// Exports an independent layout into an owned PDF buffer.
 ///
 /// # Safety
-/// `layout` must be live. A non-null `config` and its nested standard-name view
+/// `layout` must be live. A non-null `config` and its nested string views
 /// must follow the module options contract. `out` must be a non-null writable
 /// buffer slot; `diagnostics` is optional. Release both returned owners separately.
 #[no_mangle]
@@ -968,10 +975,7 @@ pub unsafe extern "C" fn typst_layout_export_pdf(
         call(diagnostics, || {
             output(out)?;
             let layout = required(layout, "layout")?;
-            let bytes = crate::export::pdf(
-                &crate::export::from_frame(&layout.inner.frame),
-                pdf_standard(config)?,
-            )?;
+            let bytes = export_pdf(&crate::export::from_frame(&layout.inner.frame), config)?;
             out.write(owned(TypstBuffer { inner: bytes }));
             Ok(Report::default())
         })
@@ -1190,7 +1194,7 @@ pub unsafe extern "C" fn typst_scene_export_svg(
 /// Exports a scene into an independently owned PDF buffer.
 ///
 /// # Safety
-/// `scene` must be live. A non-null `config` and its nested standard-name view
+/// `scene` must be live. A non-null `config` and its nested string views
 /// must follow the module options contract. `out` must be a non-null writable
 /// buffer slot; `diagnostics` is optional. Release both returned owners separately.
 #[no_mangle]
@@ -1204,10 +1208,7 @@ pub unsafe extern "C" fn typst_scene_export_pdf(
         call(diagnostics, || {
             output(out)?;
             let scene = required(scene, "scene")?;
-            let bytes = crate::export::pdf(
-                &crate::export::from_frame(&scene.inner.frame),
-                pdf_standard(config)?,
-            )?;
+            let bytes = export_pdf(&crate::export::from_frame(&scene.inner.frame), config)?;
             out.write(owned(TypstBuffer { inner: bytes }));
             Ok(Report::default())
         })

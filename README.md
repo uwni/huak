@@ -38,6 +38,8 @@ zig-out/bin/huak run circle.huak --output circle.svg --output circle.pdf
 
 动态库安装在 `zig-out/lib/`。单独构建它用 `zig build libtypst`。将 `run` 换成 `watch`，保存脚本时就会重新生成图形。[VS Code 扩展](editors/vscode/README.md) 可以直接预览 SVG。
 
+PDF 的生成工具信息写作 `huak <版本> (Typst <版本>)`，同时记录在 `Creator` 和 XMP `CreatorTool` 中；Typst 版本来自实际加载的 libtypst。
+
 ## 三维投影
 
 二维和三维路径共用 `--`、`&` 和 Bézier 构造器。用 `space` 拉伸、旋转、扫掠或放样轮廓，再将模型投影成二维路径。棱线、曲面轮廓和模型交线可分别设置线型。画半透明表面时按 `projection.layers` 从远到近填色、描边。[同一条圆弧生成曲面和实体](examples/space/profiles.huak) · [圆柱穿过透明球](examples/space/solids.huak) · [圆环与贴面螺旋](examples/space/torus.huak)
