@@ -12,9 +12,12 @@ pub const hobby = @import("path/hobby.zig");
 pub const DisplayList = @import("DisplayList.zig");
 pub const Scene = @import("Scene.zig");
 pub const outline = @import("outline.zig");
+pub const field = @import("field.zig");
+pub const patches = @import("patches.zig");
 pub const units = @import("units.zig");
 pub const pen = @import("pen/root.zig");
 pub const simd = @import("simd.zig");
+pub const shading = @import("space/shading.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

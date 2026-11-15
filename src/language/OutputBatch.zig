@@ -31,7 +31,6 @@ fn Shared(comptime T: type) type {
 const Target = struct {
     allocator: std.mem.Allocator,
     view: objects.View,
-    has_mesh: bool = false,
     /// Each reference retains its enclosing shared Layout exactly once.
     frames: []typst.FrameRef = &.{},
     geometry: []*Geometry = &.{},
@@ -134,7 +133,6 @@ pub fn init(allocator: std.mem.Allocator, library: *typst.Library, sources: []co
         snapshot.owners.clearAndFree(allocator);
         var references: std.AutoHashMapUnmanaged(u32, u32) = .empty;
         for (snapshot.picture.commands.items) |*command| {
-            if (renderer.usesMesh(command)) target.has_mesh = true;
             if (command.* != .label) continue;
             const reference = command.label.reference;
             if (reference >= frames.len) return error.InvalidFrameReference;
@@ -177,7 +175,7 @@ pub fn len(self: *const OutputBatch) usize {
 
 pub fn validate(self: *const OutputBatch, index: usize, format: renderer.Format) !void {
     const target = self.entries[index] orelse return error.ReleasedOutput;
-    try format.validate((try target.view.animation()) != null, target.has_mesh);
+    try format.validate((try target.view.animation()) != null);
 }
 
 pub fn render(self: *const OutputBatch, allocator: std.mem.Allocator, index: usize, format: renderer.Format, diagnostic: *?typst.Buffer) !renderer.Output {

@@ -5,7 +5,7 @@ const space_build = @import("build/space.zig");
 const rust = @import("build/rust.zig");
 const Import = std.Build.Module.Import;
 const Configuration = struct { target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, library: std.Build.LazyPath, typst_install: *std.Build.Step, use_llvm: ?bool };
-const Libraries = struct { binding: Import, native: Import, huak: Import, tooling: Import, options: Import, xml: *std.Build.Module, clap: Import, drawing: Import };
+const Libraries = struct { binding: Import, native: Import, huak: Import, tooling: Import, options: Import, xml: *std.Build.Module, clap: Import, drawing: Import, space_c: Import };
 const EditorTools = struct { formatter: *std.Build.Step.Compile, language_server: *std.Build.Step.Compile };
 const Fixtures = struct { sample: Import, drawing: Import, animation: Import, drawing_workflow: Import, typst_workflow: Import, regions: Import };
 const Program = struct { name: []const u8, source: []const u8, step: []const u8, description: []const u8, imports: []const Import };
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
     addExamples(b, config, libraries, fixtures, desktop);
     addBenchmarks(b, config, libraries, fixtures, cli.artifact, desktop);
     addTests(b, config, libraries, fixtures, cli.artifact, editors);
-    addSpaceTests(b, config, cli, backend, occt != null);
+    addSpaceTests(b, config, libraries, cli, backend, occt != null);
 }
 
 const EngineModules = struct {
@@ -58,6 +58,7 @@ const EngineModules = struct {
     standard_library: Import,
     csv: Import,
     xml: *std.Build.Module,
+    space_c: Import,
 };
 
 fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, comptime public: bool) EngineModules {
@@ -78,7 +79,7 @@ fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     engine.module.addOptions("build_options", build_options);
     const projection: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("src/drawing/space/projection.h"), .target = target, .optimize = optimize });
     engine.module.addImport("space_c", projection.mod);
-    return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml };
+    return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml, .space_c = .{ .name = "space_c", .module = projection.mod } };
 }
 
 fn engineModule(b: *std.Build, comptime public: bool, name: []const u8, options: std.Build.Module.CreateOptions) Import {
@@ -92,7 +93,7 @@ fn addLibraries(b: *std.Build, config: Configuration) Libraries {
     const tooling = b.addModule("huak_tooling", .{ .root_source_file = b.path("src/tooling.zig"), .target = config.target, .optimize = config.optimize, .link_libc = true, .imports = &.{ engine.standard_library, engine.csv } });
     const defaults = b.addOptions();
     defaults.addOptionPathUntracked("library_path", config.library);
-    return .{ .binding = engine.binding, .native = engine.native, .huak = engine.huak, .tooling = .{ .name = "huak_tooling", .module = tooling }, .options = .{ .name = "host_options", .module = defaults.createModule() }, .xml = engine.xml, .clap = clap, .drawing = drawing };
+    return .{ .binding = engine.binding, .native = engine.native, .huak = engine.huak, .tooling = .{ .name = "huak_tooling", .module = tooling }, .options = .{ .name = "host_options", .module = defaults.createModule() }, .xml = engine.xml, .clap = clap, .drawing = drawing, .space_c = engine.space_c };
 }
 
 fn addPlayground(b: *std.Build) void {
@@ -337,13 +338,18 @@ fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixtures
     tools_tests.dependOn(&tool_units.step);
     all_tests.dependOn(&tool_units.step);
     _ = program(b, config, .{ .name = "animation-references", .source = "tests/animation/references.zig", .step = "verify-animation", .description = "Generate native animation reference fixtures", .imports = &.{ libraries.native, libraries.huak, fixtures.animation, libraries.options } });
-    _ = program(b, config, .{ .name = "mesh-reference", .source = "tests/mesh_reference.zig", .step = "verify-mesh", .description = "Replay a numerical lighting mesh fixture through the native PDF backend", .imports = &.{ libraries.native, libraries.huak, libraries.options } });
 }
 
-fn addSpaceTests(b: *std.Build, config: Configuration, cli: *std.Build.Step.InstallArtifact, backend: space_build.Backend, include_in_suite: bool) void {
+fn addSpaceTests(b: *std.Build, config: Configuration, libraries: Libraries, cli: *std.Build.Step.InstallArtifact, backend: space_build.Backend, include_in_suite: bool) void {
     const space = b.step("test-space", "Test native OCCT modeling and projected visibility in SVG and PDF");
     if (include_in_suite) b.top_level_steps.get("test").?.step.dependOn(space);
     space.dependOn(backend.check);
+    // Smooth light against exact light, through the installed library.
+    const shading = b.addRunArtifact(b.addExecutable(.{ .name = "space-shading", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/space_shading.zig", &.{ libraries.huak, libraries.space_c }) }));
+    shading.addFileArg2(backend.library, .{});
+    shading.step.dependOn(backend.install);
+    shading.has_side_effects = true;
+    space.dependOn(&shading.step);
     for (space_contracts.names) |name| {
         const projection = runInstalled(b, config, cli, backend.install);
         projection.addArg("run");

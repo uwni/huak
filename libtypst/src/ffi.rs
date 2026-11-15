@@ -104,6 +104,41 @@ unsafe fn options<T: Copy + Default>(value: *const T) -> Result<T, Error> {
     Ok(result)
 }
 
+/// A gradient record and, when flagged, its stop positions.
+struct GradientRecord<'a> {
+    record: TypstGradient,
+    offsets: Option<&'a [f64]>,
+}
+
+/// Records written before ABI 1.10 end before `offsets`. Fields are read
+/// through the pointer, without a reference to the whole record, and
+/// `offsets` only when the flag says it is present.
+unsafe fn gradient_record<'a>(view: *const TypstGradient) -> Result<GradientRecord<'a>, Error> {
+    check_ptr(view, "gradient")?;
+    let flags = unsafe { ptr::addr_of!((*view).flags).read() };
+    if flags & !TYPST_GRADIENT_STOP_OFFSETS != 0 {
+        return Err(Error::unsupported("unknown gradient flags"));
+    }
+    let mut record = unsafe {
+        TypstGradient {
+            kind: ptr::addr_of!((*view).kind).read(),
+            flags,
+            start: ptr::addr_of!((*view).start).read(),
+            end: ptr::addr_of!((*view).end).read(),
+            colors: ptr::addr_of!((*view).colors).read(),
+            count: ptr::addr_of!((*view).count).read(),
+            offsets: ptr::null(),
+        }
+    };
+    let offsets = if flags & TYPST_GRADIENT_STOP_OFFSETS != 0 {
+        record.offsets = unsafe { ptr::addr_of!((*view).offsets).read() };
+        Some(unsafe { values(record.offsets, record.count, "gradient offsets")? })
+    } else {
+        None
+    };
+    Ok(GradientRecord { record, offsets })
+}
+
 unsafe fn report(out: *mut *mut TypstDiagnostics, value: Report) {
     if !out.is_null() && !value.entries.is_empty() {
         unsafe {
@@ -296,6 +331,7 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_MEMBER_USES
             | TYPST_CAP_MODULE_HANDLES
             | TYPST_CAP_PDF_CREATOR
+            | TYPST_CAP_GRADIENT_STOPS
             | crate::context::FONT_DISCOVERY,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),
@@ -1085,15 +1121,11 @@ pub unsafe extern "C" fn typst_scene_create(
                                 if view.is_null() {
                                     return Ok(None);
                                 }
-                                let g = required(view, "gradient")?;
-                                if g.reserved != 0 {
-                                    return Err(Error::invalid(
-                                        "gradient reserved field must be zero",
-                                    ));
-                                }
+                                let g = gradient_record(view)?;
                                 crate::scene::gradient(
-                                    g,
-                                    values(g.colors, g.count, "gradient colors")?,
+                                    &g.record,
+                                    values(g.record.colors, g.record.count, "gradient colors")?,
+                                    g.offsets,
                                 )
                                 .map(Some)
                             };
@@ -1717,6 +1749,142 @@ mod tests {
             typst_buffer_release(pdf);
             typst_scene_release(scene);
         }
+    }
+
+    #[test]
+    fn gradient_stops_follow_their_offsets() {
+        let segments = [
+            TypstPathSegment {
+                kind: TYPST_SEGMENT_MOVE,
+                ..Default::default()
+            },
+            TypstPathSegment {
+                kind: TYPST_SEGMENT_LINE,
+                p1: TypstPoint { x: 40.0, y: 0.0 },
+                ..Default::default()
+            },
+            TypstPathSegment {
+                kind: TYPST_SEGMENT_LINE,
+                p1: TypstPoint { x: 40.0, y: 10.0 },
+                ..Default::default()
+            },
+            TypstPathSegment {
+                kind: TYPST_SEGMENT_CLOSE,
+                ..Default::default()
+            },
+        ];
+        let path = TypstPath {
+            segments: segments.as_ptr(),
+            segment_count: segments.len(),
+        };
+        let style = TypstStyle {
+            flags: TYPST_STYLE_FILL,
+            fill_rule: TYPST_FILL_NONZERO,
+            fill: TypstColor {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            stroke: TypstColor::default(),
+            stroke_width_pt: 0.0,
+            line_cap: TYPST_CAP_BUTT,
+            line_join: TYPST_JOIN_MITER,
+            miter_limit: 4.0,
+            dashes: ptr::null(),
+            dash_count: 0,
+            dash_phase_pt: 0.0,
+        };
+        let colors = [
+            TypstColor {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            TypstColor {
+                r: 0.0,
+                g: 1.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            TypstColor {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        ];
+        let render = |flags: u32, offsets: &[f64]| unsafe {
+            let gradient = TypstGradient {
+                kind: TYPST_GRADIENT_LINEAR,
+                flags,
+                start: TypstPoint { x: 0.0, y: 5.0 },
+                end: TypstPoint { x: 40.0, y: 5.0 },
+                colors: colors.as_ptr(),
+                count: colors.len(),
+                offsets: offsets.as_ptr(),
+            };
+            let paints = TypstSceneItemOptions {
+                fill_gradient: &gradient,
+                ..Default::default()
+            };
+            let item = TypstSceneItem {
+                kind: TYPST_ITEM_PATH,
+                reserved: 0,
+                transform: TypstTransform {
+                    xx: 1.0,
+                    yy: 1.0,
+                    ..Default::default()
+                },
+                path: &path,
+                style: &style,
+                layout: ptr::null(),
+                scene: ptr::null(),
+                clip: ptr::null(),
+                options: &paints,
+            };
+            let options = TypstSceneOptions {
+                width_pt: 40.0,
+                height_pt: 10.0,
+                items: &item,
+                item_count: 1,
+                ..Default::default()
+            };
+            let mut scene = ptr::null_mut();
+            let mut diagnostics = ptr::null_mut();
+            let status = typst_scene_create(&options, &mut scene, &mut diagnostics);
+            typst_diagnostics_release(diagnostics);
+            if status != TYPST_OK {
+                return Err(status);
+            }
+            let mut svg = ptr::null_mut();
+            assert_eq!(
+                typst_scene_export_svg(scene, &mut svg, ptr::null_mut()),
+                TYPST_OK
+            );
+            let text = String::from_utf8((*svg).inner.to_vec()).unwrap();
+            typst_buffer_release(svg);
+            typst_scene_release(scene);
+            Ok(text)
+        };
+
+        let placed = render(TYPST_GRADIENT_STOP_OFFSETS, &[0.0, 0.25, 1.0]).unwrap();
+        assert!(placed.contains(r#"offset="25%""#), "{placed}");
+        let spaced = render(0, &[f64::NAN; 3]).unwrap();
+        assert!(spaced.contains(r#"offset="50%""#), "{spaced}");
+        for invalid in [
+            [0.1, 0.5, 1.0],
+            [0.0, 0.5, 0.9],
+            [0.0, 0.6, 0.4],
+            [0.0, f64::NAN, 1.0],
+        ] {
+            assert_eq!(
+                render(TYPST_GRADIENT_STOP_OFFSETS, &invalid),
+                Err(TYPST_INVALID_ARGUMENT)
+            );
+        }
+        assert_eq!(render(2, &[0.0, 0.5, 1.0]), Err(TYPST_UNSUPPORTED));
     }
 
     #[test]

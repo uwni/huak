@@ -21,7 +21,6 @@ translated files retain their copyright notices.
 | --- | --- |
 | `numeric.zig`, `point.zig`, `roots.zig`, `curve.zig` | Binary64 predicates, compensated arithmetic, polynomial roots and line/quadratic/cubic queries |
 | `Intersections.zig`, `intersections/` | Primitive intersection dispatch, paired source parameters, `SkTSect` subdivision and bounded refinement |
-| `reduce.zig` | Degree reduction used by the retained TSect regression tests |
 | `winding.zig` | Read-only Bézier ray winding used by stroke-section regression probes |
 
 These modules are implementation details. Path crossing queries preserve

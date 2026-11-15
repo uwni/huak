@@ -87,7 +87,7 @@ const registry = .{
     .erfc = .{ .namespace = .math, .args = .{ .value = n }, .minimum = 1, .result = n },
     .vec2 = .{ .namespace = null, .implicit = true, .args = .{ .x = s, .y = s }, .minimum = 2, .result = p },
     .vec3 = .{ .namespace = null, .implicit = true, .args = .{ .x = s, .y = s, .z = s }, .minimum = 3, .result = .vec3 },
-    .project_scene = .{ .namespace = .projection, .args = .{ .shapes = .list, .azimuth = angle, .elevation = angle, .focus = length, .tolerance = length, .faces = .boolean, .light = a, .spot = angle, .isophotes = .list }, .minimum = 9, .result = .list },
+    .project_scene = .{ .namespace = .projection, .args = .{ .shapes = .list, .azimuth = angle, .elevation = angle, .focus = length, .tolerance = length, .faces = .boolean, .light = a, .spot = angle, .isophotes = .list, .smooth = .boolean }, .minimum = 9, .result = .list },
     .model_shape = .{ .namespace = .projection, .args = .{ .kind = .string, .arguments = .list }, .minimum = 2, .result = .shape },
     .dot = .{ .namespace = .math, .args = .{ .a = .vector, .b = .vector }, .minimum = 2, .result = s },
     .norm = .{ .namespace = .math, .args = .{ .value = .vector }, .minimum = 1, .result = s },
@@ -153,7 +153,8 @@ const registry = .{
     .draw = .{ .namespace = .object, .args = .{ .curve = .path, .pen = .pen, .transform = .transform }, .minimum = 1, .result = .object },
     .fill = .{ .namespace = .object, .args = .{ .curve = .path, .color = .color, .transform = .transform }, .minimum = 1, .result = .object },
     .linear_stroke = .{ .namespace = .object, .args = .{ .curve = .path, .start = p, .end = p, .colors = .list, .brush = .pen }, .minimum = 5, .result = .object },
-    .linear_fill = .{ .namespace = .object, .args = .{ .curve = .path, .start = p, .end = p, .colors = .list }, .minimum = 4, .result = .object },
+    .linear_fill = .{ .namespace = .object, .args = .{ .curve = .path, .start = p, .end = p, .colors = .list, .offsets = .list }, .minimum = 4, .result = .object },
+    .patch_fill = .{ .namespace = .object, .args = .{ .curve = .path, .points = .list, .values = .list, .colors = .list, .levels = .list, .tolerance = n, .margin = length }, .minimum = 6, .result = .object },
     .radial_fill = .{ .namespace = .object, .args = .{ .curve = .path, .center = p, .radius = length, .inner = .color, .outer = .color }, .minimum = 5, .result = .object },
     .filldraw = .{ .namespace = .object, .args = .{ .curve = .path, .color = .color, .pen = .pen, .transform = .transform }, .minimum = 3, .result = .object },
     .label = .{ .namespace = .object, .args = .{ .body = .text, .position = p, .transform = .transform }, .minimum = 2, .result = .object },
@@ -238,17 +239,9 @@ pub fn identity(name: []const u8) ?Signature {
 }
 
 /// Data/diagnostic primitives and primary type constructors form the prelude.
-pub fn isImplicit(id: Id) bool {
-    return signature(id).implicit;
-}
-
 pub fn implicit(name: []const u8) ?Signature {
     const found = lookup(name) orelse return null;
     return if (found.implicit) found else null;
-}
-
-pub fn namespaceOf(id: Id) ?Namespace {
-    return signature(id).namespace;
 }
 
 pub fn namespaceLookup(namespace: Namespace, name: []const u8) ?Signature {
@@ -281,8 +274,6 @@ pub fn signature(id: Id) Signature {
 test "native parameter names form a complete unique signature" {
     for (signatures) |item| {
         try std.testing.expectEqualDeep(item, signature(item.id));
-        try std.testing.expectEqual(item.namespace, namespaceOf(item.id));
-        try std.testing.expectEqual(item.implicit, isImplicit(item.id));
         try std.testing.expectEqual(item.args.len, item.parameter_names.len);
         for (item.parameter_names, 0..) |name, index| {
             try std.testing.expect(name.len != 0);

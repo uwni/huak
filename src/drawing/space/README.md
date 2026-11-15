@@ -59,11 +59,32 @@ with `s.shaded(face,ink)`. Set `spot:24deg` to add a gleam. Its boundary
 is where the surface normal makes that angle with the light/view half-vector
 (Stroila, Eisemann and Hart, *Clip Art Rendering of Smooth Isosurfaces*,
 Eq. 13). OCCT traces this contour on the face. Huak fits an ellipse to each
-connected projected highlight for the radial color falloff and clips it to
-the visible highlight boundary. See the [highlight example](../../../examples/space/highlight.huak).
+connected projected highlight, with the area and principal moments OCCT
+measures, for the radial color falloff and clips it to the visible highlight
+boundary. See the [highlight example](../../../examples/space/highlight.huak).
 
-Projection first partitions the model's silhouettes and boundaries, then inserts
-lighting contours into occupied cells, excluding the empty background. This
+With `smooth:true` the light is continuous instead of banded, and each front
+region becomes its own face carrying a field of n·l and of the gleam
+(`shading.zig`). Huak computes the fields; OCCT evaluates the surfaces, their
+normals and normal derivatives, finds where the contour crosses each cell side
+and where lines of sight meet a face, all in batches. A plane's field is constant; a cylinder seen across its axis
+varies along one direction, as a profile of samples. Other faces get
+tensor-product Bézier patches over a grid of their parameters, each
+interpolating the projected surface and the light at sixteen samples. Cells
+turn the normal by at most `sqrt(4e)` for an accuracy `e` of 1/256, so that
+bilinear interpolation of each patch's corner values, which a PDF patch mesh
+paints, stays within `e`; where the gleam can be positive, finer patches carry
+it. Cells crossing the contour keep their front part, cut where n·v
+vanishes, and skirts carry the light of contour and face-boundary sides past
+the outline's tolerance. SVG output subdivides the patches into triangles
+(`src/drawing/patches.zig`).
+
+Projection (`linework.zig`) draws each curve whole where its own shape decides
+its visibility, and otherwise splits it wherever it crosses another curve's
+image or pierces another shape, ranking each piece by the sheets in front of
+its middle. It then partitions the plane by the silhouettes, intersections and
+face boundaries, groups the cells by the face each sheet in front shows, and
+inserts lighting contours into occupied cells, excluding the empty background. This
 preserves the boundary relationship at isophote tangencies; lighting does not
 turn silhouettes into interior cut edges.
 The adapter retains OCCT's computed curve-intersection parameters on both edges.
@@ -115,9 +136,24 @@ zig build test-space -Docct="$OCCT_PREFIX"
 
 CMake can also discover a system SDK when the prefix is omitted. The native
 C++ toolchain uses the SDK's imported libraries. The versioned C entry point
-`huak_space_api_v1` returns the projection and release function table.
-Each projection releases its result before returning. Watch builds and workers
-borrow the table for the lifetime of their host session.
+`huak_space_api_v3` returns the function table. The adapter only runs OCCT:
+it builds a model and opens views of it, and each query is one OCCT operation
+over a batch, such as hidden-line removal of a shape, the image of curves,
+their crossings, where lines of sight meet the shapes, the partition of the
+plane by images, merging regions, or a region's outline and moments. What to
+ask and what to make of the answers is decided in Zig (`linework.zig`,
+`shading.zig`); nothing that OCCT provides is computed again in Zig. Huak
+checks every index the adapter returns against its arrays before use. Each
+projection releases its view and model before returning.
+
+The header (`projection.h`) states the boundary contract, as libtypst does:
+named status codes tell failures, exhaustion, null arguments and indices out
+of range apart, with a message; the table carries its ABI version and size,
+and the loader rejects another major version or a smaller table; inputs are
+borrowed for the call, a view's results live until the view is released,
+and releasing null does nothing. Different models may be used from different
+threads at once, one model and its views from one thread at a time. Watch builds and workers borrow the table
+for the lifetime of their host session.
 Open CASCADE Technology is licensed under LGPL 2.1 with the Open CASCADE exception.
 The adapter installation includes the [notice and license texts](licenses/).
 

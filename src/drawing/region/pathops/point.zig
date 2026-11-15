@@ -15,9 +15,6 @@ pub const Point = struct {
     pub fn scale(a: Point, s: f64) Point {
         return .{ .x = a.x * s, .y = a.y * s };
     }
-    pub fn neg(a: Point) Point {
-        return .{ .x = -a.x, .y = -a.y };
-    }
     pub fn dot(a: Point, b: Point) f64 {
         return a.x * b.x + a.y * b.y;
     }
@@ -58,15 +55,6 @@ pub const Point = struct {
         const scale_value = largest(a, b);
         return n.almostPequalUlps(scale_value, scale_value + a.distance(b));
     }
-    pub fn approximatelyDEqual(a: Point, b: Point) bool {
-        if (n.approximatelyEqual(a.x, b.x) and n.approximatelyEqual(a.y, b.y)) return true;
-        if (!n.roughlyEqualUlps(a.x, b.x) or !n.roughlyEqualUlps(a.y, b.y)) return false;
-        const scale_value = largest(a, b);
-        return n.almostDequalUlps(scale_value, scale_value + a.distance(b));
-    }
-    pub fn approximatelyZero(a: Point) bool {
-        return n.approximatelyZero(a.x) and n.approximatelyZero(a.y);
-    }
     pub fn roughlyEqual(a: Point, b: Point) bool {
         if (n.roughlyEqual(a.x, b.x) and n.roughlyEqual(a.y, b.y)) return true;
         const scale_value = largest(a, b);
@@ -76,9 +64,6 @@ pub const Point = struct {
 pub const Bounds = struct {
     min: Point,
     max: Point,
-    pub fn valid(self: Bounds) bool {
-        return self.min.isFinite() and self.max.isFinite() and self.min.x <= self.max.x and self.min.y <= self.max.y;
-    }
     pub fn fromPoints(points: []const Point) Bounds {
         std.debug.assert(points.len > 0);
         var result: Bounds = .{ .min = points[0], .max = points[0] };

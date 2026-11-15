@@ -5,7 +5,6 @@
 // parameter tests keep their distinct epsilon policies.
 const std = @import("std");
 pub const EPSILON = std.math.floatEps(f64);
-pub const EPSILON_HALF = EPSILON / 2;
 pub const EPSILON_DOUBLE = EPSILON * 2;
 pub const EPSILON_INVERSE = 1 / EPSILON;
 pub const PRECISE_EPSILON = EPSILON * 4;
@@ -23,13 +22,6 @@ fn ulpsDistanceInternal(a: f64, b: f64) u64 {
     const bb = orderedBits(b);
     return if (aa > bb) aa - bb else bb - aa;
 }
-pub fn ulpsDistance(a: f64, b: f64) i32 {
-    if (a == b) return 0;
-    const sa = @as(u64, @bitCast(a)) >> 63;
-    const sb = @as(u64, @bitCast(b)) >> 63;
-    if (!std.math.isFinite(a) or !std.math.isFinite(b) or sa != sb) return std.math.maxInt(i32);
-    return @intCast(@min(ulpsDistanceInternal(a, b), std.math.maxInt(i32)));
-}
 fn denormalized(a: f64, b: f64, epsilon: f64) bool {
     const check = EPSILON * epsilon / 2;
     return @abs(a) <= check and @abs(b) <= check;
@@ -42,11 +34,6 @@ fn equalNoNormal(a: f64, b: f64, epsilon: u64) bool {
 }
 fn equal(a: f64, b: f64, epsilon: u64, depsilon: f64) bool {
     return denormalized(a, b, depsilon) or equalNoNormal(a, b, epsilon);
-}
-fn less(a: f64, b: f64, epsilon: u64) bool {
-    if (std.math.isNan(a) or std.math.isNan(b)) return false;
-    if (denormalized(a, b, @floatFromInt(epsilon))) return a <= b - EPSILON * @as(f64, @floatFromInt(epsilon));
-    return a < b and ulpsDistanceInternal(a, b) >= epsilon;
 }
 fn lessEqual(a: f64, b: f64, epsilon: u64) bool {
     if (std.math.isNan(a) or std.math.isNan(b)) return false;
@@ -80,12 +67,6 @@ pub fn notAlmostDequalUlps(a: f64, b: f64) bool {
 pub fn roughlyEqualUlps(a: f64, b: f64) bool {
     return equal(a, b, 256, 1024);
 }
-pub fn almostLessUlps(a: f64, b: f64) bool {
-    return less(a, b, 16);
-}
-pub fn almostLessOrEqualUlps(a: f64, b: f64) bool {
-    return lessEqual(a, b, 16);
-}
 pub fn almostBetweenUlps(a: f64, b: f64, c: f64) bool {
     return if (a <= c) lessEqual(a, b, 2) and lessEqual(b, c, 2) else lessEqual(b, a, 2) and lessEqual(c, b, 2);
 }
@@ -97,9 +78,6 @@ pub fn approximatelyZero(x: f64) bool {
 }
 pub fn preciselyZero(x: f64) bool {
     return @abs(x) < PRECISE_EPSILON;
-}
-pub fn approximatelyZeroHalf(x: f64) bool {
-    return @abs(x) < EPSILON_HALF;
 }
 pub fn approximatelyZeroInverse(x: f64) bool {
     return @abs(x) > EPSILON_INVERSE;
@@ -114,9 +92,6 @@ pub fn approximatelyEqual(x: f64, y: f64) bool {
 pub fn preciselyEqual(x: f64, y: f64) bool {
     return preciselyZero(x - y);
 }
-pub fn approximatelyEqualHalf(x: f64, y: f64) bool {
-    return approximatelyZeroHalf(x - y);
-}
 pub fn approximatelyGreaterThanOne(x: f64) bool {
     return x > 1 - EPSILON;
 }
@@ -129,7 +104,6 @@ pub fn approximatelyLessThanZero(x: f64) bool {
 pub fn preciselyLessThanZero(x: f64) bool {
     return x < PRECISE_EPSILON;
 }
-pub const preciselyNegative = preciselyLessThanZero;
 pub fn approximatelyOneOrLess(x: f64) bool {
     return x < 1 + EPSILON;
 }
@@ -142,9 +116,6 @@ pub fn approximatelyPositive(x: f64) bool {
 pub const approximatelyZeroOrMore = approximatelyPositive;
 pub fn approximatelyZeroOrMoreDouble(x: f64) bool {
     return x > -EPSILON_DOUBLE;
-}
-pub fn preciselyBetween(a: f64, b: f64, c: f64) bool {
-    return if (a <= c) preciselyNegative(a - b) and preciselyNegative(b - c) else preciselyNegative(b - a) and preciselyNegative(c - b);
 }
 pub fn between(a: f64, b: f64, c: f64) bool {
     return (a - b) * (c - b) <= 0;
@@ -163,9 +134,6 @@ pub fn moreRoughlyEqual(x: f64, y: f64) bool {
 }
 pub fn interp(a: f64, b: f64, t: f64) f64 {
     return @mulAdd(f64, b - a, t, a);
-}
-pub fn sign(x: f64) i32 {
-    return @as(i32, @intFromBool(x > 0)) - @as(i32, @intFromBool(x < 0));
 }
 pub fn side(x: f64) u2 {
     return @as(u2, @intFromBool(x > 0)) + @as(u2, @intFromBool(x >= 0));
@@ -233,16 +201,9 @@ test "binary64 ULP budgets preserve the original strict endpoints" {
     try t.expect(!almostPequalUlps(1, after(1, 8)));
     try t.expect(roughlyEqualUlps(1, after(1, 255)));
     try t.expect(!roughlyEqualUlps(1, after(1, 256)));
-    try t.expectEqual(@as(i32, 1), ulpsDistance(1, after(1, 1)));
-    try t.expectEqual(@as(i32, 1), ulpsDistance(-1, -after(1, 1)));
-    try t.expectEqual(@as(i32, 0), ulpsDistance(-0.0, 0.0));
     const tiny: f64 = @bitCast(@as(u64, 1));
-    try t.expectEqual(std.math.maxInt(i32), ulpsDistance(-tiny, 0));
     try t.expect(almostDequalUlps(-tiny, 0));
     try t.expect(almostDequalUlps(-0.0, 0.0));
-    try t.expect(almostLessUlps(1, after(1, 16)));
-    try t.expect(!almostLessUlps(1, after(1, 15)));
-    try t.expect(almostLessOrEqualUlps(1, 1));
     try t.expect(almostBetweenUlps(0, 0.5, 1) and almostBetweenUlps(1, 0.5, 0));
 }
 test "binary64 scales and nonfinite ordering match retained native contracts" {
@@ -254,12 +215,9 @@ test "binary64 scales and nonfinite ordering match retained native contracts" {
     try t.expect(almostEqualUlps(0, EPSILON));
     try t.expect(!almostEqualUlps(0, 1e-12));
     try t.expect(!almostEqualUlps(-1e308, 1e308));
-    try t.expectEqual(std.math.maxInt(i32), ulpsDistance(-1e308, 1e308));
     try t.expect(!almostEqualUlpsPin(inf, inf));
     try t.expect(!notAlmostEqualUlpsPin(inf, 1));
     try t.expect(!almostEqualUlps(nan, nan));
-    try t.expect(!almostLessUlps(nan, 1));
-    try t.expect(!almostLessOrEqualUlps(1, nan));
     try t.expect(!almostEqualUlps(std.math.floatMax(f64), inf));
 }
 test "interpolation preserves retained C++ fused rounding" {

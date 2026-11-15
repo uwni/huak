@@ -65,10 +65,6 @@ pub const Span = struct {
     curve: Cubic,
     start: Point = .zero,
     end: Point = .zero,
-
-    pub fn hasTangents(self: *const Span) bool {
-        return !self.start.eql(.zero) or !self.end.eql(.zero);
-    }
 };
 pub fn interpolateSpans(allocator: std.mem.Allocator, knots: []const Knot, options: Options) Error![]Span {
     return interpolateAs(Span, allocator, knots, options);

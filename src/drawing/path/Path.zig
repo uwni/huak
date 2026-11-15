@@ -779,15 +779,6 @@ pub fn pointAt(self: Path, time: f64) PathError!Point {
     return point;
 }
 
-/// The parameter derivative, without normalization. A stationary point has
-/// a zero derivative; callers requiring a unit direction must handle it.
-pub fn tangentAt(self: Path, time: f64) PathError!Point {
-    const selected = try self.curveAt(time);
-    const tangent = selected.curve.derivative(selected.t);
-    if (!tangent.isFinite()) return error.NonFinite;
-    return tangent;
-}
-
 /// All distinct spatial intersections, visiting each self segment against
 /// each other segment in traversal order; points are not globally sorted
 /// by self's parameter. The caller owns the result. Residual checks and
@@ -992,7 +983,6 @@ pub fn clippedToRect(self: Path, allocator: std.mem.Allocator, rect: g.BBox) !Pa
 }
 
 pub const Intersection = struct { point: Point, a: f64, b: f64 };
-pub const IntersectionError = error{ NonFinite, DegenerateLine, CoincidentCurves, ResolutionLimit };
 
 fn polynomial(coeff: [4]f64, t: f64) f64 {
     return ((coeff[0] * t + coeff[1]) * t + coeff[2]) * t + coeff[3];
@@ -1887,25 +1877,22 @@ test "circle construction keeps four cubic quarters and finite exact axis bounds
     try std.testing.expectEqual(@as(f64, 1.7e308), huge_bounds.max.y);
 }
 
-test "path queries preserve exact segment boundaries and cubic point derivatives" {
+test "path queries preserve exact segment boundaries" {
     var path = Path.init(std.testing.allocator);
     defer path.deinit();
     try path.moveTo(.zero);
     try path.lineTo(.{ .x = 10, .y = 0 });
     try path.cubicTo(.{ .x = 10, .y = 5 }, .{ .x = 15, .y = 5 }, .{ .x = 20, .y = 0 });
     try std.testing.expect(g.tolerance.points(.{ .x = 5, .y = 0 }, try path.pointAt(0.5)));
-    try std.testing.expect(g.tolerance.points(.{ .x = 10, .y = 0 }, try path.tangentAt(0.5)));
     const boundary = try path.curveAt(1);
     try std.testing.expectEqual(@as(f64, 0), boundary.t);
     try std.testing.expect(g.tolerance.points(.{ .x = 10, .y = 0 }, boundary.curve.p0));
-    try std.testing.expect(g.tolerance.points(.{ .x = 0, .y = 15 }, try path.tangentAt(1)));
     try std.testing.expect(g.tolerance.points(.{ .x = 13.125, .y = 3.75 }, try path.pointAt(1.5)));
-    try std.testing.expect(g.tolerance.points(.{ .x = 11.25, .y = 0 }, try path.tangentAt(1.5)));
     try std.testing.expect(g.tolerance.points(.{ .x = 20, .y = 0 }, try path.pointAt(2)));
     try std.testing.expectEqual(@as(f64, 1), (try path.curveAt(2)).t);
     try std.testing.expectError(error.InvalidParameter, path.pointAt(-1));
     try std.testing.expectError(error.InvalidParameter, path.curveAt(2.1));
-    try std.testing.expectError(error.InvalidParameter, path.tangentAt(std.math.nan(f64)));
+    try std.testing.expectError(error.InvalidParameter, path.pointAt(std.math.nan(f64)));
 }
 
 test "path query time skips pen up moves and zero closes while retaining implicit close edges" {
@@ -1923,7 +1910,6 @@ test "path query time skips pen up moves and zero closes while retaining implici
     try std.testing.expect(g.tolerance.points(.{ .x = 100, .y = 100 }, try path.pointAt(2)));
     try std.testing.expect(g.tolerance.points(.{ .x = 105, .y = 100 }, try path.pointAt(2.5)));
     try std.testing.expect(g.tolerance.points(.{ .x = 110, .y = 100 }, try path.pointAt(3)));
-    try std.testing.expect(g.tolerance.points(.{ .x = -10, .y = 0 }, try path.tangentAt(3)));
     try std.testing.expect(g.tolerance.points(.{ .x = 100, .y = 100 }, try path.pointAt(4)));
     var empty = Path.init(std.testing.allocator);
     defer empty.deinit();
@@ -1933,16 +1919,14 @@ test "path query time skips pen up moves and zero closes while retaining implici
     try empty.moveTo(.{ .x = 3, .y = 4 });
     try empty.lineTo(.{ .x = 3, .y = 4 });
     try std.testing.expect(g.tolerance.points(.{ .x = 3, .y = 4 }, try empty.pointAt(0)));
-    try std.testing.expect(g.tolerance.points(.zero, try empty.tangentAt(0)));
 }
 
-test "path queries reject invalid topology and nonfinite derivatives without trapping" {
+test "path queries reject invalid topology without trapping" {
     var path = Path.init(std.testing.allocator);
     defer path.deinit();
     try path.moveTo(.{ .x = -1e308, .y = 0 });
     try path.lineTo(.{ .x = 1e308, .y = 0 });
     try std.testing.expect((try path.pointAt(0.5)).isFinite());
-    try std.testing.expectError(error.NonFinite, path.tangentAt(0.5));
     try path.close();
     // Deliberately malformed raw input: a drawing command after CLOSE needs a
     // new MOVE. Public constructors prohibit it; the query must still reject.

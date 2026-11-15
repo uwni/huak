@@ -21,13 +21,6 @@ pub const Region = struct {
     height: f64 = std.math.inf(f64),
     expand_x: bool = false,
     expand_y: bool = false,
-
-    pub fn valid(self: Region) bool {
-        return !std.math.isNan(self.width) and !std.math.isNan(self.height) and
-            self.width >= 0 and self.height >= 0 and
-            (!self.expand_x or std.math.isFinite(self.width)) and
-            (!self.expand_y or std.math.isFinite(self.height));
-    }
 };
 pub const LayoutRequest = struct {
     source: []const u8,

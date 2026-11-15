@@ -117,19 +117,6 @@ pub fn removeOne(self: *Intersections, index: usize) void {
     const lower_mask = bit(index) - 1;
     self.coincident = (self.coincident & lower_mask) | ((self.coincident >> 1) & ~lower_mask);
 }
-pub fn closestTo(self: *const Intersections, start: f64, end: f64, point: Point, distance: *f64) ?usize {
-    distance.* = std.math.floatMax(f64);
-    var result: ?usize = null;
-    for (self.points[0..self.used], 0..) |hit, index| {
-        if (!n.between(start, self.parameters[0][index], end)) continue;
-        const candidate = point.sub(hit).lengthSquared();
-        if (distance.* > candidate) {
-            distance.* = candidate;
-            result = index;
-        }
-    }
-    return result;
-}
 pub fn merge(self: *Intersections, first: *const Intersections, first_index: usize, second: *const Intersections, second_index: usize) void {
     self.reset();
     self.parameters[0][0] = first.parameters[0][first_index];
@@ -528,8 +515,6 @@ test "ray intersections retain curve roots beyond the finite ray segment" {
     try std.testing.expectEqual(@as(usize, 1), result.intersectRay(.{ .cubic = curve }, ray));
     try std.testing.expectApproxEqAbs(@as(f64, 0.5), result.parameters[0][0], 1e-14);
     try std.testing.expectEqual(@as(f64, 1.5), result.points[0].x);
-    var distance: f64 = undefined;
-    try std.testing.expectEqual(@as(?usize, 0), result.closestTo(0, 1, .{ .x = 0, .y = 0 }, &distance));
 }
 
 test "TSect cubic intersections retain two curved source events" {

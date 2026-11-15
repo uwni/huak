@@ -211,17 +211,33 @@ impl GradientFrame {
     }
 }
 
+/// Without `offsets` the stops are equally spaced.
 pub(crate) fn gradient(
     g: &TypstGradient,
     colors: &[TypstColor],
+    offsets: Option<&[f64]>,
 ) -> Result<(Paint, GradientFrame), Error> {
     if colors.len() < 2 {
         return Err(Error::invalid("a gradient needs at least two colors"));
     }
+    if let Some(offsets) = offsets {
+        if offsets.first() != Some(&0.0)
+            || offsets.last() != Some(&1.0)
+            || offsets.windows(2).any(|pair| !(pair[0] <= pair[1]))
+        {
+            return Err(Error::invalid(
+                "gradient offsets must rise from 0 to 1 without decreasing",
+            ));
+        }
+    }
+    let last = (colors.len() - 1) as f64;
     let stops = colors
         .iter()
         .enumerate()
-        .map(|(i, c)| Ok((color(*c)?, Ratio::new(i as f64 / (colors.len() - 1) as f64))))
+        .map(|(i, c)| {
+            let offset = offsets.map_or(i as f64 / last, |offsets| offsets[i]);
+            Ok((color(*c)?, Ratio::new(offset)))
+        })
         .collect::<Result<Vec<_>, Error>>()?;
     let dx = g.end.x - g.start.x;
     let dy = g.end.y - g.start.y;

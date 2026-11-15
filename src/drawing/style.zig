@@ -71,56 +71,91 @@ pub const Gradient = union(enum) {
     radial_fill: Ramp,
     linear_fill: Ramp,
     linear_stroke: Ramp,
-    mesh_fill: Mesh,
+    patch_fill: Patches,
 
-    pub const Ramp = struct { start: g.Point, end: g.Point, colors: []const Color };
-    pub const Mesh = struct {
-        vertices: []const Vertex,
-        triangles: []const [3]u32,
+    /// Empty `offsets` space the colors evenly; otherwise each color has a
+    /// position from 0 to 1, in non-decreasing order.
+    pub const Ramp = struct {
+        start: g.Point,
+        end: g.Point,
+        colors: []const Color,
+        offsets: []const f64 = &.{},
+
+        pub fn validate(self: Ramp) error{ InvalidStyle, InvalidColor }!void {
+            if (!self.start.isFinite() or !self.end.isFinite() or self.start.eql(self.end) or self.colors.len < 2) return error.InvalidStyle;
+            for (self.colors) |color| if (!color.valid()) return error.InvalidColor;
+            if (self.offsets.len == 0) return;
+            if (self.offsets.len != self.colors.len or self.offsets[0] != 0 or self.offsets[self.offsets.len - 1] != 1) return error.InvalidStyle;
+            for (self.offsets[0 .. self.offsets.len - 1], self.offsets[1..]) |previous, next| {
+                if (!(previous <= next)) return error.InvalidStyle;
+            }
+        }
+    };
+
+    /// Colors at strictly increasing finite levels of a scalar field, linear
+    /// between levels. Values beyond the first or last level keep its color.
+    pub const Stops = struct {
+        levels: []const f64,
+        colors: []const Color,
+
+        pub fn validate(self: Stops) error{ InvalidStyle, InvalidColor }!void {
+            if (self.levels.len == 0 or self.levels.len != self.colors.len) return error.InvalidStyle;
+            for (self.levels, self.colors, 0..) |level, color, index| {
+                if (!std.math.isFinite(level)) return error.InvalidStyle;
+                if (!color.valid()) return error.InvalidColor;
+                if (index != 0 and !(self.levels[index - 1] < level)) return error.InvalidStyle;
+            }
+        }
+
+        pub fn at(self: Stops, value: f64) Color {
+            const next = std.sort.partitionPoint(f64, self.levels, value, struct {
+                fn below(target: f64, level: f64) bool {
+                    return level <= target;
+                }
+            }.below);
+            if (next == 0) return self.colors[0];
+            if (next == self.levels.len) return self.colors[next - 1];
+            const low = self.levels[next - 1];
+            const fraction = (value - low) / (self.levels[next] - low);
+            const a = self.colors[next - 1];
+            const b = self.colors[next];
+            return .{ .r = a.r + (b.r - a.r) * fraction, .g = a.g + (b.g - a.g) * fraction, .b = a.b + (b.b - a.b) * fraction, .a = a.a + (b.a - a.a) * fraction };
+        }
+    };
+
+    /// A scalar field on tensor-product Bézier patches, colored by stops.
+    /// Patch k maps (u, v) in the unit square to the sum of
+    /// `points[k][i * 4 + j]` B_i(u) B_j(v) over the cubic Bernstein
+    /// polynomials B, and the field is the same sum over `values[k]`; the
+    /// corner coefficients are the field at the corners. Later patches paint
+    /// over earlier ones where they overlap.
+    ///
+    /// A PDF patch mesh (shading type 7) interpolates the field bilinearly
+    /// between the corner values, so its producer keeps each patch's field
+    /// that close to bilinear. Outputs without patch meshes approximate the
+    /// field itself, adding at most `tolerance` to it except within `margin`
+    /// of the outline they fill: an outline traced only that accurately.
+    pub const Patches = struct {
+        points: []const [16]g.Point,
+        values: []const [16]f64,
+        stops: Stops,
+        tolerance: f64,
+        margin: f64 = 0,
         /// Set by style pools on the values they own: the immutable arrays
-        /// that `vertices` and `triangles` view. Leave it null when building a
-        /// style; the pool copies the arrays once.
+        /// that the slices view. Leave it null when building a style; the
+        /// pool copies the arrays once.
         shared: ?*Shared = null,
 
-        pub const Vertex = extern struct {
-            x: f64,
-            y: f64,
-            r: f64,
-            g: f64,
-            b: f64,
-            a: f64 = 1,
-            pub fn color(self: Vertex) Color {
-                return .{ .r = self.r, .g = self.g, .b = self.b, .a = self.a };
-            }
-        };
+        pub fn validate(self: Patches) error{ InvalidStyle, InvalidColor, NonFinite }!void {
+            if (self.points.len == 0 or self.points.len != self.values.len) return error.InvalidStyle;
+            if (!std.math.isFinite(self.tolerance) or !(self.tolerance > 0)) return error.InvalidStyle;
+            if (!std.math.isFinite(self.margin) or !(self.margin >= 0)) return error.InvalidStyle;
+            try self.stops.validate();
+            for (self.points) |patch| for (patch) |point| if (!point.isFinite()) return error.NonFinite;
+            for (self.values) |patch| for (patch) |value| if (!std.math.isFinite(value)) return error.NonFinite;
+        }
 
-        /// Explicit owner of the mesh arrays a host's pictures share. Pools
-        /// attached to the same store reference one copy of each mesh; any
-        /// other pool copies the arrays for itself. Like an allocator, a store
-        /// stays at a stable address until every pool attached to it is gone;
-        /// `deinit` asserts that no mesh is left. Pools on several threads may
-        /// use one store: it serializes its allocator.
-        pub const Store = struct {
-            allocator: std.mem.Allocator,
-            mutex: std.Io.Mutex = .init,
-            live: std.atomic.Value(usize) = .init(0),
-
-            pub fn init(allocator: std.mem.Allocator) Store {
-                return .{ .allocator = allocator };
-            }
-
-            pub fn deinit(self: *Store) void {
-                std.debug.assert(self.live.load(.acquire) == 0);
-                self.* = undefined;
-            }
-
-            /// Meshes the store currently holds.
-            pub fn count(self: *const Store) usize {
-                return self.live.load(.acquire);
-            }
-        };
-
-        /// Immutable mesh arrays referenced by pool entries. With a store they
+        /// Immutable arrays referenced by pool entries. With a store they
         /// come from the store and are shared by its pools; without one they
         /// belong to the single pool that copied them.
         pub const Shared = struct {
@@ -128,26 +163,26 @@ pub const Gradient = union(enum) {
             store: ?*Store,
             allocator: std.mem.Allocator,
             digest: u64,
-            vertices: []const Vertex,
-            triangles: []const [3]u32,
+            /// The owned arrays; their own `shared` is null.
+            arrays: Patches,
 
-            fn create(allocator: std.mem.Allocator, store: ?*Store, mesh: Mesh) !*Shared {
-                const digest_ = mesh.digest();
+            fn create(allocator: std.mem.Allocator, store: ?*Store, patches: Patches) !*Shared {
+                const digest_ = patches.digest();
                 const heap = if (store) |owner| owner.allocator else allocator;
                 if (store) |owner| std.Io.Threaded.mutexLockUncancelable(&owner.mutex);
                 defer if (store) |owner| std.Io.Threaded.mutexUnlock(&owner.mutex);
-                const vertices = try heap.dupe(Vertex, mesh.vertices);
-                errdefer heap.free(vertices);
-                const triangles = try heap.dupe([3]u32, mesh.triangles);
-                errdefer heap.free(triangles);
+                const arrays = try patches.dupe(heap);
+                errdefer arrays.free(heap);
                 const shared = try heap.create(Shared);
-                shared.* = .{ .references = .init(1), .store = store, .allocator = heap, .digest = digest_, .vertices = vertices, .triangles = triangles };
+                shared.* = .{ .references = .init(1), .store = store, .allocator = heap, .digest = digest_, .arrays = arrays };
                 if (store) |owner| _ = owner.live.fetchAdd(1, .monotonic);
                 return shared;
             }
 
-            fn view(self: *Shared) Mesh {
-                return .{ .vertices = self.vertices, .triangles = self.triangles, .shared = self };
+            fn view(self: *Shared) Patches {
+                var patches = self.arrays;
+                patches.shared = self;
+                return patches;
             }
 
             fn release(self: *Shared) void {
@@ -156,8 +191,7 @@ pub const Gradient = union(enum) {
                 const heap = self.allocator;
                 if (store) |owner| std.Io.Threaded.mutexLockUncancelable(&owner.mutex);
                 defer if (store) |owner| std.Io.Threaded.mutexUnlock(&owner.mutex);
-                heap.free(self.vertices);
-                heap.free(self.triangles);
+                self.arrays.free(heap);
                 heap.destroy(self);
                 if (store) |owner| _ = owner.live.fetchSub(1, .release);
             }
@@ -171,7 +205,7 @@ pub const Gradient = union(enum) {
         /// The arrays for a pool attached to `store`, or to none: the same
         /// arrays when they already belong to that store, a fresh copy
         /// otherwise.
-        fn pooled(self: Mesh, allocator: std.mem.Allocator, store: ?*Store) !Mesh {
+        fn pooled(self: Patches, allocator: std.mem.Allocator, store: ?*Store) !Patches {
             if (self.shared) |shared| {
                 if (store != null and shared.store == store) {
                     _ = shared.references.fetchAdd(1, .monotonic);
@@ -181,53 +215,108 @@ pub const Gradient = union(enum) {
             return (try Shared.create(allocator, store, self)).view();
         }
 
-        /// Pooled meshes hash once, when their arrays are copied.
-        fn digest(self: Mesh) u64 {
+        /// Pooled patches hash once, when their arrays are copied.
+        fn digest(self: Patches) u64 {
             if (self.shared) |shared| return shared.digest;
             const hashBytes = std.hash.Wyhash.hash;
-            return hashBytes(hashBytes(0, bits(self.vertices)), bits(self.triangles));
+            var h = hashBytes(0, bits(self.points));
+            h = hashBytes(h, bits(self.values));
+            h = hashBytes(h, bits(self.stops.levels));
+            h = hashBytes(h, bits(self.stops.colors));
+            return hashBytes(h, bits(&[2]f64{ self.tolerance, self.margin }));
         }
 
-        fn eql(a: Mesh, b: Mesh) bool {
+        fn eql(a: Patches, b: Patches) bool {
             if (a.shared != null and b.shared != null) {
                 if (a.shared == b.shared) return true;
                 if (a.shared.?.digest != b.shared.?.digest) return false;
             }
-            return std.mem.eql(u8, bits(a.vertices), bits(b.vertices)) and std.mem.eql(u8, bits(a.triangles), bits(b.triangles));
+            return std.mem.eql(u8, bits(a.points), bits(b.points)) and std.mem.eql(u8, bits(a.values), bits(b.values)) and
+                std.mem.eql(u8, bits(a.stops.levels), bits(b.stops.levels)) and std.mem.eql(u8, bits(a.stops.colors), bits(b.stops.colors)) and
+                std.mem.eql(u8, bits(&[2]f64{ a.tolerance, a.margin }), bits(&[2]f64{ b.tolerance, b.margin }));
+        }
+
+        fn dupe(self: Patches, allocator: std.mem.Allocator) !Patches {
+            const points = try allocator.dupe([16]g.Point, self.points);
+            errdefer allocator.free(points);
+            const values = try allocator.dupe([16]f64, self.values);
+            errdefer allocator.free(values);
+            const levels = try allocator.dupe(f64, self.stops.levels);
+            errdefer allocator.free(levels);
+            const colors = try allocator.dupe(Color, self.stops.colors);
+            return .{ .points = points, .values = values, .stops = .{ .levels = levels, .colors = colors }, .tolerance = self.tolerance, .margin = self.margin };
+        }
+
+        fn free(self: Patches, allocator: std.mem.Allocator) void {
+            allocator.free(self.points);
+            allocator.free(self.values);
+            allocator.free(self.stops.levels);
+            allocator.free(self.stops.colors);
         }
     };
 
-    pub fn clone(self: Gradient, allocator: std.mem.Allocator, meshes: ?*Mesh.Store) !Gradient {
+    /// Explicit owner of the patch arrays a host's pictures share. Pools
+    /// attached to the same store reference one copy of each paint's arrays;
+    /// any other pool copies them for itself. Like an allocator, a store
+    /// stays at a stable address until every pool attached to it is gone;
+    /// `deinit` asserts that no arrays are left. Pools on several threads may
+    /// use one store: it serializes its allocator.
+    pub const Store = struct {
+        allocator: std.mem.Allocator,
+        mutex: std.Io.Mutex = .init,
+        live: std.atomic.Value(usize) = .init(0),
+
+        pub fn init(allocator: std.mem.Allocator) Store {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Store) void {
+            std.debug.assert(self.live.load(.acquire) == 0);
+            self.* = undefined;
+        }
+
+        /// Paints whose arrays the store currently holds.
+        pub fn count(self: *const Store) usize {
+            return self.live.load(.acquire);
+        }
+    };
+
+    pub fn clone(self: Gradient, allocator: std.mem.Allocator, store: ?*Store) !Gradient {
         switch (self) {
-            .mesh_fill => |mesh| return .{ .mesh_fill = try mesh.pooled(allocator, meshes) },
-            inline else => |ramp, tag| return @unionInit(Gradient, @tagName(tag), Ramp{ .start = ramp.start, .end = ramp.end, .colors = try allocator.dupe(Color, ramp.colors) }),
+            .patch_fill => |patches| return .{ .patch_fill = try patches.pooled(allocator, store) },
+            inline .radial_fill, .linear_fill, .linear_stroke => |ramp, tag| {
+                const colors = try allocator.dupe(Color, ramp.colors);
+                errdefer allocator.free(colors);
+                const offsets = try allocator.dupe(f64, ramp.offsets);
+                return @unionInit(Gradient, @tagName(tag), Ramp{ .start = ramp.start, .end = ramp.end, .colors = colors, .offsets = offsets });
+            },
         }
     }
 
     /// Only pooled values, made by `clone`, are released.
     pub fn deinit(self: Gradient, allocator: std.mem.Allocator) void {
         switch (self) {
-            .mesh_fill => |mesh| mesh.shared.?.release(),
-            inline else => |ramp| allocator.free(ramp.colors),
+            .patch_fill => |patches| patches.shared.?.release(),
+            .radial_fill, .linear_fill, .linear_stroke => |ramp| {
+                allocator.free(ramp.colors);
+                allocator.free(ramp.offsets);
+            },
         }
     }
 
     pub fn dataSize(self: Gradient) usize {
         return switch (self) {
-            .mesh_fill => |mesh| mesh.vertices.len * @sizeOf(Mesh.Vertex) + mesh.triangles.len * @sizeOf([3]u32),
-            inline else => |ramp| ramp.colors.len * @sizeOf(Color),
+            .patch_fill => |patches| patches.points.len * (@sizeOf([16]g.Point) + @sizeOf([16]f64)) + patches.stops.levels.len * (@sizeOf(f64) + @sizeOf(Color)),
+            .radial_fill, .linear_fill, .linear_stroke => |ramp| ramp.colors.len * @sizeOf(Color) + ramp.offsets.len * @sizeOf(f64),
         };
     }
 
     pub fn hasInk(self: Gradient) bool {
-        switch (self) {
-            .mesh_fill => |mesh| {
-                for (mesh.vertices) |vertex| if (vertex.a > 0) return true;
-            },
-            inline else => |ramp| {
-                for (ramp.colors) |color| if (color.a > 0) return true;
-            },
-        }
+        const colors = switch (self) {
+            .patch_fill => |patches| patches.stops.colors,
+            .radial_fill, .linear_fill, .linear_stroke => |ramp| ramp.colors,
+        };
+        for (colors) |color| if (color.a > 0) return true;
         return false;
     }
 };
@@ -258,7 +347,7 @@ pub const Style = struct {
 pub const Pool = struct {
     allocator: std.mem.Allocator,
     /// Pools attached to the same store share mesh arrays instead of copying.
-    meshes: ?*Gradient.Mesh.Store = null,
+    meshes: ?*Gradient.Store = null,
     nodes: std.heap.MemoryPool(Entry) = .empty,
     entries: std.HashMapUnmanaged(*Entry, void, Entry.Context, 80) = .empty,
     data_bytes: usize = 0,
@@ -296,7 +385,7 @@ pub const Pool = struct {
         return .{ .allocator = allocator };
     }
 
-    pub fn initWithMeshes(allocator: std.mem.Allocator, meshes: ?*Gradient.Mesh.Store) Pool {
+    pub fn initWithMeshes(allocator: std.mem.Allocator, meshes: ?*Gradient.Store) Pool {
         return .{ .allocator = allocator, .meshes = meshes };
     }
 
@@ -427,14 +516,15 @@ const ValueContext = struct {
         if (value.gradient) |paint| {
             h = hashBytes(h, &.{@backingInt(std.meta.activeTag(paint.*))});
             switch (paint.*) {
-                .mesh_fill => |mesh| {
-                    const digest = mesh.digest();
+                .patch_fill => |patches| {
+                    const digest = patches.digest();
                     h = hashBytes(h, std.mem.asBytes(&digest));
                 },
-                inline else => |ramp| {
+                .radial_fill, .linear_fill, .linear_stroke => |ramp| {
                     h = hashBytes(h, bits(&ramp.start));
                     h = hashBytes(h, bits(&ramp.end));
                     h = hashBytes(h, bits(ramp.colors));
+                    h = hashBytes(h, bits(ramp.offsets));
                 },
             }
         }
@@ -462,10 +552,10 @@ const ValueContext = struct {
             const other = b.gradient.?;
             if (std.meta.activeTag(paint.*) != std.meta.activeTag(other.*)) return false;
             switch (paint.*) {
-                .mesh_fill => |mesh| if (!mesh.eql(other.mesh_fill)) return false,
-                inline else => |ramp, tag| {
+                .patch_fill => |patches| if (!patches.eql(other.patch_fill)) return false,
+                inline .radial_fill, .linear_fill, .linear_stroke => |ramp, tag| {
                     const next = @field(other.*, @tagName(tag));
-                    if (!std.mem.eql(u8, bits(&ramp.start), bits(&next.start)) or !std.mem.eql(u8, bits(&ramp.end), bits(&next.end)) or !std.mem.eql(u8, bits(ramp.colors), bits(next.colors))) return false;
+                    if (!std.mem.eql(u8, bits(&ramp.start), bits(&next.start)) or !std.mem.eql(u8, bits(&ramp.end), bits(&next.end)) or !std.mem.eql(u8, bits(ramp.colors), bits(next.colors)) or !std.mem.eql(u8, bits(ramp.offsets), bits(next.offsets))) return false;
                 },
             }
         }
@@ -493,18 +583,24 @@ const ValueContext = struct {
 
 fn bits(value: anytype) []const u8 {
     const pointer = @typeInfo(@TypeOf(value)).pointer;
-    const T = pointer.child;
-    comptime {
-        if (@typeInfo(T) == .@"struct") {
+    comptime std.debug.assert(dense(pointer.child));
+    return if (pointer.size == .slice) std.mem.sliceAsBytes(value) else std.mem.asBytes(value);
+}
+
+/// Every byte of a T belongs to a value: no padding or unused bits.
+fn dense(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .array => |array| return dense(array.child),
+        .@"struct" => |info| {
             var size: usize = 0;
-            for (@typeInfo(T).@"struct".field_types) |Field| {
-                std.debug.assert(@typeInfo(Field) == .float);
+            for (info.field_types) |Field| {
+                if (@typeInfo(Field) != .float) return false;
                 size += @sizeOf(Field);
             }
-            std.debug.assert(size == @sizeOf(T));
-        } else std.debug.assert(@bitSizeOf(T) == @sizeOf(T) * 8);
+            return size == @sizeOf(T);
+        },
+        else => return @bitSizeOf(T) == @sizeOf(T) * 8,
     }
-    return if (pointer.size == .slice) std.mem.sliceAsBytes(value) else std.mem.asBytes(value);
 }
 fn poolExercise(allocator: std.mem.Allocator) !void {
     var pool = Pool.init(allocator);
@@ -528,6 +624,13 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     try std.testing.expectEqual(@as(f64, 1), saved.pen.?.dash[0]);
     try std.testing.expectEqual(@as(f64, 0), saved.pen.?.nib.?.polygon[0].x);
     try std.testing.expect(saved != try pool.intern(&style));
+    var offsets = [_]f64{ 0, 1 };
+    const placed: Style = .{ .fill = .black, .gradient = &.{ .linear_fill = .{ .start = .zero, .end = .{ .x = 1, .y = 0 }, .colors = &colors, .offsets = &offsets } } };
+    const stored_placed = try pool.intern(&placed);
+    try std.testing.expect(stored_placed == try pool.intern(&placed));
+    offsets[1] = 0.5;
+    try std.testing.expectEqual(@as(f64, 1), stored_placed.gradient.?.linear_fill.offsets[1]);
+    try std.testing.expect(stored_placed != try pool.intern(&placed));
     for (0..20) |index| {
         style.pen.?.width = @floatFromInt(index);
         const stored = try pool.intern(&style);
@@ -548,20 +651,19 @@ fn poolExercise(allocator: std.mem.Allocator) !void {
     try std.testing.expect(first_profile != try pool.intern(&pressure));
     try std.testing.expectEqual(@as(f64, 14), first_profile.pen.?.motion.?.keys[1].value);
 
-    var mesh_vertices = [_]Gradient.Mesh.Vertex{
-        .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0 },
-        .{ .x = 1, .y = 0, .r = 0, .g = 1, .b = 0 },
-        .{ .x = 0, .y = 1, .r = 0, .g = 0, .b = 1 },
-    };
-    var triangles = [_][3]u32{.{ 0, 1, 2 }};
-    const mesh_style: Style = .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &mesh_vertices, .triangles = &triangles } } };
-    const mesh = try pool.intern(&mesh_style);
-    try std.testing.expect(mesh == try pool.intern(&mesh_style));
-    mesh_vertices[0].r = 0;
-    triangles[0][2] = 1;
-    try std.testing.expectEqual(@as(f64, 1), mesh.gradient.?.mesh_fill.vertices[0].r);
-    try std.testing.expectEqual(@as(u32, 2), mesh.gradient.?.mesh_fill.triangles[0][2]);
-    try std.testing.expect(mesh != try pool.intern(&mesh_style));
+    var patch_points = test_patches.points;
+    var patch_values = test_patches.values;
+    var levels = [_]f64{ 0, 1 };
+    const patch_style: Style = .{ .fill = .black, .gradient = &.{ .patch_fill = .{ .points = &patch_points, .values = &patch_values, .stops = .{ .levels = &levels, .colors = &test_patches.colors }, .tolerance = 0.01 } } };
+    const patch = try pool.intern(&patch_style);
+    try std.testing.expect(patch == try pool.intern(&patch_style));
+    patch_points[0][0].x = -1;
+    patch_values[0][15] = 2;
+    levels[1] = 3;
+    try std.testing.expectEqual(@as(f64, 0), patch.gradient.?.patch_fill.points[0][0].x);
+    try std.testing.expectEqual(@as(f64, 1), patch.gradient.?.patch_fill.values[0][15]);
+    try std.testing.expectEqual(@as(f64, 1), patch.gradient.?.patch_fill.stops.levels[1]);
+    try std.testing.expect(patch != try pool.intern(&patch_style));
 }
 
 test "immutable styles share equal values own slices and preserve float bits across OOM" {
@@ -569,96 +671,106 @@ test "immutable styles share equal values own slices and preserve float bits acr
     try std.testing.checkAllAllocationFailures(std.testing.allocator, poolExercise, .{});
 }
 
-const test_mesh = struct {
-    const vertices = [_]Gradient.Mesh.Vertex{
-        .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0 },
-        .{ .x = 1, .y = 0, .r = 0, .g = 1, .b = 0, .a = 0.5 },
-        .{ .x = 0, .y = 1, .r = 0, .g = 0, .b = 1 },
+/// One flat patch over the unit square whose field rises along u.
+const test_patches = struct {
+    const points: [1][16]g.Point = grid: {
+        var result: [1][16]g.Point = undefined;
+        for (0..4) |i| for (0..4) |j| {
+            result[0][i * 4 + j] = .{ .x = @as(f64, @floatFromInt(i)) / 3, .y = @as(f64, @floatFromInt(j)) / 3 };
+        };
+        break :grid result;
     };
-    const triangles = [_][3]u32{.{ 0, 1, 2 }};
-    const style: Style = .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &vertices, .triangles = &triangles } } };
+    const values: [1][16]f64 = field: {
+        var result: [1][16]f64 = undefined;
+        for (0..4) |i| for (0..4) |j| {
+            result[0][i * 4 + j] = @as(f64, @floatFromInt(i)) / 3;
+        };
+        break :field result;
+    };
+    const colors = [_]Color{ .{ .r = 1 }, .{ .b = 1, .a = 0.5 } };
+    const style: Style = .{ .fill = .black, .gradient = &.{ .patch_fill = .{ .points = &points, .values = &values, .stops = .{ .levels = &.{ 0, 1 }, .colors = &colors }, .tolerance = 0.01 } } };
 };
 
-test "pools attached to one store share mesh arrays and other pools copy them" {
+test "pools attached to one store share patch arrays and other pools copy them" {
     const t = std.testing;
-    var store = Gradient.Mesh.Store.init(t.allocator);
+    var store = Gradient.Store.init(t.allocator);
     defer store.deinit();
     var second = Pool.initWithMeshes(t.allocator, &store);
     defer second.deinit();
     var first = Pool.initWithMeshes(t.allocator, &store);
     var first_alive = true;
     defer if (first_alive) first.deinit();
-    const original = try first.intern(&test_mesh.style);
-    const mesh = original.gradient.?.mesh_fill;
-    try t.expect(mesh.vertices.ptr != &test_mesh.vertices);
+    const original = try first.intern(&test_patches.style);
+    const patches = original.gradient.?.patch_fill;
+    try t.expect(patches.points.ptr != &test_patches.points);
     try t.expectEqual(@as(usize, 1), store.count());
-    try t.expectEqual(ValueContext.hash(.{}, &test_mesh.style), ValueContext.hash(.{}, original));
+    try t.expectEqual(ValueContext.hash(.{}, &test_patches.style), ValueContext.hash(.{}, original));
 
     const copied = try second.intern(original);
-    const shared = copied.gradient.?.mesh_fill;
-    try t.expect(shared.shared.? == mesh.shared.?);
-    try t.expectEqual(mesh.vertices.ptr, shared.vertices.ptr);
+    const shared = copied.gradient.?.patch_fill;
+    try t.expect(shared.shared.? == patches.shared.?);
+    try t.expectEqual(patches.points.ptr, shared.points.ptr);
     try t.expectEqual(@as(usize, 2), shared.shared.?.referenceCount());
     try t.expectEqual(@as(usize, 1), store.count());
     first.deinit();
     first_alive = false;
     try t.expectEqual(@as(usize, 1), shared.shared.?.referenceCount());
-    try t.expectEqual(@as(f64, 0.5), shared.vertices[1].a);
+    try t.expectEqual(@as(f64, 0.5), shared.stops.colors[1].a);
 
     // A pool without the store, or attached to another one, copies.
     var local = Pool.init(t.allocator);
     defer local.deinit();
     const independent = try local.intern(copied);
-    try t.expect(independent.gradient.?.mesh_fill.shared.? != shared.shared.?);
-    try t.expect(independent.gradient.?.mesh_fill.vertices.ptr != shared.vertices.ptr);
+    try t.expect(independent.gradient.?.patch_fill.shared.? != shared.shared.?);
+    try t.expect(independent.gradient.?.patch_fill.points.ptr != shared.points.ptr);
     try t.expect(ValueContext.eql(.{}, independent, copied));
-    var other_store = Gradient.Mesh.Store.init(t.allocator);
+    var other_store = Gradient.Store.init(t.allocator);
     defer other_store.deinit();
     var other = Pool.initWithMeshes(t.allocator, &other_store);
     defer other.deinit();
     const foreign = try other.intern(copied);
-    try t.expect(foreign.gradient.?.mesh_fill.shared.? != shared.shared.?);
+    try t.expect(foreign.gradient.?.patch_fill.shared.? != shared.shared.?);
     try t.expectEqual(@as(usize, 1), other_store.count());
     try t.expectEqual(@as(usize, 1), shared.shared.?.referenceCount());
 }
 
 fn storeExercise(allocator: std.mem.Allocator) !void {
-    var store = Gradient.Mesh.Store.init(allocator);
+    var store = Gradient.Store.init(allocator);
     defer store.deinit();
     var first = Pool.initWithMeshes(allocator, &store);
     defer first.deinit();
     var second = Pool.initWithMeshes(allocator, &store);
     defer second.deinit();
-    const original = try first.intern(&test_mesh.style);
+    const original = try first.intern(&test_patches.style);
     _ = try second.intern(original);
 }
 
-test "store-attached pools release every partial mesh on allocation failure" {
+test "store-attached pools release every partial patch copy on allocation failure" {
     try storeExercise(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, storeExercise, .{});
 }
 
-test "pools on several threads share and create meshes through one store" {
+test "pools on several threads share and create patch arrays through one store" {
     if (builtin.single_threaded) return error.SkipZigTest;
-    var store = Gradient.Mesh.Store.init(std.testing.allocator);
+    var store = Gradient.Store.init(std.testing.allocator);
     defer store.deinit();
     var owner = Pool.initWithMeshes(std.testing.allocator, &store);
     defer owner.deinit();
-    const original = try owner.intern(&test_mesh.style);
+    const original = try owner.intern(&test_patches.style);
     const worker = struct {
-        fn run(meshes: *Gradient.Mesh.Store, source: *const Style) !void {
-            var own = test_mesh.vertices;
-            own[0].r = 0.25;
+        fn run(meshes: *Gradient.Store, source: *const Style) !void {
+            var own = test_patches.values;
+            own[0][0] = 0.25;
             for (0..200) |_| {
                 var pool = Pool.initWithMeshes(std.testing.allocator, meshes);
                 defer pool.deinit();
                 const copy = try pool.intern(source);
-                if (copy.gradient.?.mesh_fill.vertices.ptr != source.gradient.?.mesh_fill.vertices.ptr) return error.NotShared;
-                // A new mesh is created and released through the store too.
-                _ = try pool.intern(&.{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &own, .triangles = &test_mesh.triangles } } });
+                if (copy.gradient.?.patch_fill.points.ptr != source.gradient.?.patch_fill.points.ptr) return error.NotShared;
+                // New arrays are created and released through the store too.
+                _ = try pool.intern(&.{ .fill = .black, .gradient = &.{ .patch_fill = .{ .points = &test_patches.points, .values = &own, .stops = .{ .levels = &.{ 0, 1 }, .colors = &test_patches.colors }, .tolerance = 0.01 } } });
             }
         }
-        fn spawn(meshes: *Gradient.Mesh.Store, source: *const Style, failed: *std.atomic.Value(bool)) void {
+        fn spawn(meshes: *Gradient.Store, source: *const Style, failed: *std.atomic.Value(bool)) void {
             run(meshes, source) catch failed.store(true, .release);
         }
     };
@@ -670,7 +782,7 @@ test "pools on several threads share and create meshes through one store" {
         while (spawned < threads.len) : (spawned += 1) threads[spawned] = try std.Thread.spawn(.{}, worker.spawn, .{ &store, original, &failed });
     }
     try std.testing.expect(!failed.load(.acquire));
-    try std.testing.expectEqual(@as(usize, 1), original.gradient.?.mesh_fill.shared.?.referenceCount());
+    try std.testing.expectEqual(@as(usize, 1), original.gradient.?.patch_fill.shared.?.referenceCount());
     try std.testing.expectEqual(@as(usize, 1), store.count());
 }
 

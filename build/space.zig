@@ -3,6 +3,8 @@ const std = @import("std");
 pub const Backend = struct {
     install: *std.Build.Step,
     check: *std.Build.Step,
+    /// The installed library.
+    library: std.Build.LazyPath,
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, prefix: ?[]const u8) Backend {
@@ -11,7 +13,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     if (target.result.cpu.arch != host.cpu.arch or target.result.os.tag != host.os.tag or target.result.abi != host.abi) {
         const fail = &b.addFail("build the OCCT projection library with the target system's C++ toolchain").step;
         step.dependOn(fail);
-        return .{ .install = step, .check = fail };
+        return .{ .install = step, .check = fail, .library = b.graph.path(.install_lib, "") };
     }
     const mode = switch (optimize) {
         .debug => "Debug",
@@ -45,5 +47,5 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     check.addDirectoryArg2(dir, .{});
     check.addArgs(&.{ "--config", mode, "--target", "check" });
     check.step.dependOn(&compile.step);
-    return .{ .install = step, .check = &check.step };
+    return .{ .install = step, .check = &check.step, .library = b.graph.path(.install_lib, name) };
 }

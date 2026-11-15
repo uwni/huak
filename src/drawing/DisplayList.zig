@@ -635,35 +635,41 @@ test "append rejects borrowed subranges of its own allocation before mutation" {
     try std.testing.expectEqualDeep(path.segments.items, destination.storage.segments.items);
 }
 
-test "pictures attached to one mesh store share mesh arrays when appended" {
+test "pictures attached to one mesh store share patch arrays when appended" {
     const a = std.testing.allocator;
     var store = MeshStore.init(a);
     defer store.deinit();
     var boundary = try Path.circle(a, .zero, 5);
     defer boundary.deinit();
-    const vertices = [_]Gradient.Mesh.Vertex{
-        .{ .x = -5, .y = -5, .r = 1, .g = 0, .b = 0 },
-        .{ .x = 5, .y = -5, .r = 0, .g = 1, .b = 0 },
-        .{ .x = 0, .y = 5, .r = 0, .g = 0, .b = 1 },
+    var points: [16]g.Point = undefined;
+    var values: [16]f64 = undefined;
+    for (0..4) |i| for (0..4) |j| {
+        points[i * 4 + j] = .{ .x = -5 + 10 * @as(f64, @floatFromInt(i)) / 3, .y = -5 + 10 * @as(f64, @floatFromInt(j)) / 3 };
+        values[i * 4 + j] = @as(f64, @floatFromInt(j)) / 3;
     };
     var source = DisplayList.initWithMeshes(a, &store);
     defer source.deinit();
-    try source.addPath(boundary, .{ .fill = .black, .gradient = &.{ .mesh_fill = .{ .vertices = &vertices, .triangles = &.{.{ 0, 1, 2 }} } } }, .{});
+    try source.addPath(boundary, .{ .fill = .black, .gradient = &.{ .patch_fill = .{
+        .points = &.{points},
+        .values = &.{values},
+        .stops = .{ .levels = &.{ 0, 1 }, .colors = &.{ .{ .r = 1 }, .{ .b = 1 } } },
+        .tolerance = 0.01,
+    } } }, .{});
     var shared = DisplayList.initWithMeshes(a, &store);
     defer shared.deinit();
     try shared.append(&source, .{});
     var separate = DisplayList.init(a);
     defer separate.deinit();
     try separate.append(&source, .{});
-    const meshOf = struct {
+    const arraysOf = struct {
         // Appending wraps the copied commands in a group.
-        fn first(picture: *const DisplayList) ![*]const Gradient.Mesh.Vertex {
-            for (picture.commands.items) |command| if (command == .path) return command.path.style.gradient.?.mesh_fill.vertices.ptr;
+        fn first(picture: *const DisplayList) ![*]const [16]g.Point {
+            for (picture.commands.items) |command| if (command == .path) return command.path.style.gradient.?.patch_fill.points.ptr;
             return error.MissingPath;
         }
     }.first;
-    const original = try meshOf(&source);
-    try std.testing.expectEqual(original, try meshOf(&shared));
-    try std.testing.expect(try meshOf(&separate) != original);
+    const original = try arraysOf(&source);
+    try std.testing.expectEqual(original, try arraysOf(&shared));
+    try std.testing.expect(try arraysOf(&separate) != original);
     try std.testing.expectEqual(@as(usize, 1), store.count());
 }

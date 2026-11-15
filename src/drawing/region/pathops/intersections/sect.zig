@@ -1391,10 +1391,12 @@ test "TSect failed ray recovery retains genuine cubic interior events" {
         var b: curves.Cubic = .{ .points = .{ .{ .x = 0, .y = 1 }, .{ .x = 1, .y = -1 }, .{ .x = 2, .y = -1 }, .{ .x = 3, .y = 1 } } };
         for (&a.points) |*point| point.* = .{ .x = std.math.ldexp(point.x, exponent), .y = std.math.ldexp(point.y, exponent) };
         for (&b.points) |*point| point.* = .{ .x = std.math.ldexp(point.x, exponent), .y = std.math.ldexp(point.y, exponent) };
+        // B is the degree elevation of this quadratic, scaled exactly.
+        var q: curves.Quad = .{ .points = .{ .{ .x = 0, .y = 1 }, .{ .x = 1.5, .y = -2 }, .{ .x = 3, .y = 1 } } };
+        for (&q.points) |*point| point.* = .{ .x = std.math.ldexp(point.x, exponent), .y = std.math.ldexp(point.y, exponent) };
         const source_a: Curve = .{ .cubic = a };
         const source_b: Curve = .{ .cubic = b };
-        const lowered_b = @import("../reduce.zig").cubic(b).?;
-        try std.testing.expect(lowered_b == .quad);
+        const lowered_b: Curve = .{ .quad = q };
         for ([_]Curve{ source_b, lowered_b }) |second| {
             var result: Intersections = .{};
             try std.testing.expectEqual(@as(usize, 2), try intersect(std.testing.allocator, source_a, second, &result));

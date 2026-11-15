@@ -37,21 +37,6 @@ pub fn strokeFootprint(allocator: std.mem.Allocator, curve: Path, pen: *const Di
     return pens.footprint(allocator, curve, pen, geometric);
 }
 
-pub fn motionFootprint(allocator: std.mem.Allocator, center: Path, pen: *const DisplayList.Pen, options: pens.StrokeOptions) !Path {
-    var geometry = options;
-    geometry.tolerance = geometryTolerance(options.tolerance);
-    var path = try pens.motionOutline(allocator, center, pen, geometry);
-    errdefer path.deinit();
-    try checkOutputPrecision(&path, options.tolerance);
-    return path;
-}
-
-pub fn resolve(allocator: std.mem.Allocator, segments: []const Path.Segment, style: *const DisplayList.Style, options: pens.StrokeOptions) !pens.Stroke {
-    var center = Path.init(allocator);
-    center.segments.items = @constCast(segments);
-    center.segments.capacity = segments.len;
-    return resolvePath(allocator, center, style, options);
-}
 pub fn resolvePath(allocator: std.mem.Allocator, center: Path, style: *const DisplayList.Style, options: pens.StrokeOptions) !pens.Stroke {
     const pen = &style.pen.?;
     var settings = options;
@@ -71,10 +56,18 @@ pub fn inkBounds(stroke: *const pens.Stroke, segments: []const Path.Segment, sty
     return ink;
 }
 
+/// The stroke of an owned copy of `segments`.
+fn strokeOf(segments: []const Path.Segment, pen: DisplayList.Pen) !pens.Stroke {
+    var center = Path.init(std.testing.allocator);
+    defer center.deinit();
+    try center.segments.appendSlice(std.testing.allocator, segments);
+    return resolvePath(std.testing.allocator, center, &.{ .pen = pen }, .{});
+}
+
 test "ellipse normalization preserves centerline and physical nib offset" {
     const original = [_]Path.Segment{ .{ .move = .{ .x = 16, .y = 20 } }, .{ .line = .{ .x = 80, .y = 20 } } };
     const pen: DisplayList.Pen = .{ .nib = .{ .ellipse = .{ .a = 8, .d = 2, .e = 3, .f = 4 } }, .cap = .round, .join = .round };
-    var stroke = try resolve(std.testing.allocator, &original, &.{ .pen = pen }, .{});
+    var stroke = try strokeOf(&original, pen);
     defer stroke.path.deinit();
     const transform = stroke.transform.?.then(g.Transform.translation(10, 30));
     try std.testing.expectEqualDeep(g.Point{ .x = 29, .y = 54 }, transform.apply(stroke.path.segments.items[0].move));
@@ -86,7 +79,7 @@ test "polygon nib cap styles reach the computed stroke outline" {
     const vertices = [_]g.Point{ .{ .x = -2, .y = -1 }, .{ .x = 2, .y = -1 }, .{ .x = 2, .y = 1 }, .{ .x = -2, .y = 1 } };
     for ([_]DisplayList.Cap{ .butt, .square }, [_]f64{ -2, -6 }) |cap, expected_min| {
         const pen: DisplayList.Pen = .{ .nib = .{ .polygon = &vertices }, .cap = cap, .join = .bevel };
-        var stroke = try resolve(std.testing.allocator, &segments, &.{ .pen = pen }, .{});
+        var stroke = try strokeOf(&segments, pen);
         defer stroke.path.deinit();
         try std.testing.expect(stroke.transform == null);
         var minimum: f64 = std.math.inf(f64);

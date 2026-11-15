@@ -6,6 +6,8 @@ const boolean = @import("boolean.zig");
 const strokes = @import("stroke.zig");
 const Allocator = std.mem.Allocator;
 pub const coverage = @import("coverage.zig");
+/// How many times a path winds around a point.
+pub const windingAt = @import("pathops/winding.zig").windingAt;
 
 pub const Operation = enum(u32) { unite, intersect, difference, xor };
 pub const FillRule = enum(u32) { evenodd, nonzero, positive, negative };
@@ -237,7 +239,6 @@ test "unite preserves the counter between two overlapping diagonal strokes" {
     try guide.cubicTo(point(80.61239595416914, 35.99656537155017), point(81.0607303763256, 35.95902202633791), point(81.5421911289768, 36.31706607901375));
     try guide.lineTo(point(87.92, 41.06));
 
-    const windingAt = @import("pathops/winding.zig").windingAt;
     // Separate strokes change the arrangement bounds and snap resolution.
     // The distant case also produces adjacent representable cut parameters.
     for ([_]?[2]g.Point{ null, .{ point(54.8, 46.9), point(54.8, 7.74) }, .{ point(500, 0), point(500, 40) } }) |neighbor| {
@@ -294,7 +295,6 @@ test "tight cubic stroke has no pinhole at close inner-edge crossings" {
     try guide.lineTo(.{ .x = 60, .y = 1 });
     var ink = try stroke(a, guide, 4, .{ .cap = .round, .join = .round });
     defer ink.deinit();
-    const windingAt = @import("pathops/winding.zig").windingAt;
     try std.testing.expect(try windingAt(ink, .{ .x = 22.556458, .y = 0.218695 }) != 0);
     var contours: usize = 0;
     for (ink.segments.items) |segment| contours += @intFromBool(segment == .close);
@@ -319,7 +319,6 @@ test "a chain of individually short edges preserves a resolved disk" {
     try outline.close();
     var ink = try combine(a, outline, Path.init(a), .unite, .{ .tolerance = 0.001 });
     defer ink.deinit();
-    const windingAt = @import("pathops/winding.zig").windingAt;
     try std.testing.expectEqual(@as(i32, 1), try windingAt(ink, .zero));
     try std.testing.expectEqual(@as(i32, 0), try windingAt(ink, .{ .x = 0.006, .y = 0 }));
 }

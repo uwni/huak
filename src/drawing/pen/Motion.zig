@@ -208,16 +208,12 @@ pub fn bounds(self: *const Motion) Bounds {
     return b;
 }
 
-// Caller splits at every key. Derivatives here are with respect to [0,1]
-// on this interval, so the chord interpolation error is bounded by M''/8.
-pub fn chordError(self: *const Motion, t0: f64, t1: f64, radius: f64) f64 {
-    std.debug.assert(!self.usesPathFrame());
-    return self.intervalError(t0, t1, radius, .{});
-}
-
 /// Bounds on the frame angle's derivatives in the interval's unit parameter.
 pub const AngularBounds = @import("../path/Direction.zig").AngularBounds;
 
+/// The caller splits at every key. Derivatives here are with respect to
+/// [0, 1] on this interval, so the chord interpolation error is bounded by
+/// M''/8.
 pub fn intervalError(self: *const Motion, t0: f64, t1: f64, radius: f64, frame: AngularBounds) f64 {
     var b: Bounds = .{};
     const dt = t1 - t0;

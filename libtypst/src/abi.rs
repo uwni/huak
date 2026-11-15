@@ -7,7 +7,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_0009;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_000A;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -35,6 +35,8 @@ pub const TYPST_CAP_SHOW_VALUES: u64 = 2048;
 pub const TYPST_CAP_MEMBER_USES: u64 = 4096;
 /// Custom PDF Creator metadata in TypstPdfOptions.
 pub const TYPST_CAP_PDF_CREATOR: u64 = 8192;
+/// Color stops at given positions, TYPST_GRADIENT_STOP_OFFSETS.
+pub const TYPST_CAP_GRADIENT_STOPS: u64 = 16384;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;
@@ -469,16 +471,23 @@ pub struct TypstSceneItem {
 pub struct TypstGradient {
     /// TYPST_GRADIENT_LINEAR or TYPST_GRADIENT_RADIAL.
     pub kind: u32,
-    pub reserved: u32,
+    /// Zero or TYPST_GRADIENT_STOP_OFFSETS.
+    pub flags: u32,
     /// Endpoints of the linear ramp or center and rim of the radial ramp, in local points.
     pub start: TypstPoint,
     pub end: TypstPoint,
-    /// Equally spaced color stops, including both endpoints.
+    /// Color stops, including both endpoints. Equally spaced unless
+    /// `offsets` gives their positions.
     pub colors: *const TypstColor,
     pub count: usize,
+    /// Read only with TYPST_GRADIENT_STOP_OFFSETS, so records written before
+    /// ABI 1.10 may end before it. One position per color, from 0 to 1 in
+    /// non-decreasing order. Requires TYPST_CAP_GRADIENT_STOPS.
+    pub offsets: *const f64,
 }
 pub const TYPST_GRADIENT_LINEAR: u32 = 0;
 pub const TYPST_GRADIENT_RADIAL: u32 = 1;
+pub const TYPST_GRADIENT_STOP_OFFSETS: u32 = 1;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TypstSceneItemOptions {

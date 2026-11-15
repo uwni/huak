@@ -10,6 +10,13 @@ const Path = @import("../../drawing/path/Path.zig");
 const pens = @import("../../drawing/pen/root.zig");
 const physical = @import("pen.zig");
 const mesh_pdf = @import("../pdf/mesh.zig");
+const svg_mesh = @import("../svg/mesh.zig");
+const patch_mesh = @import("../../drawing/patches.zig");
+const field = @import("../../drawing/field.zig");
+/// Triangles one patch paint may become for SVG, before and after its
+/// cuts at the stop levels: the bound on other generated geometry.
+const geometry_limit = @import("../../drawing/outline.zig").max_items;
+const region = @import("../../drawing/region/root.zig");
 
 pub const SubmitOptions = struct {
     origin: g.Point = .zero,
@@ -304,39 +311,12 @@ const Builder = struct {
     }
 
     fn paint(self: *Builder, path_: *const c.TypstPath, style_: *const c.TypstStyle, gradient: ?*const Gradient, transform: g.Transform, id: u64) !void {
-        if (gradient) |value| if (value.* == .mesh_fill) {
-            if (!self.pdf_mesh) return error.MeshRequiresPdf;
-            if (!try self.library.supports(c.TYPST_CAP_PDF_IMPORT)) return error.Unsupported;
-            const workspace = self.mesh_workspace orelse workspace: {
-                const created = try self.arena.allocator().create(mesh_pdf.Workspace);
-                self.mesh_workspace = created;
-                break :workspace created;
-            };
-            // The import does not depend on fonts, files or inputs; borrowing
-            // the current context keeps the typesetter's configuration cached.
-            if (self.image_context == null) self.image_context = try typst.Engine.initAny(self.library);
-            const scratch = self.arena.child_allocator;
-            const encoded = try mesh_pdf.encode(scratch, workspace, value.mesh_fill, path_.segments[0..path_.segment_count], style_.fill_rule == c.TYPST_FILL_EVENODD);
-            var image: ?*c.TypstScene = null;
-            var diagnostics: ?*c.TypstDiagnostics = null;
-            defer self.library.functions.diagnostics_release(diagnostics);
-            const status = self.library.functions.scene_from_pdf(self.image_context.?.handle, .{ .data = encoded.pdf.ptr, .len = encoded.pdf.len }, 0, &image, &diagnostics);
-            // libtypst copied the bytes. Releasing them while they are still
-            // the most recent allocation lets an arena reuse the space.
-            scratch.free(encoded.pdf);
-            try self.library.check(status, diagnostics);
-            const scene_ = image orelse return error.InvalidResult;
-            self.children.append(self.arena.allocator(), scene_) catch |err| {
-                self.library.functions.scene_release(scene_);
-                return err;
-            };
-            const box = encoded.bounds;
-            // Imported PDF images use downward y; mesh coordinates use upward y.
-            const placement = g.Transform{ .a = box.max.x - box.min.x, .d = box.min.y - box.max.y, .e = box.min.x, .f = box.max.y };
-            var item_ = try self.item(placement.then(transform), null, id, null);
-            item_.kind = c.TYPST_ITEM_SCENE;
-            item_.scene = scene_;
-            try self.append(item_);
+        if (gradient) |value| if (value.* == .patch_fill) {
+            const evenodd = style_.fill_rule == c.TYPST_FILL_EVENODD;
+            if (self.pdf_mesh)
+                try self.pdfPatches(path_, evenodd, value.patch_fill, transform, id)
+            else
+                try self.svgPatches(path_, evenodd, value.patch_fill, transform, id);
             if (style_.flags & c.TYPST_STYLE_STROKE != 0) {
                 const stroke = try self.arena.allocator().create(c.TypstStyle);
                 stroke.* = style_.*;
@@ -350,6 +330,171 @@ const Builder = struct {
         raw.path = path_;
         raw.style = style_;
         try self.append(raw);
+    }
+
+    /// Typst has no patch paint. The patches and their exact clip become a
+    /// one-page PDF graphic that Typst imports and its PDF exporter embeds.
+    fn pdfPatches(self: *Builder, path_: *const c.TypstPath, evenodd: bool, patches: Gradient.Patches, transform: g.Transform, id: u64) !void {
+        if (!try self.library.supports(c.TYPST_CAP_PDF_IMPORT)) return error.Unsupported;
+        const workspace = self.mesh_workspace orelse workspace: {
+            const created = try self.arena.allocator().create(mesh_pdf.Workspace);
+            self.mesh_workspace = created;
+            break :workspace created;
+        };
+        // The import does not depend on fonts, files or inputs; borrowing
+        // the current context keeps the typesetter's configuration cached.
+        if (self.image_context == null) self.image_context = try typst.Engine.initAny(self.library);
+        const scratch = self.arena.child_allocator;
+        const encoded = try mesh_pdf.encode(scratch, workspace, patches, path_.segments[0..path_.segment_count], evenodd);
+        var image: ?*c.TypstScene = null;
+        var diagnostics: ?*c.TypstDiagnostics = null;
+        defer self.library.functions.diagnostics_release(diagnostics);
+        const status = self.library.functions.scene_from_pdf(self.image_context.?.handle, .{ .data = encoded.pdf.ptr, .len = encoded.pdf.len }, 0, &image, &diagnostics);
+        // libtypst copied the bytes. Releasing them while they are still
+        // the most recent allocation lets an arena reuse the space.
+        scratch.free(encoded.pdf);
+        try self.library.check(status, diagnostics);
+        const scene_ = image orelse return error.InvalidResult;
+        self.children.append(self.arena.allocator(), scene_) catch |err| {
+            self.library.functions.scene_release(scene_);
+            return err;
+        };
+        const box = encoded.bounds;
+        // Imported PDF images use downward y; mesh coordinates use upward y.
+        const placement = g.Transform{ .a = box.max.x - box.min.x, .d = box.min.y - box.max.y, .e = box.min.x, .f = box.max.y };
+        var item_ = try self.item(placement.then(transform), null, id, null);
+        item_.kind = c.TYPST_ITEM_SCENE;
+        item_.scene = scene_;
+        try self.append(item_);
+    }
+
+    /// SVG has no patch shading: the field is triangulated within the paint's
+    /// tolerance, outside the margin along the filled outline, and each
+    /// triangle cut along the stop levels so that its colors stay linear.
+    fn svgPatches(self: *Builder, path_: *const c.TypstPath, evenodd: bool, patches: Gradient.Patches, transform: g.Transform, id: u64) !void {
+        const scratch = self.arena.child_allocator;
+        var band: ?patch_mesh.Outline = null;
+        defer if (band) |*outline| outline.deinit(scratch);
+        if (patches.margin > 0) {
+            const segments = try scratch.alloc(Path.Segment, path_.segment_count);
+            defer scratch.free(segments);
+            for (path_.segments[0..path_.segment_count], segments) |segment, *out| out.* = switch (segment.kind) {
+                c.TYPST_SEGMENT_MOVE => .{ .move = pointOf(segment.p1) },
+                c.TYPST_SEGMENT_LINE => .{ .line = pointOf(segment.p1) },
+                c.TYPST_SEGMENT_CUBIC => .{ .cubic = .{ .c1 = pointOf(segment.p1), .c2 = pointOf(segment.p2), .end = pointOf(segment.p3) } },
+                c.TYPST_SEGMENT_CLOSE => .close,
+                else => return error.InvalidPath,
+            };
+            band = try patch_mesh.Outline.init(scratch, segments, patches.margin);
+        }
+        const triangulated = try patch_mesh.triangulate(scratch, patches.points, patches.values, .{
+            .tolerance = patches.tolerance,
+            .free = if (band) |*outline| outline else null,
+            .max_triangles = geometry_limit,
+        });
+        defer triangulated.deinit(scratch);
+        const colored = try field.colorMesh(scratch, triangulated.points, triangulated.values, triangulated.triangles, patches.stops, geometry_limit);
+        defer colored.deinit(scratch);
+        try self.svgTriangles(path_, evenodd, colored, transform, id);
+    }
+
+    /// SVG has no mesh shading: each triangle becomes a path with its own
+    /// linear gradient (svg/mesh.zig), in one labeled group clipped to the
+    /// paint's path.
+    fn svgTriangles(self: *Builder, path_: *const c.TypstPath, evenodd: bool, mesh: field.Colored, transform: g.Transform, id: u64) !void {
+        const memory = self.arena.allocator();
+        const outlines = try memory.alloc(c.TypstPathSegment, mesh.triangles.len * 4);
+        const items = try memory.alloc(c.TypstSceneItem, mesh.triangles.len);
+        // A gradient paints a filled path; its own color is unused.
+        const shaded = try self.style(&.{ .fill = .black });
+        // Opaque meshes overlap their triangles by a fraction of the page,
+        // converted to the mesh's own units.
+        const opaque_mesh = for (mesh.vertices) |vertex| {
+            if (vertex.color.a != 1) break false;
+        } else true;
+        var placement = transform;
+        var level = self.levels.items.len;
+        while (level > 0) {
+            level -= 1;
+            placement = placement.then(self.levels.items[level].transform);
+        }
+        const scale = @sqrt(@abs(placement.a * placement.d - placement.b * placement.c));
+        const distance = if (opaque_mesh and scale > 0) svg_mesh.overlap * @max(self.size.x, self.size.y) / scale else 0;
+        var count: usize = 0;
+        for (mesh.triangles) |indices| {
+            var points: [3]g.Point = undefined;
+            var colors: [3]DisplayList.Color = undefined;
+            for (indices, &points, &colors) |index, *point, *color| {
+                point.* = mesh.vertices[index].point;
+                color.* = mesh.vertices[index].color;
+            }
+            // Each piece's colors lie in one stop band, so on one line.
+            const triangle_paint = svg_mesh.triangle(points, colors) orelse unreachable;
+            if (triangle_paint == .none) continue;
+            const corners = svg_mesh.expanded(points, distance);
+            const outline = outlines[count * 4 ..][0..4];
+            outline.* = .{ pathSegment(.{ .move = corners[0] }), pathSegment(.{ .line = corners[1] }), pathSegment(.{ .line = corners[2] }), pathSegment(.close) };
+            var raw = switch (triangle_paint) {
+                .none => unreachable,
+                .flat => |color| flat: {
+                    var result = try self.item(.{}, null, 0, null);
+                    result.style = try self.style(&.{ .fill = color });
+                    break :flat result;
+                },
+                .linear => |linear| ramp: {
+                    const stops = try memory.dupe(DisplayList.Color, &linear.colors);
+                    const gradient = try memory.create(Gradient);
+                    gradient.* = .{ .linear_fill = .{ .start = linear.start, .end = linear.end, .colors = stops } };
+                    var result = try self.item(.{}, null, 0, gradient);
+                    result.style = shaded;
+                    break :ramp result;
+                },
+            };
+            raw.kind = c.TYPST_ITEM_PATH;
+            raw.path = try self.pathData(outline);
+            items[count] = raw;
+            count += 1;
+        }
+        const options = try memory.create(c.TypstSceneItemOptions);
+        options.* = std.mem.zeroes(c.TypstSceneItemOptions);
+        options.struct_size = @sizeOf(c.TypstSceneItemOptions);
+        options.tag = .{ .data = svg_mesh.label.ptr, .len = svg_mesh.label.len };
+        var mesh_group = std.mem.zeroes(c.TypstSceneItem);
+        mesh_group.kind = c.TYPST_ITEM_SCENE;
+        mesh_group.scene = try self.childScene(items[0..count]);
+        mesh_group.clip = if (evenodd) try self.nonzeroClip(path_) else path_;
+        mesh_group.options = options;
+        if (id == 0) {
+            mesh_group.transform = nativeTransform(transform);
+            return self.append(mesh_group);
+        }
+        mesh_group.transform = nativeTransform(.{});
+        var outer = try self.item(transform, null, id, null);
+        outer.kind = c.TYPST_ITEM_SCENE;
+        outer.scene = try self.childScene(&.{mesh_group});
+        try self.append(outer);
+    }
+
+    /// Typst clips with the nonzero rule. The region union of an even-odd
+    /// path is a nonzero path covering the same area.
+    fn nonzeroClip(self: *Builder, path_: *const c.TypstPath) !*const c.TypstPath {
+        const scratch = self.arena.child_allocator;
+        var source = Path.init(scratch);
+        defer source.deinit();
+        for (path_.segments[0..path_.segment_count]) |segment| switch (segment.kind) {
+            c.TYPST_SEGMENT_MOVE => try source.moveTo(pointOf(segment.p1)),
+            c.TYPST_SEGMENT_LINE => try source.lineTo(pointOf(segment.p1)),
+            c.TYPST_SEGMENT_CUBIC => try source.cubicTo(pointOf(segment.p1), pointOf(segment.p2), pointOf(segment.p3)),
+            c.TYPST_SEGMENT_CLOSE => try source.close(),
+            else => return error.InvalidPath,
+        };
+        var empty = Path.init(scratch);
+        defer empty.deinit();
+        var normalized = try region.combine(scratch, source, empty, .unite, .{ .fill_rule = .evenodd });
+        defer normalized.deinit();
+        const data = try self.arena.allocator().alloc(c.TypstPathSegment, normalized.segments.items.len);
+        for (normalized.segments.items, data) |segment, *out| out.* = pathSegment(segment);
+        return self.pathData(data);
     }
 
     fn resolvedPath(self: *Builder, draw: *const DisplayList.PathCommand, stroke: ?Stroke, id: u64) !void {
@@ -422,19 +567,23 @@ const Builder = struct {
         }
         if (gradient) |paint_| {
             const ramp = switch (paint_.*) {
-                .mesh_fill => return error.MeshRequiresPdf,
-                inline else => |value| value,
+                // `paint` encodes patches before any native item exists.
+                .patch_fill => unreachable,
+                .radial_fill, .linear_fill, .linear_stroke => |value| value,
             };
             const colors = try memory.alloc(c.TypstColor, ramp.colors.len);
             for (ramp.colors, colors) |value, *dest| dest.* = nativeColor(value);
+            const placed = ramp.offsets.len != 0;
+            if (placed and !try self.library.supports(c.TYPST_CAP_GRADIENT_STOPS)) return error.Unsupported;
             const native = try memory.create(c.TypstGradient);
             native.* = .{
                 .kind = if (paint_.* == .radial_fill) c.TYPST_GRADIENT_RADIAL else c.TYPST_GRADIENT_LINEAR,
-                .reserved = 0,
+                .flags = if (placed) c.TYPST_GRADIENT_STOP_OFFSETS else 0,
                 .start = .{ .x = ramp.start.x, .y = ramp.start.y },
                 .end = .{ .x = ramp.end.x, .y = ramp.end.y },
                 .colors = colors.ptr,
                 .count = colors.len,
+                .offsets = if (placed) ramp.offsets.ptr else null,
             };
             if (paint_.* == .linear_stroke) options.stroke_gradient = native else options.fill_gradient = native;
         }
@@ -484,6 +633,9 @@ fn nativeColor(value: DisplayList.Color) c.TypstColor {
 fn channel(value: f64) f64 {
     return @round(value * 255) / 255;
 }
+fn pointOf(value: c.TypstPoint) g.Point {
+    return .{ .x = value.x, .y = value.y };
+}
 fn nativeTransform(value: g.Transform) c.TypstTransform {
     return .{ .xx = value.a, .yx = value.b, .xy = value.c, .yy = value.d, .dx = value.e, .dy = value.f };
 }
@@ -532,7 +684,7 @@ test "mixed nib and ordinary paths convert only referenced intervals" {
             defer builder.arena.deinit();
             const strokes = try builder.prepareStrokes(&picture, .{});
             try t.expectEqual(@as(usize, 1), strokes.len);
-            var resolved = try physical.resolve(t.allocator, source[0..2], draw.style, .{});
+            var resolved = try resolveCopy(t.allocator, source[0..2], draw.style);
             defer resolved.path.deinit();
             const stroke = strokes[0].?;
             if (nib == .ellipse) {
@@ -735,6 +887,14 @@ test "moving pen workspace is reused and encoded coordinates retain their precis
     try std.testing.expectEqual(capacity, outer.queryCapacity());
 }
 
+/// The stroke of an owned copy of `segments`.
+fn resolveCopy(allocator: std.mem.Allocator, segments: []const Path.Segment, style: *const DisplayList.Style) !pens.Stroke {
+    var center = Path.init(allocator);
+    defer center.deinit();
+    try center.segments.appendSlice(allocator, segments);
+    return physical.resolvePath(allocator, center, style, .{});
+}
+
 fn prepareStrokeExercise(allocator: std.mem.Allocator) !void {
     const source = [_]Path.Segment{ .{ .move = .{ .x = 10, .y = 20 } }, .{ .line = .{ .x = 40, .y = 20 } }, .{ .line = .{ .x = 40, .y = 40 } }, .close };
     var picture = DisplayList.init(std.testing.allocator);
@@ -743,9 +903,9 @@ fn prepareStrokeExercise(allocator: std.mem.Allocator) !void {
     for ([_]pens.Nib{ pens.Nib.square(), .{ .ellipse = .{ .a = 4, .d = 2 } } }) |nib| {
         for ([_][]const f64{ &.{}, &.{ 4, 2 } }) |dash| {
             const style = try picture.storage.styles.intern(&.{ .pen = .{ .nib = nib, .cap = .round, .join = .round, .dash = dash, .dash_phase = 1 } });
-            var first = try physical.resolve(allocator, &source, style, .{});
+            var first = try resolveCopy(allocator, &source, style);
             defer first.path.deinit();
-            var second = try physical.resolve(allocator, &source, style, .{});
+            var second = try resolveCopy(allocator, &source, style);
             defer second.path.deinit();
             try std.testing.expect(first.path.segments.items.ptr != second.path.segments.items.ptr);
             try std.testing.expectEqualDeep(first.path.segments.items, second.path.segments.items);

@@ -52,13 +52,6 @@ pub const Nib = union(enum) {
             },
         }
     }
-    pub fn clone(self: Nib, allocator: Allocator) Error!OwnedNib {
-        try self.validate();
-        return .{ .allocator = allocator, .nib = switch (self) {
-            .ellipse => self,
-            .polygon => |vertices| .{ .polygon = try allocator.dupe(g.Point, vertices) },
-        } };
-    }
     pub fn transformed(self: Nib, allocator: Allocator, transform: g.Transform) Error!OwnedNib {
         try self.validate();
         if (!transform.isFinite()) return error.NonFinite;
@@ -220,15 +213,8 @@ fn orientation(a: g.Point, b: g.Point, c: g.Point) Error!f64 {
 
 /// Andrew's monotone-chain hull. Sorting uses the standard library; geometric
 /// orientation is scaled to avoid overflowing on finite large coordinates.
-pub fn convexHull(allocator: Allocator, input: []const g.Point) Error![]const g.Point {
-    if (input.len == 0) return error.InvalidNib;
-    const points = try allocator.dupe(g.Point, input);
-    defer allocator.free(points);
-    return convexHullScratch(allocator, points);
-}
-
-/// Internal mutable scratch for callers that already own their input buffer.
-/// Sorting may change the buffer; the returned hull is independently owned.
+/// The points are scratch: sorting may change the buffer, and the returned
+/// hull is independently owned.
 pub fn convexHullScratch(allocator: Allocator, points: []g.Point) Error![]const g.Point {
     if (points.len == 0) return error.InvalidNib;
     for (points) |point| if (!point.isFinite()) return error.NonFinite;
@@ -332,21 +318,15 @@ test "diameter transforms do not overflow when the physical ellipse is finite" {
     try std.testing.expectApproxEqRel(@as(f64, 1.2020815280171308e308), point.x, 1e-14);
 }
 
-test "borrowed and mutable hull inputs keep independent result ownership" {
-    var input = [_]g.Point{
+test "hull results and transformed nibs are owned independently of their input" {
+    var scratch = [_]g.Point{
         .{ .x = 2, .y = 2 }, .{ .x = -0.0, .y = 0.0 }, .{ .x = 2, .y = 0 },
         .{ .x = 1, .y = 1 }, .{ .x = 0, .y = 2 },      .{ .x = -0.0, .y = 0.0 },
     };
-    const snapshot = input;
-    var scratch = input;
-    const borrowed = try convexHull(std.testing.allocator, &input);
-    defer std.testing.allocator.free(borrowed);
-    const mutable = try convexHullScratch(std.testing.allocator, &scratch);
-    defer std.testing.allocator.free(mutable);
-    try std.testing.expectEqualSlices(u8, std.mem.asBytes(&snapshot), std.mem.asBytes(&input));
-    try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(borrowed), std.mem.sliceAsBytes(mutable));
+    const hull = try convexHullScratch(std.testing.allocator, &scratch);
+    defer std.testing.allocator.free(hull);
     scratch[0] = .{ .x = 99, .y = 99 };
-    try std.testing.expectEqual(@as(f64, 0), mutable[0].x);
+    try std.testing.expectEqual(@as(f64, 0), hull[0].x);
 
     var square = [_]g.Point{ .{ .x = -1, .y = -1 }, .{ .x = 1, .y = -1 }, .{ .x = 1, .y = 1 }, .{ .x = -1, .y = 1 } };
     const square_snapshot = square;

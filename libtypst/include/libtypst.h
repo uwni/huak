@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65545
+#define TYPST_ABI_VERSION 65546
 
 #define TYPST_CAP_PDF 1
 
@@ -71,6 +71,11 @@
  * Custom PDF Creator metadata in TypstPdfOptions.
  */
 #define TYPST_CAP_PDF_CREATOR 8192
+
+/**
+ * Color stops at given positions, TYPST_GRADIENT_STOP_OFFSETS.
+ */
+#define TYPST_CAP_GRADIENT_STOPS 16384
 
 #define TYPST_VALUE_NONE 0
 
@@ -224,6 +229,8 @@
 #define TYPST_GRADIENT_LINEAR 0
 
 #define TYPST_GRADIENT_RADIAL 1
+
+#define TYPST_GRADIENT_STOP_OFFSETS 1
 
 typedef struct TypstBuffer TypstBuffer;
 
@@ -577,17 +584,27 @@ typedef struct TypstGradient {
    * TYPST_GRADIENT_LINEAR or TYPST_GRADIENT_RADIAL.
    */
   uint32_t kind;
-  uint32_t reserved;
+  /**
+   * Zero or TYPST_GRADIENT_STOP_OFFSETS.
+   */
+  uint32_t flags;
   /**
    * Endpoints of the linear ramp or center and rim of the radial ramp, in local points.
    */
   struct TypstPoint start;
   struct TypstPoint end;
   /**
-   * Equally spaced color stops, including both endpoints.
+   * Color stops, including both endpoints. Equally spaced unless
+   * `offsets` gives their positions.
    */
   const struct TypstColor *colors;
   size_t count;
+  /**
+   * Read only with TYPST_GRADIENT_STOP_OFFSETS, so records written before
+   * ABI 1.10 may end before it. One position per color, from 0 to 1 in
+   * non-decreasing order. Requires TYPST_CAP_GRADIENT_STOPS.
+   */
+  const double *offsets;
 } TypstGradient;
 
 typedef struct TypstSceneItemOptions {

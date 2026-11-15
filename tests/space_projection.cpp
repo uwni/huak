@@ -1,7 +1,7 @@
 // The two exact projected curves have a shared endpoint and a nearby crossing.
 // Recovering the crossing parameter with a point-to-curve nearest-point query
 // used to lose one incidence and produce a self-intersecting face boundary.
-#include "../src/drawing/space/result.hxx"
+#include "../src/drawing/space/space.hxx"
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepCheck_Analyzer.hxx>

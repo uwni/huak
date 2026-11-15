@@ -4,7 +4,7 @@ find_package(OpenCASCADE CONFIG REQUIRED COMPONENTS FoundationClasses ModelingDa
 
 # Use the native C++ toolchain and the SDK's imported targets on both sides
 # of the OCCT C++ interface. Only the C projection table crosses into Zig.
-add_library(space_objects OBJECT model.cpp projection.cpp visibility.cpp lighting.cpp curves.cpp)
+add_library(space_objects OBJECT model.cpp projection.cpp curves.cpp partition.cpp contours.cpp)
 target_compile_features(space_objects PUBLIC cxx_std_17)
 set_target_properties(space_objects PROPERTIES POSITION_INDEPENDENT_CODE ON
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)

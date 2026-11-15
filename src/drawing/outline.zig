@@ -34,8 +34,8 @@ const Budget = struct {
     }
     fn style(self: *Budget, value: DisplayList.Style) !void {
         if (value.gradient) |paint| try self.consume(switch (paint.*) {
-            .mesh_fill => |mesh| mesh.vertices.len + mesh.triangles.len,
-            inline else => |ramp| ramp.colors.len,
+            .patch_fill => |patches| patches.points.len * 16 + patches.stops.levels.len,
+            .radial_fill, .linear_fill, .linear_stroke => |ramp| ramp.colors.len + ramp.offsets.len,
         });
         if (value.pen) |pen| {
             try self.consume(pen.dash.len);

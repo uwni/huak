@@ -46,14 +46,11 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     try outer_clip.cubicTo(.{ .x = 75, .y = 75 }, .{ .x = 5, .y = 75 }, .{ .x = 5, .y = 5 });
     try outer_clip.close();
     try picture.beginScope(.{}, outer_clip);
-    try picture.addPath(boundary, .{ .fill = .black, .fill_rule = .evenodd, .gradient = &.{ .mesh_fill = .{
-        .vertices = &.{
-            .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0, .a = 0.5 },
-            .{ .x = 60, .y = 0, .r = 1, .g = 0, .b = 0, .a = 0.5 },
-            .{ .x = 60, .y = 60, .r = 1, .g = 0, .b = 0, .a = 0.5 },
-            .{ .x = 0, .y = 60, .r = 1, .g = 0, .b = 0, .a = 0.5 },
-        },
-        .triangles = &.{ .{ 0, 1, 2 }, .{ 0, 2, 3 } },
+    try picture.addPath(boundary, .{ .fill = .black, .fill_rule = .evenodd, .gradient = &.{ .patch_fill = .{
+        .points = &.{flatPatch(.zero, 60)},
+        .values = &.{@as([16]f64, @splat(0))},
+        .stops = .{ .levels = &.{0}, .colors = &.{.{ .r = 1, .a = 0.5 }} },
+        .tolerance = 1.0 / 256.0,
     } } }, .{ .e = 10, .f = 10 });
     try picture.endScope();
     var foreground = try demo.rectangle(t.allocator, .{ .x = 12, .y = 12 }, 6, 6);
@@ -62,8 +59,17 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     try picture.labelAtBaseline(0, demo.metrics(metrics[0]), .{ .x = 4, .y = 85 }, .{});
     const frames = [_]typst.FrameRef{try text.frame(0)};
     const scene: @import("huak").render.Scene = .{ .picture = &picture, .size = .{ .x = 100, .y = 100 }, .frames = &frames };
-    try t.expectError(error.MeshRequiresPdf, scene.validate(.svg));
     try scene.validate(.pdf);
+    {
+        // One color: SVG draws the mesh as a labeled group of triangle paths,
+        // clipped to the even-odd boundary normalized for Typst's nonzero
+        // clips, with the stylesheet that stops antialiasing between them.
+        var diagnostic: ?typst.Buffer = null;
+        var output = try scene.render(t.allocator, &library, .svg, &diagnostic);
+        defer output.deinit();
+        try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), " data-typst-label=\"huak-mesh\""));
+        try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "shape-rendering:crispEdges"));
+    }
     {
         const capabilities = library.capabilities.?;
         defer library.capabilities = capabilities;
@@ -76,7 +82,9 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     engine.deinit();
     var pdf = try document.exportPdf();
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 4") != null);
+    // One color at one opacity: the mesh page fills its clip with that
+    // color at that opacity, through the coverage of the patch mesh.
+    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 7") != null);
     try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/Subtype /Image") == null);
     const words = try @import("support/pdf.zig").text(pdf.bytes(), .{});
     defer t.allocator.free(words);
@@ -115,21 +123,30 @@ test "mesh import borrows the configured typesetting context instead of replacin
     defer picture.deinit();
     var boundary = try demo.rectangle(t.allocator, .zero, 20, 10);
     defer boundary.deinit();
-    try picture.addPath(boundary, .{ .fill = .black, .gradient = &.{ .mesh_fill = .{
-        .vertices = &.{
-            .{ .x = 0, .y = 0, .r = 1, .g = 0, .b = 0 },
-            .{ .x = 20, .y = 0, .r = 0, .g = 1, .b = 0 },
-            .{ .x = 0, .y = 10, .r = 0, .g = 0, .b = 1 },
-        },
-        .triangles = &.{.{ 0, 1, 2 }},
+    var rising: [16]f64 = undefined;
+    for (&rising, 0..) |*value, index| value.* = @as(f64, @floatFromInt(index / 4)) / 3;
+    try picture.addPath(boundary, .{ .fill = .black, .gradient = &.{ .patch_fill = .{
+        .points = &.{flatPatch(.zero, 20)},
+        .values = &.{rising},
+        .stops = .{ .levels = &.{ 0, 0.5, 1 }, .colors = &.{ .{ .r = 1 }, .{ .g = 1 }, .{ .b = 1 } } },
+        .tolerance = 1.0 / 256.0,
     } } }, .{});
     var document = try backend.submit(t.allocator, &library, &picture, 20, 10, .{ .pdf_mesh = true });
     defer document.deinit();
     var pdf = try document.exportPdf();
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 4") != null);
+    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 7") != null);
     try t.expectEqual(context, library.shared_context);
     try t.expectEqual(configuration, library.shared_options);
+}
+
+/// A flat patch over the square from `origin` with side `size`.
+fn flatPatch(origin: @import("huak").core.geometry.Point, size: f64) [16]@import("huak").core.geometry.Point {
+    var result: [16]@import("huak").core.geometry.Point = undefined;
+    for (0..4) |i| for (0..4) |j| {
+        result[i * 4 + j] = .{ .x = origin.x + size * @as(f64, @floatFromInt(i)) / 3, .y = origin.y + size * @as(f64, @floatFromInt(j)) / 3 };
+    };
+    return result;
 }
 
 test "independent elliptical polygonal and singular pens render through the native backend" {
@@ -177,6 +194,96 @@ test "independent elliptical polygonal and singular pens render through the nati
     var pdf = try document.exportPdf();
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
+}
+
+test "gradient color stops keep their positions through the native scene" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var picture = DisplayList.init(t.allocator);
+    defer picture.deinit();
+    var bar = @import("huak").core.Path.init(t.allocator);
+    defer bar.deinit();
+    try bar.moveTo(.zero);
+    try bar.lineTo(.{ .x = 40, .y = 0 });
+    try bar.lineTo(.{ .x = 40, .y = 10 });
+    try bar.lineTo(.{ .x = 0, .y = 10 });
+    try bar.close();
+    const colors = [_]DisplayList.Color{ .{ .r = 1 }, .{ .g = 1 }, .{ .b = 1 } };
+    const ramp: DisplayList.Gradient.Ramp = .{ .start = .{ .x = 0, .y = 5 }, .end = .{ .x = 40, .y = 5 }, .colors = &colors, .offsets = &.{ 0, 0.25, 1 } };
+    try picture.addPath(bar, .{ .fill = .black, .gradient = &.{ .linear_fill = ramp } }, .{});
+    for ([_][]const f64{ &.{ 0, 1 }, &.{ 0.1, 0.5, 1 }, &.{ 0, 0.6, 0.4 }, &.{ 0, std.math.nan(f64), 1 } }) |offsets| {
+        var invalid = ramp;
+        invalid.offsets = offsets;
+        try t.expectError(error.InvalidStyle, picture.addPath(bar, .{ .fill = .black, .gradient = &.{ .linear_fill = invalid } }, .{}));
+    }
+    var document = try backend.submit(t.allocator, &library, &picture, 40, 10, .{});
+    defer document.deinit();
+    var svg = try document.exportSvg(0);
+    defer svg.deinit();
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "offset=\"25%\"") != null);
+    try t.expect(std.mem.indexOf(u8, svg.bytes(), "offset=\"50%\"") == null);
+}
+
+test "patch paints become a type 7 PDF mesh and SVG triangles of the same field" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var picture = DisplayList.init(t.allocator);
+    defer picture.deinit();
+    var boundary = try demo.rectangle(t.allocator, .zero, 60, 60);
+    defer boundary.deinit();
+    // Four patches tile the square; the field x / 60 is linear, so its
+    // coefficients are its values at the control points.
+    var points: [4][16]@import("huak").core.geometry.Point = undefined;
+    var values: [4][16]f64 = undefined;
+    for (0..2) |row| for (0..2) |column| {
+        const patch = row * 2 + column;
+        for (0..4) |i| for (0..4) |j| {
+            const x = 30 * (@as(f64, @floatFromInt(column)) + @as(f64, @floatFromInt(i)) / 3);
+            const y = 30 * (@as(f64, @floatFromInt(row)) + @as(f64, @floatFromInt(j)) / 3);
+            points[patch][i * 4 + j] = .{ .x = x, .y = y };
+            values[patch][i * 4 + j] = x / 60;
+        };
+    };
+    const patches: DisplayList.Gradient.Patches = .{
+        .points = &points,
+        .values = &values,
+        .stops = .{ .levels = &.{ 0, 1 }, .colors = &.{ .black, .{ .r = 1, .g = 1, .b = 1 } } },
+        .tolerance = 1.0 / 256.0,
+    };
+    try picture.addPath(boundary, .{ .fill = .black, .gradient = &.{ .patch_fill = patches } }, .{});
+    const scene: @import("huak").render.Scene = .{ .picture = &picture, .size = .{ .x = 60, .y = 60 } };
+    {
+        // A linear field over flat patches needs two triangles each, drawn
+        // in one clipped group under the stylesheet that stops antialiasing
+        // between them.
+        var diagnostic: ?typst.Buffer = null;
+        var output = try scene.render(t.allocator, &library, .svg, &diagnostic);
+        defer output.deinit();
+        const svg = output.bytes();
+        try t.expectEqual(@as(usize, 8), std.mem.count(u8, svg, "<path fill=\"url(#"));
+        try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, " data-typst-label=\"huak-mesh\""));
+        try t.expect(std.mem.indexOf(u8, svg, "clip-path=") != null);
+        try t.expect(std.mem.indexOf(u8, svg, "</style></svg>") != null);
+    }
+    var diagnostic: ?typst.Buffer = null;
+    var output = try scene.render(t.allocator, &library, .pdf, &diagnostic);
+    defer output.deinit();
+    try t.expect(std.mem.indexOf(u8, output.bytes(), "/ShadingType 7") != null);
+    var temporary = t.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(t.io, .{ .sub_path = "patches.pdf", .data = output.bytes() });
+    const raster = try std.process.run(t.allocator, t.io, .{ .argv = &.{ "pdftoppm", "-r", "72", "-singlefile", "-gray", "patches.pdf" }, .cwd = .{ .dir = temporary.dir } });
+    defer t.allocator.free(raster.stdout);
+    defer t.allocator.free(raster.stderr);
+    try t.expect(raster.term.success());
+    const header = "P5\n60 60\n255\n";
+    try t.expect(std.mem.startsWith(u8, raster.stdout, header));
+    const pixels = raster.stdout[header.len..];
+    // The gray follows x across every patch.
+    for ([_][2]usize{ .{ 5, 10 }, .{ 20, 40 }, .{ 31, 29 }, .{ 45, 50 }, .{ 55, 5 } }) |sample| {
+        const expected = 255 * (@as(f64, @floatFromInt(sample[0])) + 0.5) / 60;
+        try t.expect(@abs(@as(f64, @floatFromInt(pixels[sample[1] * 60 + sample[0]])) - expected) <= 3);
+    }
 }
 
 test "polygon pen envelopes and dashed envelopes reach SVG as curves with one transparent fill" {

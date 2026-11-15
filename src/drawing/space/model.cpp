@@ -1,5 +1,5 @@
 // Construct OCCT topology from Huak geometry. The caller builds operands first.
-#include "result.hxx"
+#include "space.hxx"
 #include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>

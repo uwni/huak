@@ -5,7 +5,7 @@ const std = @import("std");
 pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath) void {
     const sdk = root.path(b, "wasi-sdk");
     const syslib = sdk.path(b, "share/wasi-sysroot/lib/wasm32-wasip1");
-    for ([_][]const u8{ "model.cpp", "projection.cpp", "visibility.cpp", "lighting.cpp", "curves.cpp" }) |file| {
+    for ([_][]const u8{ "model.cpp", "projection.cpp", "curves.cpp", "partition.cpp", "contours.cpp" }) |file| {
         const part = std.fs.path.stem(file);
         const cc = std.Build.Step.Run.create(b, b.fmt("compile OCCT WASI {s}", .{part}));
         cc.addFileArg(sdk.path(b, "bin/clang++"));
@@ -17,8 +17,7 @@ pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath) 
         cc.addDirectoryArg2(root.path(b, "occt-headers-wasm"), .{});
         cc.addArg("-c");
         cc.addFileArg(b.path("src/drawing/space").path(b, file));
-        cc.addFileInput(b.path("src/drawing/space/result.hxx"));
-        cc.addFileInput(b.path("src/drawing/space/lighting.hxx"));
+        cc.addFileInput(b.path("src/drawing/space/space.hxx"));
         cc.addFileInput(b.path("src/drawing/space/projection.h"));
         cc.addArg("-o");
         kernel.addObjectFile(cc.addOutputFileArg2(b.fmt("{s}.o", .{part}), .{}));

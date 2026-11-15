@@ -9,7 +9,7 @@ pub const Join = style.Join;
 pub const FillRule = style.FillRule;
 pub const Pen = style.Pen;
 pub const Style = style.Style;
-pub const MeshStore = style.Gradient.Mesh.Store;
+pub const MeshStore = style.Gradient.Store;
 /// Metrics are supplied by a typesetter; baseline is measured from frame top
 /// and may lie outside the frame's height.
 pub const Metrics = struct { width: f64, height: f64, baseline: f64 };
@@ -79,7 +79,8 @@ knot_bytes: usize = 0,
 pub fn init(allocator: std.mem.Allocator) Storage {
     return initWithMeshes(allocator, null);
 }
-/// Storages attached to the same store share mesh arrays; see `MeshStore`.
+/// Storages attached to the same store share patch arrays; see
+/// `MeshStore`.
 pub fn initWithMeshes(allocator: std.mem.Allocator, meshes: ?*MeshStore) Storage {
     return .{ .allocator = allocator, .styles = .initWithMeshes(allocator, meshes) };
 }
@@ -196,20 +197,8 @@ pub fn validateStyle(style_value: *const Style) Error!void {
     if (style_value.gradient) |paint| {
         if (if (paint.* == .linear_stroke) style_value.pen == null else style_value.fill == null) return error.InvalidStyle;
         switch (paint.*) {
-            .mesh_fill => |mesh| {
-                if (mesh.vertices.len < 3 or mesh.triangles.len == 0) return error.InvalidStyle;
-                for (mesh.vertices) |vertex| {
-                    if (!std.math.isFinite(vertex.x) or !std.math.isFinite(vertex.y)) return error.NonFinite;
-                    if (!vertex.color().valid()) return error.InvalidColor;
-                }
-                for (mesh.triangles) |triangle| for (triangle) |index| {
-                    if (index >= mesh.vertices.len) return error.InvalidStyle;
-                };
-            },
-            inline else => |ramp| {
-                if (!ramp.start.isFinite() or !ramp.end.isFinite() or ramp.start.eql(ramp.end) or ramp.colors.len < 2) return error.InvalidStyle;
-                for (ramp.colors) |color| if (!color.valid()) return error.InvalidColor;
-            },
+            .patch_fill => |patches| try patches.validate(),
+            .radial_fill, .linear_fill, .linear_stroke => |ramp| try ramp.validate(),
         }
     }
     if (style_value.fill) |fill| if (!fill.valid()) return error.InvalidColor;

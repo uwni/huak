@@ -41,16 +41,6 @@ pub fn normalization(a: []const Element, b: []const Element) Normalization {
     const scale = @max(extent.x, extent.y);
     return .{ .origin = minimum.add(extent.scale(0.5)), .scale = if (scale > 0) scale else 1 };
 }
-pub fn mapElements(result: []Element, n: Normalization) void {
-    for (result) |*element| {
-        var index: usize = 0;
-        while (index < coordinateCount(element.verb)) : (index += 2) {
-            const point = n.point(.{ .x = element.data[index], .y = element.data[index + 1] });
-            element.data[index] = point.x;
-            element.data[index + 1] = point.y;
-        }
-    }
-}
 
 const Edge = struct { a: Point, b: Point };
 fn edges(allocator: std.mem.Allocator, items: []const Element, n: Normalization) ![]Edge {

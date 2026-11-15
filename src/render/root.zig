@@ -7,6 +7,7 @@ const DisplayList = @import("../drawing/DisplayList.zig");
 const animation = @import("../animation/root.zig");
 const backend = @import("typst/scene.zig");
 const svg = @import("svg/animation.zig");
+const svg_mesh = @import("svg/mesh.zig");
 
 pub const FrameBounds = backend.FrameBounds;
 
@@ -16,41 +17,43 @@ pub fn bounds(picture: *const DisplayList, frames: []const typst.FrameRef) !?g.B
 
 pub const viewport = backend.viewport;
 
-pub const motionFootprint = @import("typst/pen.zig").motionFootprint;
 pub const strokeFootprint = @import("typst/pen.zig").strokeFootprint;
 
 pub const Format = enum {
     svg,
     pdf,
 
-    pub fn validate(self: Format, animated: bool, mesh: bool) !void {
+    /// Meshes need no check here: SVG reports a mesh it cannot draw as the
+    /// encoder reaches it.
+    pub fn validate(self: Format, animated: bool) !void {
         if (animated and self == .pdf) return error.AnimationRequiresSvg;
-        if (mesh and self == .svg) return error.MeshRequiresPdf;
     }
 };
 
 pub fn usesMesh(command: *const DisplayList.Command) bool {
     if (command.* != .path) return false;
     const gradient = command.path.style.gradient orelse return false;
-    return gradient.* == .mesh_fill;
+    return gradient.* == .patch_fill;
 }
 
 /// Matching allocation owners stay with the bytes and never cross the ABI.
 pub const Output = union(enum) {
     native: typst.Buffer,
-    animated: struct { allocator: std.mem.Allocator, data: []u8 },
+    /// SVG that huak completed after Typst's export, with animations or the
+    /// mesh stylesheet.
+    edited: struct { allocator: std.mem.Allocator, data: []u8 },
 
     pub fn bytes(self: *const Output) []const u8 {
         return switch (self.*) {
             .native => |*buffer| buffer.bytes(),
-            .animated => |buffer| buffer.data,
+            .edited => |buffer| buffer.data,
         };
     }
 
     pub fn deinit(self: *Output) void {
         switch (self.*) {
             .native => |*buffer| buffer.deinit(),
-            .animated => |buffer| buffer.allocator.free(buffer.data),
+            .edited => |buffer| buffer.allocator.free(buffer.data),
         }
         self.* = undefined;
     }
@@ -68,18 +71,14 @@ pub const Scene = struct {
     tracks: ?animation.Animation = null,
 
     pub fn validate(self: Scene, format: Format) !void {
-        const mesh = format == .svg and for (self.picture.commands.items) |*command| {
-            if (usesMesh(command)) break true;
-        } else false;
-        return format.validate(self.tracks != null, mesh);
+        return format.validate(self.tracks != null);
     }
 
     /// diagnostic must initially own nothing. Preserve the host's presentation
     /// of the per-call native diagnostic before returning. The caller owns the
     /// copied Buffer, including on failure.
     pub fn render(self: Scene, allocator: std.mem.Allocator, library: *typst.Library, format: Format, diagnostic: *?typst.Buffer) !Output {
-        // SVG mesh support is checked as the encoder visits the paints.
-        if (format == .pdf) try self.validate(format);
+        try self.validate(format);
         var document = backend.submitPicture(allocator, library, self.picture, self.size, .{
             .origin = self.origin,
             .frames = self.frames,
@@ -97,11 +96,15 @@ pub const Scene = struct {
             diagnostic.* = library.lastError() catch null;
             return err;
         };
-        if (self.tracks) |tracks| {
-            defer buffer.deinit();
-            return .{ .animated = .{ .allocator = allocator, .data = try svg.encodeAnimatedSvg(allocator, buffer.bytes(), &tracks) } };
-        }
-        return .{ .native = buffer };
+        const meshes = format == .svg and for (self.picture.commands.items) |*command| {
+            if (usesMesh(command)) break true;
+        } else false;
+        if (self.tracks == null and !meshes) return .{ .native = buffer };
+        defer buffer.deinit();
+        const animated: ?[]u8 = if (self.tracks) |tracks| try svg.encodeAnimatedSvg(allocator, buffer.bytes(), &tracks) else null;
+        if (!meshes) return .{ .edited = .{ .allocator = allocator, .data = animated.? } };
+        defer if (animated) |bytes| allocator.free(bytes);
+        return .{ .edited = .{ .allocator = allocator, .data = try svg_mesh.addStylesheet(allocator, animated orelse buffer.bytes()) } };
     }
 };
 

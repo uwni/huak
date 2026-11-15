@@ -1,10 +1,16 @@
-//! Convert one complete model for OCCT. Inputs and kernel output are scratch;
-//! only ordinary 2D paths and line metadata survive the projection.
+//! Convert one complete model for OCCT and its projection back. Inputs and
+//! kernel output are scratch; only ordinary 2D paths, line metadata and the
+//! smooth light fields computed here survive the projection.
 const std = @import("std");
 const Runtime = @import("../Runtime.zig");
 const types = @import("../types.zig");
 const Path = @import("../../drawing/path/Path.zig");
+const units = @import("../../drawing/units.zig");
 const c = @import("space_c");
+const g = @import("../../drawing/geometry.zig");
+const shading = @import("../../drawing/space/shading.zig");
+const Model = @import("../../drawing/space/Model.zig");
+const linework = @import("../../drawing/space/linework.zig");
 const Value = types.Value;
 
 fn coordinates(v: Value, direction: bool) ![3]f64 {
@@ -166,11 +172,71 @@ fn projectedPath(rt: *Runtime, commands: []const c.HuakPathCommand) !Value {
             c.HUAK_LINE => try path.lineTo(point(command.p[0])),
             c.HUAK_BEZIER => try path.cubicTo(point(command.p[0]), point(command.p[1]), point(command.p[2])),
             c.HUAK_CLOSE => try path.close(),
-            else => return error.InvalidProjectedPath,
+            else => unreachable,
         };
         break :projected path;
     };
     return rt.pathResult(projected);
+}
+
+/// Smooth light stays within one 256th of n·l and of the glint wherever an
+/// output interpolates it; the palette's slope keeps the color error below
+/// one 8-bit step.
+const shading_accuracy = 1.0 / 256.0;
+
+/// false, or [kind, ...]: ["constant", diffuse, glint], ["profile", start,
+/// end, positions, diffuse, glint] or ["patches", points, diffuse,
+/// glint_points, glint, accuracy, margin], with sixteen control points and
+/// field coefficients per patch; the margin is the outline tolerance.
+fn fieldValue(output: std.mem.Allocator, shaded: *const shading.Output, field: shading.Field, margin: f64) !Value {
+    switch (field) {
+        .none => return .{ .boolean = false },
+        .constant => |shine| return types.listView(try output.dupe(Value, &.{ .{ .string = "constant" }, .{ .number = shine.diffuse }, .{ .number = shine.glint } })),
+        .profile => |graded| {
+            const samples = shaded.samples.items[graded.samples.start..][0..graded.samples.count];
+            const positions = try output.alloc(Value, samples.len);
+            const diffuse = try output.alloc(Value, samples.len);
+            const glint = try output.alloc(Value, samples.len);
+            for (samples, positions, diffuse, glint) |sample, *position, *d, *gl| {
+                position.* = .{ .number = sample.position };
+                d.* = .{ .number = sample.shine.diffuse };
+                gl.* = .{ .number = sample.shine.glint };
+            }
+            return types.listView(try output.dupe(Value, &.{ .{ .string = "profile" }, .{ .vec2 = types.Vec2.fromPoint(graded.start) }, .{ .vec2 = types.Vec2.fromPoint(graded.end) }, types.listView(positions), types.listView(diffuse), types.listView(glint) }));
+        },
+        .patches => |patches| {
+            const diffuse = try patchLists(output, shaded.patches.items[patches.diffuse.start..][0..patches.diffuse.count]);
+            const glint = try patchLists(output, shaded.patches.items[patches.glint.start..][0..patches.glint.count]);
+            return types.listView(try output.dupe(Value, &.{ .{ .string = "patches" }, diffuse[0], diffuse[1], glint[0], glint[1], .{ .number = shading_accuracy }, .{ .quantity = units.fromPoints(margin) } }));
+        },
+    }
+}
+
+/// The patches' control points and field coefficients as flat lists.
+fn patchLists(output: std.mem.Allocator, patches: []const shading.Patch) ![2]Value {
+    const points = try output.alloc(Value, patches.len * 16);
+    const values = try output.alloc(Value, patches.len * 16);
+    for (patches, 0..) |patch, index| for (patch.points, patch.values, 0..) |control, value, k| {
+        points[index * 16 + k] = .{ .vec2 = types.Vec2.fromPoint(control) };
+        values[index * 16 + k] = .{ .number = value };
+    };
+    return .{ types.listView(points), types.listView(values) };
+}
+
+/// The smooth light of each front region, computed for the consecutive
+/// The smooth light of each front region.
+fn shade(scratch: std.mem.Allocator, view: *Model.View, work: *const linework.Linework, direction: [3]f64, spot: f64, tolerance: f64, fields: []shading.Field, shaded: *shading.Output) shading.Error!void {
+    const length = @sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
+    const sun: shading.Vec3 = .{ direction[0] / length, direction[1] / length, direction[2] / length };
+    var lighting: shading.Shading = try .init(scratch, view.surfaces(), .{ .sun = sun, .spot = spot, .accuracy = shading_accuracy }, work.frame.eye, tolerance);
+    defer lighting.deinit();
+    try linework.smoothFields(work, &lighting, shaded, fields);
+}
+
+fn failure(rt: *Runtime, err: Model.Error, message: *const Model.Message) error{ ProjectionFailed, OutOfMemory } {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    rt.setMessage(std.mem.sliceTo(message, 0));
+    return error.ProjectionFailed;
 }
 
 pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Value {
@@ -185,13 +251,14 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
     var graph: Graph = .{ .rt = rt, .arena = scratch };
     const roots = try scratch.alloc(usize, input.len);
     for (input, roots) |v, *id| id.* = try graph.add(v, 0);
-    const focus = try Runtime.lengthPoints(args[3]);
+    const camera: linework.Camera = .{ .azimuth = try Runtime.angular(args[1]), .elevation = try Runtime.angular(args[2]), .focus = try Runtime.lengthPoints(args[3]) };
     const tolerance = try Runtime.lengthPoints(args[4]);
-    if (focus < 0 or tolerance <= 0) return error.InvalidProjection;
+    if (camera.focus < 0 or tolerance <= 0) return error.InvalidProjection;
     if (args[5] != .boolean) return error.TypeMismatch;
     const spot = try Runtime.angular(args[7]);
     if (!(spot >= 0 and spot < std.math.pi / 2.0)) return error.InvalidHighlightAngle;
-    var light: ?c.HuakLight = null;
+    const smooth = args.len > 9 and args[9] == .boolean and args[9].boolean;
+    var light: ?linework.Light = null;
     if (!(args[6] == .boolean and !args[6].boolean)) {
         const d = try coordinates(args[6], true);
         const scale = @max(@abs(d[0]), @abs(d[1]), @abs(d[2]));
@@ -204,59 +271,57 @@ pub fn project(rt: *Runtime, output: std.mem.Allocator, args: []const Value) !Va
             if (!(threshold.* >= 0 and threshold.* < 1) or
                 (if (i == 0) threshold.* != 0 else threshold.* <= thresholds[i - 1])) return error.InvalidIsophotes;
         }
-        light = .{ .direction = .{ d[0] / scale, d[1] / scale, d[2] / scale }, .spot_angle = spot, .isophotes = thresholds.ptr, .isophote_count = thresholds.len };
-    } else if (spot != 0) return error.HighlightRequiresLight;
-    var work: c.HuakLinework = undefined;
-    var message: [512]u8 = @splat(0);
-    switch (backend.project.?(graph.nodes.items.ptr, graph.nodes.items.len, roots.ptr, roots.len, try Runtime.angular(args[1]), try Runtime.angular(args[2]), focus, tolerance, @intFromBool(args[5].boolean), if (light) |*l| l else null, &work, &message, message.len)) {
-        0 => {},
-        2 => return error.OutOfMemory,
-        else => {
-            rt.setMessage(std.mem.sliceTo(&message, 0));
+        light = .{ .direction = .{ d[0] / scale, d[1] / scale, d[2] / scale }, .spot = spot, .isophotes = thresholds, .smooth = smooth };
+    } else if (spot != 0) return error.HighlightRequiresLight else if (smooth) return error.SmoothShadingRequiresLight;
+    var message: Model.Message = @splat(0);
+    var model = Model.build(scratch, backend, graph.nodes.items, roots, tolerance, &message) catch |err| return failure(rt, err, &message);
+    defer model.deinit(scratch);
+    var view = linework.view(&model, scratch, camera) catch |err| return failure(rt, err, &message);
+    defer view.deinit();
+    const work = linework.project(scratch, &view, .{ .faces = args[5].boolean, .light = light, .tolerance = tolerance }) catch |err| return failure(rt, err, &message);
+    const fields = try scratch.alloc(shading.Field, work.faces.items.len);
+    @memset(fields, .none);
+    var shaded: shading.Output = .{};
+    if (smooth) shade(scratch, &view, &work, light.?.direction, spot, tolerance, fields, &shaded) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.SurfaceQueryFailed => return failure(rt, error.ProjectionFailed, &message),
+        error.ShadingLimit => {
+            rt.setMessage("shading patches exceed the limit");
             return error.ProjectionFailed;
         },
-    }
-    defer backend.release.?(&work);
+        error.UndefinedNormal => {
+            rt.setMessage("undefined surface normal at shading sample");
+            return error.ProjectionFailed;
+        },
+    };
+    const commands = work.commands.items;
     var layer_count: usize = 0;
-    const result = try output.alloc(Value, work.count);
-    for (result, 0..) |*row, i| {
-        const line = work.lines[i];
-        const path = try projectedPath(rt, work.commands[line.start..][0..line.count]);
-        const kind: []const u8 = switch (line.kind) {
-            c.HUAK_EDGE => "edge",
-            c.HUAK_CURVE => "curve",
-            c.HUAK_OUTLINE => "outline",
-            c.HUAK_SMOOTH => "smooth",
-            c.HUAK_SEAM => "seam",
-            c.HUAK_INTERSECTION => "intersection",
-            else => return error.InvalidProjectedPath,
-        };
+    const result = try output.alloc(Value, work.lines.items.len);
+    for (result, work.lines.items) |*row, line| {
+        const path = try projectedPath(rt, commands[line.start..][0..line.count]);
         layer_count = @max(layer_count, line.covering + 1);
-        row.* = types.listView(try output.dupe(Value, &.{ path, .{ .int = @intCast(line.source) }, .{ .string = kind }, .{ .int = @intCast(line.covering) }, .{ .int = line.other_source } }));
+        row.* = types.listView(try output.dupe(Value, &.{ path, .{ .int = @intCast(line.source) }, .{ .string = @tagName(line.kind) }, .{ .int = @intCast(line.covering) }, .{ .int = line.other } }));
     }
-    const faces = try output.alloc(Value, work.face_count);
-    for (faces, 0..) |*row, i| {
-        const face = work.faces[i];
-        const path = try projectedPath(rt, work.commands[face.start..][0..face.count]);
+    const faces = try output.alloc(Value, work.faces.items.len);
+    for (faces, work.faces.items, fields) |*row, face, field| {
+        const path = try projectedPath(rt, commands[face.start..][0..face.count]);
         layer_count = @max(layer_count, face.covering + 1);
         const spot_path: Value = if (face.spot_count == 0)
             .{ .boolean = false }
         else if (face.spot_start == face.start and face.spot_count == face.count)
             path
         else
-            try projectedPath(rt, work.commands[face.spot_start..][0..face.spot_count]);
+            try projectedPath(rt, commands[face.spot_start..][0..face.spot_count]);
         const lobes = try output.alloc(Value, face.lobe_count);
-        for (lobes, 0..) |*lobe, index| {
-            const ellipse = work.lobes[face.lobe_start + index];
-            lobe.* = types.listView(try output.dupe(Value, &.{ .{ .vec2 = types.Vec2.fromPoint(point(ellipse.center)) }, .{ .vec2 = .{ .x = ellipse.u.x, .y = ellipse.u.y } }, .{ .vec2 = .{ .x = ellipse.v.x, .y = ellipse.v.y } } }));
+        for (lobes, work.lobes.items[face.lobe_start..][0..face.lobe_count]) |*lobe, ellipse| {
+            lobe.* = types.listView(try output.dupe(Value, &.{ .{ .vec2 = types.Vec2.fromPoint(ellipse.center) }, .{ .vec2 = .{ .x = ellipse.u.x, .y = ellipse.u.y } }, .{ .vec2 = .{ .x = ellipse.v.x, .y = ellipse.v.y } } }));
         }
         const shades = try output.alloc(Value, face.shade_count);
-        for (shades, 0..) |*shade, index| {
-            const native = work.shades[face.shade_start + index];
-            const region = if (native.start == face.start and native.count == face.count) path else try projectedPath(rt, work.commands[native.start..][0..native.count]);
-            shade.* = types.listView(try output.dupe(Value, &.{ region, .{ .number = native.diffuse } }));
+        for (shades, work.shades.items[face.shade_start..][0..face.shade_count]) |*shade_value, band| {
+            const region = if (band.start == face.start and band.count == face.count) path else try projectedPath(rt, commands[band.start..][0..band.count]);
+            shade_value.* = types.listView(try output.dupe(Value, &.{ region, .{ .number = band.diffuse } }));
         }
-        row.* = types.listView(try output.dupe(Value, &.{ path, .{ .int = @intCast(face.source) }, .{ .int = @intCast(face.face) }, .{ .int = @intCast(face.covering) }, types.listView(shades), spot_path, types.listView(lobes) }));
+        row.* = types.listView(try output.dupe(Value, &.{ path, .{ .int = @intCast(face.source) }, .{ .int = @intCast(face.face) }, .{ .int = @intCast(face.covering) }, types.listView(shades), spot_path, types.listView(lobes), try fieldValue(output, &shaded, field, tolerance) }));
     }
     return types.listView(try output.dupe(Value, &.{ types.listView(result), types.listView(faces), .{ .int = if (args[5].boolean) @intCast(layer_count) else 0 } }));
 }

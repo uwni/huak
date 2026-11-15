@@ -1712,12 +1712,44 @@ fn invoke(self: *Runtime, a: std.mem.Allocator, id: builtin.Id, args: []const Va
             const colors = try self.gpa.alloc(DisplayList.Color, values.len);
             defer self.gpa.free(colors);
             for (values, colors) |value, *dest| dest.* = try self.color(value);
-            const ramp: DisplayList.Gradient.Ramp = .{ .start = start, .end = end, .colors = colors };
+            const positions = if (id == .linear_fill and hasArgument(args, 4)) types.sequence(args[4]) orelse return error.TypeMismatch else &[_]Value{};
+            const offsets = try self.gpa.alloc(f64, positions.len);
+            defer self.gpa.free(offsets);
+            for (positions, offsets) |value, *dest| dest.* = try numeric(value);
+            const ramp: DisplayList.Gradient.Ramp = .{ .start = start, .end = end, .colors = colors, .offsets = offsets };
             if (id == .linear_fill)
                 return self.pathObject(&curve, &.{ .fill = colors[0], .gradient = &.{ .linear_fill = ramp } }, .{});
             var brush = try self.penValue(args[4]);
             brush.color = colors[0];
             return self.pathObject(&curve, &.{ .pen = brush, .gradient = &.{ .linear_stroke = ramp } }, .{});
+        },
+        .patch_fill => {
+            const curve = try self.path(args[0]);
+            const point_values = types.sequence(args[1]) orelse return error.TypeMismatch;
+            const field_values = types.sequence(args[2]) orelse return error.TypeMismatch;
+            const color_values = types.sequence(args[3]) orelse return error.TypeMismatch;
+            const level_values = types.sequence(args[4]) orelse return error.TypeMismatch;
+            // Sixteen control points and field coefficients per patch.
+            if (point_values.len % 16 != 0 or field_values.len != point_values.len or color_values.len != level_values.len) return error.InvalidStyle;
+            const points = try self.gpa.alloc([16]g.Point, point_values.len / 16);
+            defer self.gpa.free(points);
+            for (points, 0..) |*patch, index| for (patch, point_values[index * 16 ..][0..16]) |*dest, value| {
+                dest.* = try point(value);
+            };
+            const values = try self.gpa.alloc([16]f64, field_values.len / 16);
+            defer self.gpa.free(values);
+            for (values, 0..) |*patch, index| for (patch, field_values[index * 16 ..][0..16]) |*dest, value| {
+                dest.* = try numeric(value);
+            };
+            const colors = try self.gpa.alloc(DisplayList.Color, color_values.len);
+            defer self.gpa.free(colors);
+            for (color_values, colors) |value, *dest| dest.* = try self.color(value);
+            const levels = try self.gpa.alloc(f64, level_values.len);
+            defer self.gpa.free(levels);
+            for (level_values, levels) |value, *dest| dest.* = try numeric(value);
+            const margin = if (hasArgument(args, 6)) try lengthPoints(args[6]) else 0;
+            const patches: DisplayList.Gradient.Patches = .{ .points = points, .values = values, .stops = .{ .levels = levels, .colors = colors }, .tolerance = try numeric(args[5]), .margin = margin };
+            return self.pathObject(&curve, &.{ .fill = if (colors.len != 0) colors[0] else .black, .gradient = &.{ .patch_fill = patches } }, .{});
         },
         .draw, .fill, .filldraw, .label => {
             return switch (id) {

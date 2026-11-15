@@ -40,10 +40,6 @@ pub const Line = struct {
         _ = t;
         return self.points[1].sub(self.points[0]);
     }
-    pub fn chopAt(self: Line, t: f64) [2]Line {
-        const p = self.ptAtT(t);
-        return .{ .{ .points = .{ self.points[0], p } }, .{ .points = .{ p, self.points[1] } } };
-    }
     pub fn subDivide(self: Line, t1: f64, t2: f64) Line {
         return .{ .points = .{ self.ptAtT(t1), self.ptAtT(t2) } };
     }
@@ -74,23 +70,9 @@ pub const Line = struct {
         if (unequal) |u| u.* = largest != largest + dist;
         return n.pinT(t);
     }
-    pub fn nearRay(self: Line, p: Point) bool {
-        const len = self.points[1].sub(self.points[0]);
-        const ab0 = p.sub(self.points[0]);
-        const t = (len.x * ab0.x + ab0.y * len.y) / (len.x * len.x + len.y * len.y);
-        const dist = self.ptAtT(t).distance(p);
-        const b = self.hullBounds();
-        const largest = @max(@max(b.max.x, b.max.y), -@min(b.min.x, b.min.y));
-        return n.roughlyEqualUlps(largest, largest + dist);
-    }
     pub fn horizontalIntersect(self: Line, y: f64, out: *[1]f64) usize {
         if (self.points[0].y == self.points[1].y) return 0;
         out[0] = n.pinT((y - self.points[0].y) / (self.points[1].y - self.points[0].y));
-        return @intFromBool(n.between(0, out[0], 1));
-    }
-    pub fn verticalIntersect(self: Line, x: f64, out: *[1]f64) usize {
-        if (self.points[0].x == self.points[1].x) return 0;
-        out[0] = n.pinT((x - self.points[0].x) / (self.points[1].x - self.points[0].x));
         return @intFromBool(n.between(0, out[0], 1));
     }
 };
@@ -113,12 +95,6 @@ pub const Quad = struct {
         var result: Point = .{ .x = a * self.points[0].x + b * self.points[1].x + c * self.points[2].x, .y = a * self.points[0].y + b * self.points[1].y + c * self.points[2].y };
         if (result.x == 0 and result.y == 0 and n.zeroOrOne(t)) result = self.points[2].sub(self.points[0]);
         return result;
-    }
-    pub fn chopAt(self: Quad, t: f64) [2]Quad {
-        const ab = self.points[0].interp(self.points[1], t);
-        const bc = self.points[1].interp(self.points[2], t);
-        const abc = ab.interp(bc, t);
-        return .{ .{ .points = .{ self.points[0], ab, abc } }, .{ .points = .{ abc, bc, self.points[2] } } };
     }
     fn interpPoint(self: Quad, t: f64) Point {
         if (t == 0) return self.points[0];
@@ -147,12 +123,6 @@ pub const Quad = struct {
     }
     pub fn reverse(self: Quad) Quad {
         return .{ .points = .{ self.points[2], self.points[1], self.points[0] } };
-    }
-    pub fn monotonicInX(self: Quad) bool {
-        return n.between(self.points[0].x, self.points[1].x, self.points[2].x);
-    }
-    pub fn monotonicInY(self: Quad) bool {
-        return n.between(self.points[0].y, self.points[1].y, self.points[2].y);
     }
     pub fn findExtrema(self: Quad, axis: Axis, out: *[1]f64) usize {
         const a = coordinate(self.points[0], axis);
@@ -196,9 +166,6 @@ pub const Quad = struct {
         const v02 = self.points[0].sub(self.points[2]);
         const v12 = self.points[1].sub(self.points[2]);
         return v02.dot(v01) > 0 and v02.dot(v12) > 0;
-    }
-    pub fn isLinear(self: Quad, start: usize, end: usize) bool {
-        return linearControlPoints(&self.points, start, end, &.{1});
     }
     pub fn hullIntersects(self: *const Quad, other: anytype, is_linear: *bool) bool {
         if (@TypeOf(other) == Cubic or @TypeOf(other) == *const Cubic) return other.hullIntersects(self, is_linear);
@@ -315,25 +282,6 @@ pub const Cubic = struct {
         const ny = @mulAdd(f64, -8, d.y, @mulAdd(f64, 27, f.y, -a.y));
         return .{ .points = .{ a, .{ .x = @mulAdd(f64, 2, mx, -nx) / 18, .y = @mulAdd(f64, 2, my, -ny) / 18 }, .{ .x = @mulAdd(f64, 2, nx, -mx) / 18, .y = @mulAdd(f64, 2, ny, -my) / 18 }, d } };
     }
-    /// SkDCubic::subDivide(a,d,t1,t2): merged intersection endpoints also
-    /// translate their adjacent controls; source-axis alignment and the
-    /// original two-ULP snaps are applied after that correction.
-    pub fn subDivideWithEnds(self: Cubic, a: Point, d: Point, t1: f64, t2: f64) Cubic {
-        std.debug.assert(t1 != t2);
-        const sub = self.subDivide(t1, t2);
-        var controls = [2]Point{ sub.points[1].add(a.sub(sub.points[0])), sub.points[2].add(d.sub(sub.points[3])) };
-        if (t1 == 0 or t2 == 0) self.alignControl(0, 1, &controls[if (t1 == 0) 0 else 1]);
-        if (t1 == 1 or t2 == 1) self.alignControl(3, 2, &controls[if (t1 == 1) 0 else 1]);
-        if (n.almostBequalUlps(controls[0].x, a.x)) controls[0].x = a.x;
-        if (n.almostBequalUlps(controls[0].y, a.y)) controls[0].y = a.y;
-        if (n.almostBequalUlps(controls[1].x, d.x)) controls[1].x = d.x;
-        if (n.almostBequalUlps(controls[1].y, d.y)) controls[1].y = d.y;
-        return .{ .points = .{ a, controls[0], controls[1], d } };
-    }
-    fn alignControl(self: Cubic, end: usize, control: usize, point: *Point) void {
-        if (self.points[end].x == self.points[control].x) point.x = self.points[end].x;
-        if (self.points[end].y == self.points[control].y) point.y = self.points[end].y;
-    }
     pub fn hullBounds(self: Cubic) Bounds {
         return Bounds.fromPoints(&self.points);
     }
@@ -342,8 +290,8 @@ pub const Cubic = struct {
         var ts: [2]f64 = undefined;
         for ([_]Axis{ .x, .y }) |axis| {
             // The control hull proves that this axis already fits between
-            // the endpoints. Use exact ordering rather than monotonicInX/Y's
-            // absolute epsilon, which can hide extrema of very small curves.
+            // the endpoints. Exact ordering, not an absolute epsilon, which
+            // could hide extrema of very small curves.
             if (controlsWithinEndpoints(&self.points, axis)) continue;
             const count = self.findExtrema(axis, &ts);
             for (ts[0..count]) |t| result.include(self.ptAtT(t));
@@ -489,30 +437,6 @@ pub const Cubic = struct {
         const v23 = self.points[2].sub(self.points[3]);
         return v03.dot(v01) > 0 and v03.dot(v02) > 0 and v03.dot(v13) > 0 and v03.dot(v23) > 0;
     }
-    pub fn monotonicInX(self: Cubic) bool {
-        return n.preciselyBetween(self.points[0].x, self.points[1].x, self.points[3].x) and n.preciselyBetween(self.points[0].x, self.points[2].x, self.points[3].x);
-    }
-    pub fn monotonicInY(self: Cubic) bool {
-        return n.preciselyBetween(self.points[0].y, self.points[1].y, self.points[3].y) and n.preciselyBetween(self.points[0].y, self.points[2].y, self.points[3].y);
-    }
-    pub fn isLinear(self: Cubic, start: usize, end: usize) bool {
-        if (self.points[0].approximatelyDEqual(self.points[3])) return (Quad{ .points = self.points[0..3].* }).isLinear(0, 2);
-        return linearControlPoints(&self.points, start, end, &.{ 1, 2 });
-    }
-    pub fn calcPrecision(self: Cubic) f64 {
-        return (self.points[1].sub(self.points[0]).length() + self.points[2].sub(self.points[1]).length() + self.points[3].sub(self.points[2]).length()) / 256;
-    }
-    pub fn findMaxCurvature(self: Cubic, out: *[3]f64) usize {
-        var coefficients_sum: [4]f64 = @splat(0);
-        for ([_]Axis{ .x, .y }) |axis| {
-            const a = coordinate(self.points[1], axis) - coordinate(self.points[0], axis);
-            const b = coordinate(self.points[2], axis) - 2 * coordinate(self.points[1], axis) + coordinate(self.points[0], axis);
-            const c = coordinate(self.points[3], axis) + 3 * (coordinate(self.points[1], axis) - coordinate(self.points[2], axis)) - coordinate(self.points[0], axis);
-            const values = [4]f64{ c * c, 3 * b * c, 2 * b * b + c * a, a * b };
-            for (&coefficients_sum, values) |*sum, value| sum.* += value;
-        }
-        return roots.cubicValidT(coefficients_sum[0], coefficients_sum[1], coefficients_sum[2], coefficients_sum[3], out);
-    }
     pub fn convexHull(self: *const Cubic, order: *[4]usize) usize {
         var y_min: usize = 0;
         for (1..4) |i| if (self.points[y_min].y > self.points[i].y or
@@ -656,26 +580,6 @@ pub const Cubic = struct {
 };
 fn otherTwo(one: usize, two: usize) usize {
     return (@as(usize, 1) >> @as(std.math.Log2Int(usize), @intCast(3 - (one ^ two)))) ^ 3;
-}
-fn linearControlPoints(points: []const Point, start: usize, end: usize, controls: []const usize) bool {
-    var a = points[start].y - points[end].y;
-    var b = points[end].x - points[start].x;
-    var c = points[start].x * points[end].y - points[end].x * points[start].y;
-    const normal = @sqrt(a * a + b * b);
-    if (n.approximatelyZero(normal)) {
-        a = 0;
-        b = 0;
-        c = 0;
-    } else {
-        const reciprocal = 1 / normal;
-        a *= reciprocal;
-        b *= reciprocal;
-        c *= reciprocal;
-    }
-    const bounds = Bounds.fromPoints(points);
-    const largest = @max(@max(bounds.max.x, bounds.max.y), -@min(bounds.min.x, bounds.min.y));
-    for (controls) |index| if (!n.approximatelyZeroWhenComparedTo(a * points[index].x + b * points[index].y + c, largest)) return false;
-    return true;
 }
 fn pointInTriangle(points: [3]Point, test_point: Point) bool {
     const v0 = points[2].sub(points[0]);
@@ -1147,14 +1051,11 @@ test "endpoint control hull bounds retain monotone and interior extrema at extre
         point.x = std.math.ldexp(point.x, -80);
         point.y = std.math.ldexp(point.y, -80);
     }
-    // Existing tolerant monotonicity is intentionally unchanged. It is not
-    // sufficient to discard this curve's nonzero interior extrema.
-    try std.testing.expect(tiny.monotonicInY());
     try std.testing.expect(tiny.bounds().min.y < 0);
     try std.testing.expect(tiny.bounds().max.y > 0);
 }
 
-test "upstream curve hull and linearity methods compile and retain strict separation" {
+test "upstream curve hull methods retain strict separation" {
     const cubic: Cubic = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 3 }, .{ .x = 2, .y = -2 }, .{ .x = 4, .y = 0 } } };
     const quad: Quad = .{ .points = .{ .{ .x = 0, .y = 2 }, .{ .x = 2, .y = -1 }, .{ .x = 4, .y = 2 } } };
     const far: Quad = .{ .points = .{ .{ .x = 10, .y = 2 }, .{ .x = 12, .y = -1 }, .{ .x = 14, .y = 2 } } };
@@ -1164,9 +1065,6 @@ test "upstream curve hull and linearity methods compile and retain strict separa
     try std.testing.expect((Curve{ .quad = quad }).hullIntersects(&.{ .cubic = cubic }, &linear));
     try std.testing.expect(quad.hullIntersects(quad, &linear));
     try std.testing.expect(cubic.hullIntersects(cubic, &linear));
-    try std.testing.expect(!cubic.isLinear(0, 3));
-    try std.testing.expect(!quad.isLinear(0, 2));
-    try std.testing.expect(cubic.bounds().valid());
     try std.testing.expect(!(Curve{ .cubic = cubic }).collapsed());
     try std.testing.expectEqual(@as(usize, 4), (Curve{ .cubic = cubic }).pointCount());
     try std.testing.expect((Curve{ .cubic = cubic }).point(3).eql(cubic.points[3]));
@@ -1245,21 +1143,6 @@ test "hull Y projection preserves original rotation bits and degeneracy" {
     }
 }
 
-test "merged cubic endpoints shift adjacent controls while retaining source alignment" {
-    const c: Cubic = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 2 }, .{ .x = 4, .y = 2 } } };
-    const sub = c.subDivide(0, 0.5);
-    const delta: Point = .{ .x = 0.001, .y = -0.002 };
-    const endpoint = sub.points[3].add(delta);
-    const adjusted = c.subDivideWithEnds(c.points[0], endpoint, 0, 0.5);
-    try std.testing.expect(adjusted.points[0].eql(c.points[0]));
-    try std.testing.expect(adjusted.points[3].eql(endpoint));
-    try std.testing.expectEqual(@as(f64, 0), adjusted.points[1].y);
-    try std.testing.expect(adjusted.points[2].eql(sub.points[2].add(endpoint.sub(sub.points[3]))));
-    const reversed = c.subDivideWithEnds(endpoint, c.points[0], 0.5, 0);
-    try std.testing.expectEqual(@as(f64, 0), reversed.points[2].y);
-    try std.testing.expect(reversed.points[3].eql(c.points[0]));
-}
-
 test "axis line proximity uses its constant-coordinate ULP budget" {
     const line: Line = .{ .points = .{ .{ .x = 0, .y = 0 }, .{ .x = 1e5, .y = 0 } } };
     try std.testing.expectEqual(@as(f64, -1), line.nearPoint(.{ .x = 5e4, .y = 1e-12 }, null));
@@ -1268,7 +1151,6 @@ test "axis line proximity uses its constant-coordinate ULP budget" {
     try std.testing.expect(!unequal);
     try std.testing.expectEqual(@as(f64, 0), line.exactPoint(.{ .x = 0, .y = 0 }));
     try std.testing.expectEqual(@as(f64, 1), line.exactPoint(.{ .x = 1e5, .y = 0 }));
-    try std.testing.expect(line.nearRay(.{ .x = 2e5, .y = 0 }));
 }
 
 test "line evaluation matches reference rounding before coincidence classification" {
@@ -1296,6 +1178,5 @@ test "line evaluation matches reference rounding before coincidence classificati
             try std.testing.expectEqual(coordinates[0], @as(u64, @bitCast(point.x)));
             try std.testing.expectEqual(coordinates[1], @as(u64, @bitCast(point.y)));
         }
-        try std.testing.expect(!pa.approximatelyDEqual(pb));
     }
 }

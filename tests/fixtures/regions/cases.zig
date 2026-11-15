@@ -189,10 +189,3 @@ pub fn input(allocator: std.mem.Allocator, case: Case) !Inputs {
     errdefer allocator.free(be);
     return .{ .a = a, .b = b, .ae = ae, .be = be, .probes = try probes.toOwnedSlice(allocator) };
 }
-
-pub fn eoEquivalent(shape: Shape) bool {
-    return switch (shape) {
-        .opposite_raw, .opposite_canonical, .crossing => false,
-        else => true,
-    };
-}
