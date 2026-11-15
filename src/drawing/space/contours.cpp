@@ -1,5 +1,8 @@
 // Contours where a face's normal makes a constant angle with a direction.
 #include "space.hxx"
+// Contap_Point.hxx and Contap_Line.hxx use Adaptor2d_Curve2d without
+// including it.
+#include <Adaptor2d_Curve2d.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepTopAdaptor_Tool.hxx>
 #include <Contap_Contour.hxx>

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(huak_space LANGUAGES CXX)
 find_package(OpenCASCADE CONFIG REQUIRED COMPONENTS FoundationClasses ModelingData ModelingAlgorithms)
+# An SDK built with precompiled headers exports them to its consumers, which
+# hides includes missing from our sources. Compile every source on its own
+# includes, whichever SDK is used.
+set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
 
 # Use the native C++ toolchain and the SDK's imported targets on both sides
 # of the OCCT C++ interface. Only the C projection table crosses into Zig.
