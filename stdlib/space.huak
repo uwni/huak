@@ -95,14 +95,15 @@ export struct Shade
 end
 
 // Continuous light on a visible face, from project(..., smooth: true).
-// Diffuse is n·l. Glint is 1 at the center of the highlight, positive inside
-// it, and -1 where there is no highlight or the point is unlit. A "constant"
-// field has one sample. A "profile" varies only along start -> stop, with
-// positions from 0 to 1. "patches" carry sixteen control points and field
-// coefficients each (see object.patch_fill): diffuse on points, and the
-// glint on finer glint_points where the highlight can reach. They extend past
-// the face's region and stay within accuracy of the light, except within
-// margin of the region's outline, which is traced only that accurately.
+// Diffuse is n·l. Glint is 1 at the center of the highlight and positive
+// inside it; it is at most 0 where the point is unlit, and -1 everywhere when
+// there is no highlight. A "constant" field has one sample. A "profile"
+// varies only along start -> stop, with positions from 0 to 1. "patches"
+// carry sixteen control points and field coefficients each (see
+// object.patch_fill): diffuse on points, and the glint on finer glint_points
+// where the highlight can reach. They extend past the face's region and stay
+// within accuracy of the light, except within margin of the region's
+// outline, which is traced only that accurately.
 export struct LightField
     kind:string
     diffuse:list

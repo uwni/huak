@@ -131,8 +131,10 @@ pub const Light = struct {
 };
 
 /// Light at one point: n·l, unclamped, and the glint (n·h - cos spot) /
-/// (1 - cos spot), 1 at the center of the highlight and positive inside it,
-/// or -1 where the point is unlit or there is no highlight.
+/// (1 - cos spot), 1 at the center of the highlight and positive inside it.
+/// Where the point is unlit the glint is capped at 0, so the field stays
+/// continuous across the terminator wherever the highlight does not reach
+/// it; with no highlight it is -1.
 pub const Shine = struct { diffuse: f64, glint: f64 };
 pub const Sample = struct {
     /// The fraction of the way from start to end.
@@ -238,7 +240,8 @@ pub const Shading = struct {
 
     fn shine(self: *const Shading, normal: Vec3) Shine {
         const diffuse = dot(normal, self.sun);
-        return .{ .diffuse = diffuse, .glint = if (diffuse > 0) self.glint(normal) else -1 };
+        const gleam = self.glint(normal);
+        return .{ .diffuse = diffuse, .glint = if (diffuse > 0) gleam else @min(gleam, 0) };
     }
 
     /// The node at `uv`: its projection, depth and light. A singular node

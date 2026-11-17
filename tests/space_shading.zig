@@ -65,6 +65,13 @@ pub fn main(init: std.process.Init) !void {
         const roots = [_]usize{try add(a, &nodes, shape(c.HUAK_CONE, &.{ 12, 0, 20 }))};
         _ = try scenes.check("cone", nodes.items, &roots, -80, 36, overhead, 30, null);
     }
+    // Glint patches cross the terminator of this cone, where the glint of
+    // lit points far from the highlight is well below that of unlit ones.
+    {
+        var nodes: std.ArrayList(c.HuakModelShape) = .empty;
+        const roots = [_]usize{try add(a, &nodes, shape(c.HUAK_CONE, &.{ 14, 0, 38 }))};
+        _ = try scenes.check("cone across the terminator", nodes.items, &roots, -70, 28, overhead, 24, null);
+    }
     // A cylinder seen across its axis shades along a profile; its caps are
     // constant.
     {
@@ -207,8 +214,12 @@ const Scenes = struct {
             w.samples += 1;
             for (painted, 0..) |shine, k| {
                 w.errors[k] = @max(w.errors[k], @abs(shine.diffuse - diffuse));
-                // The glint matters where it is positive and the point is lit.
-                if (diffuse > 0 and (glint > 0 or shine.glint > 0)) w.errors[2 + k] = @max(w.errors[2 + k], @abs(@max(shine.glint, 0) - @max(glint, 0)));
+                // The highlight shows wherever the painted glint is positive:
+                // it must be the lit glint there, and absent where the point is
+                // unlit.
+                const lit = if (diffuse > 0) @max(glint, 0) else 0;
+                const shown = @max(shine.glint, 0);
+                if (lit > 0 or shown > 0) w.errors[2 + k] = @max(w.errors[2 + k], @abs(shown - lit));
             }
         }
         var largest: [4]f64 = @splat(0);
