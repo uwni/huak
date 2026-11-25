@@ -153,7 +153,7 @@ fn allocationCase(allocator: std.mem.Allocator) !void {
     var drawing = DisplayList.init(allocator);
     defer drawing.deinit();
     try drawing.beginScope(.{}, source);
-    try drawing.filldraw(source, .{ .r = 1, .a = 0.5 }, .{ .width = 0.5 }, .{});
+    try drawing.filldraw(source, .{ .color = .{ .r = 1, .a = 0.5 } }, .{ .width = 0.5 }, .{});
     try drawing.endScope();
     var warped = try bend.picture(allocator, &drawing);
     defer warped.deinit();

@@ -28,7 +28,7 @@ pub fn collect(allocator: std.mem.Allocator, program: *const bytecode.Program) !
         if (label) |alias| {
             if (default) continue;
             if (!merged and output.global == shared.?) {
-                try result.append(allocator, .{ .name = "default", .label = alias, .default = true });
+                try result.append(allocator, .{ .name = bytecode.Output.default_name, .label = alias, .default = true });
                 merged = true;
                 continue;
             }
@@ -39,7 +39,7 @@ pub fn collect(allocator: std.mem.Allocator, program: *const bytecode.Program) !
 }
 
 fn isDefault(name: []const u8) bool {
-    return std.mem.eql(u8, name, "default");
+    return std.mem.eql(u8, name, bytecode.Output.default_name);
 }
 
 fn isPicture(program: *const bytecode.Program, output: bytecode.Output) bool {
@@ -50,7 +50,7 @@ fn isPicture(program: *const bytecode.Program, output: bytecode.Output) bool {
 /// A default is a snapshot. It shares a named binding's final value only when
 /// a direct global read created it and that binding cannot subsequently change.
 fn defaultSource(program: *const bytecode.Program) ?u32 {
-    const output = program.outputNamed("default") orelse return null;
+    const output = program.outputNamed(bytecode.Output.default_name) orelse return null;
     if (!isPicture(program, output.*)) return null;
     const destination = output.global;
     const code = program.functions[program.entry].code;

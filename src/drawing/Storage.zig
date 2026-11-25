@@ -8,6 +8,7 @@ pub const Cap = style.Cap;
 pub const Join = style.Join;
 pub const FillRule = style.FillRule;
 pub const Pen = style.Pen;
+pub const Paint = style.Paint;
 pub const Style = style.Style;
 pub const MeshStore = style.Gradient.Store;
 /// Metrics are supplied by a typesetter; baseline is measured from frame top
@@ -52,7 +53,10 @@ pub const Geometry = struct {
 pub const PathCommand = struct { path: PathRef, style: *const Style, transform: g.Transform };
 
 pub const Label = struct { reference: u32, metrics: Metrics, transform: g.Transform };
-pub const Scope = struct { transform: g.Transform, clip: ?PathRef };
+/// A group of commands under one transform and clip. Below 1, `opacity`
+/// blends the finished group as one layer: its commands first paint over one
+/// another, and what shows is then mixed with what lies under the group.
+pub const Scope = struct { transform: g.Transform, clip: ?PathRef, opacity: f64 = 1 };
 pub const Error = std.mem.Allocator.Error || error{
     InvalidColor,
     InvalidPen,
@@ -178,6 +182,10 @@ pub fn validateScope(transform: g.Transform, clip: ?*const Path) Error!void {
     if (!transform.isFinite()) return error.NonFinite;
     if (clip) |value| try validatePath(value.segments.items, true);
 }
+/// A group's opacity runs from 0, which hides it, to 1.
+pub fn validateOpacity(opacity: f64) Error!void {
+    if (!(opacity >= 0 and opacity <= 1)) return error.InvalidStyle;
+}
 pub fn label(reference: u32, metrics: Metrics, transform: g.Transform) Error!Label {
     try validateMetrics(metrics);
     if (!transform.isFinite()) return error.NonFinite;
@@ -194,16 +202,9 @@ pub fn validateMetrics(metrics: Metrics) Error!void {
 }
 pub fn validateStyle(style_value: *const Style) Error!void {
     if (style_value.fill == null and style_value.pen == null) return error.InvalidStyle;
-    if (style_value.gradient) |paint| {
-        if (if (paint.* == .linear_stroke) style_value.pen == null else style_value.fill == null) return error.InvalidStyle;
-        switch (paint.*) {
-            .patch_fill => |patches| try patches.validate(),
-            .radial_fill, .linear_fill, .linear_stroke => |ramp| try ramp.validate(),
-        }
-    }
-    if (style_value.fill) |fill| if (!fill.valid()) return error.InvalidColor;
+    if (style_value.fill) |*fill| try validatePaint(fill);
     if (style_value.pen) |*pen| {
-        if (!pen.color.valid()) return error.InvalidColor;
+        try validatePaint(&pen.paint);
         if (!std.math.isFinite(pen.width) or pen.width < 0 or !std.math.isFinite(pen.miter_limit) or pen.miter_limit < 1 or !std.math.isFinite(pen.dash_phase)) return error.InvalidPen;
         if (pen.nib) |nib| nib.validate() catch return error.InvalidPen;
         if (pen.motion) |motion| {
@@ -216,6 +217,17 @@ pub fn validateStyle(style_value: *const Style) Error!void {
             total += length;
         }
         if (!std.math.isFinite(total) or (pen.dash.len != 0 and total <= 0)) return error.InvalidPen;
+    }
+}
+fn validatePaint(paint: *const style.Paint) Error!void {
+    switch (paint.*) {
+        .color => |color| if (!color.valid()) return error.InvalidColor,
+        .gradient => |gradient| switch (gradient.*) {
+            .patches => |patches| try patches.validate(),
+            .fan => |conic| try conic.validate(),
+            .color_patches => |patches| try patches.validate(),
+            .linear, .radial => |ramp| try ramp.validate(),
+        },
     }
 }
 pub fn validatePath(segments: []const Path.Segment, closed: bool) Error!void {

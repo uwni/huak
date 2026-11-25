@@ -20,6 +20,9 @@ pub const Options = struct {
     /// Watch events use JSON Lines on stdout; script prints remain on stderr.
     json: bool = false,
 };
+/// The events `watch --json` writes, one JSON object a line, each named by
+/// its `event` member.
+pub const WatchEvent = enum { build_start, success, @"error" };
 
 // The same upstream declarations drive token recognition and help output.
 const main_params = clap.parseParamsComptime(
@@ -38,7 +41,8 @@ const params = clap.parseParamsComptime(
     \\--json                  Emit watch build events as JSON Lines.
     \\<FILE>                  Script to compile or execute.
 );
-const Option = enum { param, output, jobs, libtypst, font, @"font-path", @"system-fonts", @"no-bundled-fonts", json, file };
+/// The options, each named as it is given after `--`, and the script file.
+pub const Option = enum { param, output, jobs, libtypst, font, @"font-path", @"system-fonts", @"no-bundled-fonts", json, file };
 // Assign typed IDs once at comptime; runtime parsing never rematches names.
 const option_params = blk: {
     @setEvalBranchQuota(2000);
@@ -67,10 +71,35 @@ pub fn writeUsage(writer: *std.Io.Writer) !void {
     try clap.help(writer, clap.Help, &params, .{});
 }
 
+/// What the command line takes from the engine: the name of a script's
+/// default export, which an output given without a name selects, and the
+/// formats it renders, each named by the extension of the files it writes.
+pub const Engine = struct { default_output: []const u8, formats: []const []const u8 };
+
+/// The format of `formats` an output file is written in, by its extension.
+pub fn formatOf(formats: []const []const u8, path: []const u8) ?usize {
+    const extension = std.fs.path.extension(path);
+    if (extension.len < 2) return null;
+    for (formats, 0..) |format, index| if (std.mem.eql(u8, extension[1..], format)) return index;
+    return null;
+}
+
+/// The extensions of the formats, written as a list: ".svg or .pdf".
+const Extensions = struct {
+    formats: []const []const u8,
+
+    pub fn format(self: Extensions, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        for (self.formats, 0..) |name, index| {
+            if (index != 0) try writer.writeAll(if (index + 1 == self.formats.len) " or " else ", ");
+            try writer.print(".{s}", .{name});
+        }
+    }
+};
+
 /// Returned strings borrow args; owned parameter/font/output lists use allocator.
 /// zig-clap handles options, assignments and --. The remaining checks express
 /// huak's command, duplicate and script-parameter rules.
-pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, diagnostic: *?[]const u8) !Options {
+pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, engine: Engine, diagnostic: *?[]const u8) !Options {
     diagnostic.* = null;
     var iterator: clap.args.SliceIterator = .{ .args = args };
     var detail: clap.Diagnostic = .{};
@@ -144,11 +173,11 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, diagnostic:
                 const output: Output = if (std.mem.indexOfScalar(u8, value, '=')) |at|
                     .{ .name = value[0..at], .path = value[at + 1 ..] }
                 else
-                    .{ .name = "default", .path = value };
+                    .{ .name = engine.default_output, .path = value };
                 if (!identifier(output.name)) return fail(allocator, diagnostic, "output name must be an identifier: '{s}'", .{output.name});
                 if (output.path.len == 0) return fail(allocator, diagnostic, "output path must not be empty", .{});
-                if (!std.mem.endsWith(u8, output.path, ".svg") and !std.mem.endsWith(u8, output.path, ".pdf"))
-                    return fail(allocator, diagnostic, "output must end in .svg or .pdf: '{s}'", .{output.path});
+                if (formatOf(engine.formats, output.path) == null)
+                    return fail(allocator, diagnostic, "output must end in {f}: '{s}'", .{ Extensions{ .formats = engine.formats }, output.path });
                 for (outputs.items) |previous| if (std.mem.eql(u8, previous.path, output.path))
                     return fail(allocator, diagnostic, "duplicate output path '{s}'", .{output.path});
                 try outputs.append(output);
@@ -208,138 +237,6 @@ fn fail(allocator: std.mem.Allocator, diagnostic: *?[]const u8, comptime format:
     return error.InvalidArguments;
 }
 
-fn rejected(args: []const []const u8, expected: []const u8) !void {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var diagnostic: ?[]const u8 = null;
-    try std.testing.expectError(error.InvalidArguments, parse(arena.allocator(), args, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?, expected) != null);
-}
-
-test "run flags preserve literal strings and repeated font paths" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var diagnostic: ?[]const u8 = null;
-    const options = try parse(arena.allocator(), &.{ "run", "drawing.huak", "--param", "count=200", "--param=title=\"); panic(\"x\")", "--param", "empty=", "--output", "out.pdf", "--output=detail=more=detail.svg", "--output=detail=other.pdf", "--libtypst=custom.dylib", "--font", "one.ttf", "--font=two.otf", "--font-path", "fonts", "--font-path=more fonts", "--system-fonts", "--no-bundled-fonts" }, &diagnostic);
-    try std.testing.expectEqual(Command.run, options.command);
-    try std.testing.expectEqualStrings("drawing.huak", options.script.?);
-    try std.testing.expectEqualStrings("custom.dylib", options.library.?);
-    try std.testing.expectEqual(@as(usize, 3), options.outputs.len);
-    try std.testing.expectEqualStrings("default", options.outputs[0].name);
-    try std.testing.expectEqualStrings("out.pdf", options.outputs[0].path);
-    try std.testing.expectEqualStrings("detail", options.outputs[1].name);
-    try std.testing.expectEqualStrings("more=detail.svg", options.outputs[1].path);
-    try std.testing.expectEqual(@as(usize, 2), options.fonts.len);
-    try std.testing.expectEqual(@as(usize, 2), options.font_dirs.len);
-    try std.testing.expectEqualStrings("more fonts", options.font_dirs[1]);
-    try std.testing.expect(options.system_fonts);
-    try std.testing.expectEqualStrings("\"); panic(\"x\")", options.parameters[1].value);
-    try std.testing.expectEqualStrings("", options.parameters[2].value);
-    try std.testing.expect(!options.bundled_fonts);
-    try std.testing.expect(diagnostic == null);
-}
-
-test "watch shares run options and reserves JSON events for watch" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var diagnostic: ?[]const u8 = null;
-    const options = try parse(arena.allocator(), &.{ "watch", "--json", "--output", "default=preview.svg", "--param", "count=3", "drawing.huak", "--font", "custom.otf", "-j2" }, &diagnostic);
-    try std.testing.expectEqual(Command.watch, options.command);
-    try std.testing.expect(options.json);
-    try std.testing.expectEqualStrings("drawing.huak", options.script.?);
-    try std.testing.expectEqualStrings("default", options.outputs[0].name);
-    try std.testing.expectEqualStrings("count", options.parameters[0].name);
-    try std.testing.expectEqual(@as(?usize, 2), options.jobs);
-    try rejected(&.{ "run", "drawing.huak", "--json" }, "only valid with watch");
-    try rejected(&.{ "watch", "drawing.huak", "--json", "--json" }, "duplicate option");
-}
-
-test "command grammar rejects unknown duplicate and incomplete arguments" {
-    try rejected(&.{}, "expected");
-    try rejected(&.{"unknown"}, "unknown command");
-    try rejected(&.{"run"}, "missing script");
-    try rejected(&.{ "run", "a.huak", "b.huak" }, "unexpected positional");
-    try rejected(&.{ "run", "a.huak", "--unknown" }, "unknown option");
-    try rejected(&.{ "run", "a.huak", "--param" }, "missing value");
-    try rejected(&.{ "run", "a.huak", "--font", "--libtypst", "lib.so" }, "missing value");
-    try rejected(&.{ "run", "a.huak", "--param", "=value" }, "name must not");
-    try rejected(&.{ "run", "a.huak", "--param", "name" }, "NAME=VALUE");
-    try rejected(&.{ "run", "a.huak", "--param", "x=1", "--param", "x=2" }, "duplicate parameter");
-    try rejected(&.{ "run", "a.huak", "--output", "--font", "a.ttf" }, "missing value");
-    try rejected(&.{ "run", "a.huak", "--output=foo=" }, "path must not be empty");
-    try rejected(&.{ "run", "a.huak", "--output==a.svg" }, "name must be an identifier");
-    try rejected(&.{ "run", "a.huak", "--output=bad-name=a.svg" }, "name must be an identifier");
-    try rejected(&.{ "run", "a.huak", "--output=a.png" }, ".svg or .pdf");
-    try rejected(&.{ "run", "a.huak", "--output=one=a.svg", "--output=two=a.svg" }, "duplicate output path");
-    try rejected(&.{ "check", "a.huak", "--output=a.svg" }, "only valid with run");
-    try rejected(&.{ "run", "a.huak", "--no-bundled-fonts", "--no-bundled-fonts" }, "duplicate option");
-    try rejected(&.{ "run", "a.huak", "--system-fonts", "--system-fonts" }, "duplicate option '--system-fonts'");
-    try rejected(&.{ "run", "a.huak", "--font-path=" }, "empty value for '--font-path'");
-    try rejected(&.{ "check", "a.huak", "--system-fonts" }, "only valid with run");
-    try rejected(&.{ "run", "a.huak", "--libtypst=one", "--libtypst", "two" }, "duplicate option '--libtypst'");
-    try rejected(&.{ "check", "a.huak", "--param", "a=1" }, "only valid with run");
-    try rejected(&.{ "--", "run" }, "unknown command");
-    try rejected(&.{ "--help", "run" }, "help does not accept");
-    try rejected(&.{ "help", "run" }, "help does not accept");
-}
-
-test "arguments preserve owned lists and attached option-like values" {
-    const allocator = std.testing.allocator;
-    var diagnostic: ?[]const u8 = null;
-    const options = try parse(allocator, &.{ "run", "--libtypst=--syntax-library", "--font=--font.ttf", "--param=label=--literal", "--output=--drawing.svg", "--", "-drawing.huak" }, &diagnostic);
-    defer allocator.free(options.parameters);
-    defer allocator.free(options.fonts);
-    defer allocator.free(options.font_dirs);
-    defer allocator.free(options.outputs);
-    try std.testing.expect(diagnostic == null);
-    try std.testing.expectEqualStrings("-drawing.huak", options.script.?);
-    try std.testing.expectEqualStrings("--syntax-library", options.library.?);
-    try std.testing.expectEqualStrings("--font.ttf", options.fonts[0]);
-    try std.testing.expectEqualStrings("label", options.parameters[0].name);
-    try std.testing.expectEqualStrings("--literal", options.parameters[0].value);
-    try std.testing.expectEqualStrings("--drawing.svg", options.outputs[0].path);
-}
-
-test "check disassembly help and explicit positional separator" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var diagnostic: ?[]const u8 = null;
-    const help = try parse(arena.allocator(), &.{"--help"}, &diagnostic);
-    try std.testing.expectEqual(Command.help, help.command);
-    const check = try parse(arena.allocator(), &.{ "check", "--libtypst", "lib.so", "a.huak" }, &diagnostic);
-    try std.testing.expectEqual(Command.check, check.command);
-    const disassemble = try parse(arena.allocator(), &.{ "disassemble", "--", "-a.huak" }, &diagnostic);
-    try std.testing.expectEqual(Command.disassemble, disassemble.command);
-    try std.testing.expectEqualStrings("-a.huak", disassemble.script.?);
-}
-
-test "parallel output jobs use clap long and short options" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var diagnostic: ?[]const u8 = null;
-    const automatic = try parse(arena.allocator(), &.{ "run", "a.huak" }, &diagnostic);
-    try std.testing.expect(automatic.jobs == null);
-    for ([_][]const []const u8{
-        &.{ "run", "a.huak", "--jobs", "3" },
-        &.{ "run", "--jobs=3", "a.huak" },
-        &.{ "run", "a.huak", "-j", "3" },
-        &.{ "run", "a.huak", "-j3" },
-        &.{ "run", "a.huak", "--jobs=+3" },
-    }) |args| {
-        const options = try parse(arena.allocator(), args, &diagnostic);
-        try std.testing.expectEqual(@as(?usize, 3), options.jobs);
-        try std.testing.expect(diagnostic == null);
-    }
-    const serial = try parse(arena.allocator(), &.{ "run", "a.huak", "--jobs=1" }, &diagnostic);
-    try std.testing.expectEqual(@as(?usize, 1), serial.jobs);
-}
-
-test "parallel output jobs reject invalid duplicate and non-run options" {
-    for ([_][]const u8{ "0", "-1", "1.5", "many", "", "999999999999999999999999999999999999999999" }) |value|
-        try rejected(&.{ "run", "a.huak", "--jobs", value }, "positive integer");
-    try rejected(&.{ "run", "a.huak", "--jobs" }, "missing value");
-    try rejected(&.{ "run", "a.huak", "--jobs", "--font", "a.ttf" }, "missing value");
-    try rejected(&.{ "run", "a.huak", "--jobs=2", "-j3" }, "duplicate option '--jobs'");
-    try rejected(&.{ "check", "a.huak", "--jobs=2" }, "only valid with run");
-    try rejected(&.{ "disassemble", "a.huak", "-j2" }, "only valid with run");
+test {
+    _ = @import("options_test.zig");
 }

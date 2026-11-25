@@ -21,6 +21,11 @@ typst_core = { package = "typst", version = "=0.15.1" }
 typst_layout = { package = "typst-layout", version = "=0.15.1" }
 typst_svg = { package = "typst-svg", version = "=0.15.1" }
 typst_pdf = { package = "typst-pdf", version = "=0.15.1" }
+# typst-pdf's PDF writer and the parser it embeds PDF pages with, at the
+# versions and with the PDF embedding typst-pdf already links: a PDF page
+# drawn inside one transparency group (`typst_pdf_page_with_opacity`).
+krilla = { version = "=0.8.2", default-features = false, features = ["pdf"] }
+hayro-syntax = "=0.7.2"
 # Upstream font provisioning: embedded fonts, lazily loaded font slots and,
 # where a file system exists, directory and system font discovery.
 typst_kit = { package = "typst-kit", version = "=0.15.1", default-features = false, features = ["embedded-fonts"] }

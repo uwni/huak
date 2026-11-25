@@ -1,0 +1,140 @@
+// What surrounds the data: axes and spines, the title, the legend and the colorbar.
+import math.{min, ceil}
+import collections.get
+import color.rgb
+import geometry.{rectangle}
+import object.{append, draw, fill}
+import "model.huak".{Figure, horizontal, primary}
+import "rulers.huak" as rulers
+import "arrows.huak" as arrows
+import "scales.huak" as scales
+import "markers.huak" as markers
+import "labels.huak" as labels
+import "heatmap.huak" as heat
+import "panels.huak".{Panel, palette}
+import "layers.huak".{segment}
+
+export fn decorations(dst:picture, panel:Panel, fig:Figure, foreground:bool)
+    opts := panel.source.options
+    o := panel.origin; s := panel.size
+    ink := pen(get(fig.options, "ink", rgb(0.15, 0.15, 0.15)), 0.6pt)
+    grid := pen(get(fig.options, "grid_color", rgb(0.88, 0.88, 0.88)), 0.4pt)
+    spines:list := get(opts, "spines", keys(panel.rulers_by_side))
+    for side in keys(panel.rulers_by_side) do
+        cross := "x"
+        if horizontal(side) then cross = "y" end
+        pieces := panel.rulers_by_side[primary(panel.source, cross)].partition.pieces
+        rulers.paint(dst, panel.rulers_by_side[side], o, s, ink, grid, foreground, scales.index(spines, side) >= 0, pieces)
+    end
+    if foreground then
+        // A spine can also be a bare frame edge without a scale or ticks.
+        for side in spines do
+            horizontal(side)
+            if not dict_contains(panel.rulers_by_side, side) then
+                dim := "x"; start := o
+                if not horizontal(side) then dim = "y" end
+                if side == "top" then start = o+(0pt, s.y) end
+                if side == "right" then start = o+(s.x, 0pt) end
+                frame := copy(panel.rulers_by_side[primary(panel.source, dim)])
+                frame.side = side
+                frame.options = {}
+                rulers.spine(dst, frame, start, ink)
+            end
+        end
+        if get(opts, "title", false) != false then
+            share := title_share(opts)
+            labels.place(dst, opts["title"], (o.x+s.x*share, o.y+s.y+panel.top-3pt), (share, 1))
+        end
+    end
+end
+
+// An aligned title is anchored at this share of the plot area's width.
+fn title_share(opts:dict) -> float
+    align:string := get(opts, "title_align", "center")
+    if align == "left" then return 0.0 end
+    if align == "right" then return 1.0 end
+    return 0.5
+end
+
+export fn legend(dst:picture, panel:Panel, fig:Figure)
+    position:string := get(panel.source.options, "legend", "none")
+    if position == "none" or len(panel.legends) == 0 then return end
+    o := panel.origin; s := panel.size; size := panel.legend_size
+    p := o+s-size-(5pt, 5pt)
+    if position == "top-left" then p = (o.x+5pt, o.y+s.y-size.y-5pt) end
+    if position == "bottom-left" then p = o+(5pt, 5pt) end
+    if position == "bottom-right" then p = (o.x+s.x-size.x-5pt, o.y+5pt) end
+    if position == "outside-right" then p = (o.x+s.x+panel.right-panel.legend_right, o.y+s.y-size.y) end
+    if position == "outside-bottom" then p = (o.x, o.y-panel.bottom+2pt) end
+    if get(fig.options, "background", rgb(1, 1, 1)) != false then
+        append(dst, fill(rectangle(p, size.x, size.y), rgb(1, 1, 1, 0.94)))
+    end
+    colors := palette(fig)
+    columns:int := get(panel.source.options, "legend_columns", 1)
+    rows := int(ceil(float(len(panel.legends))/columns))
+    height := (size.y-8pt)/rows
+    for j in 0:len(panel.legends)-1 do
+        i:int := panel.legends[j]
+        item := panel.layers[i]
+        ink := get(item.options, "color", colors[get(item.options, "series_index", i)%len(colors)])
+        at := p+(4pt+(j%columns)*(size.x-8pt)/columns, size.y-4pt-(int(j/columns)+0.5)*height)
+        stroke := get(item.options, "pen", pen(ink, get(item.options, "width", get(fig.options, "line_width", 1.2pt)), dash: get(item.options, "dash", [])))
+        // legend_line=false keeps only the marker and label of an entry.
+        if get(item.options, "legend_line", true) then
+            if item.kind == "arrow" or item.kind == "lines" or item.kind == "hline" or item.kind == "vline" then
+                ends := "none"
+                if item.kind == "arrow" then ends = "end" end
+                arrows.stroke(dst, [at+(2pt, 0pt), at+(22pt, 0pt)], stroke, get(item.options, "arrow", ends), get(item.options, "arrow_size", 6pt))
+            elseif item.kind == "errorbars" then
+                a := at+(12pt, -5pt); b := at+(12pt, 5pt); cap := (3pt, 0pt)
+                if get(item.options, "orientation", "vertical") == "horizontal" then a = at+(3pt, 0pt); b = at+(21pt, 0pt); cap = (0pt, 3pt) end
+                segment(dst, a, b, stroke); segment(dst, a-cap, a+cap, stroke); segment(dst, b-cap, b+cap, stroke)
+            elseif item.kind != "scatter" and item.kind != "annotation" then
+                shape := rectangle(at+(2pt, -3pt), 20pt, 6pt)
+                interior:any := get(item.options, "fill", ink)
+                if interior != false then append(dst, fill(shape, interior)) end
+                if get(item.options, "pen", false) != false then append(dst, draw(shape, stroke)) end
+            end
+        end
+        symbol:any := get(item.options, "marker", false)
+        if item.kind == "scatter" and symbol == false then symbol = markers.marker() end
+        if symbol != false then symbol = markers.inherited(symbol, item.options) end
+        if symbol != false then markers.paint(dst, symbol, markers.prepare(symbol, ink), at+(12pt, 0pt), ink) end
+        labels.place(dst, item.options["label"], at+(28pt, 0pt), (0, 0.5))
+    end
+end
+
+// A point centered in an omitted interval must not leave the edge of a
+// marker or a text label in a neighboring retained interval.
+export fn colorbar(dst:picture, panel:Panel)
+    if panel.color_layer == false then return end
+    item := panel.color_layer
+    vertical := panel.source.options["colorbar"] == "right"
+    origin := panel.origin+(panel.size.x+panel.right-panel.legend_right-panel.color_right+4pt, 0pt)
+    size := (10pt, panel.size.y)
+    if not vertical then origin = (panel.origin.x, panel.origin.y-panel.bottom+panel.legend_bottom+20pt); size = (panel.size.x, 10pt) end
+    for i in 0:127 do
+        p := origin+(0pt, size.y*i/128)
+        extent := (size.x, size.y/128)
+        if not vertical then p = origin+(size.x*i/128, 0pt); extent = (size.x/128, size.y) end
+        if i < 127 then
+            if vertical then extent = extent+(0pt, min(1pt, size.y*(127-i)/128))
+            else extent = extent+(min(1pt, size.x*(127-i)/128), 0pt) end
+        end
+        append(dst, fill(rectangle(p, extent.x, extent.y), heat.color_at(item.data["colormap"], float(i)/127)))
+    end
+    stroke := pen(rgb(0.2, 0.2, 0.2), 0.5pt)
+    for i in 0:len(panel.color_ticks)-1 do
+        t := heat.normalized(item, panel.color_ticks[i])
+        if vertical then
+            p := origin+(size.x, size.y*t)
+            segment(dst, p, p+(3pt, 0pt), stroke)
+            labels.place(dst, panel.color_labels[i], p+(5pt, 0pt), (0, 0.5))
+        else
+            p := origin+(size.x*t, 0pt)
+            segment(dst, p, p-(0pt, 3pt), stroke)
+            labels.place(dst, panel.color_labels[i], p-(0pt, 5pt), (0.5, 1))
+        end
+    end
+end
+

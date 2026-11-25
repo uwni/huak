@@ -4,6 +4,7 @@ const std = @import("std");
 const huak = @import("huak");
 const typst = @import("libtypst");
 const Output = @import("options.zig").Output;
+const formatOf = @import("options.zig").formatOf;
 const OutputBatch = huak.language.OutputBatch;
 const Format = huak.render.Format;
 const Report = @import("Report.zig");
@@ -118,8 +119,9 @@ fn publish(io: std.Io, path: []const u8, bytes: []const u8, publication: Publica
     try file.replace(io);
 }
 
+/// The format of an output file, as the options checked it.
 fn format(path: []const u8) Format {
-    return if (std.mem.endsWith(u8, path, ".pdf")) .pdf else .svg;
+    return std.enums.values(Format)[formatOf(std.meta.fieldNames(Format), path).?];
 }
 
 fn reportRenderFailure(path: []const u8, output: Output, cause: anyerror, diagnostic: ?typst.Buffer, report: *Report) void {

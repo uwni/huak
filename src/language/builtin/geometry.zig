@@ -1,0 +1,56 @@
+//! Builtins of the geometry, projection and transform namespaces: paths,
+//! regions, 3D projection and transforms. See `../builtin.zig`.
+
+pub const geometry = .{
+    .rectangle = .{ .args = .{ .origin = .vector, .width = .length, .height = .length }, .minimum = 3, .result = .path_or_shape },
+    .circle = .{ .args = .{ .center = .vector, .radius = .length }, .minimum = 2, .result = .path_or_shape },
+    .ellipse = .{ .args = .{ .center = .vector, .rx = .length, .ry = .length }, .minimum = 3, .result = .path_or_shape },
+    .arc = .{ .args = .{ .center = .vector, .radius = .length, .start = .angle, .sweep = .angle }, .minimum = 4, .result = .path_or_shape },
+    .path = .{ .implicit = true, .args = .{}, .minimum = 1, .variadic = .any, .result = .path_or_shape },
+    .compound = .{ .args = .{ .paths = .list }, .minimum = 1, .result = .path },
+    .subpaths = .{ .args = .{ .curve = .path }, .minimum = 1, .result = .list },
+    .smooth = .{ .args = .{ .points = .list, .closed = .boolean, .tension = .number }, .minimum = 1, .result = .path },
+    .bezier = .{ .args = .{ .start = .vector, .control1 = .vector, .control2 = .vector, .finish = .vector }, .minimum = 4, .result = .path_or_shape },
+    .reverse = .{ .args = .{ .curve = .path_or_shape }, .minimum = 1, .result = .path_or_shape },
+    .closed = .{ .args = .{ .curve = .path_or_shape }, .minimum = 1, .result = .path_or_shape },
+    .measure = .{ .args = .{ .curve = .path, .tolerance = .length }, .minimum = 1, .result = .measure },
+    .joined = .{ .args = .{ .first = .path_or_shape, .second = .path_or_shape }, .minimum = 2, .result = .path_or_shape },
+    .trimmed = .{ .args = .{ .curve = .path, .start = .number, .stop = .number }, .minimum = 3, .result = .path },
+    .point_at = .{ .args = .{ .curve = .path, .time = .number }, .minimum = 2, .result = .vec2 },
+    .tangent_at = .{ .args = .{ .curve = .path, .time = .number }, .minimum = 2, .result = .vec2 },
+    .arclength = .{ .args = .{ .curve = .any, .tolerance = .length }, .minimum = 1, .result = .length },
+    .sample_path = .{ .args = .{ .curve = .any, .count = .int, .tolerance = .length }, .minimum = 2, .result = .list },
+    .sample_at_length = .{ .args = .{ .curve = .any, .distance = .length, .tolerance = .length }, .minimum = 2, .result = .list },
+    .sample_at_fraction = .{ .args = .{ .curve = .any, .fraction = .number, .tolerance = .length }, .minimum = 2, .result = .list },
+    .samples_at_length = .{ .args = .{ .curve = .any, .distances = .list, .tolerance = .length }, .minimum = 2, .result = .list },
+    .path_crossings = .{ .args = .{ .curves = .list, .tolerance = .length }, .minimum = 1, .result = .list },
+    .intersections = .{ .args = .{ .first = .path, .second = .path, .tolerance = .length }, .minimum = 2, .result = .list },
+    .intersection_times = .{ .args = .{ .first = .path, .second = .path, .tolerance = .length }, .minimum = 2, .result = .list },
+    .clipped = .{ .args = .{ .curve = .path, .min = .vec2, .max = .vec2 }, .minimum = 3, .result = .path },
+    .region_union = .{ .args = .{ .first = .path_or_shape, .second = .path_or_shape, .tolerance = .length, .fill_rule = .string }, .minimum = 2, .result = .path_or_shape },
+    .region_intersection = .{ .args = .{ .first = .path_or_shape, .second = .path_or_shape, .tolerance = .length, .fill_rule = .string }, .minimum = 2, .result = .path_or_shape },
+    .region_difference = .{ .args = .{ .first = .path_or_shape, .second = .path_or_shape, .tolerance = .length, .fill_rule = .string }, .minimum = 2, .result = .path_or_shape },
+    .region_xor = .{ .args = .{ .first = .path, .second = .path, .tolerance = .length, .fill_rule = .string }, .minimum = 2, .result = .path },
+    .offset = .{ .args = .{ .curve = .path, .distance = .length, .join = .string, .miter_limit = .number, .tolerance = .length, .fill_rule = .string }, .minimum = 2, .result = .path },
+    .fillet = .{ .args = .{ .curve = .path, .radii = .any }, .minimum = 2, .result = .path },
+    .clip_region = .{ .args = .{ .curve = .path, .min = .vec2, .max = .vec2, .tolerance = .length, .fill_rule = .string }, .minimum = 3, .result = .path },
+    .clip_lines = .{ .args = .{ .curve = .path, .min = .vec2, .max = .vec2, .tolerance = .length }, .minimum = 3, .result = .path },
+    .contour_ranges = .{ .args = .{ .curve = .path }, .minimum = 1, .result = .list },
+};
+
+pub const projection = .{
+    .project_scene = .{ .args = .{ .shapes = .list, .azimuth = .angle, .elevation = .angle, .focus = .length, .tolerance = .length, .faces = .boolean, .light = .any, .spot = .angle, .isophotes = .list, .smooth = .boolean, .field = .any, .field_tolerance = .number, .field_step = .length }, .minimum = 9, .result = .list },
+    .model_shape = .{ .args = .{ .kind = .string, .arguments = .list }, .minimum = 2, .result = .shape },
+};
+
+pub const transform = .{
+    .translate = .{ .args = .{ .offset = .vector }, .minimum = 1, .result = .transform },
+    .scale = .{ .args = .{ .x = .number, .y = .number, .z = .number }, .minimum = 1, .result = .transform },
+    .rotate = .{ .args = .{ .angle = .angle, .axis = .vec3 }, .minimum = 1, .result = .transform },
+    .compose = .{ .args = .{ .first = .transform, .second = .transform }, .minimum = 2, .result = .transform },
+    .apply = .{ .args = .{ .transform = .transform, .point = .vector }, .minimum = 2, .result = .any },
+    .transformed = .{ .args = .{ .object = .any, .transform = .transform }, .minimum = 2, .result = .any },
+    .mapped = .{ .args = .{ .object = .any, .mapping = .any, .context = .any, .tolerance = .length }, .minimum = 2, .result = .any },
+    .bent = .{ .args = .{ .object = .any, .guide = .path, .offset = .length, .tolerance = .length }, .minimum = 2, .result = .any },
+    .matrix = .{ .args = .{ .a = .number, .b = .number, .c = .number, .d = .number, .e = .length, .f = .length }, .minimum = 6, .result = .transform },
+};

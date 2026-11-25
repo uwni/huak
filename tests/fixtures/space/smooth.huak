@@ -1,0 +1,42 @@
+import space as s
+import paint.*
+import math.norm
+import assertions.assert
+
+// Smooth light picks a field by surface: a constant on a plane, a profile
+// across a cylinder and a fan around the apex of a cone or a frustum.
+tube := transformed(s.cylinder(12pt, 36pt), translate((-5pt, 0, 0)))
+spire := transformed(s.cone(14pt, 38pt), translate((30pt, 0, 0)))
+stump := transformed(s.cone(14pt, 20pt, top: 6pt), translate((64pt, 0, 0)))
+view := s.project([tube, spire, stump], s.orthographic(-70deg, 28deg), light: (-1, -2, 3), spot: 24deg, smooth: true)
+
+kinds := {}
+fans := 0
+for face in view.visible_faces do
+    field := face.field
+    assert(field != false, "every visible face has a field")
+    kinds[field.kind] = true
+    if field.kind == "fan" then
+        fans = fans + 1
+        assert(len(field.points) >= 2 and len(field.points) == len(field.diffuse), "one light per ray")
+        assert(len(field.glint) == 0 or len(field.glint) == len(field.points), "both lights on the same rays")
+        assert(field.accuracy > 0 and field.accuracy < 1 / 256, "outputs get most of the accuracy, not all")
+        // Rays start at the apex, off every point, and the fan goes all
+        // the way around it.
+        for point in field.points do assert(norm(point - field.center) > 1pt) end
+        assert(norm(field.points[0] - field.points[len(field.points)-1]) < 1pt or len(field.points) > 4)
+    end
+end
+assert(fans == 2, "the cone and the frustum shade as fans")
+for kind in ["constant", "profile", "fan"] do assert(dict_contains(kinds, kind), "a field of each kind") end
+
+// The paint by itself: a wheel around the middle of a disk.
+center := (120pt, 20pt)
+rim := [center + (18pt, 0pt), center + (0pt, 18pt), center - (18pt, 0pt), center - (0pt, 18pt), center + (18pt, 0pt)]
+wheel := fill(circle(center, 16pt), gradient.fan(center, rim, [0, 0.5, 1, 0.5, 0], [rgb(0.1, 0.2, 0.8), rgb(1, 0.9, 0.2)], [0, 1], 1 / 256))
+
+inks := [rgb(0.16, 0.61, 0.58), rgb(0.83, 0.43, 0.20), rgb(0.56, 0.65, 0.75)]
+default drawing picture() do
+    +s.shaded(view.visible_faces, inks)
+    +wheel
+end

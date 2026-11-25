@@ -1,0 +1,123 @@
+// Every mark meets its shaft: the shaft's end lies inside the mark's ink, so
+// that no seam can show, and no part of the shaft shows past or beside the
+// mark. Checked on the final regions of what `line` draws.
+import assertions.assert
+import color.rgb
+import geometry.{arc, arclength, bezier, compound, rectangle, region_difference, region_intersection, region_union, sample_at_length, sample_path, subpaths}
+import object.region
+import "../arrows.huak" as arrows
+
+// The ink an object puts down. `region` keeps each stroke's contours apart;
+// merge them once, so that later booleans see one well-formed region.
+fn ink(content:object) -> path
+    return region_union(region(content), compound([]))
+end
+
+// The separate pieces of a region: its outer boundaries, which run
+// counterclockwise.
+fn pieces(area:path) -> int
+    count := 0
+    for contour in subpaths(area) do
+        rows := sample_path(contour, 64)
+        twice_area := 0.0
+        for i in 0:len(rows)-2 do
+            a:vec2 := rows[i][1]
+            b:vec2 := rows[i+1][1]
+            twice_area = twice_area+(a.x/1pt)*(b.y/1pt)-(b.x/1pt)*(a.y/1pt)
+        end
+        if twice_area > 0 then count = count+1 end
+    end
+    return count
+end
+
+// The ink of several objects together.
+fn inks(objects:list) -> path
+    regions := []
+    for item in objects do regions += [region(item)] end
+    return region_union(compound(regions), compound([]))
+end
+
+fn joined_well(name:string, curve:path, mark:function, thickness:length)
+    // A mark in a paint of its own is drawn apart from the line's path, so
+    // that shaft and mark can be told apart; the shaft is cut the same.
+    pic := arrows.line(curve, pen(rgb(0, 0, 0), thickness), tip: arrows.inked(mark, rgb(1, 0, 0)))
+    parts := pic.children
+    shaft := ink(parts[0])
+    head := inks(parts[1:])
+    assert(len(subpaths(shaft)) > 0, name+": the shaft must be drawn")
+    // A hair-thin band around the shaft's square end lies inside the mark.
+    shape:arrows.Mark := mark(arrows.Line(paint: rgb(0, 0, 0), thickness: thickness))
+    sample := sample_at_length(curve, arclength(curve)-shape.neck)
+    point:vec2 := sample[1]
+    along:vec2 := sample[2]
+    across := (-along.y, along.x)*(thickness/2)
+    hair := along*0.02pt
+    face := path([point+across-hair, point+across+hair, point-across+hair, point-across-hair], true)
+    assert(len(region_difference(face, head)) == 0, name+": the shaft must end inside the mark")
+    assert(pieces(region_difference(shaft, head)) == 1, name+": the shaft must show only behind the mark")
+    // The marks of a combination may only touch; the shaft adds no piece.
+    assert(pieces(region_union(shaft, head)) == pieces(head), name+": the shaft must join the mark")
+end
+
+marks := [
+    ["stealth", arrows.stealth],
+    ["stealth outlined", arrows.stealth.with(fill: false)],
+    ["stealth two-tone", arrows.stealth.with(fill: rgb(1, 1, 1))],
+    ["stealth reversed", arrows.stealth.with(rev: true)],
+    ["stealth reversed outlined", arrows.stealth.with(rev: true, fill: false)],
+    ["stealth deep", arrows.stealth.with(inset: 0.7)],
+    ["triangle", arrows.triangle],
+    ["triangle outlined", arrows.triangle.with(fill: false)],
+    ["triangle reversed", arrows.triangle.with(rev: true)],
+    ["round", arrows.round],
+    ["round outlined", arrows.round.with(fill: false)],
+    ["round reversed", arrows.round.with(rev: true)],
+    ["straight", arrows.straight],
+    ["straight reversed", arrows.straight.with(rev: true)],
+    ["barb", arrows.barb],
+    ["barb reversed", arrows.barb.with(rev: true)],
+    ["hooks", arrows.hooks],
+    ["hooks reversed", arrows.hooks.with(rev: true)],
+    ["tikz", arrows.tikz],
+    ["bar", arrows.bar],
+    ["bar at the end", arrows.bar.with(align: "end")],
+    ["bracket", arrows.bracket],
+    ["bracket reversed", arrows.bracket.with(rev: true)],
+    ["disk", arrows.disk],
+    ["disk outlined", arrows.disk.with(fill: false)],
+    ["disk at the end", arrows.disk.with(align: "end")],
+    ["square", arrows.square],
+    ["square outlined", arrows.square.with(fill: false)],
+    ["diamond", arrows.diamond],
+    ["diamond outlined", arrows.diamond.with(fill: false, align: "end")],
+    ["rays", arrows.rays],
+    ["rays at the end", arrows.rays.with(count: 3, align: "end")],
+    ["combined", arrows.combine(arrows.bar, arrows.stealth)],
+    ["double", arrows.combine(arrows.stealth, arrows.stealth)],
+    ["rigid stealth", arrows.rigid(arrows.stealth)],
+]
+curves := [
+    ["straight line", (0pt, 0pt) -- (60pt, 20pt)],
+    ["curve", bezier((0pt, 0pt), (40pt, 0pt), (60pt, 20pt), (60pt, 60pt))],
+    ["arc", arc((0pt, 0pt), 30pt, 0deg, 150deg)],
+]
+for thickness in [0.4pt, 1pt, 2.5pt] do
+    for item in marks do
+        for route in curves do
+            name:string := item[0]
+            where:string := route[0]
+            joined_well(name+" on a "+where+" at "+str(thickness), route[1], item[1], thickness)
+        end
+    end
+end
+
+// A mark that points at the line's end reaches it, and nothing passes it.
+pointing := [arrows.stealth, arrows.triangle, arrows.round, arrows.straight, arrows.barb, arrows.hooks, arrows.tikz, arrows.bracket, arrows.stealth.with(rev: true), arrows.straight.with(rev: true), arrows.barb.with(rev: true), arrows.hooks.with(rev: true), arrows.bracket.with(rev: true), arrows.bar.with(align: "end"), arrows.disk.with(align: "end"), arrows.square.with(align: "end"), arrows.diamond.with(align: "end")]
+for mark in pointing do
+    pic := arrows.line((0pt, 0pt) -- (60pt, 0pt), pen(rgb(0, 0, 0), 1pt), tip: mark)
+    parts := pic.children
+    head := ink(parts[len(parts)-1])
+    assert(len(region_intersection(head, rectangle((60pt-0.01pt, -20pt), 0.01pt, 40pt))) > 0, "a pointing mark must reach the line's end")
+    assert(len(region_intersection(head, rectangle((60pt+0.01pt, -20pt), 20pt, 40pt))) == 0, "nothing may pass the line's end")
+end
+print("join checks passed")

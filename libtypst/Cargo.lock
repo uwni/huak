@@ -1194,6 +1194,8 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "comemo",
+ "hayro-syntax",
+ "krilla",
  "kurbo",
  "rayon",
  "serde",

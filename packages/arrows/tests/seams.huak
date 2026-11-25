@@ -1,0 +1,44 @@
+// Thick horizontal arrows for the acceptance driver to rasterize from PDF.
+// Along a solid arrow's axis the ink stays dark from the shaft into the head;
+// along a gradient arrow's axis the grey changes smoothly; along a
+// translucent arrow's axis it stays even, the overlap painted once. Each
+// check has a control row drawn the way that fails it: a shaft butted
+// against a head, a head painted with the gradient moved along, and a shaft
+// and head drawn as two translucent objects. Every join sits off the grid.
+import color.rgb
+import object.{append, draw, fill}
+import "../arrows.huak" as arrows
+
+fn row(i:int) -> length
+    return 190.37pt-i*20pt
+end
+
+fn grey(from:length, to:length, y:length) -> any
+    return gradient.linear((from, y), (to, y), [rgb(0.1, 0.1, 0.1), rgb(0.7, 0.7, 0.7)])
+end
+
+fn head(y:length) -> path
+    return path([(100.37pt, y), (80.37pt, y+8pt), (80.37pt, y-8pt)], true)
+end
+
+black := rgb(0, 0, 0)
+half := rgb(0, 0, 0, 0.5)
+heads := [arrows.triangle, arrows.stealth, arrows.round, arrows.disk.with(align: "end"), arrows.square.with(align: "end")]
+export seams := picture(120pt, 205pt)
+for i in 0:len(heads)-1 do
+    append(seams, arrows.line((10.37pt, row(i)) -- (100.37pt, row(i)), pen(black, 4pt), tip: heads[i]))
+end
+y := row(5)
+append(seams, draw((10.37pt, y) -- (80.37pt, y), pen(black, 4pt)))
+append(seams, fill(head(y), black))
+y = row(6)
+append(seams, arrows.line((10.37pt, y) -- (100.37pt, y), pen(grey(10.37pt, 100.37pt, y), 4pt), tip: arrows.triangle))
+y = row(7)
+append(seams, draw((10.37pt, y) -- (85.37pt, y), pen(grey(10.37pt, 100.37pt, y), 4pt)))
+append(seams, fill(head(y), grey(30.37pt, 120.37pt, y)))
+y = row(8)
+append(seams, arrows.line((10.37pt, y) -- (100.37pt, y), pen(half, 4pt), tip: arrows.triangle))
+y = row(9)
+append(seams, draw((10.37pt, y) -- (85.37pt, y), pen(half, 4pt)))
+append(seams, fill(head(y), half))
+default seams

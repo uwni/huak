@@ -2,6 +2,8 @@
 const std = @import("std");
 pub const Position = struct { line: usize, character: usize };
 pub const Range = struct { start: Position, end: Position };
+/// A range in the document a URI names, as the protocol sends it.
+pub const Location = struct { uri: []const u8, range: Range };
 
 pub fn at(source: []const u8, byte_offset: usize) Position {
     var position: Position = .{ .line = 0, .character = 0 };

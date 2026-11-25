@@ -1,0 +1,75 @@
+import space as s
+import paint.*
+import regions.*
+import math.{abs, sin, cos}
+import assertions.assert
+
+// A light that keeps its place on the page. Seen from above the page's axes
+// are the model's; toward the reader is toward the camera.
+top := s.orthographic(-90deg, 90deg)
+given := s.page_light(top, 0.3, -0.4, 0.5)
+assert(abs(given.x-0.3) < 0.000000000001 and abs(given.y+0.4) < 0.000000000001 and abs(given.z-0.5) < 0.000000000001)
+usual := s.page_light(top)
+assert(usual.x < 0 and usual.y > 0 and usual.z > 0, "from the upper left, in front of the page")
+camera := s.orthographic(-70deg, 28deg)
+toward := s.page_light(camera, 0, 0, 1)
+assert(abs(toward.x-cos(28deg)*cos(-70deg)) < 0.000000000001 and abs(toward.y-cos(28deg)*sin(-70deg)) < 0.000000000001 and abs(toward.z-sin(28deg)) < 0.000000000001)
+
+tones := s.Tones()
+assert(len(tones.cuts) == 4 and len(tones.levels) == 4)
+
+// Under the usual light a sphere shows the part turned away and four bands.
+// The part turned away and the first band share the first tone, so `toned`
+// draws four paths: space_tones.zig counts them in the SVG.
+lit := s.project([s.sphere(20pt)], camera, light: s.page_light(camera), isophotes: tones.cuts)
+assert(len(lit.visible_faces) == 1 and len(lit.visible_faces[0].shades) == 5)
+
+// Lit almost from the reader, the tones on a sphere take shares of its disk
+// that have a closed form: space_tones.zig compares the color `flat` draws
+// with their average. The light stands about 8 degrees off the line of
+// sight, so along part of the rim a crescent turned away from it shows,
+// about 0.2pt wide at most: it and the four bands are five shades.
+ball := transformed(s.sphere(20pt), translate((60pt, 0pt, 0pt)))
+near := s.project([ball], camera, light: s.page_light(camera, -0.1, 0.1, 0.99), isophotes: tones.cuts)
+assert(len(near.visible_faces) == 1 and len(near.visible_faces[0].shades) == 5)
+
+// Flat faces, a hollow and two solids in one projection.
+brick := s.box(30pt, 24pt, 16pt) minus transformed(s.cylinder(6pt, 30pt), translate((15pt, 12pt, -5pt)))
+first := transformed(brick, translate((-90pt, -12pt, -8pt)))
+second := transformed(brick, translate((-90pt, -12pt, -40pt)))
+blocks := s.project([first, second], camera, light: s.page_light(camera), isophotes: tones.cuts)
+upper := []
+lower := []
+for face in blocks.visible_faces do
+    if face.source == 0 then upper += [face] else lower += [face] end
+end
+assert(len(upper) > 3 and len(lower) > 3)
+
+// An ink that is not opaque, with a line behind the sphere, both ways:
+// flattened, the tones and the line come out in the colors they show over
+// white paper, and nothing drawn is translucent; as a layer, the tones stay
+// as they are in one group at the ink's opacity, with the line under it in
+// its own color. space_tones.zig reads both from the SVG. The exported PDF
+// writes the layer as a transparency group.
+fn across(x:length) -> picture
+    middle := (-sin(-70deg)*x, -sin(28deg)*cos(-70deg)*x)
+    lines := picture()
+    append(lines, draw((middle - (25pt, 0pt)) -- (middle + (25pt, 0pt)), pen(rgb(0, 0, 0), 1pt)))
+    return lines
+end
+veiled := s.project([transformed(s.sphere(20pt), translate((120pt, 0pt, 0pt)))], camera, light: s.page_light(camera), isophotes: tones.cuts)
+layered := s.project([transformed(s.sphere(20pt), translate((180pt, 0pt, 0pt)))], camera, light: s.page_light(camera), isophotes: tones.cuts)
+
+teal := rgb(0.16, 0.61, 0.58)
+blue := rgb(0.33, 0.50, 0.80)
+gold := rgb(0.88, 0.70, 0.22)
+wine := rgb(0.70, 0.25, 0.30, 0.5)
+plum := rgb(0.45, 0.30, 0.65, 0.5)
+default drawing picture() do
+    +s.toned(lit.visible_faces, [teal])
+    +s.flat(near.visible_faces, [blue])
+    +s.toned(upper, [gold, gold])
+    +s.flat(lower, [gold, gold])
+    +s.toned(veiled.visible_faces, [wine], behind: across(120pt))
+    +s.toned(layered.visible_faces, [plum], behind: across(180pt), translucent: true)
+end

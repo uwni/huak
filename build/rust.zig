@@ -60,9 +60,27 @@ fn targetName(allocator: std.mem.Allocator, target: std.Target) !?[]const u8 {
     return try std.fmt.allocPrint(allocator, "{s}-unknown-linux-{t}", .{ name, abi });
 }
 
-pub fn installLibtypst(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, name: []const u8, prebuilt: ?[]const u8) *std.Build.Step {
+/// The desktop library as Cargo builds it or as `-Dlibtypst` names it.
+pub const Libtypst = struct {
+    /// Tests and benchmarks load the library here, a path that stays the same
+    /// when it is rebuilt; the installed tools load the installed copy.
+    library: std.Build.LazyPath,
+    /// The Cargo build that writes `library`; null for a given library.
+    cargo: ?*std.Build.Step,
+    /// Installs the library and its C header.
+    install: *std.Build.Step,
+
+    /// A run that loads the library waits for it and reruns when it changes.
+    pub fn loadIn(typst: Libtypst, run: *std.Build.Step.Run) void {
+        if (typst.cargo) |cargo| run.step.dependOn(cargo);
+        run.addFileInput(typst.library);
+    }
+};
+
+pub fn libtypst(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, name: []const u8, prebuilt: ?[]const u8) Libtypst {
     const step = b.step("libtypst", "Build and install the desktop Typst library and C header");
-    const library = if (prebuilt) |path| b.addInstallLibFile(b.graph.cwdRelativePath(path), name) else lib: {
+    var build: ?*std.Build.Step = null;
+    const library = if (prebuilt) |path| b.graph.cwdRelativePath(path) else lib: {
         const cargo = b.addSystemCommand(&.{ "cargo", "build", "--locked", "--lib", "--target-dir", "target" });
         cargo.setCwd(b.path("libtypst"));
         cargo.removeEnvironmentVariable("CARGO_BUILD_TARGET");
@@ -72,13 +90,14 @@ pub fn installLibtypst(b: *std.Build, target: std.Build.ResolvedTarget, optimize
         if (!target.query.isNative()) {
             dir = setTarget(b, cargo, target.result, dir);
         }
-        const install = b.addInstallLibFile(dir.path(b, profile).path(b, name), name);
-        install.step.dependOn(&cargo.step);
-        break :lib install;
+        build = &cargo.step;
+        break :lib dir.path(b, profile).path(b, name);
     };
-    step.dependOn(&library.step);
+    const install = b.addInstallLibFile(library, name);
+    if (build) |cargo| install.step.dependOn(cargo);
+    step.dependOn(&install.step);
     step.dependOn(&b.addInstallHeaderFile(b.path("libtypst/include/libtypst.h"), "libtypst.h").step);
-    return step;
+    return .{ .library = library, .cargo = build, .install = step };
 }
 
 test "Cargo targets retain the Zig architecture, ABI and instruction baseline" {

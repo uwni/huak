@@ -13,15 +13,18 @@ pub const Operation = enum(u32) { unite, intersect, difference, xor };
 pub const FillRule = enum(u32) { evenodd, nonzero, positive, negative };
 pub const Join = strokes.Join;
 pub const Cap = strokes.Cap;
+/// Region strokes keep the stroke tracer's style unless told otherwise;
+/// `strokeOptions` passes these options on to it.
+const stroke_defaults: strokes.Options = .{};
 pub const Options = struct {
-    tolerance: f64 = 1e-3,
+    tolerance: f64 = g.curve_tolerance,
     max_segments: usize = 65536,
     max_vertices: usize = 1048576,
     max_depth: usize = 24,
     fill_rule: FillRule = .nonzero,
-    join: Join = .miter,
-    cap: Cap = .butt,
-    miter_limit: f64 = 4,
+    join: Join = stroke_defaults.join,
+    cap: Cap = stroke_defaults.cap,
+    miter_limit: f64 = stroke_defaults.miter_limit,
 };
 
 pub fn combine(allocator: Allocator, a: Path, b: Path, operation: Operation, options: Options) !Path {
@@ -117,7 +120,7 @@ pub fn clipLines(allocator: Allocator, path: Path, rectangle: g.BBox, options: O
     if (try validatePath(path, false) > options.max_segments) return error.GeometryWorkLimit;
     if (try boolean.vertexCount(path) > options.max_vertices) return error.GeometryWorkLimit;
     if (rectangle.width() == 0 or rectangle.height() == 0) return Path.init(allocator);
-    var result = try path.clippedToRect(allocator, rectangle);
+    var result = try Path.trim.clippedToRect(path, allocator, rectangle);
     errdefer result.deinit();
     // clipLines treats closing edges as ordinary drawn edges. Path's general
     // clipping method preserves a wholly retained closed stroke instead.

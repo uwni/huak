@@ -1,0 +1,19 @@
+import space as s
+import paint.*
+import assertions.assert
+
+// A cone lit so that, near its apex, its outline and the edges of the
+// light's bands meet at a narrow angle: between two of them the arrangement
+// leaves a cell no wider than the vertices at its ends reach, bounded by two
+// straight arcs that at those vertices' points are one segment. The cell is
+// a region of its own, lying left of its loop as the loop runs beyond the
+// vertices.
+view := s.orthographic(-56.32deg, 63.26deg)
+light := s.page_light(view, -0.3, 0.4, -0.6)
+lit := s.project([s.cone(14pt, 38pt)], view, light: light, spot: 24deg)
+assert(len(lit.lines) > 0, "a lit cone has its lines")
+drawn := picture()
+for line in lit.lines do
+    append(drawn, draw(line.curve, pen(rgb(0, 0, 0), 0.4pt)))
+end
+default drawn

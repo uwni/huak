@@ -1,17 +1,14 @@
-// The two exact projected curves have a shared endpoint and a nearby crossing.
-// Recovering the crossing parameter with a point-to-curve nearest-point query
-// used to lose one incidence and produce a self-intersecting face boundary.
+// The two exact projected curves have a shared endpoint and a crossing a few
+// millionths away, which OCCT's own curve intersector does not tell from
+// it. The arrangement keeps both: two vertices at which arcs of both curves
+// end, so that the small region between them stays bounded; losing one of
+// these incidences used to leave a region's boundary crossing itself.
 #include "../src/drawing/space/space.hxx"
 #include <BRepBuilderAPI_MakeEdge.hxx>
-#include <BRepBuilderAPI_MakeFace.hxx>
-#include <BRepCheck_Analyzer.hxx>
-#include <BRepGProp.hxx>
-#include <GProp_GProps.hxx>
+#include <algorithm>
 #include <Geom_BSplineCurve.hxx>
 #include <NCollection_Array1.hxx>
-#include <TopExp_Explorer.hxx>
-#include <TopoDS.hxx>
-#include <gp_Pln.hxx>
+#include <TopExp.hxx>
 #include <cstdio>
 
 int main() {
@@ -43,24 +40,28 @@ int main() {
                new Geom_BSplineCurve(poles, knots, multiplicities, n - 1))
         .Edge();
   };
-  huak::space::ShapeList objects, tools;
-  objects.Append(BRepBuilderAPI_MakeFace(gp_Pln(gp::XOY()), -24, -21, 2, 5).Face());
-  tools.Append(edge(first, 0.95120232690684425));
-  tools.Append(edge(second, 0));
-  const auto partition = huak::space::splitFaces(objects, tools);
-  int cells = 0, small = 0;
-  for (TopExp_Explorer it(partition, TopAbs_FACE); it.More(); it.Next()) {
-    ++cells;
-    if (!BRepCheck_Analyzer(it.Current()).IsValid()) {
-      std::fprintf(stderr, "projected cell has an invalid boundary\n");
-      return 1;
+  const std::vector<TopoDS_Edge> images{edge(first, 0.95120232690684425), edge(second, 0)};
+  const auto arcs = huak::space::arrangeImages(images, {true, true}, {}, {});
+  // The vertices at which arcs of both curves end: the shared end, and the
+  // crossing beside it that bounds the small region between them.
+  std::vector<std::pair<TopoDS_Vertex, int>> ends;
+  for (const auto &arc : arcs) {
+    int of = 0;
+    for (const auto &part : arc.parts)
+      of |= 1 << part.tool;
+    TopoDS_Vertex a, b;
+    TopExp::Vertices(arc.edge, a, b);
+    for (const auto &vertex : {a, b}) {
+      const auto known = std::find_if(ends.begin(), ends.end(), [&](const auto &end) { return end.first.IsSame(vertex); });
+      if (known == ends.end())
+        ends.push_back({vertex, of});
+      else
+        known->second |= of;
     }
-    GProp_GProps area;
-    BRepGProp::SurfaceProperties(it.Current(), area);
-    small += area.Mass() > 0 && area.Mass() < 1e-9;
   }
-  if (cells != 2 || small != 1) {
-    std::fprintf(stderr, "lost the closed region between the two crossings\n");
+  const auto shared = std::count_if(ends.begin(), ends.end(), [](const auto &end) { return end.second == 3; });
+  if (shared != 2) {
+    std::fprintf(stderr, "arcs of both curves end at %td vertices, expected the shared end and the crossing\n", shared);
     return 1;
   }
 }

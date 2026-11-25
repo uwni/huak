@@ -2,10 +2,19 @@
 // Copyright (c) 2011–2020 Jürg Lehni & Jonathan Puckey, https://paperjs.org/
 // Distributed under the MIT license. See the retained upstream LICENSE.
 const std = @import("std");
+/// Values within this of zero count as zero (`isZero`): large enough to absorb
+/// floating-point noise, small enough to matter in a nominal range.
 pub const EPSILON: f64 = 1e-12;
+/// The relative error of one binary64 addition or multiplication, a little
+/// above 2^-53, half the machine epsilon. Values within it of zero are machine
+/// zero.
 pub const MACHINE_EPSILON: f64 = 1.12e-16;
+/// For curve times t in [0, 1], for example how near an end a time must be
+/// to stand for that end.
 pub const CURVETIME_EPSILON: f64 = 1e-8;
+/// For geometric checks, such as distances between points and lines.
 pub const GEOMETRIC_EPSILON: f64 = 1e-7;
+/// For trigonometric checks, such as cross products testing collinearity.
 pub const TRIGONOMETRIC_EPSILON: f64 = 1e-8;
 pub fn clamp(value: f64, min: f64, max: f64) f64 {
     return if (value < min) min else if (value > max) max else value;
@@ -16,6 +25,8 @@ pub fn isZero(value: f64) bool {
 pub fn getEpsilon(magnitude: f64, epsilon: ?f64) f64 {
     return @max(EPSILON, magnitude * 4 * MACHINE_EPSILON, epsilon orelse 0);
 }
+/// Veltkamp's split by 2^27 + 1: both halves keep 26 bits, so products of
+/// halves are exact, which lets the discriminant recover its rounding error.
 fn split(value: f64) [2]f64 {
     const x = value * 134217729;
     const y = value - x;
@@ -37,6 +48,9 @@ fn getDiscriminant(a: f64, b: f64, c: f64) f64 {
     }
     return d;
 }
+/// As upstream, after Jenkins and Traub's RPOLY: coefficients whose largest
+/// magnitude lies outside [1e-8, 1e8] are scaled by a power of two, which keeps
+/// every mantissa bit; others are left as they are.
 fn getNormalizationFactor(norm: f64) f64 {
     if (norm == 0 or !(norm < 1e-8 or norm > 1e8) or !std.math.isFinite(norm)) return 0;
     // The upstream power is exact for integer exponents; ldexp produces the

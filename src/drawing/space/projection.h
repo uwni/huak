@@ -29,7 +29,10 @@ enum HuakModelKind {
   HUAK_SOLID_LOFT,
   HUAK_FUSE,
   HUAK_COMMON,
-  HUAK_CUT
+  HUAK_CUT,
+  /* A surface through a grid of points: args[0] rows of args[1] points,
+     row after row in `points`. */
+  HUAK_GRID
 };
 enum HuakProjectedKind {
   HUAK_EDGE,
@@ -81,13 +84,15 @@ enum HuakSurfaceKind {
   HUAK_FREEFORM
 };
 /* A face's surface: its kind, the face's parameter bounds, the period of
-   each parameter or zero, a cone's semi-angle, and a cylinder's frame, in
-   which u is the angle from axis_x toward axis_y. */
+   each parameter or zero, a cone's semi-angle and the v of its apex, where
+   its rulings meet, and a cylinder's frame, in which u is the angle from
+   axis_x toward axis_y. */
 typedef struct {
   int kind;
   double u0, u1, v0, v1;
   double u_period, v_period;
   double semi_angle;
+  double apex_v;
   double axis_x[3], axis_y[3];
 } HuakFace;
 typedef struct {
@@ -142,19 +147,13 @@ typedef struct {
   const size_t *items;
   size_t count;
 } HuakIndices;
-/* Lists of indices: list k at items[offsets[k] .. offsets[k + 1]]. */
-typedef struct {
-  const size_t *offsets;
-  const size_t *items;
-  size_t count;
-} HuakGroups;
-/* Lists of numbers, laid out as HuakGroups. */
+/* Lists of numbers: list k at values[offsets[k] .. offsets[k + 1]]. */
 typedef struct {
   const size_t *offsets;
   const double *values;
   size_t count;
 } HuakRows;
-/* Paths, laid out as HuakGroups. */
+/* Paths, laid out as HuakRows. */
 typedef struct {
   const size_t *offsets;
   const HuakPathCommand *commands;
@@ -170,42 +169,45 @@ typedef struct {
   const HuakShapeHit *items;
   size_t count;
 } HuakShapeHits;
-/* A space curve from hidden-line removal: HUAK_EDGE, HUAK_OUTLINE,
-   HUAK_SMOOTH or HUAK_SEAM, and whether it is visible in its own shape. */
+/* No face, where a record names one. */
+#define HUAK_NO_FACE ((size_t)-1)
+/* A piece of a face's outline, where the line of sight grazes the face and
+   the face folds over in the image: a curve traced on the face, with its
+   curve on the face, or where the outline runs along an edge of the face,
+   the curve `edges` names for that edge; and the face's index in its
+   shape. */
 typedef struct {
   size_t curve;
-  int kind;
-  int visible;
-} HuakSilhouette;
+  size_t face;
+} HuakRim;
 typedef struct {
-  const HuakSilhouette *items;
+  const HuakRim *items;
   size_t count;
-} HuakSilhouettes;
-/* An edge of a root shape: how many of the shape's faces it bounds, and
-   whether it closes the single face it bounds on itself. */
+} HuakRims;
+/* An edge of a root shape: how many of the shape's faces it bounds, the
+   first two of them (HUAK_NO_FACE past `faces`), whether it closes the
+   single face it bounds on itself, and its kind as OCCT's continuity across
+   it gives it: HUAK_SEAM where the faces meet with continuous curvature,
+   HUAK_SMOOTH with a continuous tangent plane only, otherwise HUAK_EDGE. */
 typedef struct {
   size_t curve, faces;
+  size_t face[2];
   int closed;
+  int kind;
 } HuakEdge;
 typedef struct {
   const HuakEdge *items;
   size_t count;
 } HuakEdges;
-/* Whether a space curve is a straight line, and its tolerance. */
-typedef struct {
-  int line;
-  double tolerance;
-} HuakCurveInfo;
-typedef struct {
-  double first, last;
-} HuakRange;
-/* A point of a space curve at a parameter of its spline, or, with
-   `on_surface`, the point of its surface at its parameter curve. */
+/* A curve where two root shapes meet, and the face of each it lies on. */
 typedef struct {
   size_t curve;
-  double parameter;
-  int on_surface;
-} HuakCurvePoint;
+  size_t face[2];
+} HuakSection;
+typedef struct {
+  const HuakSection *items;
+  size_t count;
+} HuakSections;
 typedef struct {
   size_t first, second;
 } HuakPair;
@@ -220,10 +222,69 @@ typedef struct {
   int whole;
   double first, last;
 } HuakPiece;
-/* An image whose pieces a partition records for its shape. */
+/* A layer at a point of the image: a face that the line of sight through
+   the point meets, as root shape and face index, which way it turns there
+   (1 toward the viewer, -1 away), and where it meets it: the depth and the
+   face's parameters. */
 typedef struct {
-  size_t image, source;
-} HuakTracked;
+  size_t source, face;
+  int facing;
+  double depth, u, v;
+} HuakLayer;
+/* A place to cut an image although no other image crosses it there, as
+   where its curve passes through a face of another shape. */
+typedef struct {
+  size_t image;
+  double parameter;
+} HuakCut;
+/* An image that runs along an arc: the part [first, last] of the image's
+   planar curve that the arc covers; where the arc is a stretch along which
+   the image runs within tolerance of another whose curve bounds layers,
+   beyond which end of the part the image leaves the stretch (1 its last,
+   -1 its first), otherwise 0;
+   where the image's curve stands over the arc's middle, its depth there
+   and its tolerance; and the faces the curve lies on, as root shape and
+   face index (HUAK_NO_FACE where fewer). */
+typedef struct {
+  size_t image;
+  double first, last;
+  int leaves;
+  double depth, tolerance;
+  size_t source[2], face[2];
+} HuakArcOrigin;
+/* An arc of the arrangement of images: a piece of the images between the
+   points where they cross, meet or end. (x, y) is its middle; the images
+   that run along it are origins[first_origin .. first_origin +
+   origin_count). Its left is the left of the way its own curve runs. */
+typedef struct {
+  double x, y;
+  size_t first_origin, origin_count;
+} HuakArc;
+typedef struct {
+  const HuakArc *items;
+  const HuakArcOrigin *origins;
+  size_t count;
+} HuakArcs;
+/* The cells of an arrangement: the parts of the plane that its arcs
+   bound, one for each closed path of arcs around such a part, so that a
+   part with holes in it is a cell for each of its boundaries. Over a cell
+   the line of sight meets the same faces in the same order: those of cell
+   k, front to back, are layers[offsets[k] .. offsets[k + 1]], where the
+   line of sight through a point inside it meets them. Arc k has cell
+   left[k] on its left, the left of the way it runs, and right[k] on its
+   right; `arcs` counts them. */
+typedef struct {
+  const size_t *offsets;
+  const HuakLayer *layers;
+  size_t count;
+  const size_t *left, *right;
+  size_t arcs;
+} HuakCells;
+/* An arc run its own way, or the other way where `reversed` is set. */
+typedef struct {
+  size_t arc;
+  int reversed;
+} HuakTurnedArc;
 /* A region's area and centroid, and its principal moments of inertia about
    the centroid with their axes. */
 typedef struct {
@@ -232,6 +293,18 @@ typedef struct {
   double moments[3];
   double axes[3][3];
 } HuakMoments;
+/* The regions that sets of arcs bound: the regions of set k are regions
+   sets[k] .. sets[k + 1], each a connected region with its outline, the
+   closed paths commands[offsets[r] .. offsets[r + 1]], its bounds, and its
+   area, centroid and principal moments with their axes. */
+typedef struct {
+  const size_t *sets;
+  const size_t *offsets;
+  const HuakPathCommand *commands;
+  const HuakBox *bounds;
+  const HuakMoments *moments;
+  size_t count;
+} HuakRegions;
 /* Status codes. Each failure writes a message to `error` when it is non-null
    and `capacity` is nonzero, NUL-terminated and truncated to fit. */
 #define HUAK_SPACE_OK 0
@@ -245,7 +318,7 @@ typedef struct {
 
 /* The major version, in the high 16 bits, matches the entry point; the minor
    version counts entries appended to the table since. */
-#define HUAK_SPACE_ABI_VERSION 0x00030000u
+#define HUAK_SPACE_ABI_VERSION 0x00060000u
 
 /* Contract for every entry.
 
@@ -318,75 +391,70 @@ typedef struct {
   /* Each distinct edge of a root shape with the faces it bounds. */
   int (*edges)(HuakView *, size_t source, HuakEdges *, char *error,
                size_t capacity);
-  /* Hidden-line removal of a root shape alone: for each kind in the order
-     above, its visible curves and then its hidden ones. */
-  int (*silhouettes)(HuakView *, size_t source, HuakSilhouettes *,
-                     char *error, size_t capacity);
+  /* The outlines of a root shape's faces as the camera sees them, as OCCT
+     traces them face by face. A face whose outline runs along one of its
+     edges folds over along that edge's curve. */
+  int (*rims)(HuakView *, size_t source, HuakRims *, char *error,
+              size_t capacity);
   /* The curves where two root shapes meet. */
-  int (*sections)(HuakView *, size_t first, size_t second, HuakIndices *,
+  int (*sections)(HuakView *, size_t first, size_t second, HuakSections *,
                   char *error, size_t capacity);
   /* The image of each curve, or of its conversion to a spline, which keeps
      a line's perspective parameter; -1 where the image is a point. */
   int (*project)(HuakView *, const size_t *curves, size_t count, int spline,
                  double tolerance, ptrdiff_t *images, char *error,
                  size_t capacity);
-  int (*curve_info)(HuakView *, const size_t *curves, size_t count,
-                    HuakCurveInfo *, char *error, size_t capacity);
-  /* The parameter range of each image's planar curve. */
-  int (*ranges)(HuakView *, const size_t *images, size_t count, HuakRange *,
-                char *error, size_t capacity);
-  /* The bounds of images together, with their tolerances. */
-  int (*bounds)(HuakView *, const size_t *images, size_t count, HuakBox *,
-                char *error, size_t capacity);
-  /* The bounds of each region, with its tolerance. */
-  int (*region_bounds)(HuakView *, const size_t *regions, size_t count,
-                       HuakBox *, char *error, size_t capacity);
-  /* For each pair of images, the parameters on the first where they meet,
-     points first and then the ends of shared segments. */
-  int (*crossings)(HuakView *, const HuakPair *, size_t count, HuakRows *,
-                   char *error, size_t capacity);
   /* For each pair of a curve and a root shape, the spline parameters where
-     the curve meets the shape's faces. */
+     the curve passes through one of the shape's faces. */
   int (*pierce)(HuakView *, const HuakPair *, size_t count, HuakRows *,
                 char *error, size_t capacity);
-  int (*curve_points)(HuakView *, const HuakCurvePoint *, size_t count,
-                      HuakXYZ *, char *error, size_t capacity);
-  int (*image_points)(HuakView *, const size_t *images,
-                      const double *parameters, size_t count, HuakXY *,
-                      char *error, size_t capacity);
   /* Path commands for pieces of images, within `tolerance`. */
   int (*approximate)(HuakView *, const HuakPiece *, size_t count,
                      double tolerance, HuakPaths *, char *error,
                      size_t capacity);
-  /* The images of the curves on a face where the normal makes `angle` with
-     `direction`. */
+  /* The curves on a face where the normal makes `angle` with `direction`,
+     as OCCT traces them: space curves with their curves on the face. Each
+     end of one lies on an edge of the face, at a point where the face's
+     parametrization is singular, or at an end of another; OCCT leaving a
+     curve open elsewhere fails the call. */
   int (*contours)(HuakView *, size_t source, size_t face,
-                  const double direction[3], double angle, double tolerance,
-                  HuakIndices *, char *error, size_t capacity);
-  /* The regions into which images divide the rectangle, or with a null
-     rectangle the regions `domain`. Pieces of tracked images join their
-     shape's borders, which `merge` can keep. */
-  int (*partition)(HuakView *, const HuakBox *rectangle, const size_t *domain,
-                   size_t domain_count, const size_t *tools, size_t tool_count,
-                   const HuakTracked *, size_t tracked_count, HuakIndices *,
-                   char *error, size_t capacity);
-  /* A point inside each region. */
-  int (*interiors)(HuakView *, const size_t *regions, size_t count, HuakXY *,
-                   char *error, size_t capacity);
-  /* Each list of regions merged where they share a boundary, except along
-     the borders of shape keep[k]; keep[k] < 0 keeps none. */
-  int (*merge)(HuakView *, const HuakGroups *, const ptrdiff_t *keep,
-               HuakGroups *, char *error, size_t capacity);
-  /* Each region's wires as closed paths, within `tolerance`. */
-  int (*outlines)(HuakView *, const size_t *regions, size_t count,
-                  double tolerance, HuakPaths *, char *error, size_t capacity);
-  int (*moments)(HuakView *, const size_t *regions, size_t count,
-                 HuakMoments *, char *error, size_t capacity);
-} HuakProjectionV3;
+                  const double direction[3], double angle, HuakIndices *curves,
+                  char *error, size_t capacity);
+  /* Arranges the images into arcs, which the view keeps in place of any
+     earlier arrangement: the pieces of them between the points where they
+     meet, cross or come within tolerance of each other in the plane. Curves
+     that meet in space meet at one point of it; an image is also cut at each
+     of `cuts`. */
+  int (*arrange)(HuakView *, const size_t *images,
+                 size_t count, const HuakCut *cuts, size_t cut_count, HuakArcs *,
+                 char *error, size_t capacity);
+  /* The cells of the latest arrangement, each with the layers over it.
+     Turning at each vertex onto the arc that leaves it next clockwise runs
+     around the part of the plane on the left of the arcs; the order in which
+     arcs leave a vertex is that in which they cross the circle of its
+     tolerance, beyond which they stand apart. A cell's layers are found
+     along the line of sight through the point at the middle of the arc of
+     its boundary that stands farthest from the other arcs, halfway from the
+     arc to the nearest of them. */
+  int (*cells)(HuakView *, HuakCells *, char *error, size_t capacity);
+  /* The outline of each set of arcs, set k arcs[offsets[k] .. offsets[k + 1]],
+     that bound a region lying to their left as they are turned: closed
+     paths within `tolerance`, which filled where they wind around a point
+     are the region. */
+  int (*fill)(HuakView *, const size_t *offsets, const HuakTurnedArc *arcs,
+              size_t count, double tolerance, HuakPaths *, char *error,
+              size_t capacity);
+  /* As `fill`, with each set's region apart from the others it does not
+     touch: each connected region with its own outline, holes included, its
+     bounds and its moments. */
+  int (*regions)(HuakView *, const size_t *offsets, const HuakTurnedArc *arcs,
+                 size_t count, double tolerance, HuakRegions *, char *error,
+                 size_t capacity);
+} HuakProjectionV6;
 
 /* The table is immutable and valid until the library is unloaded. Incompatible
    changes to the table or any input/output structure require a new entry point. */
-const HuakProjectionV3 *huak_space_api_v3(void);
+const HuakProjectionV6 *huak_space_api_v6(void);
 #ifdef __cplusplus
 }
 #endif

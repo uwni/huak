@@ -1,0 +1,4 @@
+// Marks need a pen with a width across the line.
+import color.rgb
+import "../../arrows.huak" as arrows
+default arrows.line((0pt, 0pt) -- (20pt, 0pt), pen(rgb(0, 0, 0), 0pt), tip: arrows.stealth)

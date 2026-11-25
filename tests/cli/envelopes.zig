@@ -67,10 +67,11 @@ pub fn run(ctx: *h.Harness) !void {
         \\param tolerance:length = 0.01pt
         \\motion := moving() do return scaling x (1 + t) y (1 + t) end
         \\stops := [rgb(0,0,0),rgb(1,0,0)]
-        \\brush := pen(stops[0],nib:pensquare(1pt),motion:motion,tolerance:tolerance)
+        \\brush := pen(gradient.linear((100pt,6pt),(110pt,6pt),stops),nib:pensquare(1pt),motion:motion,tolerance:tolerance)
+        \\plain := pen(stops[0],nib:pensquare(1pt),motion:motion,tolerance:tolerance)
         \\curve := (100pt,6pt)--(110pt,6pt)
-        \\item := object.linear_stroke(curve,(100pt,6pt),(110pt,6pt),stops,brush)
-        \\assert(bounds(item) == bounds(object.draw(curve,brush)))
+        \\item := object.draw(curve,brush)
+        \\assert(bounds(item) == bounds(object.draw(curve,plain)))
         \\default drawing picture(120pt,12pt) do +copy(item) end
         \\export fitted := drawing picture() do +item end
         \\assert(fitted.width == 11.5pt)

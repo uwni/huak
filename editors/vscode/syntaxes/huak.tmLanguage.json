@@ -81,8 +81,8 @@
       { "begin": "\\{", "end": "\\}", "beginCaptures": { "0": { "name": "punctuation.section.huak" } }, "endCaptures": { "0": { "name": "punctuation.section.huak" } }, "patterns": [{ "include": "#signature-groups" }, { "include": "$self" }] }
     ] },
     "keywords": { "patterns": [
-      { "name": "keyword.control.huak", "match": "\\b(?:fn|expand_block|block|struct|end|param|if|then|elseif|else|while|for|do|in|break|continue|return|export|default|import|precedence|mixfix|and|or|not|typ|cycle)\\b" },
-      { "name": "constant.language.boolean.huak", "match": "\\b(?:true|false)\\b" }
+      { "name": "keyword.control.huak", "match": "\\b(?:and|block|break|continue|cycle|default|do|else|elseif|end|expand_block|export|fn|for|if|import|in|mixfix|not|or|param|precedence|return|struct|then|typ|while)\\b" },
+      { "name": "constant.language.boolean.huak", "match": "\\b(?:false|true)\\b" }
     ] },
     "numbers": { "patterns": [
       { "name": "constant.numeric.huak", "match": "(?<![\\w.])(?:[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\\s*pi)?(?:\\s*(?:mm|cm|m|in|pt|bp|texpt|rad|deg|turn)\\b)?" }
@@ -91,7 +91,7 @@
       { "name": "entity.name.function.huak", "match": "\\b[A-Za-z_][A-Za-z_0-9]*(?=\\()" }
     ] },
     "operators": { "patterns": [
-      { "name": "keyword.operator.huak", "match": "\\+=|~~|--|->|:=|==|!=|<=|>=|[+*/%\\^=<>&-]" },
+      { "name": "keyword.operator.huak", "match": "!=|\\+=|--|->|:=|<=|==|>=|~~|%|&|\\*|\\+|-|/|<|=|>|\\^" },
       { "name": "punctuation.separator.huak", "match": "[,;:.]" },
       { "name": "punctuation.section.huak", "match": "[()\\[\\]{}]" }
     ] }

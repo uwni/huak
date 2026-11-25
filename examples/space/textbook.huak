@@ -1,0 +1,53 @@
+import space as s
+import paint.*
+import regions.*
+
+// Two ways to color a textbook figure. The light keeps its place on the
+// page whatever the camera, and hidden lines show dashed through the ink.
+// On the left each face is cut where its tone changes; on the right each
+// face takes one color, the average of those tones.
+//
+// The ink lets 15% of what is under it show. By default the transparency is
+// flattened onto white paper and nothing drawn is translucent. With
+// `translucent` each solid stays one layer at the ink's opacity; over white
+// paper the two look the same.
+param translucent:bool = false
+
+base := s.box(44pt, 30pt, 18pt) minus transformed(s.cylinder(7pt, 30pt), translate((30pt, 15pt, -6pt)))
+post := transformed(s.cone(8pt, 20pt, 4pt), translate((11pt, 15pt, 18pt)))
+part := base union post
+twin := transformed(part, translate((64pt, 30pt, 0pt)))
+
+camera := s.orthographic(-65deg, 28deg)
+tones := s.Tones()
+view := s.project([part, twin], camera, light: s.page_light(camera), isophotes: tones.cuts)
+inks := [rgb(0.16, 0.61, 0.58, 0.85), rgb(0.86, 0.47, 0.20, 0.85)]
+dark := rgb(0.12, 0.17, 0.19)
+
+fn drawn(line:any) -> bool
+    return line.kind == "outline" or line.kind == "edge"
+end
+
+// The lines each solid hides, for the coloring to show through its ink.
+fn behind(source:int) -> picture
+    dashed := pen(dark, 0.35pt, dash: [1.6pt, 1pt])
+    hidden := picture()
+    for line in view.lines do
+        if line.source == source and drawn(line) and not line.visible then append(hidden, draw(line.curve, dashed)) end
+    end
+    return hidden
+end
+
+default drawing picture() do
+    left := []
+    right := []
+    for face in view.visible_faces do
+        if face.source == 0 then left += [face] else right += [face] end
+    end
+    +s.toned(left, inks, tones, behind: behind(0), translucent: translucent)
+    +s.flat(right, inks, tones, behind: behind(1), translucent: translucent)
+    edge := pen(dark, 0.5pt)
+    for line in view.lines do
+        if drawn(line) and line.visible then +draw line.curve with edge end
+    end
+end

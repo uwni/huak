@@ -1,0 +1,55 @@
+#!/bin/sh
+# Refuses a commit that:
+# 1) stages build logs, packaged VSIX binaries, or disallowed script files
+#    (*.log, *.vsix, *.py, *.pl, *.awk, or *.js outside editors/vscode/ and apps/playground/);
+# 2) adds or changes a source file over 5,000 tokens, about 20,000 bytes at four
+#    bytes a token: agents read whole files, and a file that large is to be split
+#    by what it does. Files that no one reads as source are not checked: lockfiles,
+#    the generated C header, fonts, images, PDFs, recorded data and license texts,
+#    which stay verbatim. Enable with:
+# git config core.hooksPath .githooks
+limit=20000
+
+# Whether a path is disallowed from being committed.
+disallowed_path() {
+  case "$1" in
+    *.log | *.vsix | *.py | *.pl | *.awk) return 0 ;;
+    editors/vscode/*.js | apps/playground/*.js) return 1 ;;
+    *.js) return 0 ;;
+  esac
+  return 1
+}
+
+# Whether a path is read as source, and so checked.
+read_as_source() {
+  case "$1" in
+    *.lock | *.svg | *.png | *.jpg | *.jpeg | *.otf | *.ttf | *.pdf | *.json | *.csv | libtypst/include/libtypst.h) return 1 ;;
+    *LICENSE* | */licenses/*) return 1 ;;
+  esac
+  return 0
+}
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+banned=$(printf '%s\n' "$staged" | while IFS= read -r path; do
+  [ -n "$path" ] && disallowed_path "$path" || continue
+  echo "  $path"
+done)
+if [ -n "$banned" ]; then
+  echo "Commit refused: disallowed files staged (*.log, *.vsix, *.py, *.pl, *.awk, or *.js outside editors/vscode/ and apps/playground/):" >&2
+  echo "$banned" >&2
+  exit 1
+fi
+
+over=$(printf '%s\n' "$staged" | while IFS= read -r path; do
+  [ -n "$path" ] && read_as_source "$path" || continue
+  size=$(git cat-file -s ":$path")
+  if [ "$size" -gt "$limit" ]; then
+    echo "  $path: $size bytes, about $((size / 4)) tokens"
+  fi
+done)
+if [ -n "$over" ]; then
+  echo "Commit refused: these files are over 5,000 tokens ($limit bytes):" >&2
+  echo "$over" >&2
+  echo "Split each one by what it does into several files, then commit again." >&2
+  exit 1
+fi

@@ -1,0 +1,6 @@
+// A line with marks must be a single subpath.
+import color.rgb
+import geometry.compound
+import "../../arrows.huak" as arrows
+two := compound([(0pt, 0pt) -- (20pt, 0pt), (0pt, 10pt) -- (20pt, 10pt)])
+default arrows.line(two, pen(rgb(0, 0, 0), 1pt), tip: arrows.stealth)

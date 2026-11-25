@@ -1,0 +1,216 @@
+// Solids in tones, in flat colors or in their light, each one layer flattened
+// onto the paper, and faces colored by the script's field.
+import geometry.{compound, subpaths, measure}
+import math.abs
+import object.{fill, append, opacity, flatten_transparency}
+import color.rgb
+import assertions.assert
+import "std/space/light.huak".{VisibleFace, SmoothField, tone, face_light, light_over}
+
+// Tones for `toned` and `flat`. `cuts` are the isophotes to project with: how
+// far a surface must face the light, from 0 (edge on) to 1 (facing it), for
+// the next tone to begin. `levels` holds one tone for each cut, as a step
+// from the ink toward black (negative) or white; the first also covers what
+// faces away from the light.
+export struct Tones
+    cuts:list = [0, 0.15, 0.6, 0.93]
+    levels:list = [-0.30, 0.06, 0.40, 0.66]
+end
+
+// A face's tones, as [level, region] rows: the face is cut where its tone
+// changes. A band lies between two isophotes, so it falls within one tone as
+// long as every cut is one of them.
+fn tone_rows(face:VisibleFace, tones:Tones) -> list
+    assert(len(tones.cuts) > 0 and len(tones.cuts) == len(tones.levels), "tones need one level for each cut")
+    assert(len(face.shades) > 0, "tones need a projection with a directional light and without smooth")
+    rows := []
+    for shade in face.shades do
+        index := 0
+        for k in 1:len(tones.cuts)-1 do
+            if shade.diffuse >= tones.cuts[k] then index = k end
+        end
+        rows += [[tones.levels[index], shade.region]]
+    end
+    return rows
+end
+
+fn wedge(p:any, q:any) -> float
+    return (p.x/1pt)*(q.y/1pt) - (p.y/1pt)*(q.x/1pt)
+end
+
+// The area a region covers on the page, in square points: Green's theorem on
+// each cubic of a contour, and on the chord that closes it.
+fn area(curve:path) -> float
+    total := 0.0
+    for contour in subpaths(curve) do
+        curves := measure(contour).curves
+        for c in curves do
+            total = total + 0.3*wedge(c[0], c[1]) + 0.15*wedge(c[0], c[2]) + 0.05*wedge(c[0], c[3]) + 0.15*wedge(c[1], c[2]) + 0.15*wedge(c[1], c[3]) + 0.3*wedge(c[2], c[3])
+        end
+        if len(curves) > 0 then total = total + 0.5*wedge(curves[len(curves)-1][3], curves[0][0]) end
+    end
+    return abs(total)
+end
+
+fn same_color(a:color, b:color) -> bool
+    return a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a
+end
+
+// One face as a [level, color, region] row: the average of its tones, by
+// the area each takes on the page.
+fn face_piece(face:VisibleFace, ink:color, tones:Tones) -> list
+    rows := tone_rows(face, tones)
+    level := 0.0
+    r := 0.0
+    g := 0.0
+    b := 0.0
+    whole := 0.0
+    if len(rows) > 1 then
+        for row in rows do
+            part := area(row[1])
+            paint:color := tone(ink, row[0])
+            level = level + part*row[0]
+            r = r + part*paint.r
+            g = g + part*paint.g
+            b = b + part*paint.b
+            whole = whole + part
+        end
+    end
+    if whole > 0 then return [level/whole, rgb(r/whole, g/whole, b/whole), face.region] end
+    return [rows[0][0], tone(ink, rows[0][0]), face.region]
+end
+
+// Pieces of one solid, as [level, color, region] rows, in tiers from the
+// darkest up, as [color, reach] rows: `reach` holds the pieces of that
+// color and every lighter piece in one path. Painting each
+// tier over its reach puts the darkest color under the whole solid, and
+// under any edge between two colors only colors between them. Pieces
+// filled side by side would each be anti-aliased by itself, and a reader
+// would let the page show along every edge they share.
+fn tiers(pieces:list) -> list
+    ordered := []
+    for piece in pieces do
+        at := len(ordered)
+        for i in 0:len(ordered)-1 do
+            if at == len(ordered) and ordered[i][0] > piece[0] then at = i end
+        end
+        moved := []
+        for i in 0:len(ordered)-1 do
+            if i == at then moved += [piece] end
+            moved += [ordered[i]]
+        end
+        if at == len(ordered) then moved += [piece] end
+        ordered = moved
+    end
+    lightest := []
+    reach := []
+    k := len(ordered) - 1
+    while k >= 0 do
+        paint:color := ordered[k][1]
+        more := true
+        while more do
+            reach += [ordered[k][2]]
+            k = k - 1
+            if k < 0 then
+                more = false
+            elseif not same_color(ordered[k][1], paint) then
+                more = false
+            end
+        end
+        lightest += [[paint, compound(reach)]]
+    end
+    result := []
+    i := len(lightest) - 1
+    while i >= 0 do
+        result += [lightest[i]]
+        i = i - 1
+    end
+    return result
+end
+
+// The solids of `faces`, one from each ink, by `piece`: "light" shades each
+// face in its light; "tones" cuts each face where its tone changes and
+// "faces" keeps each face whole, both laid in tiers. A solid is one layer at
+// its ink's opacity, and inside it the ink is opaque.
+fn solids(faces:list, inks:list, piece:string, tones:Tones = Tones()) -> list
+    bodies := []
+    for source in 0:len(inks)-1 do
+        ink:color := inks[source]
+        opaque := rgb(ink.r, ink.g, ink.b)
+        body := picture()
+        pieces := []
+        for face in faces do
+            if face.source == source then
+                if piece == "light" then
+                    append(body, face_light(face, opaque))
+                elseif piece == "faces" then
+                    pieces += [face_piece(face, opaque, tones)]
+                else
+                    for row in tone_rows(face, tones) do pieces += [[row[0], tone(opaque, row[0]), row[1]]] end
+                end
+            end
+        end
+        for row in tiers(pieces) do append(body, fill(row[1], row[0])) end
+        if len(body.children) > 0 then
+            if ink.a < 1 then opacity(body, ink.a) end
+            bodies += [body]
+        end
+    end
+    return bodies
+end
+
+// What lies under, then `drawn` in order. Unless `translucent`, transparency
+// is flattened onto `paper`.
+fn composed(behind:any, drawn:list, paper:color, translucent:bool) -> picture
+    result := picture()
+    if behind != false then append(result, copy(behind)) end
+    for item in drawn do append(result, item) end
+    if translucent then return result end
+    return flatten_transparency(result, paper)
+end
+
+// Colors faces in a few tones with hard edges: each face is cut where its
+// tone changes. Project with a light and `isophotes: tones.cuts`. `inks`
+// holds one ink for each projected shape. A highlight from `spot` is not
+// drawn: the last tone stands for it.
+//
+// `behind` is a picture of what lies under the faces, such as the lines
+// they hide; it is drawn first. Each solid is one layer at its ink's
+// opacity, so an ink that is not opaque lets what is under it show. By
+// default the result is flattened onto `paper` (see
+// `object.flatten_transparency`) and nothing in it is translucent; with
+// `translucent` the layers stay as they are and `paper` is not used.
+export fn toned(faces:list, inks:list, tones:Tones = Tones(), behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
+    return composed(behind, solids(faces, inks, "tones", tones), paper, translucent)
+end
+
+// Colors each face in one color: the average of the tones `toned` gives it,
+// by the area each takes on the page. `behind`, `paper` and `translucent`
+// work as in `toned`.
+export fn flat(faces:list, inks:list, tones:Tones = Tones(), behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
+    return composed(behind, solids(faces, inks, "faces", tones), paper, translucent)
+end
+
+// Shades faces in their light: continuously when projected with `smooth`,
+// otherwise in the isophote bands, with the highlight of `spot` in white over
+// them. Project with a light. `inks`, `behind`, `paper` and `translucent`
+// work as in `toned`.
+export fn shaded(faces:list, inks:list, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
+    return composed(behind, solids(faces, inks, "light"), paper, translucent)
+end
+
+// Colors faces by the field projected with `field` (see `project`): its
+// value through `colors` at `levels`, as `gradient.patches` maps them. With
+// `light`, the projection's smooth light shades the colors as `shaded`
+// tones an ink, with the highlight over them. `behind`, `paper` and
+// `translucent` work as in `toned`.
+export fn colored(faces:list, colors:list, levels:list, light:bool = false, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
+    drawn := picture()
+    for face in faces do
+        assert(face.field != false and len(face.field.values) > 0, "colored needs a projection with a field")
+        field:SmoothField := face.field
+        append(drawn, fill(face.region, gradient.patches(field.points, field.values, colors, levels, field.tolerance, field.margin)))
+        if light then append(drawn, light_over(face)) end
+    end
+    return composed(behind, [drawn], paper, translucent)
+end

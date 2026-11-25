@@ -52,6 +52,63 @@ pub fn pdf(document: &PagedDocument, standard: &str, creator: &str) -> Result<Ve
         .map_err(|errors| Error::compile(Report::from_native_unlocated(&errors, usize::MAX)))
 }
 
+/// A page of the size of page `page` of `data` that draws it inside one
+/// transparency group at `opacity`, so that it blends with what lies under it
+/// as a whole. Typst's groups have no opacity; krilla, the writer typst-pdf
+/// drives, has. The result declares the input's PDF version, at least 1.4,
+/// so it embeds wherever the input does.
+pub fn pdf_page_with_opacity(data: &[u8], page: usize, opacity: f64) -> Result<Vec<u8>, Error> {
+    use hayro_syntax::PdfVersion as Declared;
+    use krilla::configure::{ConfigurationBuilder, PdfVersion};
+    use krilla::{geom::Size, num::NormalizedF32, page::PageSettings, pdf, Document};
+
+    let opacity = (0.0..=1.0)
+        .contains(&opacity)
+        .then(|| NormalizedF32::new(opacity as f32))
+        .flatten()
+        .ok_or_else(|| Error::invalid("opacity must lie between 0 and 1"))?;
+    let source = pdf::Pdf::new(data.to_vec())
+        .map_err(|error| Error::invalid(format!("PDF data cannot be read: {error:?}")))?;
+    let (width, height) = source
+        .pages()
+        .get(page)
+        .ok_or_else(|| Error::range("PDF page index is out of range"))?
+        .render_dimensions();
+    let size =
+        Size::from_wh(width, height).ok_or_else(|| Error::invalid("PDF page has no area"))?;
+    let version = match source.version() {
+        Declared::Pdf10 | Declared::Pdf11 | Declared::Pdf12 | Declared::Pdf13 | Declared::Pdf14 => {
+            PdfVersion::Pdf14
+        }
+        Declared::Pdf15 => PdfVersion::Pdf15,
+        Declared::Pdf16 => PdfVersion::Pdf16,
+        Declared::Pdf17 => PdfVersion::Pdf17,
+        Declared::Pdf20 => PdfVersion::Pdf20,
+    };
+    let configuration = ConfigurationBuilder::new()
+        .with_version(version)
+        .finish()
+        .map_err(|error| Error::invalid(format!("{error:?}")))?;
+    let mut document = Document::new_with(krilla::SerializeSettings {
+        configuration,
+        ..Default::default()
+    });
+    let mut sheet = document.start_page_with(PageSettings::new(size));
+    let mut surface = sheet.surface();
+    surface.push_opacity(opacity);
+    surface.draw_pdf_page(
+        &pdf::PdfDocument::new(std::sync::Arc::new(source)),
+        size,
+        page,
+    );
+    surface.pop();
+    surface.finish();
+    sheet.finish();
+    document
+        .finish()
+        .map_err(|error| Error::invalid(format!("PDF page cannot be embedded: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +153,44 @@ mod tests {
         let document = from_frame(&frame());
         assert!(pdf(&document, "not-a-pdf-standard", "").is_err());
         assert!(svg(&document, 1).is_err());
+    }
+
+    #[test]
+    fn page_with_opacity_is_one_group_on_a_page_of_the_same_size_and_version() {
+        let document = from_frame(&frame());
+        for (standard, version) in [
+            ("", hayro_syntax::PdfVersion::Pdf17),
+            ("1.4", hayro_syntax::PdfVersion::Pdf14),
+            ("2.0", hayro_syntax::PdfVersion::Pdf20),
+        ] {
+            let bytes = pdf(&document, standard, "").unwrap();
+            let wrapped = pdf_page_with_opacity(&bytes, 0, 0.5).unwrap();
+            let result = hayro_syntax::Pdf::new(wrapped.clone()).unwrap();
+            assert_eq!(result.version(), version);
+            assert_eq!(result.pages().len(), 1);
+            let source = hayro_syntax::Pdf::new(bytes).unwrap();
+            assert_eq!(
+                result.pages()[0].render_dimensions(),
+                source.pages()[0].render_dimensions()
+            );
+            let text = String::from_utf8_lossy(&wrapped);
+            assert!(text.contains("/Group<</Type/Group/S/Transparency/I true"));
+            assert!(text.contains("/ca 0.5"));
+        }
+        let bytes = pdf(&document, "", "").unwrap();
+        for opacity in [-0.1, 1.5, f64::NAN] {
+            let error = pdf_page_with_opacity(&bytes, 0, opacity).unwrap_err();
+            assert_eq!(error.status, TYPST_INVALID_ARGUMENT);
+        }
+        assert_eq!(
+            pdf_page_with_opacity(&bytes, 1, 0.5).unwrap_err().status,
+            TYPST_OUT_OF_RANGE
+        );
+        assert_eq!(
+            pdf_page_with_opacity(b"not a PDF", 0, 0.5)
+                .unwrap_err()
+                .status,
+            TYPST_INVALID_ARGUMENT
+        );
     }
 }

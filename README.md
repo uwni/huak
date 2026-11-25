@@ -4,7 +4,7 @@ Huak 是一门独立的绘图语言，与 Typst 的关系类似于 MetaPost 与 
 
 ## 快速上手
 
-你可以在 [huak.github.io](https://huak.github.io)
+你可以在 [huak.github.io](https://huak.github.io) 打开 Playground，在浏览器里直接编辑和运行 Huak。
 
 将下面的代码保存为 `circle.huak`。把 `r` 从 `15mm` 改为 `20mm`，圆和半径一起变大，标注仍在半径中点上方。
 

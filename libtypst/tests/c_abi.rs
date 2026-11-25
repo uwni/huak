@@ -114,13 +114,23 @@ fn independent_c_host_exercises_stable_abi() {
         "c-abi-host"
     });
 
+    // The host is `acceptance.c` (its `main`) and one file per API area.
+    let fixtures = package.join("tests/fixtures");
+    let mut sources = vec![fixtures.join("acceptance.c")];
+    let mut parts: Vec<PathBuf> = std::fs::read_dir(fixtures.join("acceptance"))
+        .expect("list the acceptance host parts")
+        .map(|entry| entry.expect("read an acceptance host part").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "c"))
+        .collect();
+    parts.sort();
+    sources.extend(parts);
     let mut compiler = Command::new(std::env::var_os("CC").unwrap_or_else(|| "cc".into()));
     compiler
         .current_dir(&package)
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic"])
         .arg("-I")
         .arg(package.join("include"))
-        .arg(package.join("tests/fixtures/acceptance.c"))
+        .args(&sources)
         .arg("-o")
         .arg(&executable);
     if cfg!(target_os = "linux") {

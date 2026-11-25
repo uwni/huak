@@ -3,7 +3,7 @@
 const std = @import("std");
 const t = std.testing;
 const core = @import("huak").core;
-const support = @import("envelope.zig");
+const support = @import("harness.zig");
 const Point = core.geometry.Point;
 const Path = core.Path;
 const Case = enum { @"small-loop", @"small-loop-reversed", @"bowtie-closed", @"self-cross-open", @"repeat-same", @"repeat-opposite" };

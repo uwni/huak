@@ -148,7 +148,7 @@ test "output preparation validates animation before frame references without con
     try picture.addLabel(0, .{ .width = 10, .height = 12, .baseline = 9 }, .{});
     try picture.endScope();
     var owner: Owner = .{
-        .scene = try huak.core.Scene.fromDisplayList(&picture),
+        .scene = try huak.core.Scene.ownership.fromDisplayList(&picture),
         .animation_state = AnimationState.init(t.allocator),
         .owner_index = 0,
     };
@@ -198,7 +198,7 @@ test "frame compaction preserves paint order across map growth and shared layout
         try picture.labelAtBaseline(@intCast(index), .{ .width = metric.width, .height = metric.height, .baseline = metric.baseline }, .{ .x = 5, .y = @floatFromInt(12 * i + 10) }, .{});
     }
     var owner: Owner = .{
-        .scene = try huak.core.Scene.fromDisplayList(&picture),
+        .scene = try huak.core.Scene.ownership.fromDisplayList(&picture),
         .animation_state = AnimationState.init(t.allocator),
         .owner_index = 0,
     };
@@ -241,7 +241,7 @@ test "last output alias releases picture geometry before the batch is destroyed"
     }
     try picture.endScope();
     var owner: Owner = .{
-        .scene = try huak.core.Scene.fromDisplayList(&picture),
+        .scene = try huak.core.Scene.ownership.fromDisplayList(&picture),
         .animation_state = AnimationState.init(allocator),
         .owner_index = 0,
     };
@@ -279,7 +279,7 @@ fn allocationHandoff(allocator: std.mem.Allocator, library: *typst.Library) !voi
     const second_value = machine.getGlobal("second").?;
     const first = scene.object(first_value);
     const second = scene.object(second_value);
-    try second.scene.place(second.index, try firstChild(first), null);
+    try huak.core.Scene.placement.place(second.scene, second.index, try firstChild(first), null);
     const first_count = first.scene.nodes.items.len;
     const second_count = second.scene.nodes.items.len;
     const shared_handle = runtime.frames.items[1].layout.handle;
@@ -345,8 +345,8 @@ test "cross-storage outputs retain geometry and native text after their original
         const from = scene.object(first);
         const to = scene.object(second);
         const extra = scene.object(unused);
-        try to.scene.place(to.index, try firstChild(from), null);
-        try to.scene.place(to.index, try firstChild(extra), null);
+        try huak.core.Scene.placement.place(to.scene, to.index, try firstChild(from), null);
+        try huak.core.Scene.placement.place(to.scene, to.index, try firstChild(extra), null);
         break :result try runtime.takeOutputs(&.{ first, second });
     };
     defer batch.deinit();
@@ -388,7 +388,7 @@ test "output jobs retain foreign animation keys after runtime and original outpu
         }
         (try to.scene.settings(to.index)).duration = 2;
         (try to.scene.settings(to.index)).repeat = false;
-        try to.scene.place(to.index, try firstChild(from), null);
+        try huak.core.Scene.placement.place(to.scene, to.index, try firstChild(from), null);
         break :result try runtime.takeOutputs(&.{ first, second });
     };
     defer batch.deinit();

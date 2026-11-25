@@ -64,7 +64,7 @@ fn render(filename: []const u8, source: []const u8) !huak.render.Output {
         return err;
     };
     defer program.deinit();
-    const selected = program.outputNamed("default") orelse {
+    const selected = program.outputNamed(lang.bytecode.Output.default_name) orelse {
         try report.writer.writeAll("Declare a default picture to preview.");
         return error.MissingDefaultPicture;
     };

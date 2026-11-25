@@ -16,5 +16,4 @@ mod scene;
 mod syntax;
 
 pub use abi::*;
-pub use ffi::*;
 pub use handles::*;

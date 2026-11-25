@@ -207,7 +207,15 @@ pub const Record = struct { name: []const u8, module: u32 = 0, fields: []const R
 /// slots[source index] identifies its destination parameter. Every destination
 /// must be supplied once, including defaults evaluated by compiler-emitted code.
 pub const ArgumentBinding = struct { slots: []const u32, parameter_count: u32 };
-pub const Output = struct { name: []const u8, global: u32, span: Span };
+pub const Output = struct {
+    /// The name of the output `export default` makes, which a host chooses
+    /// where it names none.
+    pub const default_name = "default";
+
+    name: []const u8,
+    global: u32,
+    span: Span,
+};
 
 pub const Program = struct {
     outputs: []const Output = &.{},

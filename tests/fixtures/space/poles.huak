@@ -1,0 +1,29 @@
+import space as s
+import paint.*
+import geometry.{bezier, reverse}
+import assertions.assert
+
+// Open sheets of revolution whose meridian ends on the axis: at the pole
+// OCCT's normal has no length, and a point a step of what OCCT tells apart
+// on the parameters inside it is still the pole to OCCT. The contours are
+// taken where the normal has length, so that the domes project lit in bands
+// and unlit from low and high, whichever way their meridian runs.
+meridian := bezier((0pt, 12pt), (6pt, 12pt), (12pt, 3pt), (18pt, 0pt))
+domes := [s.revolve(meridian), s.revolve(reverse(meridian))]
+drawn := picture()
+for k in 0:len(domes)-1 do
+    for elevation in [10deg, 29deg, 50deg] do
+        view := s.orthographic(-60deg + 80deg*k, elevation)
+        lights := [s.page_light(view), s.page_light(view, -0.3, 0.4, -0.6)]
+        unlit := s.project([domes[k]], view)
+        assert(len(unlit.lines) > 0, "a dome has an outline")
+        for sun in lights do
+            lit := s.project([domes[k]], view, light: sun, spot: 24deg)
+            assert(len(lit.lines) > 0, "a lit dome has its lines")
+        end
+        for line in unlit.lines do
+            append(drawn, draw(line.curve, pen(rgb(0, 0, 0), 0.4pt)))
+        end
+    end
+end
+default drawn

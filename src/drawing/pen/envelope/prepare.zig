@@ -131,7 +131,7 @@ pub fn smoothKnot(pieces: []const Piece) Error!?usize {
     for (pieces, 0..) |piece, index| {
         if (stationary(piece.curve)) continue;
         const incoming_piece = pieces[previous];
-        if (same(incoming_piece.curve.p3, piece.curve.p0)) {
+        if (incoming_piece.curve.p3.eql(piece.curve.p0)) {
             const incoming = try endpointTangent(incoming_piece, false);
             const outgoing = try endpointTangent(piece, true);
             if (incoming != null and outgoing != null and sameRay(incoming.?, outgoing.?)) return index;
@@ -145,12 +145,8 @@ pub fn zero(point: Point) bool {
     return point.x == 0 and point.y == 0;
 }
 
-pub fn same(a: Point, b: Point) bool {
-    return a.x == b.x and a.y == b.y;
-}
-
 pub fn stationary(curve: g.Cubic) bool {
-    return same(curve.p0, curve.p1) and same(curve.p0, curve.p2) and same(curve.p0, curve.p3);
+    return curve.p0.eql(curve.p1) and curve.p0.eql(curve.p2) and curve.p0.eql(curve.p3);
 }
 
 pub fn startDirection(curve: g.Cubic) Error!Point {

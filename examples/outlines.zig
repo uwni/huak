@@ -66,7 +66,7 @@ pub fn main(init: std.process.Init) !void {
     try canvas.lineTo(.{ .x = width, .y = height });
     try canvas.lineTo(.{ .x = 0, .y = height });
     try canvas.close();
-    try picture.fill(canvas, .{ .r = 0.975, .g = 0.98, .b = 0.995 }, .{});
+    try picture.fill(canvas, .{ .color = .{ .r = 0.975, .g = 0.98, .b = 0.995 } }, .{});
     try picture.labelAtBaseline(0, metrics(measured[0]), .{ .x = 34, .y = 345 }, .{});
     try picture.labelAtBaseline(4, metrics(measured[4]), .{ .x = 34, .y = 316 }, .{});
 
@@ -90,7 +90,7 @@ pub fn main(init: std.process.Init) !void {
         const phase: f64 = @floatFromInt(index);
         try part.path.transform(g.Transform.scaling(1.12, 1.2 + 0.12 * @sin(phase)).then(g.Transform.rotation(0.07 * @sin(phase + 1))));
         part.style.fill = colors[index % colors.len];
-        part.style.pen = .{ .color = .{ .r = 0.08, .g = 0.12, .b = 0.2, .a = 0.75 }, .width = 0.8, .join = .round };
+        part.style.pen = .{ .paint = .{ .color = .{ .r = 0.08, .g = 0.12, .b = 0.2, .a = 0.75 } }, .width = 0.8, .join = .round };
         part.transform = part.transform.then(.{ .e = phase * 7, .f = 9 * @sin(phase * 1.3) });
     }
     try batch.labels[1].addToPicture(&picture, .{ .e = 40, .f = 210 });
@@ -100,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
     const formula_color: DisplayList.Color = .{ .r = 0.12, .g = 0.3, .b = 0.52 };
     for (batch.labels[2].parts) |*part| {
         if (part.style.fill != null) part.style.fill = formula_color;
-        if (part.style.pen) |*pen| pen.color = formula_color;
+        if (part.style.pen) |*pen| pen.paint = .{ .color = formula_color };
     }
     try batch.labels[2].addToPicture(&picture, .{ .c = 0.10, .e = 40, .f = 115 });
     try picture.labelAtBaseline(3, metrics(measured[3]), .{ .x = 34, .y = 42 }, .{});

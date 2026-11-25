@@ -28,5 +28,6 @@ pub const Kind = enum {
     fuse,
     common,
     cut,
+    grid,
 };
 pub const Node = struct { kind: Kind, arguments: []const types.Value };

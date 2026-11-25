@@ -1,0 +1,17 @@
+// Every predefined mark as a tip, on a straight line and on a curve.
+import paint.{rgb, picture, append}
+import geometry.bezier
+import "../arrows.huak" as arrows
+
+ink := rgb(0.1, 0.1, 0.1)
+blue := rgb(0.15, 0.35, 0.7)
+marks := [arrows.stealth, arrows.triangle, arrows.round, arrows.straight, arrows.barb, arrows.hooks, arrows.tikz, arrows.bar, arrows.bracket, arrows.disk, arrows.square, arrows.diamond, arrows.rays]
+
+export pic := picture()
+for i in 0:len(marks)-1 do
+    y := -i*24pt
+    curved := bezier((100pt, y-6pt), (125pt, y+10pt), (150pt, y+10pt), (175pt, y-4pt))
+    append(pic, arrows.line((0pt, y) -- (70pt, y), pen(ink, 1pt), tip: marks[i]))
+    append(pic, arrows.line(curved, pen(blue, 1.4pt), tip: marks[i], toe: marks[i]))
+end
+default pic

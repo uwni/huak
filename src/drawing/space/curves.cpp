@@ -1,7 +1,10 @@
 // Projected curves: the image of an edge in the projection plane, its planar
 // curve, and its conversion to Huak's cubic path commands.
 #include "space.hxx"
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <Bnd_Box.hxx>
+#include <cmath>
 #include <BRepLib.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Tool.hxx>
@@ -66,6 +69,36 @@ TopoDS_Edge projected(const TopoDS_Edge &edge,
   if (collapsed)
     return {};
   return BRepBuilderAPI_MakeEdge(spline);
+}
+
+// A perspective projector maps (x, y, z) to (x, y) / w with w = 1 - z / f:
+// its derivative is (1 / w) [I | (x, y) / (f w)], whose norm is
+// sqrt(1 + rho^2 / (f w)^2) / w with rho = |(x, y)|. Both factors grow with
+// z and rho, so their values at the box's farthest-forward and widest
+// corners bound it over the edge.
+double magnification(const TopoDS_Edge &edge,
+                     const HLRAlgo_Projector &projector) {
+  if (!projector.Perspective())
+    return 1;
+  Bnd_Box box;
+  BRepBndLib::Add(edge, box);
+  if (box.IsVoid())
+    return 1;
+  double x0, y0, z0, x1, y1, z1;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  double front = -RealLast(), wide = 0;
+  for (int i = 0; i < 8; ++i) {
+    gp_Pnt p(i & 1 ? x1 : x0, i & 2 ? y1 : y0, i & 4 ? z1 : z0);
+    projector.Transform(p);
+    front = std::max(front, p.Z());
+    wide = std::max(wide, std::hypot(p.X(), p.Y()));
+  }
+  const double f = projector.Focus();
+  const double w = 1.0 - front / f;
+  if (w <= 0)
+    throw std::domain_error("shape crosses the camera eye plane");
+  const double spread = wide / (f * w);
+  return std::sqrt(1 + spread * spread) / w;
 }
 
 Handle(Geom2d_Curve) inPlane(const TopoDS_Edge &edge) {

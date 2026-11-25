@@ -1,0 +1,79 @@
+// What `line` draws besides its marks: the shaft keeps the dash pattern and
+// nib the pen gives it; the marks take the pen's width across the line where
+// they sit; the line and its marks in one paint are one path, a mark in
+// another paint is drawn on its own, and a fill in another paint lies beneath
+// the outline around it.
+import assertions.assert
+import color.rgb
+import math.abs
+import geometry.{bezier, compound, rectangle, region_intersection, region_union, region_xor, subpaths}
+import object.{bounds, draw, region}
+import pen.makepen
+import "../arrows.huak" as arrows
+
+fn ink(content:object) -> path
+    return region_union(region(content), compound([]))
+end
+
+// The x spans of the separate pieces of ink inside `window`, in order.
+fn spans(content:object, window:path) -> list
+    result := []
+    for piece in subpaths(region_intersection(ink(content), window)) do
+        box := bounds(piece)
+        low:vec2 := box[0]
+        high:vec2 := box[1]
+        result += [[low.x, high.x, low.y, high.y]]
+    end
+    return result
+end
+
+// Whether two objects put down the same pieces of ink inside `window`, to
+// within the outlines' tolerance.
+fn alike(a:object, b:object, window:path) -> bool
+    first := spans(a, window)
+    second := spans(b, window)
+    if len(first) != len(second) then return false end
+    for i in 0:len(first)-1 do
+        for k in 0:3 do
+            if abs(first[i][k]-second[i][k]) > 0.01pt then return false end
+        end
+    end
+    return true
+end
+
+black := rgb(0, 0, 0)
+red := rgb(1, 0, 0)
+straight := (0pt, 0pt) -- (100pt, 0pt)
+window := rectangle((20pt, -5pt), 60pt, 10pt)
+dashed := pen(black, 1pt, "butt", "miter", 4, [3pt, 2pt], 1pt)
+for toe in [arrows.stealth, arrows.disk.with(fill: false), arrows.combine(arrows.bar, arrows.triangle)] do
+    drawn := arrows.line(straight, dashed, tip: arrows.straight, toe: toe)
+    assert(alike(drawn, draw(straight, dashed), window), "the shaft keeps the pen's dash pattern")
+end
+
+// A broad nib: 6pt along x, 1pt along y.
+nib := pen(black, nib: makepen((-3pt, -0.5pt) -- (3pt, -0.5pt) -- (3pt, 0.5pt) -- (-3pt, 0.5pt) -- cycle))
+across := arrows.line(straight, nib, tip: arrows.inked(arrows.stealth, red))
+assert(alike(across.children[0], draw(straight, nib), window), "the shaft keeps the pen's nib")
+head := bounds(ink(across.children[1]))
+assert(abs(head[1].x-head[0].x-7.5pt) < 0.01pt, "along x the nib is 1pt across the line, so the head is 3pt + 4.5pt long")
+assert(head[1].x < 100.01pt and bounds(ink(across.children[0]))[1].x < 100pt-arrows.stealth(arrows.Line(paint: black, thickness: 1pt)).neck+0.01pt, "a nib's print ends at the neck")
+upright := arrows.line((0pt, 0pt) -- (0pt, 100pt), nib, tip: arrows.inked(arrows.stealth, red))
+head = bounds(ink(upright.children[1]))
+assert(abs(head[1].y-head[0].y-30pt) < 0.01pt, "along y the nib is 6pt across the line, so the head is 3pt + 27pt long")
+
+// The shaft would end 2.875pt behind a 1pt line's stealth tip.
+short := arrows.line((0pt, 0pt) -- (2pt, 0pt), pen(black, 1pt), tip: arrows.inked(arrows.stealth, red))
+assert(len(short.children) == 1, "a line shorter than its head's neck has no shaft, only the head")
+
+curve := bezier((0pt, 0pt), (30pt, 40pt), (60pt, -20pt), (90pt, 10pt))
+round := pen(black, 2pt, "round")
+bare := arrows.line(curve, round)
+assert(len(region_xor(ink(bare), ink(draw(curve, round)))) == 0, "a line without marks is its stroke")
+whole := arrows.line(curve, round, tip: arrows.stealth, toe: arrows.bar, marks: [arrows.along(arrows.disk)])
+assert(len(whole.children) == 1 and whole.children[0].kind == "path", "a line and its marks in one paint are one path")
+white := rgb(1, 1, 1)
+framed := arrows.line(curve, round, tip: arrows.stealth.with(fill: white))
+underneath:color := framed.children[0].fill
+assert(len(framed.children) == 2 and underneath.b == 1, "a fill in another paint lies beneath the line's path")
+print("line checks passed")

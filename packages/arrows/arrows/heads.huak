@@ -1,0 +1,128 @@
+// Marks that point along their line, with tiptoe's shapes and default sizes:
+// a fixed part plus a multiple of the line's width.
+import math.sqrt
+import geometry.{arc, bezier, joined}
+import transform.{compose, scale, transformed, translate}
+import assertions.assert
+import "model.huak".{Line, Mark, size_or}
+import "outline.huak".{polygon, reflected, stroked, traced}
+
+// A swept-back head: the tip at the line's end, the wings `width` apart
+// `length` behind it, the back notched `inset` of the length deep.
+export fn stealth(line:Line, length:any = false, width:any = false, inset:float = 0.4, fill:any = true, rev:bool = false) -> Mark
+    l := size_or(length, 3pt+4.5*line.thickness)
+    return notched(line, l, size_or(width, 0.8*l), inset, fill, rev)
+end
+
+// A stealth head with a straight back.
+export fn triangle(line:Line, length:any = false, width:any = false, fill:any = true, rev:bool = false) -> Mark
+    l := size_or(length, 3pt+4.5*line.thickness)
+    return notched(line, l, size_or(width, 0.8*l), 0, fill, rev)
+end
+
+fn notched(line:Line, l:length, w:length, inset:float, fill_style:any, rev:bool) -> Mark
+    assert(l > 0pt and w > 0pt and inset >= 0 and inset < 1, "a head needs a positive length and width and an inset in [0, 1)")
+    s := line.thickness/2
+    h := w/2
+    depth := l*inset
+    points := [(0pt, 0pt), (-l, h), (-l+depth, 0pt), (-l, -h)]
+    // The shaft ends inside the ink. An outlined head takes it to the outline
+    // where that crosses the axis. A filled head takes it halfway from where
+    // the head first grows as wide as the shaft to where the axis leaves the
+    // ink, so that no edge of the shaft lies on an edge of the head.
+    outlined := fill_style != true
+    back := l-depth
+    neck := (s*l/h+back)/2
+    if outlined then neck = back-s*sqrt(h*h+depth*depth)/h end
+    if rev then
+        points = reflected(points, l)
+        back = l
+        neck = (depth+l-s*l/h)/2
+        if outlined then neck = l-s*sqrt(h*h+l*l)/h end
+    end
+    return Mark(pieces: polygon(points, line, fill_style), back: back, neck: neck)
+end
+
+// A stealth head with corners rounded by its stroke. The stroke's centre
+// line runs half the width inside the head's extremes, so that the rounded
+// head still reaches its tip, and the shaft ends on that line.
+export fn round(line:Line, length:any = false, width:any = false, inset:float = 0.4, fill:any = true, rev:bool = false) -> Mark
+    s := line.thickness/2
+    l := size_or(length, 3pt+4.5*line.thickness)
+    h := size_or(width, 0.8*l)/2
+    depth := l*inset
+    assert(l > 2*s+depth and h > s and inset >= 0 and inset < 1, "a round head needs room for its stroke and an inset in [0, 1)")
+    points := [(-s, 0pt), (-l+s, h-s), (-l+depth+s, 0pt), (-l+s, -h+s)]
+    back := l-depth
+    neck := l-depth-s
+    if rev then
+        points = reflected(points, l)
+        back = l
+        neck = l-s
+    end
+    return Mark(pieces: stroked(path(points, true), line, fill, "round"), back: back, neck: neck)
+end
+
+// An open head: two strokes meeting at the tip.
+export fn straight(line:Line, length:any = false, width:any = false, rev:bool = false) -> Mark
+    s := line.thickness/2
+    l := size_or(length, 3pt+4.5*line.thickness)
+    h := size_or(width, 0.8*l)/2
+    assert(l > 0pt and h > 0pt, "a head needs a positive length and width")
+    // Each stroke runs half the width inside the head's outer edge, so that
+    // its outer side is that edge and the mitred corner is the tip.
+    corner := s*sqrt(h*h+l*l)/h
+    wing := (-l+s, (l-s-corner)*h/l)
+    points := [wing, (-corner, 0pt), (wing.x, -wing.y)]
+    neck := corner
+    if rev then
+        points = reflected(points, l)
+        neck = l-corner
+    end
+    return Mark(pieces: [traced(path(points), line, "round")], back: neck, neck: neck)
+end
+
+// A circular arc across the line, its middle at the tip.
+export fn barb(line:Line, width:any = false, sweep:angle = 180deg, rev:bool = false) -> Mark
+    s := line.thickness/2
+    w := size_or(width, 3pt+4.5*line.thickness)
+    radius := w/2-s
+    assert(radius > 0pt and sweep > 0deg and sweep <= 360deg, "a barb needs room for its stroke and a sweep in (0deg, 360deg]")
+    curve := arc((-w/2, 0pt), radius, -sweep/2, sweep)
+    neck := s
+    if rev then
+        curve = arc((0pt, 0pt), radius, 180deg-sweep/2, sweep)
+        neck = radius
+    end
+    return Mark(pieces: [traced(curve, line)], back: neck, neck: neck)
+end
+
+// Two hooks that leave the line's end forward and curl back around it.
+export fn hooks(line:Line, width:any = false, sweep:angle = 180deg, rev:bool = false) -> Mark
+    s := line.thickness/2
+    w := size_or(width, 3pt+4.5*line.thickness)
+    radius := (w/2-s)/2
+    assert(radius > 0pt and sweep > 0deg and sweep <= 360deg, "hooks need room for their stroke and a sweep in (0deg, 360deg]")
+    upper := arc((-radius-s, radius), radius, -90deg, sweep)
+    lower := arc((-radius-s, -radius), radius, 90deg, -sweep)
+    neck := radius
+    if rev then
+        mirror := compose(translate((radius+s, 0pt)), scale(-1, 1))
+        upper = transformed(upper, mirror)
+        lower = transformed(lower, mirror)
+        neck = s
+    end
+    return Mark(pieces: [traced(upper, line), traced(lower, line)], back: neck, neck: neck)
+end
+
+// The curved barbs of TikZ's `to` tip, the arrow of mathematics.
+export fn tikz(line:Line, width:any = false) -> Mark
+    t := line.thickness
+    s := t/2
+    w := size_or(width, 3pt+4.5*t)
+    assert(w > 2*t, "a tikz head needs room for its strokes")
+    tip := (-s, 0pt)
+    below := bezier((-0.42*w, -w/2+s), (-0.32*w, -0.1*w+s), tip, tip)
+    above := bezier(tip, tip, (-0.32*w, 0.1*w-s), (-0.42*w, w/2-s))
+    return Mark(pieces: [traced(joined(below, above), line, "round", "round")], back: t, neck: t)
+end

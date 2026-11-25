@@ -19,17 +19,22 @@
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <GeomAPI_PointsToBSplineSurface.hxx>
 #include <Geom2d_BezierCurve.hxx>
+#include <Geom_BSplineSurface.hxx>
 #include <Geom_BezierCurve.hxx>
 #include <Geom_Circle.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <NCollection_Array1.hxx>
+#include <NCollection_Array2.hxx>
+#include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Wire.hxx>
 #include <algorithm>
+#include <cmath>
 #include <gp_Elips.hxx>
 #include <stdexcept>
 
@@ -270,6 +275,25 @@ TopoDS_Shape buildShape(const HuakModelShape &m,
     }
     loft.Build();
     return loft.Shape();
+  }
+  case HUAK_GRID: {
+    const double rows = a[0], columns = a[1];
+    if (!(rows >= 2 && columns >= 2) || rows != std::floor(rows) ||
+        columns != std::floor(columns) || m.count != static_cast<size_t>(rows * columns))
+      throw std::invalid_argument("a surface needs rows of as many points, at least two by two");
+    const int n = static_cast<int>(rows), k = static_cast<int>(columns);
+    NCollection_Array2<gp_Pnt> grid(1, n, 1, k);
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < k; ++j)
+        grid(i + 1, j + 1) = xyz(m.points[static_cast<size_t>(i) * k + j].xyz);
+    GeomAPI_PointsToBSplineSurface fit;
+    fit.Interpolate(grid);
+    if (!fit.IsDone())
+      throw std::runtime_error("no surface passes through the grid");
+    BRepBuilderAPI_MakeFace face(fit.Surface(), Precision::Confusion());
+    if (!face.IsDone())
+      throw std::runtime_error("the grid's surface makes no face");
+    return face.Face();
   }
   case HUAK_FUSE:
   case HUAK_COMMON:

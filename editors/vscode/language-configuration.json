@@ -4,8 +4,8 @@
   "autoClosingPairs": [{ "open": "(", "close": ")" }, { "open": "[", "close": "]" }, { "open": "{", "close": "}" }, { "open": "\"", "close": "\"", "notIn": ["string", "comment"] }],
   "surroundingPairs": [["(", ")"], ["[", "]"], ["{", "}"], ["\"", "\""]],
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(?:(?:if|elseif)\\b.*\\bthen|(?:for|while|drawing)\\b.*\\bdo|(?:export\\s+)?(?:fn|struct)\\b|precedence\\b|else\\b)(?!.*\\bend\\b).*$",
-    "decreaseIndentPattern": "^\\s*(?:end|else|elseif)\\b"
+    "increaseIndentPattern": "^\\s*(?:(?:else|elseif|then)\\b|.*\\b(?:fn|expand_block|block|struct|if|do|precedence)\\b)(?!.*\\bend\\b).*$",
+    "decreaseIndentPattern": "^\\s*(?:end|else|elseif|then)\\b"
   },
   "folding": { "markers": { "start": "^\\s*//\\s*region\\b", "end": "^\\s*//\\s*endregion\\b" } }
 }

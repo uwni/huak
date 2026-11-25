@@ -39,6 +39,11 @@ pub const Type = enum(u32) {
     typst_module,
     /// Where a labeled element of typeset content lies.
     anchor,
+    /// Colors that vary over the plane: a paint for fills and strokes.
+    gradient,
+    /// Builtin argument constraint: what paints a fill or a stroke, a color
+    /// or a gradient.
+    paint,
     _,
 
     pub const record_base: u32 = 0x10000;
@@ -57,6 +62,7 @@ pub const Type = enum(u32) {
 
     pub fn name(self: Type) []const u8 {
         if (self == .path_or_shape) return "path | shape";
+        if (self == .paint) return "color | gradient";
         if (self == .typst_module) return "typ.module";
         const info = @typeInfo(Type).@"enum";
         inline for (info.field_names, info.field_values) |field_name, value| {
@@ -66,7 +72,7 @@ pub const Type = enum(u32) {
     }
 
     pub fn parse(text: []const u8) ?Type {
-        if (std.mem.eql(u8, text, "vector") or std.mem.eql(u8, text, "path_or_shape") or std.mem.eql(u8, text, "typst_module")) return null;
+        if (std.mem.eql(u8, text, "vector") or std.mem.eql(u8, text, "path_or_shape") or std.mem.eql(u8, text, "paint") or std.mem.eql(u8, text, "typst_module")) return null;
         if (std.mem.eql(u8, text, "typ.module")) return .typst_module;
         if (std.mem.eql(u8, text, "float") or std.mem.eql(u8, text, "numeric")) return .number;
         if (std.mem.eql(u8, text, "bool")) return .boolean;
@@ -109,6 +115,7 @@ pub const Type = enum(u32) {
             .{ .owner = .object, .name = "parent", .kind = .any },
             .{ .owner = .object, .name = "fill", .kind = .any },
             .{ .owner = .object, .name = "pen", .kind = .any },
+            .{ .owner = .pen, .name = "paint", .kind = .any },
             .{ .owner = .solution, .name = "status", .kind = .string },
             .{ .owner = .solution, .name = "rank", .kind = .int },
             .{ .owner = .measure, .name = "length", .kind = .length },
@@ -124,6 +131,8 @@ pub const Type = enum(u32) {
             (expected == .vector and actual.isVector()) or
             (expected == .path_or_shape and (actual == .path or actual == .shape)) or
             (actual == .path_or_shape and (expected == .path or expected == .shape)) or
+            (expected == .paint and (actual == .color or actual == .gradient)) or
+            (actual == .paint and (expected == .color or expected == .gradient)) or
             (expected == .object and actual == .picture) or
             (expected == .number and actual == .int) or
             (expected == .scalar and actual.isScalar()) or

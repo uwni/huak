@@ -2,9 +2,6 @@
 //! the caller's common coordinate unit (the native scene adapter uses points).
 const std = @import("std");
 
-pub const Numeric = f64;
-pub const Pair = Point;
-
 pub const Tolerance = struct {
     absolute: f64 = 1e-9,
     relative: f64 = 1e-12,
@@ -20,6 +17,10 @@ pub const Tolerance = struct {
     }
 };
 pub const tolerance: Tolerance = .{};
+/// How far a curve that stands in for another may stray from it, in the
+/// caller's units: the default of every curve operation, a thousandth of a
+/// point in huak.
+pub const curve_tolerance: f64 = 1e-3;
 
 pub const Point = struct {
     x: f64,

@@ -2,7 +2,6 @@
 //! identity survives placement; selection borrows geometry and animation keys.
 const std = @import("std");
 const Scene = @import("../../drawing/Scene.zig");
-const DisplayList = @import("../../drawing/DisplayList.zig");
 const AnimationState = @import("../AnimationState.zig");
 const core_animation = @import("../../animation/root.zig");
 const evaluate = @import("../../animation/evaluate.zig");
@@ -18,7 +17,7 @@ pub const Owner = struct {
     }
 
     pub fn takeStorage(self: *Owner) Storage {
-        const result: Storage = .{ .picture = self.scene.takeStorage(), .animation_state = self.animation_state };
+        const result: Storage = .{ .picture = Scene.ownership.takeStorage(&self.scene), .animation_state = self.animation_state };
         self.animation_state = .init(result.animation_state.arena.child_allocator);
         return result;
     }
@@ -29,17 +28,17 @@ pub const Owner = struct {
         return (@as(u64, self.owner_index) << 32) | (@as(u64, index) + 1);
     }
 
-    pub fn hasGeometricStroke(self: *const Owner, index: Scene.Index) bool {
-        return hasGeometricStrokeInSubtree(self.scene.object(index));
+    pub fn hasResolvedStroke(self: *const Owner, index: Scene.Index) bool {
+        return hasResolvedStrokeInSubtree(self.scene.object(index));
     }
 
-    fn hasGeometricStrokeInSubtree(object_: Scene.Object) bool {
+    fn hasResolvedStrokeInSubtree(object_: Scene.Object) bool {
         const command = object_.scene.getNode(object_.index) catch return false;
         if (command.* == .path) {
-            if (command.path.style.pen) |pen| if (pen.needsGeometry()) return true;
+            if (command.path.style.pen) |pen| if (pen.resolvesStroke()) return true;
         }
         var children = object_.scene.children(object_.index) catch return false;
-        while (children.next()) |child| if (hasGeometricStrokeInSubtree(child)) return true;
+        while (children.next()) |child| if (hasResolvedStrokeInSubtree(child)) return true;
         return false;
     }
 
@@ -47,7 +46,7 @@ pub const Owner = struct {
         switch (track.property) {
             .path, .stroke_width, .stroke, .fill => {
                 const index = std.math.cast(Scene.Index, track.target - 1) orelse return error.InvalidAnimationTarget;
-                if (self.hasGeometricStroke(index)) return error.UnsupportedNibAnimation;
+                if (self.hasResolvedStroke(index)) return error.UnsupportedResolvedStrokeAnimation;
             },
             else => {},
         }
@@ -66,7 +65,7 @@ pub const Owner = struct {
     pub fn viewWithBounds(self: *Owner, allocator: std.mem.Allocator, index: Scene.Index, labels: anytype) !View {
         const settings = (try self.scene.settings(index)).*;
         var result: View = .{
-            .snapshot = try self.scene.snapshotWithBounds(allocator, index, self, labels),
+            .snapshot = try Scene.snapshots.snapshotWithBounds(&self.scene, allocator, index, self, labels),
             .settings = settings,
         };
         errdefer result.deinit();
@@ -117,7 +116,7 @@ test "animation follows object placement across stores without ID collisions" {
     try second.animation_state.animate(right, "opacity", keys, .linear, .{}, null);
     (try first.scene.settings(0)).duration = 2;
     (try second.scene.settings(0)).* = .{ .duration = 3, .repeat = false };
-    try first.scene.place(0, second.scene.object(right), null);
+    try Scene.placement.place(&first.scene, 0, second.scene.object(right), null);
     {
         var selected = try first.view(t.allocator, 0);
         defer selected.deinit();
@@ -127,8 +126,8 @@ test "animation follows object placement across stores without ID collisions" {
         try t.expectEqualSlices(u64, &.{ 0, 2, 3, 0 }, selected.snapshot.ids.items);
         try t.expectEqual(@as(f64, 2), tracks.duration_seconds);
     }
-    try second.scene.remove(right);
-    try second.scene.place(0, second.scene.object(right), null);
+    try Scene.placement.remove(&second.scene, right);
+    try Scene.placement.place(&second.scene, 0, second.scene.object(right), null);
     var selected = try second.view(t.allocator, 0);
     defer selected.deinit();
     const tracks = (try selected.animation()).?;
@@ -173,9 +172,7 @@ pub const View = struct {
     }
 
     /// A static, independently owned copy `seconds` into the timeline, as the
-    /// SVG export plays it. It keeps the canvas size but no tracks. Typst
-    /// groups have no opacity, so an opacity strictly between 0 and 1 needs a
-    /// path with one solid paint.
+    /// SVG export plays it. It keeps the canvas size but no tracks.
     pub fn still(self: *const View, allocator: std.mem.Allocator, scratch: std.mem.Allocator, seconds: f64) !Scene {
         var copied = try self.snapshot.picture.copy(allocator);
         errdefer copied.deinit();
@@ -187,7 +184,7 @@ pub const View = struct {
             node.* = count;
             if (command != .pop) count += 1;
         }
-        var scene = try Scene.fromDisplayList(&copied);
+        var scene = try Scene.ownership.fromDisplayList(&copied);
         errdefer scene.deinit();
         // A root wrapper, when added, precedes every converted command.
         const wrap = @as(Scene.Index, @intCast(scene.nodes.items.len)) - count;
@@ -230,14 +227,10 @@ fn paintStill(scene: *Scene, scratch: std.mem.Allocator, index: Scene.Index, tra
     }
     var style = (try scene.getNode(target)).path.style.*;
     switch (track.property) {
-        .fill => |keys| {
-            if (style.gradientFor(.fill) != null) style.gradient = null;
-            style.fill = evaluate.color(keys, track.easing, at);
-        },
+        .fill => |keys| style.fill = .{ .color = evaluate.color(keys, track.easing, at) },
         .stroke => |keys| {
-            if (style.gradientFor(.stroke) != null) style.gradient = null;
             var pen = style.pen orelse return error.UnsupportedSnapshotStroke;
-            pen.color = evaluate.color(keys, track.easing, at);
+            pen.paint = .{ .color = evaluate.color(keys, track.easing, at) };
             style.pen = pen;
         },
         .stroke_width => |keys| {
@@ -272,21 +265,25 @@ fn onlyPath(scene: *const Scene, index: Scene.Index, found: *?Scene.Index) !bool
     return true;
 }
 
-/// Opacity 0 hides the object and 1 leaves it unchanged. Any other value
-/// scales the single solid paint of a path, which equals group opacity there.
+/// Opacity 0 hides the object and 1 leaves it unchanged. Any other value is
+/// group opacity, as SVG playback blends the object. A picture takes it on in
+/// its own opacity. A path with one solid paint carries it in that paint,
+/// which is the same and needs no layer. Anything else is put in a picture
+/// of its own at that opacity.
 fn opacityStill(scene: *Scene, index: Scene.Index, value: f64) !void {
     if (value >= 1) return;
     if (value <= 0) return scene.setVisible(index, false);
-    const node = try scene.getNode(index);
-    if (node.* != .path) return error.UnsupportedSnapshotOpacity;
-    var style = node.path.style.*;
-    if (style.gradient != null or (style.fill == null) == (style.pen == null)) return error.UnsupportedSnapshotOpacity;
-    if (style.fill) |fill| {
-        style.fill.?.a = fill.a * value;
-    } else {
-        var pen = style.pen.?;
-        pen.color.a *= value;
-        style.pen = pen;
+    switch ((try scene.getNode(index)).*) {
+        .picture => |group| return scene.setOpacity(index, group.opacity * value),
+        .path => |draw| if ((draw.style.fill == null) != (draw.style.pen == null)) {
+            var style = draw.style.*;
+            const paint = if (style.fill) |*fill| fill else &style.pen.?.paint;
+            if (paint.* == .color) {
+                paint.color.a *= value;
+                return scene.setStyle(index, &style);
+            }
+        },
+        .label => {},
     }
-    try scene.setStyle(index, &style);
+    try scene.setOpacity(try Scene.placement.enclose(scene, index), value);
 }

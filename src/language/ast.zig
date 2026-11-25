@@ -3,6 +3,11 @@ const source = @import("source.zig");
 const units = @import("../drawing/units.zig");
 pub const Span = source.Span;
 
+/// How deeply syntax may nest. Parsing, the regrouping of operators and
+/// compiling recurse along the tree, and refuse a deeper one rather than run
+/// out of stack.
+pub const max_depth = 256;
+
 pub const Unary = enum { negate, positive, logical_not };
 pub const Binary = enum { add, subtract, multiply, divide, remainder, power, equal, not_equal, less, less_equal, greater, greater_equal, logical_and, logical_or };
 pub const PathJoin = enum { straight, smooth };
@@ -11,6 +16,9 @@ pub const OperatorName = struct { namespace: ?[]const u8 = null, name: []const u
 pub const MixfixBinding = struct { target: OperatorName, form: MixfixForm };
 /// The head is the first literal in the template. Null parts are argument slots.
 pub const MixfixForm = struct {
+    /// The most parts a template may have.
+    pub const max_parts = 256;
+
     head: []const u8,
     parts: []const ?[]const u8,
     group: OperatorName,
@@ -74,6 +82,13 @@ pub const Expr = struct {
         expansion: struct { name: OperatorName, definition: *Stmt, module: u32, args: []const *Expr, argument_names: []const ?[]const u8, body: []const *Stmt, scope: u32 },
     },
 };
+/// The expression inside any parentheses around `expression`, a `*Expr` or
+/// `*const Expr`; the result keeps its constness.
+pub fn ungroup(expression: anytype) @TypeOf(expression) {
+    var current = expression;
+    while (current.value == .grouped) current = current.value.grouped;
+    return current;
+}
 /// Typst code borrowed from module source, with the places where it reads
 /// Huak values as `huak.name` or `import huak: name`, in source order.
 pub const Typst = struct {

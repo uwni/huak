@@ -21,7 +21,7 @@ pub fn childCount(value: Value) !usize {
 }
 
 pub fn view(value: Value) !huak.core.Scene.Snapshot {
-    return owner(value).scene.snapshot(std.testing.allocator, value.object.index, null);
+    return huak.core.Scene.snapshots.snapshot(&owner(value).scene, std.testing.allocator, value.object.index, null);
 }
 
 pub fn count(snapshot: *const huak.core.Scene.Snapshot, kind: std.meta.Tag(huak.core.DisplayList.Command)) usize {

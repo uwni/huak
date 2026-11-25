@@ -55,7 +55,7 @@ pub const Label = struct {
         errdefer result.deinit();
         for (self.parts) |*part| {
             if (part.style.fill == null and part.style.pen == null) continue;
-            try result.appendTransformed(part.path, part.transform);
+            try Path.contours.appendTransformed(&result, part.path, part.transform);
         }
         return result;
     }
@@ -237,13 +237,13 @@ const Extractor = struct {
             else => return error.InvalidResult,
         };
         var result: DisplayList.Style = .{ .fill_rule = rule };
-        if (value.flags & c.TYPST_STYLE_FILL != 0) result.fill = try color(value.fill);
+        if (value.flags & c.TYPST_STYLE_FILL != 0) result.fill = .{ .color = try color(value.fill) };
         if (value.flags & c.TYPST_STYLE_STROKE != 0) {
             if (!std.math.isFinite(value.stroke_width_pt) or value.stroke_width_pt < 0 or !std.math.isFinite(value.miter_limit) or value.miter_limit < 1 or !std.math.isFinite(value.dash_phase_pt)) return error.InvalidResult;
             if (value.dash_offset > dashes.len or value.dash_count > dashes.len - value.dash_offset) return error.InvalidResult;
             const dash = dashes[value.dash_offset..][0..value.dash_count];
             for (dash) |length| if (!std.math.isFinite(length) or length < 0) return error.InvalidResult;
-            result.pen = .{ .color = try color(value.stroke), .width = value.stroke_width_pt, .miter_limit = value.miter_limit, .cap = switch (value.line_cap) {
+            result.pen = .{ .paint = .{ .color = try color(value.stroke) }, .width = value.stroke_width_pt, .miter_limit = value.miter_limit, .cap = switch (value.line_cap) {
                 c.TYPST_CAP_BUTT => .butt,
                 c.TYPST_CAP_ROUND => .round,
                 c.TYPST_CAP_SQUARE => .square,

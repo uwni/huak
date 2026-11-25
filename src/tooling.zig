@@ -11,6 +11,7 @@ pub const inlay_hints = @import("tooling/inlay_hints.zig");
 pub const outputs = @import("tooling/outputs.zig");
 pub const definition = @import("tooling/definition.zig");
 pub const semantic_tokens = @import("tooling/semantic_tokens.zig");
+pub const editor_grammar = @import("tooling/editor_grammar.zig");
 
 test {
     _ = format;
@@ -22,4 +23,5 @@ test {
     _ = outputs;
     _ = definition;
     _ = semantic_tokens;
+    _ = editor_grammar;
 }

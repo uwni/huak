@@ -1,0 +1,93 @@
+// Marks across or around the line's end, with tiptoe's shapes and default
+// sizes. Those centred on the end keep their shape instead of bending.
+import math.{cos, sin, sqrt}
+import assertions.assert
+import "model.huak".{Line, Mark, size_or}
+import "outline.huak".{ellipse, polygon, reflected, traced}
+
+// How far ahead of ending at the line's end a mark `extent` long sits: half
+// its extent when centred on the end, none when it ends there.
+fn ahead(align:string, extent:length) -> length
+    assert(align == "center" or align == "end", "align must be \"center\" or \"end\"")
+    if align == "center" then return extent/2 end
+    return 0pt
+end
+
+// A bar across the line.
+export fn bar(line:Line, width:any = false, align:string = "center") -> Mark
+    t := line.thickness
+    w := size_or(width, 2.4pt+3.6*t)
+    x := ahead(align, t)-t/2
+    return Mark(pieces: [traced(path((x, -w/2), (x, w/2)), line)], back: -x, neck: -x)
+end
+
+// A bracket closing the line, or opening it with `rev`.
+export fn bracket(line:Line, width:any = false, length:any = false, rev:bool = false) -> Mark
+    t := line.thickness
+    s := t/2
+    w := size_or(width, 2.4pt+3.6*t)
+    l := size_or(length, 0.3*w)
+    y := w/2-s
+    points := [(-l, -y), (-s, -y), (-s, y), (-l, y)]
+    back := s
+    neck := s
+    if rev then
+        points = reflected(points, l)
+        back = l
+        neck = l-s
+    end
+    return Mark(pieces: [traced(path(points), line)], back: back, neck: neck)
+end
+
+// An ellipse, by default a circle four times the width across. tiptoe calls
+// it `circle`; `paint` already exports that name.
+export fn disk(line:Line, length:any = false, width:any = false, fill:any = true, align:string = "center") -> Mark
+    l := size_or(length, 4*line.thickness)
+    w := size_or(width, l)
+    forward := ahead(align, l)
+    back := l-forward
+    // A filled shape takes the shaft to its middle, an outlined one to its
+    // outline.
+    neck := l/2-forward
+    if fill != true then neck = back-line.thickness/2 end
+    return Mark(pieces: ellipse((forward-l/2, 0pt), l/2, w/2, line, fill), back: back, neck: neck, bend: false)
+end
+
+export fn square(line:Line, length:any = false, width:any = false, fill:any = true, align:string = "center") -> Mark
+    l := size_or(length, 4*line.thickness)
+    h := size_or(width, l)/2
+    forward := ahead(align, l)
+    points := [(forward, -h), (forward, h), (forward-l, h), (forward-l, -h)]
+    back := l-forward
+    neck := l/2-forward
+    if fill != true then neck = back-line.thickness/2 end
+    return Mark(pieces: polygon(points, line, fill), back: back, neck: neck, bend: false)
+end
+
+export fn diamond(line:Line, length:any = false, width:any = false, fill:any = true, align:string = "center") -> Mark
+    l := size_or(length, 4*sqrt(2)*line.thickness)
+    h := size_or(width, l)/2
+    forward := ahead(align, l)
+    points := [(forward, 0pt), (forward-l/2, h), (forward-l, 0pt), (forward-l/2, -h)]
+    back := l-forward
+    neck := l/2-forward
+    if fill != true then neck = back-line.thickness/2*sqrt(l*l/4+h*h)/h end
+    return Mark(pieces: polygon(points, line, fill), back: back, neck: neck, bend: false)
+end
+
+// `count` strokes radiating `length` from a centre: by default an x, or a
+// star with its first ray pointing down.
+export fn rays(line:Line, count:int = 4, length:any = false, phase:any = false, align:string = "center") -> Mark
+    assert(count > 0, "rays needs at least one ray")
+    l := size_or(length, 2.8*line.thickness)
+    first:angle := -90deg
+    if count == 4 then first = 45deg end
+    if phase != false then first = phase end
+    center := (ahead(align, 2*l)-l, 0pt)
+    pieces := []
+    for i in 0:count-1 do
+        direction := first+360deg*i/count
+        pieces += [traced(path(center, center+(cos(direction), sin(direction))*l), line)]
+    end
+    return Mark(pieces: pieces, back: -center.x, neck: -center.x, bend: false)
+end

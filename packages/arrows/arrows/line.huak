@@ -1,0 +1,227 @@
+// One call draws a line with its marks. The shaft and every mark are placed
+// by the same arc-length parametrisation of the curve. Everything drawn in
+// the line's own paint, shaft and marks alike, is one path filled once, so
+// that where they overlap nothing is painted twice: no seam shows, and a
+// translucent or graded paint runs on unbroken.
+import math.{atan2, dot, max, min, norm, unit}
+import geometry.{arclength, compound, contour_ranges, measure, reverse, sample_at_length, subpaths}
+import object.{append, bounds, draw, fill, filldraw, region}
+import transform.{bent, compose, rotate, scale, transformed, translate}
+import pen.{penoffset, stroke_sections}
+import assertions.assert
+import "model.huak".{Line, Mark, Along, Piece}
+
+// A miter limit high enough that mitred joins reach the nominal corners,
+// however sharp.
+MITER := 64
+
+// `curve` drawn with `pen`, with `tip` at its end and `toe` at its start,
+// each false or a mark, and with the marks in `marks`, made by `along`,
+// partway along it. The marks are painted with the pen's paint.
+export fn line(curve:path, pen:pen, tip:any = false, toe:any = false, marks:list = []) -> picture
+    if tip == false and toe == false and len(marks) == 0 then
+        result := picture()
+        append(result, draw(curve, pen))
+        return result
+    end
+    paint := pen.paint
+    total := arclength(curve)
+    assert(len(subpaths(curve)) == 1 and total > 0pt, "a line with marks must be one subpath of nonzero length")
+    laid := []
+    start := 0pt
+    stop := total
+    if toe != false then
+        outward := -frame(curve, total, 0pt)[1]
+        shape := drawn(toe, styled(pen, paint, outward))
+        laid += placed(shape, curve, total, 0pt, true)
+        start = shape.neck+overshoot(pen, outward)
+    end
+    if tip != false then
+        onward := frame(curve, total, total)[1]
+        shape := drawn(tip, styled(pen, paint, onward))
+        laid += placed(shape, curve, total, total, false)
+        stop = total-shape.neck-overshoot(pen, onward)
+    end
+    for item in marks do
+        placement:Along := item
+        middle := placement.position*total
+        shape := drawn(placement.mark, styled(pen, paint, frame(curve, total, middle)[1]))
+        laid += placed(shape, curve, total, middle-centre(shape), false)
+    end
+    own := shaft(curve, pen, total, start, stop)
+    under := []
+    over := []
+    for item in laid do sort(item, paint, own, under, over) end
+    result := picture()
+    for item in under do append(result, item) end
+    if len(own) > 0 then append(result, fill(compound(own), paint)) end
+    for item in over do append(result, item) end
+    return result
+end
+
+// What a mark sees of the line where it runs along `direction`: the paint,
+// and the pen's width across that direction. The one place a Line is made.
+fn styled(brush:pen, paint:any, direction:vec2) -> Line
+    right := (direction.y, -direction.x)
+    width := dot(penoffset(brush, direction)-penoffset(brush, -direction), right)
+    assert(width > 0pt, "the pen must have a width across the line")
+    return Line(paint: paint, thickness: width)
+end
+
+fn drawn(mark:function, style:Line) -> Mark
+    return mark(style)
+end
+
+// The shaft's ink from `start` to `stop` along the curve, as the pen draws
+// it on the whole curve: its dash pattern, joins and nib in place, square
+// across where it is cut short. The one place that decides how the shaft
+// ends at its marks.
+fn shaft(curve:path, brush:pen, total:length, start:length, stop:length) -> list
+    if stop <= start then return [] end
+    span:list := contour_ranges(curve)[0]
+    first := span[0]
+    last := span[1]
+    if start > 0pt then first = time_at(curve, start) end
+    if stop < total then last = time_at(curve, stop) end
+    return stroke_sections(curve, brush, [[0, first, last]])
+end
+
+// How far the pen's ink runs on past a point where the shaft is cut while
+// running along `direction`: nothing for a round pen, which is cut square,
+// and as far as a nib's print reaches.
+fn overshoot(brush:pen, direction:vec2) -> length
+    probe := path(-direction*1pt, direction*1pt)
+    stamp := stroke_sections(probe, brush, [[0, 0, 0.5]])[0]
+    box := bounds(transformed(stamp, rotate(-atan2(direction.y, direction.x))))
+    high:vec2 := box[1]
+    return max(0pt, high.x)
+end
+
+// A piece's ink goes where its paint does: in the line's paint into the
+// line's one path; a fill in another paint beneath that path when the piece
+// is outlined in the line's paint, as a fill lies beneath its outline; any
+// other paint above it.
+fn sort(piece:Piece, paint:any, own:list, under:list, over:list)
+    if piece.fill != paint and piece.stroke != paint then
+        over += [painted(piece, piece.path)]
+        return
+    end
+    if piece.fill == paint then
+        own += [wound(piece.path)]
+    elseif piece.fill != false then
+        if piece.stroke == paint then under += [fill(piece.path, piece.fill)] else over += [fill(piece.path, piece.fill)] end
+    end
+    if piece.stroke == paint then
+        own += outlines(piece)
+    elseif piece.stroke != false then
+        over += [draw(piece.path, nib(piece))]
+    end
+end
+
+// The region a piece's stroke covers, contour by contour, wound
+// counterclockwise like every region.
+fn outlines(piece:Piece) -> list
+    ranges := []
+    spans:list := contour_ranges(piece.path)
+    for i in 0:len(spans)-1 do
+        span:list := spans[i]
+        ranges += [[i, span[0], span[1]]]
+    end
+    return stroke_sections(piece.path, nib(piece), ranges)
+end
+
+fn nib(piece:Piece) -> pen
+    return pen(piece.stroke, piece.width, piece.cap, piece.join, MITER)
+end
+
+// A closed path wound counterclockwise, so that in a path filled by the
+// nonzero rule it adds to its neighbours instead of cancelling them.
+fn wound(shape:path) -> path
+    if twice_area(shape) < 0 then return reverse(shape) end
+    return shape
+end
+
+// Twice the signed area a path encloses, exactly: Green's theorem over each
+// cubic segment's control points, with the integrals of products of
+// Bernstein polynomials as weights.
+fn twice_area(shape:path) -> float
+    total := 0.0
+    for segment in measure(shape).curves do
+        points:list := segment
+        for i in 0:3 do
+            for k in 0:2 do
+                p:vec2 := points[i]
+                step:vec2 := points[k+1]-points[k]
+                weight := [1, 3, 3, 1][i]*[1, 2, 1][k]/(6*[1, 5, 10, 10, 5, 1][i+k])
+                total = total+3*weight*((p.x/1pt)*(step.y/1pt)-(p.y/1pt)*(step.x/1pt))
+            end
+        end
+    end
+    return total
+end
+
+// A mark's pieces with its tip `distance` along the curve, pointing the way
+// the curve runs, or the other way for a toe. A mark that bends follows the
+// curve; a rigid one lies along the chord from its neck to its tip, so that
+// the shaft still ends on its axis.
+fn placed(shape:Mark, curve:path, total:length, distance:length, backward:bool) -> list
+    flip := scale(1, 1)
+    if backward then flip = scale(-1, 1) end
+    tip := frame(curve, total, distance)
+    reach := distance-shape.neck
+    if backward then reach = distance+shape.neck end
+    neck := frame(curve, total, reach)
+    chord:vec2 := tip[0]-neck[0]
+    if backward then chord = neck[0]-tip[0] end
+    direction:vec2 := tip[1]
+    if norm(chord) > 0.001pt then direction = unit(chord) end
+    rigid := compose(flip, compose(rotate(atan2(direction.y, direction.x)), translate(tip[0])))
+    result := []
+    for item in shape.pieces do
+        piece:Piece := copy(item)
+        if shape.bend then piece.path = bent(transformed(piece.path, flip), curve, distance) else piece.path = transformed(piece.path, rigid) end
+        result += [piece]
+    end
+    return result
+end
+
+// A mark painted piece by piece in its own tip coordinates.
+export fn glyph(shape:Mark) -> picture
+    result := picture()
+    for item in shape.pieces do
+        piece:Piece := item
+        append(result, painted(piece, piece.path))
+    end
+    return result
+end
+
+// A piece of ink along `curve`, the piece's path where it now lies.
+fn painted(piece:Piece, curve:path) -> object
+    if piece.stroke == false then return fill(curve, piece.fill) end
+    if piece.fill == false then return draw(curve, nib(piece)) end
+    return filldraw(curve, piece.fill, nib(piece))
+end
+
+// The point and unit tangent `distance` along the curve. Beyond either end
+// the curve continues along its end tangent, as transform.bent continues it.
+fn frame(curve:path, total:length, distance:length) -> list
+    within := max(0pt, min(distance, total))
+    sample := sample_at_length(curve, within)
+    point:vec2 := sample[1]
+    tangent:vec2 := sample[2]
+    return [point+tangent*(distance-within), tangent]
+end
+
+fn time_at(curve:path, distance:length) -> float
+    sample := sample_at_length(curve, distance)
+    return sample[3]
+end
+
+// The middle of a mark's ink along its axis, in tip coordinates.
+fn centre(shape:Mark) -> length
+    box := bounds(region(glyph(shape)))
+    if len(box) < 2 then return 0pt end
+    low:vec2 := box[0]
+    high:vec2 := box[1]
+    return (low.x+high.x)/2
+end

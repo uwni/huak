@@ -6,7 +6,7 @@ const Path = @import("Path.zig");
 const flattening = @import("flatten.zig");
 
 pub const Options = struct {
-    tolerance: f64 = 1e-3,
+    tolerance: f64 = g.curve_tolerance,
     max_segments: usize = 65536,
     max_depth: usize = 24,
 };

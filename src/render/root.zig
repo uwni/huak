@@ -8,6 +8,7 @@ const animation = @import("../animation/root.zig");
 const backend = @import("typst/scene.zig");
 const svg = @import("svg/animation.zig");
 const svg_mesh = @import("svg/mesh.zig");
+const svg_styles = @import("svg/styles.zig");
 
 pub const FrameBounds = backend.FrameBounds;
 
@@ -32,8 +33,10 @@ pub const Format = enum {
 
 pub fn usesMesh(command: *const DisplayList.Command) bool {
     if (command.* != .path) return false;
-    const gradient = command.path.style.gradient orelse return false;
-    return gradient.* == .patch_fill;
+    for ([_]DisplayList.Style.Component{ .fill, .stroke }) |component| {
+        if (command.path.style.gradientFor(component)) |gradient| if (gradient.isMesh()) return true;
+    }
+    return false;
 }
 
 /// Matching allocation owners stay with the bytes and never cross the ABI.
@@ -83,7 +86,7 @@ pub const Scene = struct {
             .origin = self.origin,
             .frames = self.frames,
             .object_ids = self.object_ids,
-            .pdf_mesh = format == .pdf,
+            .pdf = format == .pdf,
         }) catch |err| {
             diagnostic.* = library.lastError() catch null;
             return err;
@@ -96,15 +99,24 @@ pub const Scene = struct {
             diagnostic.* = library.lastError() catch null;
             return err;
         };
-        const meshes = format == .svg and for (self.picture.commands.items) |*command| {
-            if (usesMesh(command)) break true;
-        } else false;
-        if (self.tracks == null and !meshes) return .{ .native = buffer };
+        // Rules for what Typst's scene cannot say: see svg/styles.zig.
+        var rules: std.ArrayList(u8) = .empty;
+        defer rules.deinit(allocator);
+        if (format == .svg) {
+            var meshes = false;
+            for (self.picture.commands.items) |*command| switch (command.*) {
+                .path => meshes = meshes or usesMesh(command),
+                .push => |scope| if (scope.opacity < 1) try svg_styles.layerRule(&rules, allocator, scope.opacity),
+                else => {},
+            };
+            if (meshes) try rules.appendSlice(allocator, svg_mesh.rule);
+        }
+        if (self.tracks == null and rules.items.len == 0) return .{ .native = buffer };
         defer buffer.deinit();
         const animated: ?[]u8 = if (self.tracks) |tracks| try svg.encodeAnimatedSvg(allocator, buffer.bytes(), &tracks) else null;
-        if (!meshes) return .{ .edited = .{ .allocator = allocator, .data = animated.? } };
+        if (rules.items.len == 0) return .{ .edited = .{ .allocator = allocator, .data = animated.? } };
         defer if (animated) |bytes| allocator.free(bytes);
-        return .{ .edited = .{ .allocator = allocator, .data = try svg_mesh.addStylesheet(allocator, animated orelse buffer.bytes()) } };
+        return .{ .edited = .{ .allocator = allocator, .data = try svg_styles.add(allocator, animated orelse buffer.bytes(), rules.items) } };
     }
 };
 

@@ -3,18 +3,16 @@ const std = @import("std");
 pub const Backend = struct {
     install: *std.Build.Step,
     check: *std.Build.Step,
-    /// The installed library.
+    /// The library where CMake builds it, already with its installed rpath.
     library: std.Build.LazyPath,
+    /// The file name the CLI loads the library by, through its rpath.
+    name: []const u8,
+    /// Builds `library`.
+    build: *std.Build.Step,
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, prefix: ?[]const u8) Backend {
     const step = b.step("space-backend", "Build and install the optional native OCCT projection library");
-    const host = b.graph.host.result;
-    if (target.result.cpu.arch != host.cpu.arch or target.result.os.tag != host.os.tag or target.result.abi != host.abi) {
-        const fail = &b.addFail("build the OCCT projection library with the target system's C++ toolchain").step;
-        step.dependOn(fail);
-        return .{ .install = step, .check = fail, .library = b.graph.path(.install_lib, "") };
-    }
     const mode = switch (optimize) {
         .debug => "Debug",
         .safe => "RelWithDebInfo",
@@ -22,6 +20,14 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .fast => "Release",
     };
     const dir = std.Build.LazyPath.cache_root.path(b, b.fmt("occt/{s}-{x}", .{ mode, std.hash.Wyhash.hash(0, prefix orelse "") }));
+    const name = if (target.result.os.tag == .macos) "libhuak_space.dylib" else "libhuak_space.so";
+    const library = dir.path(b, mode).path(b, name);
+    const host = b.graph.host.result;
+    if (target.result.cpu.arch != host.cpu.arch or target.result.os.tag != host.os.tag or target.result.abi != host.abi) {
+        const fail = &b.addFail("build the OCCT projection library with the target system's C++ toolchain").step;
+        step.dependOn(fail);
+        return .{ .install = step, .check = fail, .library = library, .name = name, .build = fail };
+    }
     const configure = b.addSystemCommand(&.{ "cmake", "-S" });
     configure.addDirectoryArg2(b.path("src/drawing/space"), .{});
     configure.addArg("-B");
@@ -38,8 +44,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     compile.addDirectoryArg2(dir, .{});
     compile.addArgs(&.{ "--config", mode, "--parallel", "--target", "huak_space" });
     compile.step.dependOn(&configure.step);
-    const name = if (target.result.os.tag == .macos) "libhuak_space.dylib" else "libhuak_space.so";
-    const install = b.addInstallLibFile(dir.path(b, mode).path(b, name), name);
+    const install = b.addInstallLibFile(library, name);
     install.step.dependOn(&compile.step);
     step.dependOn(&install.step);
     step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src/drawing/space/licenses"), .install_dir = .prefix, .install_subdir = "share/licenses/huak/occt" }).step);
@@ -47,5 +52,5 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     check.addDirectoryArg2(dir, .{});
     check.addArgs(&.{ "--config", mode, "--target", "check" });
     check.step.dependOn(&compile.step);
-    return .{ .install = step, .check = &check.step, .library = b.graph.path(.install_lib, name) };
+    return .{ .install = step, .check = &check.step, .library = library, .name = name, .build = &compile.step };
 }

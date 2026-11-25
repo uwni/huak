@@ -1,0 +1,166 @@
+// Placing panels: margins and ticks of each panel, shared ticks, then each
+// panel's cell and its axis-break pieces.
+import math.{min, max, ceil}
+import collections.get
+import assertions.assert
+import "model.huak".{Figure, horizontal, primary}
+import "rulers.huak" as rulers
+import "breaks.huak" as cuts
+import "scales.huak" as scales
+import "labels.huak" as labels
+import "panels.huak".{Panel, connected}
+
+fn measure(panel:Panel, fig:Figure, available:vec2)
+    opts := panel.source.options
+    size:length := get(opts, "font_size", get(fig.options, "font_size", 9pt))
+    style:any := get(opts, "tick_style", get(fig.options, "tick_style", false))
+    panel.left = 10pt; panel.right = 10pt; panel.bottom = 10pt; panel.top = 10pt
+    for side in keys(panel.rulers_by_side) do
+        r := panel.rulers_by_side[side]
+        span := available.y; shared:any := false
+        if horizontal(side) then span = available.x end
+        if side == primary(panel.source, "x") then shared = panel.shared_x end
+        if side == primary(panel.source, "y") then shared = panel.shared_y end
+        rulers.measure(r, span, size, style, shared)
+        if side == "left" then panel.left = r.depth
+        elseif side == "right" then panel.right = r.depth
+        elseif side == "bottom" then panel.bottom = r.depth
+        else panel.top = r.depth end
+    end
+    panel.xt = panel.rulers_by_side[primary(panel.source, "x")].ticks
+    panel.yt = panel.rulers_by_side[primary(panel.source, "y")].ticks
+    if get(opts, "title", false) != false then panel.top = panel.top+opts["title"].height+6pt end
+    title_align:string := get(opts, "title_align", "center")
+    assert(title_align == "left" or title_align == "center" or title_align == "right", "title_align must be left, center or right")
+    position:string := get(opts, "legend", "none")
+    assert(scales.index(["none", "top-right", "top-left", "bottom-right", "bottom-left", "outside-right", "outside-bottom"], position) >= 0, "unknown legend position")
+    panel.legends = []
+    legend_width := 0pt; legend_height := 0pt
+    for i in 0:len(panel.layers)-1 do
+        item := panel.layers[i]
+        body:any := get(item.options, "label", false)
+        if body != false then
+            panel.legends += [i]
+            legend_width = max(legend_width, body.width+36pt)
+            legend_height = max(legend_height, body.height+7pt)
+        end
+    end
+    columns:int := get(opts, "legend_columns", 1)
+    assert(columns > 0, "legend columns must be positive")
+    panel.legend_size = (legend_width*columns+8pt, legend_height*ceil(float(len(panel.legends))/columns)+8pt)
+    panel.legend_right = 0pt; panel.legend_bottom = 0pt
+    if len(panel.legends) > 0 then
+        if position == "outside-right" then panel.legend_right = panel.legend_size.x+6pt end
+        if position == "outside-bottom" then panel.legend_bottom = panel.legend_size.y+6pt end
+    end
+    panel.color_layer = false; panel.color_ticks = []; panel.color_labels = []
+    panel.color_right = 0pt; panel.color_bottom = 0pt
+    colorbar:any := get(opts, "colorbar", false)
+    if colorbar != false then
+        assert(colorbar == "right" or colorbar == "bottom", "colorbar position must be right or bottom")
+        for item in panel.layers do
+            if item.kind == "cells" then
+                assert(panel.color_layer == false, "colorbar requires exactly one heatmap per axis")
+                panel.color_layer = item
+            end
+        end
+        assert(panel.color_layer != false, "colorbar requires a heatmap")
+        limits := panel.color_layer.data["clim"]
+        panel.color_ticks = scales.ticks(scales.resolve(limits, "linear", limits), 4)
+        max_width := 0pt; max_height := 0pt
+        for value in panel.color_ticks do
+            body := labels.number(value, size, "auto", style)
+            panel.color_labels += [body]
+            max_width = max(max_width, body.width); max_height = max(max_height, body.height)
+        end
+        if colorbar == "right" then panel.color_right = 28pt+max_width
+        else panel.color_bottom = 28pt+max_height end
+    end
+    panel.right = panel.right+panel.legend_right+panel.color_right
+    panel.bottom = panel.bottom+panel.legend_bottom+panel.color_bottom
+end
+
+
+
+fn share_ticks(panels:list, groups:list, dimension:string)
+    for target in panels do
+        group := connected(target.source, groups, len(panels))
+        if len(group) > 1 then
+            selected:any := false
+            explicit:any := false
+            for panel in panels do
+                if scales.index(group, panel.source) >= 0 then
+                    ticks := panel.xt
+                    if dimension == "y" then ticks = panel.yt end
+                    opts := panel.rulers_by_side[primary(panel.source, dimension)].options
+                    supplied:any := get(opts, "ticks", false)
+                    if supplied == false and (dict_contains(opts, "step") or dict_contains(opts, "decades")) then supplied = ticks end
+                    if supplied != false then
+                        if explicit != false then
+                            assert(len(explicit) == len(supplied), "shared axes have conflicting ticks")
+                            for i in 0:len(explicit)-1 do assert(explicit[i] == supplied[i], "shared axes have conflicting ticks") end
+                        end
+                        explicit = supplied
+                    end
+                    if selected == false or len(ticks) < len(selected) then selected = ticks end
+                end
+            end
+            if explicit != false then selected = explicit end
+            for panel in panels do
+                if scales.index(group, panel.source) >= 0 then
+                    if dimension == "x" then panel.xt = selected; panel.shared_x = selected
+                    else panel.yt = selected; panel.shared_y = selected end
+                end
+            end
+        end
+    end
+end
+
+export fn layout(fig:Figure, panels:list)
+    rows := 1; cols := 1
+    for panel in panels do rows = max(rows, int(panel.source.cell.x)+1); cols = max(cols, int(panel.source.cell.y)+1) end
+    margin:length := get(fig.options, "margin", 0pt)
+    gap:length := get(fig.options, "gap", 16pt)
+    assert(margin >= 0pt and gap >= 0pt, "figure spacing must be nonnegative")
+    cell := ((fig.width-2*margin-(cols-1)*gap)/cols, (fig.height-2*margin-(rows-1)*gap)/rows)
+    for panel in panels do measure(panel, fig, cell) end
+    if len(fig.xlinks) > 0 or len(fig.ylinks) > 0 then
+        share_ticks(panels, fig.xlinks, "x"); share_ticks(panels, fig.ylinks, "y")
+        for panel in panels do measure(panel, fig, cell) end
+    end
+    for panel in panels do
+        left := panel.left; right := panel.right; top := panel.top; bottom := panel.bottom
+        for other in panels do
+            if other.source.cell.y == panel.source.cell.y then left = max(left, other.left); right = max(right, other.right) end
+            if other.source.cell.x == panel.source.cell.x then top = max(top, other.top); bottom = max(bottom, other.bottom) end
+        end
+        panel.left = left; panel.right = right; panel.top = top; panel.bottom = bottom
+        panel.size = cell-(left+right, top+bottom)
+        assert(panel.size.x > 10pt and panel.size.y > 10pt, "figure is too small for axis labels")
+        panel.origin = (margin+panel.source.cell.y*(cell.x+gap)+left, fig.height-margin-(panel.source.cell.x+1)*cell.y-panel.source.cell.x*gap+bottom)
+        if get(panel.source.options, "equal", false) then
+            assert(panel.x.kind == "linear" and panel.y.kind == "linear", "equal aspect requires linear axes")
+            ranges := []; gaps := []
+            for dim in ["x", "y"] do
+                r := panel.rulers_by_side[primary(panel.source, dim)]
+                visible := 0.0
+                for piece in r.partition.pieces do visible = visible+(piece.scale.high-piece.scale.low) end
+                spacing := 0pt
+                for hole in r.partition.gaps do spacing = spacing+(hole.stop-hole.start) end
+                ranges += [visible]; gaps += [spacing]
+            end
+            unit := min((panel.size.x-gaps[0])/ranges[0], (panel.size.y-gaps[1])/ranges[1])
+            assert(unit > 0pt, "axis break gaps must fit inside the axis")
+            fitted := (unit*ranges[0]+gaps[0], unit*ranges[1]+gaps[1])
+            panel.origin = panel.origin+(panel.size-fitted)/2
+            panel.size = fitted
+        end
+        for side in keys(panel.rulers_by_side) do
+            r := panel.rulers_by_side[side]
+            span := panel.size.y
+            if horizontal(side) then span = panel.size.x end
+            r.partition = cuts.split(r.scale, r.options, span)
+        end
+    end
+end
+

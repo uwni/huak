@@ -1,7 +1,8 @@
 import "../plot.huak".*
 import "../plot/breaks.huak" as cuts
 import "../plot/scales.huak" as scales
-import "../plot/render.huak" as renderer
+import "../plot/panels.huak" as stage
+import "../plot/placement.huak" as placement
 import assertions.assert
 import object.{append, fill}
 import color.rgb
@@ -44,12 +45,12 @@ plotting a do
     +lines x [0, 100] y [1, 2]
 end
 link_x of linked axes [a, b]
-panels := renderer.prepare(linked)
-renderer.layout(linked, panels)
+panels := stage.prepare(linked)
+placement.layout(linked, panels)
 for side in ["top", "bottom"] do assert(len(panels[0].rulers_by_side[side].partition.pieces) == 2) end
 assert(len(panels[1].rulers_by_side["bottom"].partition.pieces) == 2)
 for value in panels[0].xt do assert(value <= 20 or value >= 80) end
-assert(math.abs(renderer.point(panels[0], 80, 1).x-renderer.point(panels[0], 20, 1).x-12pt) < 0.00001pt)
+assert(math.abs(stage.point(panels[0], 80, 1).x-stage.point(panels[0], 20, 1).x-12pt) < 0.00001pt)
 
 // Check the exported scene's diagonal strokes against the data coordinates
 // of the four cut endpoints, including an asymmetric break on a reversed x.
@@ -61,10 +62,10 @@ for spacing in [3pt, 13pt, 27pt] do
         breaks "bottom" over [[10, 70]] gap spacing
         breaks "left" over [[8, 88]] gap spacing
     end
-    edges := renderer.prepare(marks)
-    renderer.layout(marks, edges)
+    edges := stage.prepare(marks)
+    placement.layout(marks, edges)
     p := edges[0]
-    expected := [renderer.point(p, 10, 0), renderer.point(p, 70, 0), renderer.point(p, 100, 8), renderer.point(p, 100, 88)]
+    expected := [stage.point(p, 10, 0), stage.point(p, 70, 0), stage.point(p, 100, 8), stage.point(p, 100, 88)]
     assert(math.abs(expected[0].x-expected[1].x-spacing) < 1e-8pt and math.abs(expected[3].y-expected[2].y-spacing) < 1e-8pt)
     hits := [0, 0, 0, 0]
     drawing_of_marks := render marks
@@ -107,28 +108,28 @@ plotting direct_axis do
     breaks "top" over [[10, 70]] gap 13pt
     breaks "right" over [[8, 88]] gap 17pt
 end
-direct_panels := renderer.prepare(direct)
-renderer.layout(direct, direct_panels)
+direct_panels := stage.prepare(direct)
+placement.layout(direct, direct_panels)
 view := direct_panels[0]
 export segmented := render direct
 paths := segmented.paths
 // Includes both frame edges, major grid lines and minor grid lines.
 for y in [0, 93, 94, 100] do
     for interval in [[0, 10], [70, 100]] do
-        assert(has_segment(paths, renderer.point(view, interval[0], y), renderer.point(view, interval[1], y)))
+        assert(has_segment(paths, stage.point(view, interval[0], y), stage.point(view, interval[1], y)))
     end
-    assert(not has_segment(paths, renderer.point(view, 0, y), renderer.point(view, 100, y)))
+    assert(not has_segment(paths, stage.point(view, 0, y), stage.point(view, 100, y)))
 end
 for x in [0, 4, 5, 100] do
     for interval in [[0, 8], [88, 100]] do
-        assert(has_segment(paths, renderer.point(view, x, interval[0]), renderer.point(view, x, interval[1])))
+        assert(has_segment(paths, stage.point(view, x, interval[0]), stage.point(view, x, interval[1])))
     end
-    assert(not has_segment(paths, renderer.point(view, x, 0), renderer.point(view, x, 100)))
+    assert(not has_segment(paths, stage.point(view, x, 0), stage.point(view, x, 100)))
 end
 heads := 0
 for curve in paths do
     if len(curve) == 2 then
-        assert(math.norm(geometry.point_at(curve, 1)-renderer.point(view, 100, 100)) < 1e-8pt)
+        assert(math.norm(geometry.point_at(curve, 1)-stage.point(view, 100, 100)) < 1e-8pt)
         heads = heads+1
     end
 end
@@ -141,12 +142,12 @@ plotting square_axis do
     settings {"equal": true, "xlim": [0, 100], "ylim": [0, 20]}
     breaks "bottom" over [[10, 90]] gap 13pt
 end
-square_panels := renderer.prepare(square_units)
-renderer.layout(square_units, square_panels)
+square_panels := stage.prepare(square_units)
+placement.layout(square_units, square_panels)
 square := square_panels[0]
-unit10 := renderer.point(square, 10, 10)-renderer.point(square, 0, 0)
+unit10 := stage.point(square, 10, 10)-stage.point(square, 0, 0)
 assert(math.abs(unit10.x-unit10.y) < 1e-8pt)
-assert(math.abs(renderer.point(square, 90, 0).x-renderer.point(square, 10, 0).x-13pt) < 1e-8pt)
+assert(math.abs(stage.point(square, 90, 0).x-stage.point(square, 10, 0).x-13pt) < 1e-8pt)
 
 // Show the transparent chart on an orange page. A white cover would fail
 // the pixel check. Both breaks span pixels 93..110 before the PDF y flip.

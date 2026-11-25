@@ -1,0 +1,78 @@
+// How closed marks are inked. A mark filled with its line's paint is that fill
+// alone, the exact nominal shape. An outlined mark strokes the shape moved in
+// by half the thickness, so that the stroke's outer edge is the nominal shape
+// again and the mark keeps its size whatever its style.
+import math.{dot, unit}
+import geometry.circle
+import transform.{compose, scale, transformed, translate}
+import "model.huak".{Line, Piece}
+
+// The polygon moved in by `distance`: each corner is where its two edges,
+// each moved in parallel, meet.
+export fn inset(points:list, distance:length) -> list
+    count := len(points)
+    area := 0.0
+    for i in 0:count-1 do
+        a:vec2 := points[i]
+        b:vec2 := points[(i+1)%count]
+        area = area+(a.x/1pt)*(b.y/1pt)-(b.x/1pt)*(a.y/1pt)
+    end
+    // Inward is to the left of a counterclockwise boundary.
+    side := 1
+    if area < 0 then side = -1 end
+    result := []
+    for i in 0:count-1 do
+        before:vec2 := points[(i+count-1)%count]
+        corner:vec2 := points[i]
+        after:vec2 := points[(i+1)%count]
+        incoming:vec2 := unit(corner-before)
+        outgoing:vec2 := unit(after-corner)
+        first := (-incoming.y, incoming.x)*side
+        second := (-outgoing.y, outgoing.x)*side
+        result += [corner+(first+second)*(distance/(1+dot(first, second)))]
+    end
+    return result
+end
+
+// The points mirrored end for end within a mark `length` long, so that it
+// points back at its line.
+export fn reflected(points:list, length:length) -> list
+    result := []
+    for point in points do
+        p:vec2 := point
+        result += [(-length-p.x, p.y)]
+    end
+    return result
+end
+
+// A closed polygon inked as a mark: filled with the line's paint (fill true),
+// outlined (false), or filled with the given paint inside an outline.
+export fn polygon(points:list, line:Line, fill_style:any) -> list
+    if fill_style != true then return stroked(path(inset(points, line.thickness/2), true), line, fill_style, "miter") end
+    return [Piece(path: path(points, true), fill: line.paint)]
+end
+
+// An ellipse with semi-axes `along` and `across`, inked as `polygon` inks.
+export fn ellipse(center:vec2, along:length, across:length, line:Line, fill_style:any) -> list
+    half := line.thickness/2
+    if fill_style != true then return stroked(oval(center, along-half, across-half), line, fill_style, "miter") end
+    return [Piece(path: oval(center, along, across), fill: line.paint)]
+end
+
+fn oval(center:vec2, along:length, across:length) -> path
+    return transformed(circle((0pt, 0pt), along), compose(scale(1, across/along), translate(center)))
+end
+
+// A closed centre line stroked with the line's paint at its width and filled
+// inside: with the line's paint (fill true), not at all (false), or with the
+// given paint.
+export fn stroked(edge:path, line:Line, fill_style:any, corners:string) -> list
+    inside:any := fill_style
+    if fill_style == true then inside = line.paint end
+    return [Piece(path: edge, fill: inside, stroke: line.paint, width: line.thickness, join: corners)]
+end
+
+// An open path stroked with the line's paint at its width.
+export fn traced(curve:path, line:Line, cap:string = "butt", join:string = "miter") -> Piece
+    return Piece(path: curve, stroke: line.paint, width: line.thickness, cap: cap, join: join)
+end

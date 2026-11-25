@@ -7,7 +7,7 @@ const DisplayList = @import("../DisplayList.zig");
 const outline = @import("../outline.zig");
 
 pub const Options = struct {
-    tolerance: f64 = 1e-3,
+    tolerance: f64 = g.curve_tolerance,
     /// Bound source control-polygon steps, as in nonlinear drawing systems.
     /// Tolerance is additionally checked at interior parameter samples.
     max_step: f64 = 1,
@@ -200,7 +200,7 @@ test "point operators bend straight segments and implicit closing edges" {
     const fill: DisplayList.Color = .{ .r = 1, .a = 0.5 };
     const stroke: DisplayList.Color = .{ .b = 1, .a = 0.7 };
     const placement: g.Transform = .{ .a = -2, .c = 0.5, .d = 3, .e = 4 };
-    try drawing.filldraw(source, fill, .{ .color = stroke, .width = 0.5, .cap = .round, .dash = &.{ 2, 1 } }, placement);
+    try drawing.filldraw(source, .{ .color = fill }, .{ .paint = .{ .color = stroke }, .width = 0.5, .cap = .round, .dash = &.{ 2, 1 } }, placement);
     try drawing.endScope();
     var painted = try picture(std.testing.allocator, &drawing, Warp{}, .{});
     defer painted.deinit();
@@ -217,7 +217,7 @@ test "point operators bend straight segments and implicit closing edges" {
     const expected = try (Warp{}).point(world.apply(.zero));
     try std.testing.expectApproxEqAbs(expected.x, first.x, 1e-12);
     try std.testing.expectApproxEqAbs(expected.y, first.y, 1e-12);
-    try std.testing.expectEqual(fill, drawing.commands.items[1].path.style.fill.?);
+    try std.testing.expectEqual(DisplayList.Paint{ .color = fill }, drawing.commands.items[1].path.style.fill.?);
     try std.testing.expect(drawing.commands.items[1].path.style.pen != null);
 }
 
@@ -236,7 +236,7 @@ fn allocationCase(allocator: std.mem.Allocator) !void {
     var drawing = DisplayList.init(allocator);
     defer drawing.deinit();
     try drawing.beginScope(.{}, source);
-    try drawing.filldraw(source, .{ .r = 1, .a = 0.5 }, .{ .width = 0.5 }, .{});
+    try drawing.filldraw(source, .{ .color = .{ .r = 1, .a = 0.5 } }, .{ .width = 0.5 }, .{});
     try drawing.endScope();
     var warped = try picture(allocator, &drawing, Warp{}, .{});
     defer warped.deinit();

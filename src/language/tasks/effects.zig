@@ -4,9 +4,9 @@
 //! point; a mutable picture is writable only when every incoming value is fresh.
 const std = @import("std");
 const bc = @import("../bytecode.zig");
-const builtin = @import("../builtin.zig");
 const Allocator = std.mem.Allocator;
 const Type = bc.Type;
+const Analysis = @import("effects/Analysis.zig");
 
 /// Proof limits are serial fallbacks, never language/execution limits. They
 /// bound both CFG storage and repeated work across a long helper call graph.
@@ -18,11 +18,11 @@ pub const limits = struct {
     pub const cells = 262_144;
     pub const work = 4_000_000;
 };
-const Budget = struct {
+pub const Budget = struct {
     remaining: usize = limits.work,
     exhausted: bool = false,
 
-    fn consume(self: *Budget, amount: usize) bool {
+    pub fn consume(self: *Budget, amount: usize) bool {
         if (amount > self.remaining) {
             self.exhausted = true;
             self.remaining = 0;
@@ -41,16 +41,16 @@ pub const Summary = struct {
     observes_identity: bool = false,
 };
 
-const Value = struct {
+pub const Value = struct {
     kind: Type = .any,
     initialized: bool = false,
     fresh_owner: bool = false,
     callable: ?bc.types.Function = null,
     bound: ?*const Bound = null,
 
-    const Bound = struct { target: bc.types.Function.Target, values: []const Value, names: []const ?[]const u8 };
+    pub const Bound = struct { target: bc.types.Function.Target, values: []const Value, names: []const ?[]const u8 };
 
-    fn ordinary(kind: Type) Value {
+    pub fn ordinary(kind: Type) Value {
         return .{ .kind = kind, .initialized = true };
     }
     fn join(self: *Value, other: Value) bool {
@@ -64,11 +64,11 @@ const Value = struct {
     }
 };
 
-const State = struct {
+pub const State = struct {
     stack: std.ArrayList(Value) = .empty,
     locals: []Value,
 
-    fn pop(self: *State, analysis: *Analysis) Value {
+    pub fn pop(self: *State, analysis: *Analysis) Value {
         return self.stack.pop() orelse blk: {
             analysis.safe = false;
             analysis.malformed = true;
@@ -77,595 +77,14 @@ const State = struct {
     }
 };
 
-const Analysis = struct {
-    /// The working arena of this analysis.
-    allocator: Allocator,
-    /// Backs the working arenas of the context analyses it starts.
-    scratch_allocator: Allocator,
-    program: *const bc.Program,
-    summaries: []const Summary,
-    budget: *Budget,
-    reads: []bool,
-    local_types: []const Type = &.{},
-    safe: bool = true,
-    malformed: bool = false,
-    uses_typst: bool = false,
-    returned: bool = false,
-    all_returns_fresh: bool = true,
-    saw_user_call: bool = false,
-    observes_identity: bool = false,
-    depth: usize = 0,
-
-    fn init(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary, budget: *Budget) !Analysis {
-        const reads = try allocator.alloc(bool, program.global_types.len);
-        @memset(reads, false);
-        return .{ .allocator = allocator, .scratch_allocator = scratch_allocator, .program = program, .summaries = summaries, .budget = budget, .reads = reads };
-    }
-
-    fn observe(self: *Analysis, value: Value) void {
-        if (!value.initialized or !supportedType(value.kind)) self.safe = false;
-    }
-
-    fn args(self: *Analysis, state: *State, count: u32) []const Value {
-        if (count > state.stack.items.len) {
-            self.safe = false;
-            self.malformed = true;
-            return &.{};
-        }
-        return state.stack.items[state.stack.items.len - count ..];
-    }
-
-    fn push(self: *Analysis, state: *State, value: Value) !void {
-        try state.stack.append(self.allocator, value);
-    }
-
-    fn bindArguments(self: *Analysis, state: *State, instruction_: bc.Instruction) !void {
-        if (instruction_.a >= self.program.argument_bindings.len) return self.invalid();
-        const binding = self.program.argument_bindings[instruction_.a];
-        if (binding.slots.len != instruction_.b or binding.parameter_count != instruction_.b) return self.invalid();
-        const arguments = self.args(state, instruction_.b);
-        if (self.malformed or !self.budget.consume(arguments.len)) return self.invalid();
-        const ordered = try self.allocator.alloc(Value, arguments.len);
-        const supplied = try self.allocator.alloc(bool, arguments.len);
-        @memset(supplied, false);
-        for (arguments, binding.slots) |value, slot| {
-            if (slot >= arguments.len or supplied[slot]) return self.invalid();
-            ordered[slot] = value;
-            supplied[slot] = true;
-        }
-        @memcpy(state.stack.items[state.stack.items.len - arguments.len ..], ordered);
-    }
-
-    fn instruction(self: *Analysis, state: *State, instruction_: bc.Instruction) !void {
-        if (!self.budget.consume(1)) return self.invalid();
-        switch (instruction_.op) {
-            .constant => {
-                if (instruction_.a >= self.program.constants.len) return self.invalid();
-                const constant = self.program.constants[instruction_.a];
-                if (!constantSafe(constant)) self.safe = false;
-                var value = Value.ordinary(constant.valueType());
-                if (constant == .function and constant.function != .bound) value.callable = constant.function;
-                try self.push(state, value);
-            },
-            .load_global => {
-                if (instruction_.a >= self.program.global_types.len) return self.invalid();
-                self.reads[instruction_.a] = true;
-                const kind = self.program.global_types[instruction_.a];
-                if (!supportedType(kind)) self.safe = false;
-                try self.push(state, Value.ordinary(kind));
-            },
-            .load_local => {
-                if (instruction_.a >= state.locals.len) return self.invalid();
-                const value = state.locals[instruction_.a];
-                self.observe(value);
-                try self.push(state, value);
-            },
-            .store_local => {
-                if (instruction_.a >= state.locals.len) return self.invalid();
-                state.locals[instruction_.a] = state.pop(self);
-                if (self.local_types[instruction_.a] != .any) state.locals[instruction_.a].kind = self.local_types[instruction_.a];
-            },
-            .pop => _ = state.pop(self),
-            .duplicate => {
-                const value = state.pop(self);
-                try self.push(state, value);
-                try self.push(state, value);
-            },
-            .bind_arguments => try self.bindArguments(state, instruction_),
-            .list_append => {
-                _ = state.pop(self);
-                _ = state.pop(self);
-                self.safe = false;
-            },
-            .list_append_items => {
-                const arguments = self.args(state, instruction_.a);
-                if (self.malformed) return;
-                state.stack.items.len -= arguments.len;
-                _ = state.pop(self);
-                self.safe = false;
-            },
-            .set_index => {
-                for (0..3) |_| _ = state.pop(self);
-                self.safe = false;
-            },
-            .set_field => {
-                if (instruction_.a >= self.program.constants.len or self.program.constants[instruction_.a] != .string) return self.invalid();
-                _ = state.pop(self);
-                _ = state.pop(self);
-                self.safe = false;
-            },
-            .add, .subtract, .multiply, .divide, .remainder, .power => {
-                const right = state.pop(self);
-                const left = state.pop(self);
-                self.observe(left);
-                self.observe(right);
-                const ordinary = (left.kind.isScalar() and right.kind.isScalar()) or
-                    (left.kind.isVector() and (right.kind.isVector() or right.kind.isScalar())) or
-                    (right.kind.isVector() and left.kind.isScalar()) or
-                    (instruction_.op == .add and left.kind == .string and right.kind == .string);
-                if (!ordinary) self.safe = false; // nativeBinary includes solver effects.
-                const kind: Type = if (left.kind.isVector()) left.kind else if (right.kind.isVector()) right.kind else if (left.kind == .string and right.kind == .string) .string else joinType(left.kind, right.kind);
-                try self.push(state, Value.ordinary(kind));
-            },
-            .positive, .negate, .logical_not => {
-                var operand = state.pop(self);
-                self.observe(operand);
-                if (instruction_.op == .logical_not) {
-                    operand = Value.ordinary(.boolean);
-                } else if (!operand.kind.isScalar() and !operand.kind.isVector()) self.safe = false;
-                try self.push(state, operand);
-            },
-            .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => {
-                const right = state.pop(self);
-                const left = state.pop(self);
-                self.observe(left);
-                self.observe(right);
-                try self.push(state, Value.ordinary(.boolean));
-            },
-            .jump_if_false => {
-                const condition = state.pop(self);
-                self.observe(condition);
-            },
-            .iterate_init, .iterate_test, .iterate_advance => {
-                if (instruction_.op == .iterate_init and instruction_.a == 1) {
-                    const collection = state.pop(self);
-                    self.observe(collection);
-                    try self.push(state, Value.ordinary(.int));
-                    try self.push(state, collection);
-                    try self.push(state, Value.ordinary(.int));
-                    return;
-                }
-                const step = state.pop(self);
-                const stop = state.pop(self);
-                const start = state.pop(self);
-                for ([_]Value{ start, stop, step }) |value| {
-                    if (!value.kind.isScalar() or !value.initialized) self.safe = false;
-                }
-                const kind = joinType(joinType(start.kind, stop.kind), step.kind);
-                switch (instruction_.op) {
-                    .iterate_init => for (0..3) |_| try self.push(state, Value.ordinary(kind)),
-                    .iterate_test => {
-                        try self.push(state, Value.ordinary(if (stop.kind == .list) .any else kind));
-                        try self.push(state, Value.ordinary(.boolean));
-                    },
-                    .iterate_advance => {
-                        try self.push(state, Value.ordinary(kind));
-                        try self.push(state, Value.ordinary(.boolean));
-                    },
-                    else => unreachable,
-                }
-            },
-            .call => {
-                if (instruction_.a >= self.program.functions.len or instruction_.a >= self.summaries.len) return self.invalid();
-                const callee = self.program.functions[instruction_.a];
-                if (!callee.acceptsCount(instruction_.b)) return self.invalid();
-                const arguments = self.args(state, instruction_.b);
-                if (self.malformed) return;
-                for (arguments) |arg| {
-                    self.observe(arg);
-                }
-                const result = try self.userCall(instruction_.a, arguments);
-                self.saw_user_call = true;
-                state.stack.items.len -= instruction_.b;
-                try self.push(state, result);
-            },
-            .call_value, .bind_function => {
-                const effect = instruction_.stackEffect();
-                if (effect.consumed > state.stack.items.len) return self.invalid();
-                const values = state.stack.items[state.stack.items.len - effect.consumed ..];
-                const function = values[0];
-                const result = try self.apply(function, values[1..], instruction_);
-                state.stack.items.len -= effect.consumed;
-                try self.push(state, result);
-            },
-            .call_builtin => {
-                const id = std.enums.fromInt(builtin.Id, instruction_.a) orelse return self.invalid();
-                const signature = builtin.signature(id);
-                if (!signature.acceptsCount(instruction_.b)) return self.invalid();
-                const arguments = self.args(state, instruction_.b);
-                if (self.malformed) return;
-                const result = self.builtinResult(&signature, arguments);
-                state.stack.items.len -= instruction_.b;
-                try self.push(state, result);
-            },
-            .make_vec2, .make_vec3 => {
-                const is_three = instruction_.op == .make_vec3;
-                for (0..@as(usize, if (is_three) 3 else 2)) |_| {
-                    if (!state.pop(self).kind.isScalar()) self.safe = false;
-                }
-                try self.push(state, Value.ordinary(if (is_three) .vec3 else .vec2));
-            },
-            .make_list => {
-                const arguments = self.args(state, instruction_.a);
-                if (self.malformed) return;
-                for (arguments) |arg| {
-                    self.observe(arg);
-                }
-                state.stack.items.len -= instruction_.a;
-                try self.push(state, Value.ordinary(.list));
-            },
-            .make_dict, .make_record => {
-                const effect = instruction_.stackEffect();
-                const count = std.math.cast(u32, effect.consumed) orelse return self.invalid();
-                const arguments = self.args(state, count);
-                if (self.malformed) return;
-                var kind: Type = .dict;
-                if (instruction_.op == .make_record) {
-                    if (instruction_.a >= self.program.records.len or self.program.records[instruction_.a].fields.len != instruction_.b) return self.invalid();
-                    kind = Type.record(instruction_.a);
-                }
-                state.stack.items.len -= arguments.len;
-                self.safe = false;
-                try self.push(state, Value.ordinary(kind));
-            },
-            .index => {
-                const index = state.pop(self);
-                const list = state.pop(self);
-                if (list.kind != .list or index.kind != .int) self.safe = false;
-                // A list can contain aliases. Never promote its element to fresh.
-                try self.push(state, Value.ordinary(.any));
-            },
-            .slice => {
-                const step = state.pop(self);
-                const stop = state.pop(self);
-                const start = state.pop(self);
-                const list = state.pop(self);
-                const end_matches = switch (instruction_.a) {
-                    0 => stop.kind == .int,
-                    1 => stop.kind == .unit,
-                    else => false,
-                };
-                if ((list.kind != .list and list.kind != .any) or start.kind != .int or
-                    step.kind != .int or !end_matches) self.safe = false;
-                // The container is new; its elements can still alias inputs.
-                try self.push(state, Value.ordinary(.list));
-            },
-            .field => {
-                const object = state.pop(self);
-                if (instruction_.a >= self.program.constants.len or self.program.constants[instruction_.a] != .string) return self.invalid();
-                const name = self.program.constants[instruction_.a].string;
-                if (!object.kind.isVector() and object.kind != .text and object.kind != .picture and object.kind != .object and object.kind != .measure and object.kind != .anchor) self.safe = false;
-                if (object.kind == .text) self.uses_typst = true;
-                const raw_paths = object.kind.isObject() and std.mem.eql(u8, name, "paths");
-                if (raw_paths) self.uses_typst = true;
-                const kind = object.kind.fieldType(name) orelse invalid: {
-                    self.safe = false;
-                    break :invalid Type.any;
-                };
-                var value = Value.ordinary(kind);
-                if (kind.isObject()) value.fresh_owner = object.fresh_owner;
-                try self.push(state, value);
-            },
-            // Workers read the modules made before their group; a module made
-            // in a task stays in the worker, since only the task's picture escapes.
-            .typst, .typst_module => {
-                self.uses_typst = true;
-                // A module's name precedes its captured pairs.
-                const named = instruction_.op == .typst_module;
-                const count = @as(u32, instruction_.typstCaptures().pairs) * 2 + @intFromBool(named);
-                const operands = self.args(state, count);
-                if (operands.len != count) return self.invalid();
-                if (named and operands[0].kind != .string) self.safe = false;
-                const captures = operands[@intFromBool(named)..];
-                var index: usize = 0;
-                while (index < captures.len) : (index += 2) {
-                    if (captures[index].kind != .string) self.safe = false;
-                    switch (captures[index + 1].kind) {
-                        .int, .number, .boolean, .string, .scalar, .length, .quantity, .color, .typst_module, .any => {},
-                        else => self.safe = false,
-                    }
-                }
-                state.stack.shrinkRetainingCapacity(state.stack.items.len - operands.len);
-                try self.push(state, Value.ordinary(if (named) .typst_module else .text));
-            },
-            .check_module, .jump => {},
-            .return_value => {
-                const value = state.pop(self);
-                self.observe(value);
-                self.returned = true;
-                self.all_returns_fresh = self.all_returns_fresh and value.fresh_owner and (value.kind == .picture or value.kind == .object or value.kind == .any);
-                if (state.stack.items.len != 0) self.invalid();
-            },
-            .store_global => {
-                _ = state.pop(self);
-                self.safe = false;
-            },
-            // Import/observable effects and global writes cannot be
-            // replayed by an isolated worker. Unknown opcodes stay barriers.
-            .import_module, .halt => self.safe = false,
-        }
-    }
-
-    fn userCall(self: *Analysis, index: u32, arguments: []const Value) Allocator.Error!Value {
-        if (index >= self.summaries.len) {
-            self.invalid();
-            return .{};
-        }
-        const function = self.program.functions[index];
-        var summary = self.summaries[index];
-        if (!summary.safe and self.depth < limits.rounds) for (arguments) |arg| {
-            if (arg.fresh_owner or arg.callable != null or arg.bound != null) {
-                summary = try analyzeFunction(self.allocator, self.scratch_allocator, self.program, self.summaries, index, self.budget, arguments, self.depth + 1);
-                break;
-            }
-        };
-        _ = self.mergeSummary(summary);
-        for (function.default_functions[@min(arguments.len, function.default_functions.len)..]) |default|
-            if (default) |callee| {
-                _ = self.mergeCall(callee);
-            };
-        var result = Value.ordinary(function.result);
-        result.fresh_owner = summary.fresh_owner;
-        self.saw_user_call = true;
-        return result;
-    }
-
-    fn apply(self: *Analysis, value: Value, incoming: []const Value, instruction_: bc.Instruction) Allocator.Error!Value {
-        const target = if (value.bound) |bound| bound.target else if (value.callable) |callable| callable.target() else {
-            self.safe = false;
-            if (instruction_.op == .call_value) self.observes_identity = true;
-            return Value.ordinary(.any);
-        };
-        const names: []const []const u8, const variadic: bool = switch (target) {
-            .bytecode => |index| blk: {
-                if (index >= self.program.functions.len) {
-                    self.invalid();
-                    return .{};
-                }
-                const function = self.program.functions[index];
-                break :blk .{ function.parameter_names[0..function.fixedCount()], function.variadic != null };
-            },
-            .native => |index| blk: {
-                const id = std.enums.fromInt(builtin.Id, index) orelse {
-                    self.invalid();
-                    return .{};
-                };
-                const signature = builtin.signature(id);
-                break :blk .{ signature.parameter_names, signature.variadic != null };
-            },
-        };
-        if (instruction_.a > self.program.argument_names.len) {
-            self.invalid();
-            return .{};
-        }
-        const labels = if (instruction_.a == 0) &.{} else self.program.argument_names[instruction_.a - 1];
-        const ordered = @import("../arguments.zig").bind(Value, self.allocator, names, variadic, if (value.bound) |bound| bound.values else &.{}, if (value.bound) |bound| bound.names else &.{}, incoming, labels) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                self.invalid();
-                return .{};
-            },
-        };
-        var count: usize = 0;
-        var highest: usize = 0;
-        for (ordered, 0..) |item, i| if (item != null) {
-            count += 1;
-            highest = i + 1;
-        };
-        if (instruction_.op == .bind_function) {
-            const bound = try self.allocator.create(Value.Bound);
-            const values = try self.allocator.alloc(Value, count);
-            const bound_names = try self.allocator.alloc(?[]const u8, count);
-            var next: usize = 0;
-            for (ordered, 0..) |item, i| if (item) |arg| {
-                values[next] = arg;
-                bound_names[next] = if (i < names.len) names[i] else null;
-                next += 1;
-            };
-            bound.* = .{ .target = target, .values = values, .names = bound_names };
-            return .{ .kind = .function, .initialized = true, .bound = bound };
-        }
-        const arguments = try self.allocator.alloc(Value, highest);
-        for (arguments, ordered[0..highest], 0..) |*arg, item, i| {
-            arg.* = item orelse switch (target) {
-                .native => Value.ordinary(.unit),
-                .bytecode => |index| blk: {
-                    const function = self.program.functions[index];
-                    if (i < function.default_functions.len) if (function.default_functions[i]) |callee| break :blk try self.userCall(callee, &.{});
-                    if (i < function.defaults.len) if (function.defaults[i]) |default| break :blk Value.ordinary(default.valueType());
-                    self.invalid();
-                    return .{};
-                },
-            };
-        }
-        return switch (target) {
-            .bytecode => |index| try self.userCall(index, arguments),
-            .native => |index| blk: {
-                const signature = builtin.signature(std.enums.fromInt(builtin.Id, index).?);
-                if (!signature.acceptsCount(arguments.len)) {
-                    self.invalid();
-                    return .{};
-                }
-                break :blk self.builtinResult(&signature, arguments);
-            },
-        };
-    }
-
-    fn builtinResult(self: *Analysis, signature: *const builtin.Signature, arguments: []const Value) Value {
-        const id = signature.id;
-        for (arguments) |arg| {
-            // Unknown elements can be consumed by a fixed read-only signature;
-            // dynamic arithmetic and mutable targets need stronger provenance.
-            if (!arg.initialized) self.safe = false;
-        }
-        var result = Value.ordinary(signature.result);
-        switch (id) {
-            .print => {
-                self.safe = false;
-                if (arguments.len != 1 or !simpleType(arguments[0].kind)) self.observes_identity = true;
-            },
-            .solver, .unknown, .equation, .solve, .value => self.safe = false,
-            // A script's random stream advances in source order, including
-            // calls through aliases and helpers. It cannot be replayed by workers.
-            .seed, .random, .randint, .randn => self.safe = false,
-            .picture => result.fresh_owner = true,
-            .object, .draw, .fill, .linear_fill, .linear_stroke, .radial_fill, .patch_fill, .filldraw, .label => {
-                result.fresh_owner = true;
-                if (id == .label or (id == .object and arguments.len != 0 and (arguments[0].kind == .text or arguments[0].kind == .any))) self.uses_typst = true;
-            },
-            .append => {
-                if (arguments.len < 2) {
-                    self.safe = false;
-                    return result;
-                }
-                result = arguments[1];
-                if (!arguments[0].fresh_owner or !result.fresh_owner) self.safe = false;
-            },
-            .canvas, .timeline, .animate, .motion, .object_transform, .object_remove, .object_before, .object_style, .object_visible, .object_clip, .object_reset_clip => {
-                if (arguments.len == 0 or !arguments[0].fresh_owner or (arguments[0].kind != .picture and arguments[0].kind != .object and arguments[0].kind != .any)) self.safe = false;
-                // Animation ownership is currently published on the serial path.
-                if (id == .animate or id == .motion) self.safe = false;
-                if (result.kind == .object and arguments.len != 0) result.fresh_owner = arguments[0].fresh_owner;
-                if (id == .object_before and (arguments.len < 2 or !arguments[1].fresh_owner)) self.safe = false;
-            },
-            // It reads animation tracks, which are published on the serial path.
-            .animation_snapshot => {
-                self.safe = false;
-                result.fresh_owner = true;
-            },
-            .to_string => {
-                if (arguments.len != 1 or !simpleType(arguments[0].kind)) {
-                    self.safe = false;
-                    self.observes_identity = true;
-                }
-            },
-            .dict_remove, .object_exclude => self.safe = false,
-            .copy => {
-                result.kind = arguments[0].kind;
-                result.fresh_owner = result.kind.isObject();
-                // Collection copies are shallow; copying an object clones its subtree.
-                if (!supportedType(result.kind)) self.safe = false;
-            },
-            .width, .height, .baseline, .anchors => self.uses_typst = true,
-            .bounds => {
-                if (arguments.len != 0 and arguments[0].kind.isObject()) self.uses_typst = true;
-            },
-            .outlines, .region, .snapshot => {
-                if (id != .region) result.fresh_owner = true;
-                if (arguments.len == 0) self.safe = false else switch (arguments[0].kind) {
-                    .path, .path_or_shape => {},
-                    .text, .object, .picture => self.uses_typst = true,
-                    else => self.safe = false,
-                }
-            },
-            .transformed => {
-                result.kind = if (arguments.len != 0) arguments[0].kind else .any;
-                result.fresh_owner = result.kind.isObject();
-            },
-            .mapped, .bent => {
-                if (arguments.len < 2) self.safe = false else {
-                    result.kind = arguments[0].kind;
-                    // Any picture returned by a map is newly owned, including
-                    // generic wrappers whose input type is checked at runtime.
-                    result.fresh_owner = result.kind.isObject() or result.kind == .any;
-                    if (result.kind != .path and result.kind != .path_or_shape and !result.kind.isObject() and result.kind != .any) self.safe = false;
-                    if (id == .mapped) {
-                        if (arguments[1].callable) |function| switch (function) {
-                            .bytecode => |index| _ = self.mergeCall(index),
-                            .native, .bound => self.safe = false,
-                        } else if (arguments[1].kind != .transform) self.safe = false;
-                    }
-                }
-            },
-            else => {},
-        }
-        return result;
-    }
-
-    fn mergeCall(self: *Analysis, index: u32) Summary {
-        if (index >= self.summaries.len) {
-            self.invalid();
-            return .{};
-        }
-        return self.mergeSummary(self.summaries[index]);
-    }
-
-    fn mergeSummary(self: *Analysis, summary: Summary) Summary {
-        if (!self.budget.consume(summary.reads.len)) {
-            self.invalid();
-            return .{};
-        }
-        self.safe = self.safe and summary.safe;
-        self.uses_typst = self.uses_typst or summary.uses_typst;
-        self.observes_identity = self.observes_identity or summary.observes_identity;
-        for (summary.reads) |global| {
-            if (global >= self.reads.len) {
-                self.invalid();
-                return .{};
-            }
-            self.reads[global] = true;
-        }
-        return summary;
-    }
-
-    fn invalid(self: *Analysis) void {
-        self.safe = false;
-        self.malformed = true;
-    }
-
-    fn finish(self: *const Analysis, allocator: Allocator, fresh: bool) !Summary {
-        var count: usize = 0;
-        for (self.reads) |read| if (read) {
-            count += 1;
-        };
-        const reads = try allocator.alloc(u32, count);
-        var next: usize = 0;
-        for (self.reads, 0..) |read, index| if (read) {
-            reads[next] = @intCast(index);
-            next += 1;
-        };
-        return .{ .safe = self.safe and !self.malformed, .fresh_owner = fresh and self.safe and !self.malformed, .reads = reads, .uses_typst = self.uses_typst, .observes_identity = self.observes_identity or self.malformed };
-    }
-};
-
-fn supportedType(kind: Type) bool {
+pub fn supportedType(kind: Type) bool {
     return switch (kind) {
-        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .pen, .transform, .text, .typst_module, .picture, .function, .measure, .anchor, .object => true,
+        .any, .unit, .int, .number, .length, .angle, .quantity, .scalar, .boolean, .string, .vec2, .vec3, .list, .path, .shape, .path_or_shape, .color, .gradient, .paint, .pen, .transform, .text, .typst_module, .picture, .function, .measure, .anchor, .object => true,
         else => false,
     };
 }
 
-fn simpleType(kind: Type) bool {
-    return kind.isScalar() or switch (kind) {
-        .unit, .boolean, .string, .vec2, .vec3, .object, .picture => true,
-        else => false,
-    };
-}
-
-fn constantSafe(value: bc.Value) bool {
-    return switch (value) {
-        .handle, .dict, .record, .object => false,
-        .function => |function| function != .bound,
-        .list => |list| blk: {
-            if (list != .view) break :blk false;
-            for (list.items()) |item| if (!constantSafe(item)) break :blk false;
-            break :blk true;
-        },
-        else => true,
-    };
-}
-
-fn joinType(a: Type, b: Type) Type {
+pub fn joinType(a: Type, b: Type) Type {
     if (a == b) return a;
     if (a.isScalar() and b.isScalar()) return .scalar;
     return .any;
@@ -760,7 +179,7 @@ pub fn analyze(allocator: Allocator, scratch_allocator: Allocator, program: *con
     return output;
 }
 
-fn analyzeFunction(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary, index: u32, budget: *Budget, arguments: ?[]const Value, depth: usize) Allocator.Error!Summary {
+pub fn analyzeFunction(allocator: Allocator, scratch_allocator: Allocator, program: *const bc.Program, summaries: []const Summary, index: u32, budget: *Budget, arguments: ?[]const Value, depth: usize) Allocator.Error!Summary {
     // Release the per-function CFG after every pass. Only the summary goes to
     // `allocator`; the stacks do not stay across interprocedural iterations.
     var temporary: std.heap.ArenaAllocator = .init(scratch_allocator);
@@ -844,43 +263,6 @@ pub fn expression(allocator: Allocator, scratch_allocator: Allocator, program: *
     return try analysis.finish(allocator, true);
 }
 
-test "dictionary reads and shallow copies never create fresh picture provenance" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var program: bc.Program = .{
-        .arena = .init(std.testing.allocator),
-        .source_text = "",
-        .name = "effects",
-        .functions = &.{},
-        .constants = &.{},
-        .parameters = &.{},
-        .global_names = &.{},
-        .global_types = &.{},
-        .readonly_globals = &.{},
-    };
-    defer program.deinit();
-    var budget: Budget = .{};
-    var analysis = try Analysis.init(arena.allocator(), std.testing.allocator, &program, &.{}, &budget);
-    const dictionary = Value.ordinary(.dict);
-    const key = Value.ordinary(.string);
-    const contains = analysis.builtinResult(&builtin.signature(.dict_contains), &.{ dictionary, key });
-    try std.testing.expect(analysis.safe);
-    try std.testing.expectEqual(Type.boolean, contains.kind);
-    try std.testing.expect(!contains.fresh_owner);
-    const keys = analysis.builtinResult(&builtin.signature(.dict_keys), &.{dictionary});
-    try std.testing.expect(analysis.safe);
-    try std.testing.expectEqual(Type.list, keys.kind);
-    try std.testing.expect(!keys.fresh_owner);
-    var picture = Value.ordinary(.picture);
-    picture.fresh_owner = true;
-    const copied_picture = analysis.builtinResult(&builtin.signature(.copy), &.{picture});
-    try std.testing.expectEqual(Type.picture, copied_picture.kind);
-    try std.testing.expect(copied_picture.fresh_owner);
-    const copied_list = analysis.builtinResult(&builtin.signature(.copy), &.{Value.ordinary(.list)});
-    try std.testing.expectEqual(Type.list, copied_list.kind);
-    try std.testing.expect(!copied_list.fresh_owner);
-    _ = analysis.builtinResult(&builtin.signature(.dict_remove), &.{ dictionary, key });
-    try std.testing.expect(!analysis.safe);
-    try std.testing.expect(!supportedType(Type.record(0)));
-    try std.testing.expect(!supportedType(@fromBackingInt(0xffff)));
+test {
+    _ = @import("effects/builtins.zig");
 }

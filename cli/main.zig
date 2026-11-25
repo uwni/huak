@@ -1,6 +1,7 @@
 //! Command selection. Single builds, watching, execution and output scheduling
 //! have separate owners and lifetimes.
 const std = @import("std");
+const huak = @import("huak");
 const flags = @import("options.zig");
 const Session = @import("Session.zig");
 const Report = @import("Report.zig");
@@ -29,7 +30,8 @@ pub fn main(init: std.process.Init.Minimal) void {
 fn run(arguments: std.process.Args, io: std.Io, allocator: std.mem.Allocator) !void {
     const args = try arguments.toSlice(allocator);
     var option_error: ?[]const u8 = null;
-    const options = flags.parse(allocator, args[1..], &option_error) catch |err| {
+    const engine: flags.Engine = .{ .default_output = huak.language.bytecode.Output.default_name, .formats = std.meta.fieldNames(huak.render.Format) };
+    const options = flags.parse(allocator, args[1..], engine, &option_error) catch |err| {
         if (option_error) |message| {
             std.debug.print("huak: {s}\n\n", .{message});
             try printUsage(io, .stderr());

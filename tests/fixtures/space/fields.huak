@@ -1,0 +1,109 @@
+import space as s
+import paint.*
+import geometry.{bezier, reverse}
+import math.{abs, sqrt, max, pow}
+import assertions.assert
+
+// The script's field is sampled at points of the faces in world
+// coordinates, with the unit normal of the side that shows.
+radius := 10pt
+center := (3pt, -4pt, 2pt)
+ball := transformed(s.sphere(radius), translate(center))
+view := s.orthographic(-60deg, 29deg)
+sun := s.page_light(view)
+reach := sqrt(sun.x*sun.x + sun.y*sun.y + sun.z*sun.z)
+
+fn squared(p:vec3, n:vec3) -> float
+    d := (p.x - center.x, p.y - center.y, p.z - center.z)
+    return (d.x/1pt)*(d.x/1pt) + (d.y/1pt)*(d.y/1pt) + (d.z/1pt)*(d.z/1pt)
+end
+
+fn outward(p:vec3, n:vec3) -> float
+    return (n.x*(p.x - center.x) + n.y*(p.y - center.y) + n.z*(p.z - center.z))/radius
+end
+
+fn lit(p:vec3, n:vec3) -> float
+    return (n.x*sun.x + n.y*sun.y + n.z*sun.z)/reach
+end
+
+// How far any coefficient of the faces' field lies from `expected`.
+fn farthest(faces:list, expected:float) -> float
+    most := 0.0
+    for face in faces do
+        assert(face.field != false and face.field.kind == "patches", "with a field every face has patches")
+        assert(len(face.field.values) == len(face.field.points), "one coefficient for each control point")
+        for v in face.field.values do most = max(most, abs(v - expected)) end
+    end
+    return most
+end
+
+assert(farthest(s.project([ball], view, field: squared, field_tolerance: 0.01).visible_faces, 100) < 1e-9, "the points lie on the sphere")
+assert(farthest(s.project([ball], view, field: outward, field_tolerance: 0.001).visible_faces, 1) < 1e-12, "the normals point out of the sphere")
+
+// n·l written in the script is the engine's n·l, on the same patches.
+lighted := s.project([ball], view, light: sun, smooth: true, field: lit, field_tolerance: 1)
+for face in lighted.visible_faces do
+    assert(len(face.field.values) == len(face.field.diffuse), "light and field share the patches")
+    for k in 0:len(face.field.values)-1 do
+        assert(abs(face.field.values[k] - face.field.diffuse[k]) < 1e-12, "the script's n·l is the engine's")
+    end
+end
+
+// A spot on a plate, whose light would be one patch: the field is sampled
+// across the page before it is judged, then follows the tolerance.
+plate := s.face(s.profile(rectangle((0pt, 0pt), 100pt, 60pt)))
+fn spot(p:vec3, n:vec3) -> float
+    d := ((p.x - 50pt)/1pt)*((p.x - 50pt)/1pt) + ((p.y - 30pt)/1pt)*((p.y - 30pt)/1pt)
+    return pow(2.718281828459045, -d/64)
+end
+counts := []
+for tolerance in [0.1, 0.01, 0.001] do
+    total := 0
+    for face in s.project([plate], view, field: spot, field_tolerance: tolerance).visible_faces do
+        total = total + int(len(face.field.values)/16)
+    end
+    counts += [total]
+end
+assert(counts[0] >= 256, "a 32nd of the page between samples")
+assert(counts[0] < counts[1] and counts[1] < counts[2], "patches follow the tolerance")
+
+// An open sheet lights the side that shows: a dome lights the same whichever
+// way its normals point.
+meridian := bezier((0pt, 12pt), (6pt, 12pt), (12pt, 3pt), (18pt, 0pt))
+brightest := []
+for dome in [transformed(s.revolve(meridian), translate((40pt, 0pt, 0pt))), transformed(s.revolve(reverse(meridian)), translate((40pt, 0pt, 0pt)))] do
+    seen := s.project([dome], view, light: sun, smooth: true)
+    most := -1.0
+    for face in seen.visible_faces do
+        assert(face.field != false, "every region of an open sheet has its light")
+        for d in face.field.diffuse do most = max(most, d) end
+    end
+    brightest += [most]
+end
+assert(brightest[0] > 0.5 and abs(brightest[0] - brightest[1]) < 1e-9, "both sides of the sheet are lit alike")
+
+// A surface through a grid of points on a plane is that plane: evenly
+// spaced linear data interpolate to themselves.
+rows := []
+for j in 0:3 do
+    row := []
+    for i in 0:4 do
+        x := 10pt*i
+        y := 8pt*j
+        row += [(x, y, 0.2*x - 0.1*y)]
+    end
+    rows += [row]
+end
+fn offplane(p:vec3, n:vec3) -> float
+    return (p.z - 0.2*p.x + 0.1*p.y)/1pt
+end
+assert(farthest(s.project([s.surface(rows)], view, field: offplane, field_tolerance: 0.01).visible_faces, 0) < 1e-9, "the grid's surface passes through its plane")
+
+dome := transformed(s.revolve(meridian), translate((40pt, 0pt, 0pt)))
+fn height(p:vec3, n:vec3) -> float
+    return p.z/1pt
+end
+scene := s.project([plate, dome], view, light: sun, smooth: true, field: height, field_tolerance: 0.2)
+ramp := [rgb(0.97, 0.97, 0.97), rgb(0.92, 0.40, 0.19)]
+assert(len(s.colored(scene.visible_faces, ramp, [0, 12], light: true).children) > 0, "light over the colors")
+default s.colored(scene.visible_faces, ramp, [0, 12])

@@ -1,0 +1,221 @@
+// A face in its light: the palette over n·l, gradient stops, and the highlight.
+import geometry.circle
+import transform.matrix
+import object.{fill, append}
+import paint.clipped
+import color.rgb
+import assertions.assert
+
+export struct Shade
+    region:path
+    diffuse:float
+end
+
+// The continuous fields on a visible face, from project(..., smooth: true)
+// or project(..., field: f): its light, and the script's field.
+// Diffuse is n·l. Glint is 1 at the center of the highlight and positive
+// inside it, and at most 0 outside it. A "constant" field has one sample. A
+// "profile" varies only along start -> stop, with positions from 0 to 1. A
+// "fan" is constant along each ray from center and, between consecutive
+// points, linear along the chord joining them (see gradient.fan): one
+// value of each light for each of points, all around the center; accuracy is
+// what an output may add to it. "patches" carry sixteen control points each,
+// and sixteen coefficients of each light and of the field (see
+// gradient.patches); they are finer where the highlight can reach and where
+// the field strays from them. They extend past the face's region and stay
+// within accuracy of the light and within tolerance of the field, except
+// within margin of the region's outline, which is traced only that
+// accurately. A fan's or patches' glint is empty where the highlight shows
+// nowhere, their diffuse without a light, and values without a field; with
+// a field every face has patches.
+export struct SmoothField
+    kind:string
+    diffuse:list
+    glint:list
+    start:any = false
+    stop:any = false
+    positions:list = []
+    center:any = false
+    points:list = []
+    accuracy:float = 0
+    margin:length = 0pt
+    values:list = []
+    tolerance:float = 0
+end
+
+export struct VisibleFace
+    region:path
+    source:int
+    face:int
+    shades:list = []
+    highlight:any = false
+    lobes:list = []
+    field:any = false
+end
+
+// Palette choice is independent of the geometric light and gleam boundaries.
+export fn tone(ink:color, level:float) -> color
+    if level < 0 then return rgb(ink.r*(1+level), ink.g*(1+level), ink.b*(1+level), ink.a) end
+    return rgb(ink.r+(1-ink.r)*level, ink.g+(1-ink.g)*level, ink.b+(1-ink.b)*level, ink.a)
+end
+
+// The band palette as color stops over n·l: dark on the unlit side, the ink
+// at level 0 and light at n·l = 1. Between stops the tone is linear in n·l.
+DARKEST := -0.58
+LIGHTEST := 0.33
+fn shade_stops(ink:color) -> list
+    return [tone(ink, DARKEST), ink, tone(ink, LIGHTEST)]
+end
+SHADE_LEVELS := [0, 0.58 / 0.91, 1]
+
+fn blend(a:color, b:color, t:float) -> color
+    return rgb(a.r+(b.r-a.r)*t, a.g+(b.g-a.g)*t, a.b+(b.b-a.b)*t, a.a+(b.a-a.a)*t)
+end
+
+fn ramp(colors:list, levels:list, value:float) -> color
+    if value <= levels[0] then return colors[0] end
+    for k in 1:len(levels)-1 do
+        if value <= levels[k] then return blend(colors[k-1], colors[k], (value-levels[k-1])/(levels[k]-levels[k-1])) end
+    end
+    return colors[len(colors)-1]
+end
+
+// Highlight opacity: the band lobes' 0.88 at the center, fading with the
+// square of the glint to nothing at the highlight's edge.
+fn glow(glint:float) -> float
+    if glint <= 0 then return 0 end
+    return 0.88 * glint * glint
+end
+
+// Gradient stops along a profile: every sample, and where the light crosses
+// a palette level between two samples, so the palette's corners stay exact.
+fn profile_stops(field:SmoothField, colors:list, levels:list) -> list
+    stops := []
+    offsets := []
+    for k in 0:len(field.positions)-1 do
+        here := field.positions[k]
+        light := field.diffuse[k]
+        if k > 0 then
+            before := field.positions[k-1]
+            last := field.diffuse[k-1]
+            count := len(levels)
+            for step in 0:count-1 do
+                index := step
+                if last > light then index = count-1-step end
+                level := levels[index]
+                if (level - last) * (level - light) < 0 then
+                    offsets += [before + (here-before)*(level-last)/(light-last)]
+                    stops += [colors[index]]
+                end
+            end
+        end
+        offsets += [here]
+        stops += [ramp(colors, levels, light)]
+    end
+    return [stops, offsets]
+end
+
+// The highlight's whites over the glint, and their levels: nine stops follow
+// the glow's square within 1/256 of its opacity.
+fn glow_stops() -> list
+    whites := []
+    levels := []
+    for k in 0:8 do
+        levels += [k / 8]
+        whites += [rgb(1, 1, 1, glow(k / 8))]
+    end
+    return [whites, levels]
+end
+GLOW_STOPS := glow_stops()
+
+// A face in its continuous light: n·l in the ink's tones, the highlight's
+// whites over them on the same patches or rays.
+fn smooth_light(face:VisibleFace, ink:color) -> picture
+    result := picture()
+    field:SmoothField := face.field
+    assert(len(field.diffuse) > 0, "shaded needs a projection with a directional light")
+    colors := shade_stops(ink)
+    if field.kind == "patches" then
+        append(result, fill(face.region, gradient.patches(field.points, field.diffuse, colors, SHADE_LEVELS, field.accuracy, field.margin)))
+        if len(field.glint) > 0 then
+            append(result, fill(face.region, gradient.patches(field.points, field.glint, GLOW_STOPS[0], GLOW_STOPS[1], field.accuracy, field.margin)))
+        end
+        return result
+    end
+    if field.kind == "fan" then
+        append(result, fill(face.region, gradient.fan(field.center, field.points, field.diffuse, colors, SHADE_LEVELS, field.accuracy)))
+        if len(field.glint) > 0 then
+            append(result, fill(face.region, gradient.fan(field.center, field.points, field.glint, GLOW_STOPS[0], GLOW_STOPS[1], field.accuracy)))
+        end
+        return result
+    end
+    glows := []
+    for glint in field.glint do glows += [glow(glint)] end
+    shine := false
+    for g in glows do if g > 0 then shine = true end end
+    if field.kind == "constant" then
+        append(result, fill(face.region, ramp(colors, SHADE_LEVELS, field.diffuse[0])))
+        if shine then append(result, fill(face.region, rgb(1, 1, 1, glows[0]))) end
+    else
+        stops := profile_stops(field, colors, SHADE_LEVELS)
+        append(result, fill(face.region, gradient.linear(field.start, field.stop, stops[0], stops[1])))
+        if shine then
+            whites := []
+            for g in glows do whites += [rgb(1, 1, 1, g)] end
+            append(result, fill(face.region, gradient.linear(field.start, field.stop, whites, field.positions)))
+        end
+    end
+    return result
+end
+
+// A face in its light: continuous with smooth light, otherwise in the
+// isophote bands, with the highlight in white over them.
+export fn face_light(face:VisibleFace, ink:color) -> picture
+    if face.field != false then return smooth_light(face, ink) end
+    result := picture()
+    assert(len(face.shades) > 0, "shaded needs a projection with a directional light")
+    for shade in face.shades do
+        append(result, fill(shade.region, tone(ink, DARKEST+0.91*shade.diffuse)))
+    end
+    if face.highlight != false then
+        if len(face.lobes) == 0 then
+            append(result, fill(face.highlight, tone(ink, 0.70)))
+            return result
+        end
+        spots := picture()
+        disk := circle((0pt, 0pt), 1pt)
+        for ellipse in face.lobes do
+            center := ellipse[0]
+            u := ellipse[1]
+            v := ellipse[2]
+            glint := fill(disk, gradient.radial((0pt, 0pt), 1pt, [rgb(1, 1, 1, 0.88), rgb(1, 1, 1, 0)]))
+            append(spots, glint, matrix(u.x, u.y, v.x, v.y, center.x, center.y))
+        end
+        append(result, clipped(spots, face.highlight))
+    end
+    return result
+end
+
+// The light as layers over colors that vary across a face: black fading
+// out from n·l = 0 to the ink's own level, then white fading in to n·l = 1,
+// as `shade_stops` tones one ink, and the highlight's whites over them.
+export fn light_over(face:VisibleFace) -> picture
+    result := picture()
+    field:SmoothField := face.field
+    assert(field.kind == "patches" and len(field.diffuse) > 0, "light needs a projection with a directional light")
+    shadow := [rgb(0, 0, 0, -DARKEST), rgb(0, 0, 0, 0)]
+    gleam := [rgb(1, 1, 1, 0), rgb(1, 1, 1, LIGHTEST)]
+    append(result, fill(face.region, gradient.patches(field.points, field.diffuse, shadow, [SHADE_LEVELS[0], SHADE_LEVELS[1]], field.accuracy, field.margin)))
+    append(result, fill(face.region, gradient.patches(field.points, field.diffuse, gleam, [SHADE_LEVELS[1], SHADE_LEVELS[2]], field.accuracy, field.margin)))
+    if len(field.glint) > 0 then
+        append(result, fill(face.region, gradient.patches(field.points, field.glint, GLOW_STOPS[0], GLOW_STOPS[1], field.accuracy, field.margin)))
+    end
+    return result
+end
+
+export fn smooth_field(row:list) -> SmoothField
+    if row[0] == "constant" then return SmoothField("constant", [row[1]], [row[2]]) end
+    if row[0] == "profile" then return SmoothField("profile", row[4], row[5], start: row[1], stop: row[2], positions: row[3]) end
+    if row[0] == "fan" then return SmoothField("fan", row[3], row[4], center: row[1], points: row[2], accuracy: row[5]) end
+    return SmoothField("patches", row[2], row[3], points: row[1], accuracy: row[4], margin: row[5], values: row[6], tolerance: row[7])
+end

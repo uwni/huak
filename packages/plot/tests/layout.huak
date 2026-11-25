@@ -1,6 +1,7 @@
 import assertions.assert
 import "../plot.huak".*
-import "../plot/render.huak" as renderer
+import "../plot/panels.huak" as stage
+import "../plot/placement.huak" as placement
 import "../plot/heatmap.huak" as heat
 import "../plot/scales.huak" as scales
 
@@ -16,8 +17,8 @@ plotting b do
     +scatter x [10, 1000] y [1, 2]
 end
 link_x of fig axes [a, b]
-panels := renderer.prepare(fig)
-renderer.layout(fig, panels)
+panels := stage.prepare(fig)
+placement.layout(fig, panels)
 assert(panels[0].origin.x == panels[1].origin.x)
 assert(panels[0].size.x == panels[1].size.x)
 assert(panels[0].x.low == panels[1].x.low and panels[0].x.high == panels[1].x.high)
@@ -43,7 +44,7 @@ assert(blank.width == 200pt and blank.height == 160pt)
 gaps := figure(240pt, 180pt)
 gap_axis := axis(gaps)
 plotting gap_axis do +band x [0, 1, 2] lower [0, 100, 0] upper [1, false, 1] end
-assert(renderer.prepare(gaps)[0].y.high < 2)
+assert(stage.prepare(gaps)[0].y.high < 2)
 // Exact category-cell edges stay attached to their category after sharing.
 categories := figure(480pt, 240pt)
 c1 := axis(categories, (0, 0)); c2 := axis(categories, (0, 1))

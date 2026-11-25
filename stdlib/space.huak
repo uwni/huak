@@ -1,13 +1,14 @@
 // Script-built boundary geometry. Projection preserves the source list index.
 import projection.{project_scene, model_shape as Shape}
-import geometry.{compound, rectangle, circle}
-import transform.matrix
-import object.{region, fill, radial_fill, linear_fill, patch_fill, append}
-import paint.clipped
-import color.rgb
+import geometry.{compound, rectangle}
+import math.{sin, cos}
+import object.region
 import assertions.assert
+import "std/space/light.huak".{Shade, SmoothField, VisibleFace, smooth_field}
+import "std/space/solids.huak".{Tones, toned, flat, shaded, colored}
 
 export Shape
+export Shade, SmoothField, VisibleFace, Tones, toned, flat, shaded, colored
 
 export fn torus(major:length, minor:length) -> shape
     return Shape("torus", [major, minor])
@@ -66,6 +67,18 @@ export fn loft(sections:list, solid:bool = false) -> shape
     return Shape("loft", sections)
 end
 
+// A surface through a grid of points: `rows` lists the rows, each of as
+// many points, at least two rows of two. It is the C2 B-spline surface OCCT
+// interpolates through them all (GeomAPI_PointsToBSplineSurface), one face
+// whose parameters run along the rows and across them. A graph z = f(x, y),
+// a parametric surface or measured heights are grids of their points.
+export fn surface(rows:list) -> shape
+    assert(len(rows) >= 2, "a surface needs at least two rows")
+    arguments := [len(rows), len(rows[0])]
+    for row in rows do arguments += row end
+    return Shape("grid", arguments)
+end
+
 export struct Camera
     azimuth:angle
     elevation:angle
@@ -81,50 +94,23 @@ export fn perspective(azimuth:angle, elevation:angle, focus:length) -> Camera
     return Camera(azimuth, elevation, focus)
 end
 
+// The direction toward a light that keeps its place on the page whatever the
+// camera: `right` and `up` lie in the page and `out` points at the reader.
+// The default comes from the upper left, in front of the page.
+export fn page_light(view:Camera, right:float = -0.55, up:float = 0.6, out:float = 0.58) -> vec3
+    sa := sin(view.azimuth)
+    ca := cos(view.azimuth)
+    se := sin(view.elevation)
+    ce := cos(view.elevation)
+    return (-right*sa - up*se*ca + out*ce*ca, right*ca - up*se*sa + out*ce*sa, up*ce + out*se)
+end
+
 export struct Line
     curve:path
     source:int
     kind:string
     visible:bool
     other_source:int = -1
-end
-
-export struct Shade
-    region:path
-    diffuse:float
-end
-
-// Continuous light on a visible face, from project(..., smooth: true).
-// Diffuse is n·l. Glint is 1 at the center of the highlight and positive
-// inside it; it is at most 0 where the point is unlit, and -1 everywhere when
-// there is no highlight. A "constant" field has one sample. A "profile"
-// varies only along start -> stop, with positions from 0 to 1. "patches"
-// carry sixteen control points and field coefficients each (see
-// object.patch_fill): diffuse on points, and the glint on finer glint_points
-// where the highlight can reach. They extend past the face's region and stay
-// within accuracy of the light, except within margin of the region's
-// outline, which is traced only that accurately.
-export struct LightField
-    kind:string
-    diffuse:list
-    glint:list
-    start:any = false
-    stop:any = false
-    positions:list = []
-    points:list = []
-    glint_points:list = []
-    accuracy:float = 0
-    margin:length = 0pt
-end
-
-export struct VisibleFace
-    region:path
-    source:int
-    face:int
-    shades:list = []
-    highlight:any = false
-    lobes:list = []
-    field:any = false
 end
 
 export struct Layer
@@ -145,140 +131,21 @@ export fn silhouette(projection:Projection) -> path
     return region(compound(paths))
 end
 
-// Palette choice is independent of the geometric light and gleam boundaries.
-fn tone(ink:color, level:float) -> color
-    if level < 0 then return rgb(ink.r*(1+level), ink.g*(1+level), ink.b*(1+level), ink.a) end
-    return rgb(ink.r+(1-ink.r)*level, ink.g+(1-ink.g)*level, ink.b+(1-ink.b)*level, ink.a)
-end
-
-// The band palette as color stops over n·l: dark on the unlit side, the ink
-// at level 0 and light at n·l = 1. Between stops the tone is linear in n·l.
-fn shade_stops(ink:color) -> list
-    return [tone(ink, -0.58), ink, tone(ink, 0.33)]
-end
-SHADE_LEVELS := [0, 0.58 / 0.91, 1]
-
-fn blend(a:color, b:color, t:float) -> color
-    return rgb(a.r+(b.r-a.r)*t, a.g+(b.g-a.g)*t, a.b+(b.b-a.b)*t, a.a+(b.a-a.a)*t)
-end
-
-fn ramp(colors:list, levels:list, value:float) -> color
-    if value <= levels[0] then return colors[0] end
-    for k in 1:len(levels)-1 do
-        if value <= levels[k] then return blend(colors[k-1], colors[k], (value-levels[k-1])/(levels[k]-levels[k-1])) end
-    end
-    return colors[len(colors)-1]
-end
-
-// Highlight opacity: the band lobes' 0.88 of the ink's alpha at the center,
-// fading with the square of the glint to nothing at the highlight's edge.
-fn glow(ink:color, glint:float) -> float
-    if glint <= 0 then return 0 end
-    return 0.88 * ink.a * glint * glint
-end
-
-// Gradient stops along a profile: every sample, and where the light crosses
-// a palette level between two samples, so the palette's corners stay exact.
-fn profile_stops(field:LightField, colors:list, levels:list) -> list
-    stops := []
-    offsets := []
-    for k in 0:len(field.positions)-1 do
-        here := field.positions[k]
-        light := field.diffuse[k]
-        if k > 0 then
-            before := field.positions[k-1]
-            last := field.diffuse[k-1]
-            count := len(levels)
-            for step in 0:count-1 do
-                index := step
-                if last > light then index = count-1-step end
-                level := levels[index]
-                if (level - last) * (level - light) < 0 then
-                    offsets += [before + (here-before)*(level-last)/(light-last)]
-                    stops += [colors[index]]
-                end
-            end
-        end
-        offsets += [here]
-        stops += [ramp(colors, levels, light)]
-    end
-    return [stops, offsets]
-end
-
-fn smooth_shaded(face:VisibleFace, ink:color) -> picture
-    result := picture()
-    field:LightField := face.field
-    colors := shade_stops(ink)
-    if field.kind == "patches" then
-        append(result, patch_fill(face.region, field.points, field.diffuse, colors, SHADE_LEVELS, field.accuracy, field.margin))
-        if len(field.glint) > 0 then
-            // Nine stops follow the glow's square within 1/256 of its opacity.
-            whites := []
-            levels := []
-            for k in 0:8 do
-                levels += [k / 8]
-                whites += [rgb(1, 1, 1, glow(ink, k / 8))]
-            end
-            append(result, patch_fill(face.region, field.glint_points, field.glint, whites, levels, field.accuracy, field.margin))
-        end
-        return result
-    end
-    glows := []
-    for glint in field.glint do glows += [glow(ink, glint)] end
-    shine := false
-    for g in glows do if g > 0 then shine = true end end
-    if field.kind == "constant" then
-        append(result, fill(face.region, ramp(colors, SHADE_LEVELS, field.diffuse[0])))
-        if shine then append(result, fill(face.region, rgb(1, 1, 1, glows[0]))) end
-    else
-        stops := profile_stops(field, colors, SHADE_LEVELS)
-        append(result, linear_fill(face.region, field.start, field.stop, stops[0], stops[1]))
-        if shine then
-            whites := []
-            for g in glows do whites += [rgb(1, 1, 1, g)] end
-            append(result, linear_fill(face.region, field.start, field.stop, whites, field.positions))
-        end
-    end
-    return result
-end
-
-export fn shaded(face:VisibleFace, ink:color) -> picture
-    if face.field != false then return smooth_shaded(face, ink) end
-    result := picture()
-    assert(len(face.shades) > 0, "shaded needs a projection with a directional light")
-    for shade in face.shades do
-        append(result, fill(shade.region, tone(ink, -0.58+0.91*shade.diffuse)))
-    end
-    if face.highlight != false then
-        if len(face.lobes) == 0 then
-            append(result, fill(face.highlight, tone(ink, 0.70)))
-            return result
-        end
-        spots := picture()
-        disk := circle((0pt, 0pt), 1pt)
-        for ellipse in face.lobes do
-            center := ellipse[0]
-            u := ellipse[1]
-            v := ellipse[2]
-            glint := radial_fill(disk, (0pt, 0pt), 1pt, rgb(1, 1, 1, ink.a*0.88), rgb(1, 1, 1, 0))
-            append(spots, glint, matrix(u.x, u.y, v.x, v.y, center.x, center.y))
-        end
-        append(result, clipped(spots, face.highlight))
-    end
-    return result
-end
-
-fn light_field(row:list) -> LightField
-    if row[0] == "constant" then return LightField("constant", [row[1]], [row[2]]) end
-    if row[0] == "profile" then return LightField("profile", row[4], row[5], start: row[1], stop: row[2], positions: row[3]) end
-    return LightField("patches", row[2], row[4], points: row[1], glint_points: row[3], accuracy: row[5], margin: row[6])
-end
-
 // Smooth light replaces the isophote bands with continuous fields on the
 // front faces; each region then shows one sheet of its face.
-export fn project(shapes:list, view:Camera, tolerance:length = 0.01pt, faces:bool = true, light:any = false, spot:angle = 0deg, isophotes:list = [0, 0.25, 0.5, 0.75], smooth:bool = false) -> Projection
+//
+// `field` is the script's own field on the faces: a function
+// `f(point:vec3, normal:vec3) -> float` of a point of a face, in world
+// coordinates, and the unit normal of the side that shows there. Each front
+// region gets patches carrying it, sampled at least every `field_step` on
+// the page, by default a 32nd of what the faces cover, and finer where the
+// patches' corner values stray from it by more than `field_tolerance` at
+// their samples (see `colored`). The samples judge the patches: a change
+// narrower than the step may go unseen. A field needs an orthographic
+// camera, and smooth light or none.
+export fn project(shapes:list, view:Camera, tolerance:length = 0.01pt, faces:bool = true, light:any = false, spot:angle = 0deg, isophotes:list = [0, 0.25, 0.5, 0.75], smooth:bool = false, field:any = false, field_tolerance:float = 0, field_step:length = 0pt) -> Projection
     lines := []
-    result := project_scene(shapes, view.azimuth, view.elevation, view.focus, tolerance, faces, light, spot, isophotes, smooth)
+    result := project_scene(shapes, view.azimuth, view.elevation, view.focus, tolerance, faces, light, spot, isophotes, smooth, field, field_tolerance, field_step)
     layers := []
     count:int := result[2]
     for i in 0:count-1 do layers += [Layer()] end
@@ -290,9 +157,9 @@ export fn project(shapes:list, view:Camera, tolerance:length = 0.01pt, faces:boo
     for row in result[1] do
         shades := []
         for band in row[4] do shades += [Shade(band[0], band[1])] end
-        field:any := false
-        if row[7] != false then field = light_field(row[7]) end
-        layers[count-1-row[3]].faces += [VisibleFace(row[0], row[1], row[2], shades, row[5], row[6], field)]
+        fields:any := false
+        if row[7] != false then fields = smooth_field(row[7]) end
+        layers[count-1-row[3]].faces += [VisibleFace(row[0], row[1], row[2], shades, row[5], row[6], fields)]
     end
     front := []
     if count > 0 then front = layers[count-1].faces end

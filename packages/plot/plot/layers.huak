@@ -1,0 +1,201 @@
+// Painting data layers, also in pieces between axis breaks.
+import math.{min}
+import collections.get
+import assertions.assert
+import geometry.{rectangle}
+import object.{append, draw, fill, clip as clip_picture}
+import "model.huak".{Figure, Layer, horizontal}
+import "rulers.huak" as rulers
+import "arrows.huak" as arrows
+import "scales.huak" as scales
+import "markers.huak" as markers
+import "labels.huak" as labels
+import "heatmap.huak" as heat
+import "panels.huak".{Panel, affine_point, raw_point}
+
+export fn segment(dst:picture, a:vec2, b:vec2, ink:pen)
+    append(dst, draw(path(a, b), ink))
+end
+
+fn retained(panel:Panel, p:vec2) -> bool
+    if panel.x_piece != false then
+        if panel.x_piece.cut_before and p.x < panel.origin.x-1e-8pt then return false end
+        if panel.x_piece.cut_after and p.x > panel.origin.x+panel.size.x+1e-8pt then return false end
+    end
+    if panel.y_piece != false then
+        if panel.y_piece.cut_before and p.y < panel.origin.y-1e-8pt then return false end
+        if panel.y_piece.cut_after and p.y > panel.origin.y+panel.size.y+1e-8pt then return false end
+    end
+    return true
+end
+
+fn directed_stroke(dst:picture, panel:Panel, points:list, stroke:pen, ends:string, size:length)
+    effective := ends
+    if ends != "none" and len(points) > 1 and (panel.x_piece != false or panel.y_piece != false) then
+        first := retained(panel, points[0]); last := retained(panel, points[len(points)-1])
+        effective = arrows.visible_ends(ends, first, last)
+    end
+    arrows.stroke(dst, points, stroke, effective, size)
+end
+
+fn series(dst:picture, panel:Panel, item:Layer, ink:color, width:length)
+    stroke := get(item.options, "pen", pen(ink, get(item.options, "width", width), dash: get(item.options, "dash", [])))
+    symbol:any := get(item.options, "marker", false)
+    if item.kind == "scatter" and symbol == false then symbol = markers.marker() end
+    if symbol != false then symbol = markers.inherited(symbol, item.options) end
+    sizes:list := get(item.options, "sizes", [])
+    colors:list := get(item.options, "colors", [])
+    assert(len(sizes) == 0 or len(sizes) == len(item.x), "marker sizes length differs from data")
+    assert(len(colors) == 0 or len(colors) == len(item.x), "marker colors length differs from data")
+    shape := path((0pt, 0pt), (1pt, 0pt))
+    if symbol != false then shape = markers.prepare(symbol, ink) end
+    points := []
+    // Stroke first; markers stay above the line, including hollow symbols.
+    if item.kind == "lines" then
+        ends:string := get(item.options, "arrow", "none")
+        head_size:length := get(item.options, "arrow_size", 6pt)
+        for i in 0:len(item.x)-1 do
+            if item.x[i] == false or item.y[i] == false then
+                directed_stroke(dst, panel, points, stroke, ends, head_size)
+                points = []
+            else points += [affine_point(panel, item.x[i], item.y[i])] end
+        end
+        directed_stroke(dst, panel, points, stroke, ends, head_size)
+    end
+    if symbol == false then return end
+    for i in 0:len(item.x)-1 do
+        if item.x[i] == false or item.y[i] == false then
+            // Explicit missing samples do not create marker instances.
+        else
+            p := affine_point(panel, item.x[i], item.y[i])
+            if (panel.x_piece == false and panel.y_piece == false) or retained(panel, p) then
+                color := ink
+                if len(colors) > 0 then color = colors[i] end
+                geometry := shape
+                if len(sizes) > 0 then geometry = markers.prepare(symbol, color, sizes[i]) end
+                markers.paint(dst, symbol, geometry, p, color)
+            end
+        end
+    end
+end
+
+export fn paint_layer(dst:picture, panel:Panel, item:Layer, ink:color, width:length)
+    if item.kind == "lines" or item.kind == "scatter" then series(dst, panel, item, ink, width); return end
+    stroke := get(item.options, "pen", pen(ink, get(item.options, "width", width), dash: get(item.options, "dash", [])))
+    interior:any := get(item.options, "fill", ink)
+    if item.kind == "rectangles" or item.kind == "segments" or item.kind == "cells" then
+        for i in 0:len(item.x)-1 do
+            a := raw_point(panel, item, item.x[i], item.y[i], i)
+            b := raw_point(panel, item, item.data["x1"][i], item.data["y1"][i], i)
+            if item.kind == "segments" then segment(dst, a, b, stroke)
+            else
+                shape := rectangle((min(a.x, b.x), min(a.y, b.y)), math.abs(b.x-a.x), math.abs(b.y-a.y))
+                fill_ink:any := interior
+                if item.kind == "cells" then fill_ink = heat.color_at(item.data["colormap"], heat.normalized(item, item.data["z"][i])) end
+                if fill_ink != false then append(dst, fill(shape, fill_ink)) end
+                if get(item.options, "pen", false) != false then append(dst, draw(shape, stroke)) end
+            end
+        end
+    elseif item.kind == "raw_scatter" then
+        symbol := get(item.options, "marker", markers.marker("circle", {"size": 3pt}))
+        symbol = markers.inherited(symbol, item.options)
+        shape := markers.prepare(symbol, ink)
+        for i in 0:len(item.x)-1 do
+            p := raw_point(panel, item, item.x[i], item.y[i], i)
+            if retained(panel, p) then markers.paint(dst, symbol, shape, p, ink) end
+        end
+    elseif item.kind == "arrow" then
+        endpoints := [affine_point(panel, item.x[0], item.y[0]), affine_point(panel, item.x[1], item.y[1])]
+        directed_stroke(dst, panel, endpoints, stroke, get(item.options, "arrow", "end"), get(item.options, "arrow_size", 6pt))
+    elseif item.kind == "hline" or item.kind == "vline" then
+        a := panel.origin; b := panel.origin+panel.size
+        piece:any := panel.x_piece; reversed := panel.x.reversed
+        if item.kind == "hline" then
+            y := a.y+panel.size.y*scales.coordinate(panel.y, item.y[0])
+            a = (a.x, y); b = (b.x, y)
+        else
+            x := a.x+panel.size.x*scales.coordinate(panel.x, item.x[0])
+            a = (x, a.y); b = (x, b.y)
+            piece = panel.y_piece; reversed = panel.y.reversed
+        end
+        if not retained(panel, (a+b)/2) then return end
+        endpoints := [a, b]
+        if reversed then endpoints = [b, a] end
+        ends:string := get(item.options, "arrow", "none")
+        if piece != false then
+            if reversed then ends = arrows.visible_ends(ends, not piece.cut_after, not piece.cut_before)
+            else ends = arrows.visible_ends(ends, not piece.cut_before, not piece.cut_after) end
+        end
+        arrows.stroke(dst, endpoints, stroke, ends, get(item.options, "arrow_size", 6pt))
+    elseif item.kind == "annotation" then
+        p := affine_point(panel, item.x[0], item.y[0])
+        alignment:string := get(item.options, "align", "center")
+        anchor:vec2 := (0.5, 0.5)
+        if alignment == "left" then anchor = (0, 0.5)
+        elseif alignment == "right" then anchor = (1, 0.5)
+        elseif alignment != "center" then panic("unknown annotation align: "+alignment) end
+        if retained(panel, p) then labels.place(dst, item.data["body"], p, anchor, 0deg, get(item.options, "part", "")) end
+    elseif item.kind == "errorbars" then
+        upper:list := get(item.options, "upper", item.data["errors"])
+        assert(len(upper) == len(item.x), "upper errors length differs from data")
+        orientation:string := get(item.options, "orientation", "vertical")
+        assert(orientation == "vertical" or orientation == "horizontal", "unknown errorbar orientation")
+        cap:length := get(item.options, "cap_size", 5pt)
+        assert(cap >= 0pt, "error cap size must be nonnegative")
+        for i in 0:len(item.x)-1 do
+            low:any := item.data["errors"][i]
+            if item.x[i] != false and item.y[i] != false and low != false and upper[i] != false then
+                assert(low >= 0 and upper[i] >= 0, "error magnitudes must be nonnegative")
+                a := (0pt, 0pt); b := (0pt, 0pt); delta := (cap/2, 0pt)
+                if orientation == "vertical" then a = affine_point(panel, item.x[i], item.y[i]-low); b = affine_point(panel, item.x[i], item.y[i]+upper[i])
+                else a = affine_point(panel, item.x[i]-low, item.y[i]); b = affine_point(panel, item.x[i]+upper[i], item.y[i]); delta = (0pt, cap/2) end
+                segment(dst, a, b, stroke); segment(dst, a-delta, a+delta, stroke); segment(dst, b-delta, b+delta, stroke)
+            end
+        end
+        if get(item.options, "marker", false) != false then
+            centers := copy(item); centers.kind = "scatter"
+            series(dst, panel, centers, ink, width)
+        end
+    elseif item.kind == "band" or item.kind == "area" then
+        lower := []; upper := []
+        for i in 0:len(item.x) do
+            missing := i == len(item.x)
+            if not missing then missing = item.x[i] == false or item.y[i] == false or item.data["upper"][i] == false end
+            if missing then
+                if len(lower) > 1 then
+                    for j in len(upper)-1:-1:0 do lower += [upper[j]] end
+                    if interior != false then append(dst, fill(path(lower, true), interior)) end
+                end
+                lower = []; upper = []
+            else
+                if item.kind == "band" then assert(item.y[i] <= item.data["upper"][i], "band lower bound exceeds upper bound") end
+                lower += [affine_point(panel, item.x[i], item.y[i])]
+                upper += [affine_point(panel, item.x[i], item.data["upper"][i])]
+            end
+        end
+    else panic("unknown plot layer: "+item.kind) end
+end
+
+export fn paint_intervals(dst:picture, fig:Figure, panel:Panel, item:Layer, xr:rulers.Ruler, yr:rulers.Ruler, ink:color, width:length, clip:bool)
+    for xp in xr.partition.pieces do
+        for yp in yr.partition.pieces do
+            view := copy(panel)
+            view.x = xp.scale; view.y = yp.scale
+            view.x_piece = xp; view.y_piece = yp
+            view.origin = panel.origin+(xp.start, yp.start)
+            view.size = (xp.stop-xp.start, yp.stop-yp.start)
+            low := view.origin; high := panel.origin+(xp.stop, yp.stop)
+            if not clip then
+                if not xp.cut_before then low = (0pt, low.y) end
+                if not xp.cut_after then high = (fig.width, high.y) end
+                if not yp.cut_before then low = (low.x, 0pt) end
+                if not yp.cut_after then high = (high.x, fig.height) end
+            end
+            tile := picture()
+            clip_picture(tile, rectangle(low, high.x-low.x, high.y-low.y))
+            append(dst, tile)
+            paint_layer(tile, view, item, ink, width)
+        end
+    end
+end
+

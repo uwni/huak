@@ -44,24 +44,24 @@ test "static polygon operations and retained text produce real native SVG and co
     for ([_]regions.Operation{ .unite, .intersect, .difference, .xor }, 0..) |operation, index| {
         var result = try regions.combine(t.allocator, outer, inner, operation, .{});
         defer result.deinit();
-        try picture.filldraw(result, .{ .r = 0.2, .g = 0.4, .b = 0.8 }, .{ .width = 0.3 }, .translation(20 + @as(f64, @floatFromInt(index)) * 65, 30));
+        try picture.filldraw(result, .{ .color = .{ .r = 0.2, .g = 0.4, .b = 0.8 } }, .{ .width = 0.3 }, .translation(20 + @as(f64, @floatFromInt(index)) * 65, 30));
     }
     var expanded = try regions.offset(t.allocator, outer, 4, .{ .join = .round });
     defer expanded.deinit();
-    try picture.fill(expanded, .{ .r = 0.8, .g = 0.2 }, .translation(20, 105));
+    try picture.fill(expanded, .{ .color = .{ .r = 0.8, .g = 0.2 } }, .translation(20, 105));
     var center = Path.init(t.allocator);
     defer center.deinit();
     try center.moveTo(.zero);
     try center.cubicTo(.{ .x = 10, .y = 30 }, .{ .x = 20, .y = -20 }, .{ .x = 40, .y = 0 });
     var stroke = try regions.stroke(t.allocator, center, 5, .{ .cap = .round });
     defer stroke.deinit();
-    try picture.fill(stroke, .{ .r = 0.8, .g = 0.2 }, .translation(100, 125));
+    try picture.fill(stroke, .{ .color = .{ .r = 0.8, .g = 0.2 } }, .translation(100, 125));
     var region = try regions.clipRegion(t.allocator, outer, .fromPoints(.{ .x = 15, .y = 15 }, .{ .x = 50, .y = 50 }), .{});
     defer region.deinit();
-    try picture.fill(region, .{ .r = 0.8, .g = 0.2 }, .translation(150, 100));
+    try picture.fill(region, .{ .color = .{ .r = 0.8, .g = 0.2 } }, .translation(150, 100));
     var lines = try regions.clipLines(t.allocator, center, .fromPoints(.{ .x = 10, .y = -30 }, .{ .x = 30, .y = 30 }), .{});
     defer lines.deinit();
-    try picture.draw(lines, .{ .width = 1, .color = .{ .r = 0.8, .g = 0.2 } }, .translation(220, 125));
+    try picture.draw(lines, .{ .width = 1, .paint = .{ .color = .{ .r = 0.8, .g = 0.2 } } }, .translation(220, 125));
     const metrics = measured[0];
     try picture.labelAtBaseline(0, .{ .width = metrics.width, .height = metrics.height, .baseline = metrics.baseline }, .{ .x = 20, .y = 170 }, .{});
     var document = try huak.backend.submit(t.allocator, &library, &picture, 300, 190, .{ .frames = &frames });

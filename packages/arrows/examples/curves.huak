@@ -1,0 +1,34 @@
+// Arrows on curves, as figures draw them: heads that bend with their line,
+// a circular arrow, marks partway along a loop, combined ends, a dashed line,
+// a broad nib, and translucent and graded paint.
+import paint.{rgb, picture, append}
+import geometry.{arc, bezier, circle}
+import pen.makepen
+import "../arrows.huak" as arrows
+
+orange := rgb(0.92, 0.40, 0.19)
+blue := rgb(0.17, 0.46, 0.85)
+ink := rgb(0.15, 0.15, 0.15)
+notched := arrows.stealth.with(length: 7pt, width: 5.25pt, inset: 0.28)
+
+export pic := picture()
+// Cubic arrows leaving horizontally, with notched heads.
+for k in 0:2 do
+    x := k*70pt
+    append(pic, arrows.line(bezier((x, 0pt), (x+30pt, 0pt), (x+40pt, 20pt), (x+60pt, 30pt)), pen(orange, 1.3pt), tip: notched))
+    append(pic, arrows.line(bezier((x, 0pt), (x+30pt, 0pt), (x+40pt, -20pt), (x+60pt, -30pt)), pen(blue, 1.3pt), tip: notched))
+end
+// A circular arrow, and a loop with its direction marked along it.
+append(pic, arrows.line(arc((20pt, -80pt), 14pt, 35deg, 290deg), pen(orange, 2.2pt), tip: arrows.triangle.with(length: 6.5pt, width: 5.85pt)))
+append(pic, arrows.line(circle((80pt, -80pt), 16pt), pen(blue, 1pt), marks: [arrows.along(arrows.stealth, 0.25), arrows.along(arrows.stealth, 0.75)]))
+// Combined ends, a dashed line, and a broad nib whose marks take its width.
+append(pic, arrows.line((130pt, -60pt) -- (200pt, -60pt), pen(ink, 1pt), tip: arrows.combine(arrows.stealth, arrows.stealth), toe: arrows.bar))
+append(pic, arrows.line((130pt, -75pt) -- (200pt, -75pt), pen(ink, 1pt), tip: arrows.combine(arrows.bar, arrows.straight), toe: arrows.disk.with(fill: false)))
+append(pic, arrows.line(bezier((130pt, -90pt), (150pt, -105pt), (180pt, -75pt), (200pt, -90pt)), pen(ink, 1pt, "butt", "miter", 4, [3pt, 2pt]), tip: arrows.tikz, toe: arrows.hooks.with(rev: true)))
+broad := pen(blue, nib: makepen((-0.3pt, -0.8pt) -- (0.3pt, -0.8pt) -- (0.3pt, 0.8pt) -- (-0.3pt, 0.8pt) -- cycle))
+append(pic, arrows.line(bezier((130pt, -115pt), (150pt, -125pt), (180pt, -100pt), (200pt, -112pt)), broad, tip: arrows.stealth, toe: arrows.stealth))
+// Translucent and graded paint: shaft and heads are one path, painted once.
+append(pic, arrows.line((130pt, -132pt) -- (200pt, -132pt), pen(rgb(0.17, 0.46, 0.85, 0.5), 3pt), tip: arrows.stealth, toe: arrows.stealth))
+shade := gradient.linear((130pt, 0pt), (200pt, 0pt), [orange, blue])
+append(pic, arrows.line(bezier((130pt, -150pt), (150pt, -160pt), (180pt, -140pt), (200pt, -150pt)), pen(shade, 2pt), tip: arrows.stealth, marks: [arrows.along(arrows.disk)]))
+default pic

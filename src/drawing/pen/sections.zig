@@ -24,12 +24,12 @@ const Run = struct { first: usize, end: usize, closed: bool };
 /// Inputs stay borrowed. Real dash/path endpoints retain their original cap;
 /// artificial cuts are butt boundaries. Original joins belong to both adjacent
 /// closed ranges. Union coverage before clipping the original stroke once.
-pub fn extract(allocator: Allocator, source: Path, paint: DisplayList.Pen, ranges: []const Range, options: outline.Options) ![]Path {
-    try DisplayList.validateStyle(&.{ .pen = paint });
-    if (paint.motion != null) return error.UnsupportedMotionSections;
+pub fn extract(allocator: Allocator, source: Path, pen: DisplayList.Pen, ranges: []const Range, options: outline.Options) ![]Path {
+    try DisplayList.validateStyle(&.{ .pen = pen });
+    if (pen.motion != null) return error.UnsupportedMotionSections;
     if (ranges.len > options.max_segments or source.segments.items.len > options.max_segments *| 2 +| 1) return error.StrokeWorkLimit;
     {
-        const contours = try source.contourRanges(allocator);
+        const contours = try Path.contours.contourRanges(source, allocator);
         defer allocator.free(contours);
         for (ranges) |range| {
             if (range.contour >= contours.len or !std.math.isFinite(range.begin) or !std.math.isFinite(range.end)) return error.InvalidSection;
@@ -38,12 +38,12 @@ pub fn extract(allocator: Allocator, source: Path, paint: DisplayList.Pen, range
         }
     }
     var settings = options;
-    settings.cap = paint.cap;
-    settings.join = paint.join;
-    settings.miter_limit = paint.miter_limit;
+    settings.cap = pen.cap;
+    settings.join = pen.join;
+    settings.miter_limit = pen.miter_limit;
     try outline.validateOptions(settings);
     if (ranges.len == 0) return allocator.alloc(Path, 0);
-    if (paint.color.a == 0) {
+    if (!pen.paint.hasInk()) {
         const result = try allocator.alloc(Path, ranges.len);
         for (result) |*path| path.* = Path.init(allocator);
         return result;
@@ -52,9 +52,9 @@ pub fn extract(allocator: Allocator, source: Path, paint: DisplayList.Pen, range
     defer pieces.deinit(allocator);
     var runs: std.ArrayList(Run) = .empty;
     defer runs.deinit(allocator);
-    const nib = paint.nib orelse @import("nib.zig").Nib{ .ellipse = g.Transform.scaling(paint.width, paint.width) };
+    const nib = pen.nib orelse @import("nib.zig").Nib{ .ellipse = g.Transform.scaling(pen.width, pen.width) };
     const vertices = prepared: {
-        var dashed = try dash.mapped(allocator, source, paint.dash, paint.dash_phase, settings);
+        var dashed = try dash.mapped(allocator, source, pen.dash, pen.dash_phase, settings);
         defer dashed.deinit();
         const vertices = try outline.nibVertices(allocator, nib, dashed.path, settings);
         errdefer if (nib == .ellipse) allocator.free(vertices);
@@ -148,8 +148,8 @@ pub fn extract(allocator: Allocator, source: Path, paint: DisplayList.Pen, range
                     // Do not silently invent one for a join-only selection.
                     if ((before != null and prep.stationary(from.curve)) or (after != null and prep.stationary(to.curve))) return error.InvalidSection;
                     builder.ends = .{
-                        .start = if (first == 0 and original_start and !run.closed) paint.cap else .butt,
-                        .end = if (finish == input.len and original_end and !run.closed) paint.cap else .butt,
+                        .start = if (first == 0 and original_start and !run.closed) pen.cap else .butt,
+                        .end = if (finish == input.len and original_end and !run.closed) pen.cap else .butt,
                     };
                     try builder.subpath(selected.items, selected.items[0].curve.p0, false);
                     if (before) |piece| try addJoin(allocator, &builder.result, vertices, piece, from, settings);
@@ -220,322 +220,8 @@ fn neighbor(pieces: []const prep.Piece, index: usize, forward: bool, closed: boo
     return null;
 }
 
-test "source stroke sections retain real caps and do not cap artificial boundaries" {
-    const t = std.testing;
-    var source = Path.init(t.allocator);
-    defer source.deinit();
-    try source.moveTo(.zero);
-    try source.lineTo(.{ .x = 10, .y = 0 });
-    const result = try extract(t.allocator, source, .{ .width = 2, .cap = .round }, &.{ .{ .contour = 0, .begin = 0, .end = 0.5 }, .{ .contour = 0, .begin = 0.5, .end = 1 } }, .{});
-    defer {
-        for (result) |*path| path.deinit();
-        t.allocator.free(result);
-    }
-    try t.expectApproxEqAbs(@as(f64, -1), result[0].bounds().?.min.x, 1e-3);
-    try t.expectApproxEqAbs(@as(f64, 5), result[0].bounds().?.max.x, 1e-9);
-    try t.expectApproxEqAbs(@as(f64, 5), result[1].bounds().?.min.x, 1e-9);
-    try t.expectApproxEqAbs(@as(f64, 11), result[1].bounds().?.max.x, 1e-3);
-}
-
-fn checkPartition(allocator: Allocator, source: Path, paint: DisplayList.Pen, ranges: []const Range, whole: Range) !void {
-    const options: outline.Options = .{ .tolerance = 1e-4 };
-    const pieces = try extract(allocator, source, paint, ranges, options);
-    defer {
-        for (pieces) |*path| path.deinit();
-        allocator.free(pieces);
-    }
-    const full = try extract(allocator, source, paint, &.{whole}, options);
-    defer {
-        full[0].deinit();
-        allocator.free(full);
-    }
-    var settings = options;
-    settings.cap = paint.cap;
-    settings.join = paint.join;
-    settings.miter_limit = paint.miter_limit;
-    var original_dash = try dash.dashed(allocator, source, paint.dash, paint.dash_phase, settings);
-    defer original_dash.deinit();
-    const nib = paint.nib orelse @import("nib.zig").Nib{ .ellipse = g.Transform.scaling(paint.width, paint.width) };
-    var native_tracing = try outline.strokeOutline(allocator, nib, original_dash, settings);
-    defer native_tracing.deinit();
-    var native = try region.combine(allocator, native_tracing, Path.init(allocator), .unite, .{ .tolerance = options.tolerance });
-    defer native.deinit();
-    var native_difference = try region.combine(allocator, native, full[0], .xor, .{ .tolerance = 1e-6 });
-    defer native_difference.deinit();
-    try std.testing.expect(@abs(native_difference.signedArea()) < 1e-5);
-    var combined = Path.init(allocator);
-    defer combined.deinit();
-    for (pieces) |path| {
-        const united = try region.combine(allocator, combined, path, .unite, .{ .tolerance = 1e-6 });
-        combined.deinit();
-        combined = united;
-    }
-    var missing = try region.combine(allocator, full[0], combined, .xor, .{ .tolerance = 1e-6 });
-    defer missing.deinit();
-    if (@abs(missing.signedArea()) >= 1e-5) {
-        std.debug.print("section partition: cap={s}, join={s}, dash={any}, full={d}, combined={d}, xor={d}\n", .{ @tagName(paint.cap), @tagName(paint.join), paint.dash, full[0].signedArea(), combined.signedArea(), missing.signedArea() });
-        var left = try region.combine(allocator, full[0], combined, .difference, .{ .tolerance = 1e-6 });
-        defer left.deinit();
-        var right = try region.combine(allocator, combined, full[0], .difference, .{ .tolerance = 1e-6 });
-        defer right.deinit();
-        std.debug.print("missing={d} {any}; extra={d} {any}\n", .{ left.signedArea(), left.segments.items, right.signedArea(), right.segments.items });
-    }
-    try std.testing.expect(@abs(missing.signedArea()) < 1e-5);
-}
-
-test "source sections partition original joins dash phases and closed seams" {
-    const t = std.testing;
-    var source = Path.init(t.allocator);
-    defer source.deinit();
-    try source.moveTo(.zero);
-    try source.lineTo(.{ .x = 10, .y = 0 });
-    try source.lineTo(.{ .x = 10, .y = 10 });
-    const ranges = [_]Range{ .{ .contour = 0, .begin = 0, .end = 1 }, .{ .contour = 0, .begin = 1, .end = 2 } };
-    inline for (.{ DisplayList.Join.miter, .round, .bevel }) |join| {
-        try checkPartition(t.allocator, source, .{ .width = 2, .cap = .square, .join = join }, &ranges, .{ .contour = 0, .begin = 0, .end = 2 });
-        try checkPartition(t.allocator, source, .{ .width = 2, .cap = .round, .join = join, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &ranges, .{ .contour = 0, .begin = 0, .end = 2 });
-    }
-    try source.lineTo(.{ .x = 0, .y = 10 });
-    try source.close();
-    const seam = [_]Range{ .{ .contour = 0, .begin = 0, .end = 2 }, .{ .contour = 0, .begin = 2, .end = 4 } };
-    try checkPartition(t.allocator, source, .{ .nib = .{ .polygon = &.{ .{ .x = -1, .y = -0.5 }, .{ .x = 1, .y = -0.5 }, .{ .x = 1, .y = 0.5 }, .{ .x = -1, .y = 0.5 } } }, .join = .miter }, &seam, .{ .contour = 0, .begin = 0, .end = 4 });
-    try checkPartition(t.allocator, source, .{ .width = 2, .cap = .round, .dash = &.{ 15, 10 } }, &seam, .{ .contour = 0, .begin = 0, .end = 4 });
-    var curve = Path.init(t.allocator);
-    defer curve.deinit();
-    try curve.moveTo(.zero);
-    try curve.cubicTo(.{ .x = 0, .y = 10 }, .{ .x = 10, .y = 10 }, .{ .x = 10, .y = 0 });
-    try checkPartition(t.allocator, curve, .{ .nib = @import("nib.zig").Nib.square(), .cap = .round, .dash = &.{ 3, 2 }, .dash_phase = 0.7 }, &.{ .{ .contour = 0, .begin = 0, .end = 0.37 }, .{ .contour = 0, .begin = 0.37, .end = 1 } }, .{ .contour = 0, .begin = 0, .end = 1 });
-}
-
-test "source section phase true dash caps and contour identities stay on the original path" {
-    const t = std.testing;
-    var source = Path.init(t.allocator);
-    defer source.deinit();
-    try source.moveTo(.zero);
-    try source.lineTo(.{ .x = 20, .y = 0 });
-    try source.moveTo(.{ .x = 100, .y = 0 });
-    try source.lineTo(.{ .x = 120, .y = 0 });
-    const output = try extract(t.allocator, source, .{ .width = 2, .cap = .round, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &.{ .{ .contour = 0, .begin = 0.5, .end = 1 }, .{ .contour = 1, .begin = 1, .end = 1.5 } }, .{});
-    defer {
-        for (output) |*path| path.deinit();
-        t.allocator.free(output);
-    }
-    try t.expectApproxEqAbs(@as(f64, 10), output[0].bounds().?.min.x, 1e-9);
-    try t.expectApproxEqAbs(@as(f64, 21), output[0].bounds().?.max.x, 1e-3);
-    try t.expectApproxEqAbs(@as(f64, 99), output[1].bounds().?.min.x, 1e-3);
-    try t.expectApproxEqAbs(@as(f64, 110), output[1].bounds().?.max.x, 1e-9);
-    try t.expectError(error.InvalidSection, extract(t.allocator, source, .{}, &.{.{ .contour = 1, .begin = 0, .end = 1 }}, .{}));
-    try t.expectError(error.InvalidSection, extract(t.allocator, source, .{}, &.{.{ .contour = 0, .begin = 0.5, .end = 0.5 }}, .{}));
-}
-
-test "source closed cubic circle halves retain the full round stroke" {
-    const t = std.testing;
-    var source = try Path.circle(t.allocator, .{ .x = 40, .y = 50 }, 25);
-    defer source.deinit();
-    const paint: DisplayList.Pen = .{ .width = 6, .cap = .round, .join = .round };
-    const settings: outline.Options = .{ .tolerance = 0.001, .cap = .round, .join = .round };
-    var original = try outline.strokeOutline(t.allocator, .{ .ellipse = .scaling(6, 6) }, source, settings);
-    defer original.deinit();
-    var whole = try region.combine(t.allocator, original, Path.init(t.allocator), .unite, .{ .tolerance = 0.001 });
-    defer whole.deinit();
-    const winding = @import("../region/pathops/winding.zig");
-    for (0..34) |x| for (0..34) |y| {
-        const point: g.Point = .{ .x = 8.37 + 2 * @as(f64, @floatFromInt(x)), .y = 18.59 + 2 * @as(f64, @floatFromInt(y)) };
-        try t.expectEqual(try winding.windingAt(original, point) != 0, try winding.windingAt(whole, point) != 0);
-    };
-    const result = try extract(t.allocator, source, paint, &.{ .{ .contour = 0, .begin = 0, .end = 2 }, .{ .contour = 0, .begin = 2, .end = 4 } }, settings);
-    defer {
-        for (result) |*path| path.deinit();
-        t.allocator.free(result);
-    }
-    for (0..34) |x| for (0..34) |y| {
-        const point: g.Point = .{ .x = 8.37 + 2 * @as(f64, @floatFromInt(x)), .y = 18.59 + 2 * @as(f64, @floatFromInt(y)) };
-        const covered = try winding.windingAt(result[0], point) != 0 or try winding.windingAt(result[1], point) != 0;
-        try t.expectEqual(try winding.windingAt(original, point) != 0, covered);
-    };
-    var joined = Path.init(t.allocator);
-    defer joined.deinit();
-    for (result) |path| {
-        const united = try region.combine(t.allocator, joined, path, .unite, .{ .tolerance = 0.001 });
-        joined.deinit();
-        joined = united;
-    }
-    var difference = try region.combine(t.allocator, whole, joined, .xor, .{ .tolerance = 0.001 });
-    defer difference.deinit();
-    if (@abs(difference.signedArea()) >= 1e-5) std.debug.print("circle native={d}, united={d}, xor={d}, bounds={any}\n", .{ whole.signedArea(), joined.signedArea(), difference.signedArea(), difference.bounds() });
-    try t.expect(@abs(difference.signedArea()) < 1e-5);
-}
-
-test "source circle raw nonzero tracing agrees with its canonical region" {
-    const t = std.testing;
-    var source = try Path.circle(t.allocator, .{ .x = 40, .y = 50 }, 25);
-    defer source.deinit();
-    var original = try outline.strokeOutline(t.allocator, .{ .ellipse = .scaling(6, 6) }, source, .{ .tolerance = 0.001, .cap = .round, .join = .round });
-    defer original.deinit();
-    var canonical = try region.combine(t.allocator, original, Path.init(t.allocator), .unite, .{ .tolerance = 0.001 });
-    defer canonical.deinit();
-    var difference = try region.combine(t.allocator, original, canonical, .xor, .{ .tolerance = 0.001 });
-    defer difference.deinit();
-    try t.expect(@abs(difference.signedArea()) < 1e-5);
-}
-
-test "source section offset retains a long inactive boundary" {
-    const t = std.testing;
-    var source = try Path.circle(t.allocator, .{ .x = 40, .y = 50 }, 25);
-    defer source.deinit();
-    const result = try extract(t.allocator, source, .{ .width = 6, .cap = .round, .join = .round }, &.{.{ .contour = 0, .begin = 0, .end = 2 }}, .{ .tolerance = 0.001 });
-    defer {
-        result[0].deinit();
-        t.allocator.free(result);
-    }
-    // The normalized offset band has more than a thousand consecutive
-    // inactive spans. Its union must finish the chase rather than stop at an
-    // input-independent traversal limit.
-    var expanded = try region.offset(t.allocator, result[0], 2, .{ .tolerance = 0.001, .join = .round });
-    defer expanded.deinit();
-    try t.expect(!expanded.open);
-    const winding = @import("../region/pathops/winding.zig");
-    try t.expect(try winding.windingAt(expanded, .{ .x = 40, .y = 79 }) != 0);
-    try t.expectEqual(@as(i32, 0), try winding.windingAt(expanded, .{ .x = 40, .y = 81 }));
-    try t.expectEqual(@as(i32, 0), try winding.windingAt(expanded, .{ .x = 40, .y = 50 }));
-}
-
-fn allocationCase(allocator: Allocator) !void {
-    var source = Path.init(std.testing.allocator);
-    defer source.deinit();
-    try source.moveTo(.zero);
-    try source.lineTo(.{ .x = 10, .y = 0 });
-    try source.lineTo(.{ .x = 10, .y = 10 });
-    const result = try extract(allocator, source, .{ .nib = @import("nib.zig").Nib.square(), .cap = .round, .join = .bevel, .dash = &.{ 3, 2 }, .dash_phase = 1 }, &.{ .{ .contour = 0, .begin = 0, .end = 1 }, .{ .contour = 0, .begin = 1, .end = 2 } }, .{});
-    defer {
-        for (result) |*path| path.deinit();
-        allocator.free(result);
-    }
-    try std.testing.expect(result[0].segments.items.len != 0 and result[1].segments.items.len != 0);
-}
-
-test "source section coverage releases working data and partial results at every allocation failure" {
-    try allocationCase(std.testing.allocator);
-    var moving = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
-    try std.testing.checkAllAllocationFailures(moving.allocator(), allocationCase, .{});
-    // The coverage owns its geometry and outlives the source.
-    var source = Path.init(std.testing.allocator);
-    try source.moveTo(.zero);
-    try source.lineTo(.{ .x = 10, .y = 0 });
-    const results = try extract(std.testing.allocator, source, .{ .width = 2, .cap = .square }, &.{.{ .contour = 0, .begin = 0, .end = 1 }}, .{});
-    defer std.testing.allocator.free(results);
-    var retained = results[0];
-    source.deinit();
-    defer retained.deinit();
-    try std.testing.expectApproxEqAbs(@as(f64, 24), retained.signedArea(), 1e-5);
-}
-
-test "source sections preserve actual millimetre trefoil stroke coverage" {
-    const t = std.testing;
-    var arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const mm = 72.0 / 25.4;
-    const tolerance = 0.001;
-    const root3 = @sqrt(@as(f64, 3));
-    const first: g.Point = .{ .x = 60, .y = 90 };
-    const second: g.Point = .{ .x = 60 - root3 * 20, .y = 30 };
-    const third: g.Point = .{ .x = 60 + root3 * 20, .y = 30 };
-    var source = Path.init(a);
-    try source.moveTo(first.scale(mm));
-    try source.cubicTo(first.add(.{ .x = 44, .y = 0 }).scale(mm), second.add(.{ .x = 22, .y = -root3 * 22 }).scale(mm), second.scale(mm));
-    try source.cubicTo(second.add(.{ .x = -22, .y = root3 * 22 }).scale(mm), third.add(.{ .x = 22, .y = root3 * 22 }).scale(mm), third.scale(mm));
-    try source.cubicTo(third.add(.{ .x = -22, .y = -root3 * 22 }).scale(mm), first.add(.{ .x = -44, .y = 0 }).scale(mm), first.scale(mm));
-    try source.close();
-    const hits = try @import("../path/crossings.zig").find(a, &.{source}, .{ .tolerance = tolerance });
-    try t.expectEqual(@as(usize, 3), hits.len);
-    var visits: [6]f64 = undefined;
-    for (hits, 0..) |hit, i| {
-        visits[2 * i] = hit.first.time;
-        visits[2 * i + 1] = hit.second.time;
-    }
-    std.mem.sort(f64, &visits, {}, std.sort.asc(f64));
-    var cuts: [7]f64 = undefined;
-    cuts[0] = 0;
-    cuts[6] = 3;
-    for (0..5) |i| {
-        const middle = (visits[i] + visits[i + 1]) / 2;
-        const node = @floor(middle) + @as(f64, if (middle - @floor(middle) > 0.5) 1 else 0);
-        cuts[i + 1] = if (visits[i] < node and node < visits[i + 1]) node else middle;
-    }
-    var ranges: [6]Range = undefined;
-    for (&ranges, 0..) |*range, i| range.* = .{ .contour = 0, .begin = cuts[i], .end = cuts[i + 1] };
-    const paint: DisplayList.Pen = .{ .width = 3 * mm, .cap = .round, .join = .round };
-    const raw = try outline.strokeOutline(a, .{ .ellipse = g.Transform.scaling(paint.width, paint.width) }, source, .{ .tolerance = tolerance, .cap = .round, .join = .round });
-    const full = try region.combine(a, raw, Path.init(a), .unite, .{ .tolerance = tolerance });
-    const parts = try extract(a, source, paint, &ranges, .{ .tolerance = tolerance });
-    var combined = Path.init(a);
-    for (parts) |part| combined = try region.combine(a, combined, part, .unite, .{ .tolerance = tolerance });
-    // This oracle only uses bounded path subdivision and half-open line rays;
-    // it does not call the Boolean kernel's curve roots or face windings.
-    const Probe = struct {
-        fn flat(allocator: Allocator, path: Path) !Path {
-            return @import("../path/flatten.zig").flatten(allocator, path, .{ .tolerance = 1e-5, .length_tolerance = 1e-5, .max_segments = 1048576, .max_depth = 32 });
-        }
-        fn inside(path: Path, p: g.Point, margin: f64) ?bool {
-            var winding: i32 = 0;
-            var current = g.Point.zero;
-            var start = g.Point.zero;
-            for (path.segments.items) |segment| {
-                const end = switch (segment) {
-                    .move => |point| {
-                        current = point;
-                        start = point;
-                        continue;
-                    },
-                    .line => |point| point,
-                    .close => start,
-                    .cubic => unreachable,
-                };
-                const delta = end.sub(current);
-                const relative = p.sub(current);
-                if (margin > 0) {
-                    const length = delta.dot(delta);
-                    const along = if (length > 0) std.math.clamp(relative.dot(delta) / length, 0, 1) else 0;
-                    const distance = relative.sub(delta.scale(along));
-                    if (distance.dot(distance) < margin * margin) return null;
-                }
-                if (current.y <= p.y and end.y > p.y and delta.cross(relative) > 0) winding += 1;
-                if (current.y > p.y and end.y <= p.y and delta.cross(relative) < 0) winding -= 1;
-                current = end;
-            }
-            return winding != 0;
-        }
-    };
-    const raw_flat = try Probe.flat(a, raw);
-    const full_flat = try Probe.flat(a, full);
-    const union_flat = try Probe.flat(a, combined);
-    var part_flats: [6]Path = undefined;
-    for (parts, &part_flats) |part, *flat| flat.* = try Probe.flat(a, part);
-    var checked: usize = 0;
-    for (0..61) |x| for (0..59) |y| {
-        const p: g.Point = .{ .x = (2 * @as(f64, @floatFromInt(x)) + 0.123) * mm, .y = (2 * @as(f64, @floatFromInt(y)) + 0.217) * mm };
-        const expected = Probe.inside(raw_flat, p, 2 * tolerance) orelse continue;
-        checked += 1;
-        try t.expectEqual(expected, Probe.inside(full_flat, p, 0).?);
-        try t.expectEqual(expected, Probe.inside(union_flat, p, 0).?);
-        var covered = false;
-        for (part_flats) |part| {
-            const inside = Probe.inside(part, p, 0).?;
-            try t.expect(expected or !inside);
-            covered = covered or inside;
-        }
-        try t.expectEqual(expected, covered);
-    };
-    try t.expect(checked > 3500);
-    for (0..900) |i| {
-        const position = try source.curveAt((@as(f64, @floatFromInt(i)) + 0.371) / 300);
-        const center = position.curve.at(position.t);
-        const tangent = try position.curve.derivative(position.t).normalized();
-        for ([_]f64{ -0.45, -0.2, 0, 0.2, 0.45 }) |offset| {
-            const p = center.add((g.Point{ .x = -tangent.y, .y = tangent.x }).scale(offset * paint.width));
-            try t.expect(Probe.inside(raw_flat, p, 0).?);
-            try t.expect(Probe.inside(union_flat, p, 0).?);
-        }
-    }
+test {
+    _ = @import("sections/ranges_test.zig");
+    _ = @import("sections/partition_test.zig");
+    _ = @import("sections/trefoil_test.zig");
 }

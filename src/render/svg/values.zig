@@ -20,7 +20,7 @@ pub fn degrees(value: f64) !f64 {
 }
 
 pub fn channel(value: f64) u8 {
-    return @intFromFloat(@round(value * 255));
+    return @intFromFloat(DisplayList.Color.level(value));
 }
 
 pub fn color(out: *std.Io.Writer, value: DisplayList.Color) !void {

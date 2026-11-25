@@ -1,5 +1,6 @@
 import "../plot.huak".*
-import "../plot/render.huak" as renderer
+import "../plot/panels.huak" as stage
+import "../plot/placement.huak" as placement
 import "../plot/scales.huak" as scales
 import assertions.assert
 import color.rgb
@@ -27,12 +28,12 @@ plotting b do
     +scatter x [10, 1000] y [-1, -2]
 end
 link_x of f axes [a, b]
-panels := renderer.prepare(f)
+panels := stage.prepare(f)
 p := panels[0]
 assert(p.y.high < 0 and p.rulers_by_side["right"].scale.high > 220)
 assert(p.rulers_by_side["top"].scale.high == panels[1].x.high)
 assert(p.rulers_by_side["top"].scale.kind == "log10")
-renderer.layout(f, panels)
+placement.layout(f, panels)
 assert(len(p.rulers_by_side["bottom"].ticks) == 4 and len(p.rulers_by_side["top"].ticks) == 2)
 assert(len(panels[1].xt) == 4)
 assert(p.rulers_by_side["right"].scale.reversed)
@@ -47,7 +48,7 @@ plotting c do
     +bar categories ["A"] values [100] on_axes x "bottom" y "right" styled {"stack": "total"}
     +bar categories ["A"] values [3] styled {"stack": "total"}
 end
-primitives := renderer.prepare(bars)[0].layers
+primitives := stage.prepare(bars)[0].layers
 assert(primitives[0].data["y1"][0] == 2)
 assert(primitives[1].y[0] == 0 and primitives[1].data["y1"][0] == 100)
 assert(primitives[2].y[0] == 2 and primitives[2].data["y1"][0] == 5)

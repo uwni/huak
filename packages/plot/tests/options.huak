@@ -5,7 +5,8 @@ import math.abs
 import color.rgb
 import object.bounds
 import "../plot.huak".*
-import "../plot/render.huak" as renderer
+import "../plot/panels.huak" as stage
+import "../plot/placement.huak" as placement
 
 BARE := {"xticks": [], "yticks": [], "labels_visible": false, "ticks_visible": false, "grid": false, "spines": [], "xlim": [0, 1], "ylim": [0, 1]}
 
@@ -66,8 +67,8 @@ fn panel(options:dict) -> any
         settings BARE
         +lines x [0, 1] y [0, 1]
     end
-    panels := renderer.prepare(fig)
-    renderer.layout(fig, panels)
+    panels := stage.prepare(fig)
+    placement.layout(fig, panels)
     return panels[0]
 end
 flush := panel({})
@@ -99,8 +100,8 @@ fn titled(align:string) -> list
         title typ[Panel title]
         settings {"title_align": align}
     end
-    panels := renderer.prepare(fig)
-    renderer.layout(fig, panels)
+    panels := stage.prepare(fig)
+    placement.layout(fig, panels)
     area := panels[0]
     return [bounds(render fig), area.origin.x, area.origin.x+area.size.x]
 end
@@ -128,8 +129,8 @@ fn ticks(figure_options:dict, axis_options:dict, bottom:dict) -> list
         +heatmap [[1, 2], [3, 4]]
         colorbar "right"
     end
-    panels := renderer.prepare(fig)
-    renderer.layout(fig, panels)
+    panels := stage.prepare(fig)
+    placement.layout(fig, panels)
     found := panels[0]
     return [found.rulers_by_side["bottom"].bodies[1].width, found.rulers_by_side["left"].bodies[1].width, found.color_labels[0].width]
 end

@@ -4,8 +4,7 @@ const std = @import("std");
 const ast = @import("../language/ast.zig");
 const locations = @import("position.zig");
 
-pub const Location = struct { uri: []const u8, range: locations.Range };
-pub const LabelPart = struct { value: []const u8, location: Location };
+pub const LabelPart = struct { value: []const u8, location: locations.Location };
 pub const Hint = struct {
     position: locations.Position,
     label: []const LabelPart,

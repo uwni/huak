@@ -44,10 +44,18 @@ pub const Functions = blk: {
     break :blk @Struct(.auto, null, &names, &types, &attrs);
 };
 
+/// An ABI version as the C API packs it: the major version in the high
+/// sixteen bits, the minor in the low.
+pub fn packVersion(major: u32, minor: u32) u32 {
+    return major << 16 | minor;
+}
+/// Whether a library of ABI `version` serves this host: the same major
+/// version, and a minor one no older than the host was built against.
+pub fn compatibleVersion(version: u32) bool {
+    return version >> 16 == abi_version >> 16 and version & 0xffff >= abi_version & 0xffff;
+}
 pub fn compatible(version: u32, capabilities: u64) bool {
-    return (version >> 16) == (abi_version >> 16) and
-        (version & 0xffff) >= (abi_version & 0xffff) and
-        (capabilities & required_capabilities) == required_capabilities;
+    return compatibleVersion(version) and capabilities & required_capabilities == required_capabilities;
 }
 
 pub fn load(dynamic: *std.DynLib) Error!Functions {
@@ -58,10 +66,10 @@ pub fn load(dynamic: *std.DynLib) Error!Functions {
 pub fn bind(dynamic: anytype, info: *c.TypstVersionInfo) Error!Functions {
     const version_function = dynamic.lookup(*const @TypeOf(c.typst_abi_version), "typst_abi_version") orelse return error.MissingSymbol;
     const version = version_function();
-    if ((version >> 16) != (abi_version >> 16) or (version & 0xffff) < (abi_version & 0xffff)) return error.IncompatibleAbi;
+    if (!compatibleVersion(version)) return error.IncompatibleAbi;
     const information = dynamic.lookup(*const @TypeOf(c.typst_version_info), "typst_version_info") orelse return error.MissingSymbol;
     if (information(info) != c.TYPST_OK or !compatible(version, info.capabilities) or
-        info.abi_major != (version >> 16) or info.abi_minor != (version & 0xffff)) return error.IncompatibleAbi;
+        packVersion(info.abi_major, info.abi_minor) != version) return error.IncompatibleAbi;
     var functions: Functions = undefined;
     inline for (@typeInfo(Functions).@"struct".field_names) |name| {
         @field(functions, name) = dynamic.lookup(@FieldType(Functions, name), "typst_" ++ name) orelse return error.MissingSymbol;

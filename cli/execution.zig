@@ -15,7 +15,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, backends: language.Runt
     const selected = try scratch.alloc(*const language.bytecode.Output, options.outputs.len);
     for (options.outputs, selected) |requested, *selection| {
         const output = program.outputNamed(requested.name) orelse {
-            if (std.mem.eql(u8, requested.name, "default")) {
+            if (std.mem.eql(u8, requested.name, language.bytecode.Output.default_name)) {
                 return report.fail("{s}: no default output; declare 'default <picture>' or select --output NAME=FILE", .{path});
             } else {
                 return report.fail("{s}: output '{s}' is not defined", .{ path, requested.name });

@@ -62,7 +62,7 @@ The evidence supports avoiding a corner as the construction cut when its
 miter/bevel choice should be retained. It does **not** support always adding
 a subdivision, nor does it establish pixel compatibility with original
 MetaPost output. The corrected production engine now prefers an existing
-smooth knot; the formal regression in `tests/pens/envelope.zig` checks exact
+smooth knot; the formal regression in `tests/pens/precision.zig` checks exact
 normalized primitives and coverage for the large-origin case. The precision
 probe reports zero control-coordinate and sampled displacement after that
 correction; original before-fix artifacts are retained separately.

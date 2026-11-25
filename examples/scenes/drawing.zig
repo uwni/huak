@@ -83,7 +83,7 @@ pub fn build(allocator: std.mem.Allocator, measured: []const typst.Metrics, delt
     errdefer picture.deinit();
     var canvas = try rectangle(allocator, .{ .x = 0, .y = 0 }, width, height);
     defer canvas.deinit();
-    try picture.fill(canvas, .{ .r = 0.98, .g = 0.985, .b = 1 }, .{});
+    try picture.fill(canvas, .{ .color = .{ .r = 0.98, .g = 0.985, .b = 1 } }, .{});
     try picture.labelAtBaseline(3, metrics(measured[3]), .{ .x = 32, .y = 294 }, .{});
     try picture.labelAtBaseline(5, metrics(measured[5]), .{ .x = 32, .y = 267 }, .{});
     const nodes = try layoutNodes(allocator, measured, delta);
@@ -109,9 +109,9 @@ pub fn build(allocator: std.mem.Allocator, measured: []const typst.Metrics, delt
     var orbit = try Path.fromCubics(allocator, orbit_curves, true);
     defer orbit.deinit();
     const orbit_ref = picture.commands.items.len;
-    try picture.filldraw(orbit, .{ .r = 0.55, .g = 0.72, .b = 0.95, .a = 0.18 }, .{ .color = .{ .r = 0.55, .g = 0.72, .b = 0.95, .a = 0.4 }, .width = 1 }, .{});
+    try picture.filldraw(orbit, .{ .color = .{ .r = 0.55, .g = 0.72, .b = 0.95, .a = 0.18 } }, .{ .paint = .{ .color = .{ .r = 0.55, .g = 0.72, .b = 0.95, .a = 0.4 } }, .width = 1 }, .{});
     const curve_ref = picture.commands.items.len;
-    try picture.draw(curve, .{ .color = blue, .width = 2.5, .cap = .round, .join = .round }, .{});
+    try picture.draw(curve, .{ .paint = .{ .color = blue }, .width = 2.5, .cap = .round, .join = .round }, .{});
     try picture.endScope();
     const caption_ref = picture.commands.items.len;
     try picture.labelAlong(4, metrics(measured[4]), curves[0].at(0.38), curves[0].derivative(0.38), 11);
@@ -123,7 +123,7 @@ pub fn build(allocator: std.mem.Allocator, measured: []const typst.Metrics, delt
         var box = try rectangle(allocator, .{ .x = node.x - m.width / 2 - 9, .y = node.y - (m.height - m.baseline) - 8 }, m.width + 18, m.height + 16);
         defer box.deinit();
         box_refs[index] = picture.commands.items.len;
-        try picture.filldraw(box, .{ .r = 1, .g = 1, .b = 1, .a = 0.96 }, .{ .color = ink, .width = 0.8 }, .{});
+        try picture.filldraw(box, .{ .color = .{ .r = 1, .g = 1, .b = 1, .a = 0.96 } }, .{ .paint = .{ .color = ink }, .width = 0.8 }, .{});
         label_refs[index] = picture.commands.items.len;
         try picture.labelAtBaseline(@intCast(index), metrics(m), .{ .x = node.x - m.width / 2, .y = node.y }, .{});
     }

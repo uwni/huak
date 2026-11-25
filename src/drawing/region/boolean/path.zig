@@ -76,7 +76,9 @@ fn reduceNodes(nodes: *std.ArrayList(Node)) void {
         const second = nodes.items[next];
         if (!noHandles(first, second)) continue;
         const delta = second.point.sub(first.point);
-        const short = @sqrt(delta.x * delta.x + delta.y * delta.y) <= 1e-7;
+        // Path.reduce({ simplify: true }) keeps a curve without handles only
+        // when it is longer than GEOMETRIC_EPSILON.
+        const short = @sqrt(delta.x * delta.x + delta.y * delta.y) <= numeric.GEOMETRIC_EPSILON;
         const after = (next + 1) % nodes.items.len;
         const first_values = values(first, second);
         const second_values = values(second, nodes.items[after]);

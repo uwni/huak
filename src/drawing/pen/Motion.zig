@@ -12,7 +12,7 @@ pub const Track = struct { kind: Kind, first: usize, len: usize, polynomial: boo
 pub const Key = struct { t: f64, value: f64 };
 tracks: []const Track,
 keys: []const Key,
-tolerance: f64 = 0.001,
+tolerance: f64 = g.curve_tolerance,
 corner: Corner = .strict,
 
 pub fn validate(self: *const Motion) !void {

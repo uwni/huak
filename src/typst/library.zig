@@ -83,7 +83,7 @@ pub const Library = struct {
         if (!installed.found_existing) installed.value_ptr.* = dynamic;
         std.Io.Threaded.mutexUnlock(&resident_mutex);
         if (installed.found_existing) dynamic.close();
-        return .{ .functions = functions, .version = (@as(u32, info.abi_major) << 16) | info.abi_minor, .image_path = image_path, .capabilities = info.capabilities };
+        return .{ .functions = functions, .version = binding.packVersion(info.abi_major, info.abi_minor), .image_path = image_path, .capabilities = info.capabilities };
     }
 
     pub fn supports(self: *Library, feature: u64) Error!bool {

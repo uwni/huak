@@ -33,15 +33,25 @@ const Budget = struct {
         for (segments) |segment| try self.consume(if (segment == .cubic) 3 else 1);
     }
     fn style(self: *Budget, value: DisplayList.Style) !void {
-        if (value.gradient) |paint| try self.consume(switch (paint.*) {
-            .patch_fill => |patches| patches.points.len * 16 + patches.stops.levels.len,
-            .radial_fill, .linear_fill, .linear_stroke => |ramp| ramp.colors.len + ramp.offsets.len,
-        });
+        if (value.fill) |fill| try self.paint(fill);
         if (value.pen) |pen| {
+            try self.paint(pen.paint);
             try self.consume(pen.dash.len);
             if (pen.motion) |p| try self.consume(p.keys.len);
             if (pen.nib) |nib| if (nib == .polygon) try self.consume(nib.polygon.len);
         }
+    }
+    fn paint(self: *Budget, value: DisplayList.Paint) !void {
+        const gradient = switch (value) {
+            .color => return,
+            .gradient => |gradient| gradient,
+        };
+        try self.consume(switch (gradient.*) {
+            .patches => |patches| patches.points.len * 16 + patches.stops.levels.len,
+            .fan => |conic| conic.points.len + conic.stops.levels.len,
+            .color_patches => |patches| patches.points.len * 20,
+            .linear, .radial => |ramp| ramp.colors.len + ramp.offsets.len,
+        });
     }
 };
 
@@ -97,7 +107,7 @@ fn Builder(comptime Resolver: type) type {
                             clip = try source.geometry().view(source.storage.allocator, reference);
                             try self.budget.geometry(clip.?.segments.items);
                         }
-                        if (clip) |*path| try self.result.beginScopeView(group.transform, path) else try self.result.beginScopeView(group.transform, null);
+                        try self.result.beginLayer(group.transform, if (clip) |*path| path else null, group.opacity);
                     },
                     .pop => {
                         if (self.result.scope_depth == initial_depth) return error.UnbalancedGroups;
@@ -221,7 +231,7 @@ test "vectorization preserves original cubic bits open contours fill rules pens 
     var original = try testCurve(t.allocator);
     defer original.deinit();
     const style: DisplayList.Style = .{
-        .fill = .{ .r = 0.3, .a = 0 },
+        .fill = .{ .color = .{ .r = 0.3, .a = 0 } },
         .fill_rule = .evenodd,
         .pen = .{ .width = 2.5, .dash = &.{ 1, 2 }, .nib = @import("pen/nib.zig").Nib.square() },
     };
@@ -266,7 +276,7 @@ test "vectorization owns nested cubic clips while raw paths apply transforms wit
     const placement = g.Transform.translation(7, 9);
     try source.beginScope(outer, clip);
     try source.beginScope(inner, clip);
-    try source.addPath(curve, .{ .fill = .{ .a = 0 }, .fill_rule = .evenodd, .pen = .{ .width = 3 } }, placement);
+    try source.addPath(curve, .{ .fill = .{ .color = .{ .a = 0 } }, .fill_rule = .evenodd, .pen = .{ .width = 3 } }, placement);
     try source.endScope();
     try source.endScope();
     var result = try extract(t.allocator, .{ .picture = &source }, null);

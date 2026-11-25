@@ -138,6 +138,13 @@ fn gap(output: *std.ArrayList(u8), allocator: std.mem.Allocator, input: []const 
     } else try output.appendSlice(allocator, input);
 }
 
+/// The words that open a block, and the one that closes it; and the words
+/// that put their line one level out from the block it is in, the block's
+/// end and the parts that follow its head. Editors indent by these too.
+pub const opens_block = [_]Lexer.Kind{ .kw_fn, .kw_expand_block, .kw_block, .kw_struct, .kw_if, .kw_do, .kw_precedence };
+pub const closes_block: Lexer.Kind = .kw_end;
+pub const leads_out = [_]Lexer.Kind{ closes_block, .kw_else, .kw_elseif, .kw_then };
+
 const Indentation = struct {
     blocks: usize = 0,
     // Anchor to the opening line rather than counting delimiters. A function
@@ -154,10 +161,7 @@ const Indentation = struct {
             }
             if (closing != 0 and closing <= self.delimiters.items.len)
                 return self.delimiters.items[self.delimiters.items.len - closing];
-            if (tokens[0].kind) |kind| switch (kind) {
-                .kw_end, .kw_else, .kw_elseif, .kw_then => return self.blocks -| 1,
-                else => {},
-            };
+            if (tokens[0].kind) |kind| if (std.mem.indexOfScalar(Lexer.Kind, &leads_out, kind) != null) return self.blocks -| 1;
         }
         if (self.delimiters.items.len != 0) return self.delimiters.items[self.delimiters.items.len - 1] + 1;
         return self.continuation orelse self.blocks;
@@ -173,9 +177,12 @@ const Indentation = struct {
             previous = if (last) |item| item.kind else null;
             last = token;
             const kind = token.kind orelse continue;
+            if (std.mem.indexOfScalar(Lexer.Kind, &opens_block, kind) != null) {
+                self.blocks += 1;
+                continue;
+            }
             switch (kind) {
-                .kw_fn, .kw_expand_block, .kw_block, .kw_struct, .kw_if, .kw_do, .kw_precedence => self.blocks += 1,
-                .kw_end => self.blocks -|= 1,
+                closes_block => self.blocks -|= 1,
                 .lparen, .lbracket, .lbrace => try self.delimiters.append(allocator, depth),
                 .rparen, .rbracket, .rbrace => _ = self.delimiters.pop(),
                 else => {},

@@ -12,3 +12,7 @@ pub fn peakRssBytes() u64 {
     const value: u64 = @intCast(usage.ru_maxrss);
     return if (builtin.os.tag == .macos) value else value * 1024;
 }
+
+pub fn microseconds(start: std.Io.Timestamp, end: std.Io.Timestamp) f64 {
+    return @as(f64, @floatFromInt(start.durationTo(end).toNanoseconds())) / 1000.0;
+}

@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65546
+#define TYPST_ABI_VERSION 65547
 
 #define TYPST_CAP_PDF 1
 
@@ -76,6 +76,11 @@
  * Color stops at given positions, TYPST_GRADIENT_STOP_OFFSETS.
  */
 #define TYPST_CAP_GRADIENT_STOPS 16384
+
+/**
+ * `typst_pdf_page_with_opacity`.
+ */
+#define TYPST_CAP_PDF_PAGE_OPACITY 32768
 
 #define TYPST_VALUE_NONE 0
 
@@ -253,44 +258,6 @@ typedef struct TypstScene TypstScene;
 typedef uint32_t TypstStatus;
 
 /**
- * A borrowed UTF-8 view; the pointer may be NULL only when len is zero.
- */
-typedef struct TypstStr {
-  const uint8_t *data;
-  size_t len;
-} TypstStr;
-
-/**
- * One place where Typst code reads a member of a name: the identifier
- * `member` in `name.member` or in `import name: member`. `start` and `end`
- * are its byte range in the queried source.
- */
-typedef struct TypstMemberUse {
-  struct TypstStr member;
-  size_t start;
-  size_t end;
-} TypstMemberUse;
-
-/**
- * Borrows the uses found by `typst_source_member_uses`, in source order.
- * `flags` may contain TYPST_MEMBER_USES_REBOUND and TYPST_MEMBER_USES_WHOLE.
- */
-typedef struct TypstMemberUseView {
-  const struct TypstMemberUse *uses;
-  size_t use_count;
-  uint32_t flags;
-  uint32_t reserved;
-} TypstMemberUseView;
-
-typedef struct TypstVersionInfo {
-  uint32_t abi_major;
-  uint32_t abi_minor;
-  uint64_t capabilities;
-  struct TypstStr library_version;
-  struct TypstStr typst_version;
-} TypstVersionInfo;
-
-/**
  * A borrowed binary view with the same null/length rule as TypstStr.
  */
 typedef struct TypstBytes {
@@ -301,6 +268,14 @@ typedef struct TypstBytes {
 typedef struct TypstFontSource {
   struct TypstBytes data;
 } TypstFontSource;
+
+/**
+ * A borrowed UTF-8 view; the pointer may be NULL only when len is zero.
+ */
+typedef struct TypstStr {
+  const uint8_t *data;
+  size_t len;
+} TypstStr;
 
 typedef struct TypstFile {
   struct TypstStr path;
@@ -384,6 +359,24 @@ typedef struct TypstEvalOptions {
   const struct TypstModule *const *module_handles;
   size_t module_handle_count;
 } TypstEvalOptions;
+
+typedef struct TypstMetrics {
+  double width_pt;
+  double height_pt;
+  double baseline_pt;
+} TypstMetrics;
+
+typedef struct TypstPdfOptions {
+  uint32_t struct_size;
+  uint32_t flags;
+  struct TypstStr standard;
+  /**
+   * Borrowed UTF-8 application name, written to PDF Creator and XMP
+   * CreatorTool. Empty or omitted selects Typst's default, including its
+   * version. Requires TYPST_CAP_PDF_CREATOR.
+   */
+  struct TypstStr creator;
+} TypstPdfOptions;
 
 /**
  * Independent Typst code whose value is a function, such as
@@ -488,12 +481,6 @@ typedef struct TypstLayoutResult {
   struct TypstDiagnostics *diagnostics;
 } TypstLayoutResult;
 
-typedef struct TypstMetrics {
-  double width_pt;
-  double height_pt;
-  double baseline_pt;
-} TypstMetrics;
-
 typedef struct TypstPoint {
   double x;
   double y;
@@ -531,17 +518,35 @@ typedef struct TypstLabelView {
   size_t element_count;
 } TypstLabelView;
 
-typedef struct TypstPdfOptions {
-  uint32_t struct_size;
+/**
+ * One place where Typst code reads a member of a name: the identifier
+ * `member` in `name.member` or in `import name: member`. `start` and `end`
+ * are its byte range in the queried source.
+ */
+typedef struct TypstMemberUse {
+  struct TypstStr member;
+  size_t start;
+  size_t end;
+} TypstMemberUse;
+
+/**
+ * Borrows the uses found by `typst_source_member_uses`, in source order.
+ * `flags` may contain TYPST_MEMBER_USES_REBOUND and TYPST_MEMBER_USES_WHOLE.
+ */
+typedef struct TypstMemberUseView {
+  const struct TypstMemberUse *uses;
+  size_t use_count;
   uint32_t flags;
-  struct TypstStr standard;
-  /**
-   * Borrowed UTF-8 application name, written to PDF Creator and XMP
-   * CreatorTool. Empty or omitted selects Typst's default, including its
-   * version. Requires TYPST_CAP_PDF_CREATOR.
-   */
-  struct TypstStr creator;
-} TypstPdfOptions;
+  uint32_t reserved;
+} TypstMemberUseView;
+
+typedef struct TypstVersionInfo {
+  uint32_t abi_major;
+  uint32_t abi_minor;
+  uint64_t capabilities;
+  struct TypstStr library_version;
+  struct TypstStr typst_version;
+} TypstVersionInfo;
 
 typedef struct TypstTransform {
   double xx;
@@ -725,69 +730,6 @@ typedef struct TypstDiagnosticView {
 extern "C" {
 #endif // __cplusplus
 
-uint32_t typst_abi_version(void);
-
-/**
- * Returns the byte length of the first complete native content/code block.
- * Syntax errors inside a closed block are left to the eventual evaluation.
- *
- * # Safety
- * `source` must be a readable view for the call and `out` a non-null writable
- * `usize`. The optional diagnostics slot follows the module pointer contract;
- * release any returned diagnostic with `typst_diagnostics_release`.
- */
-TypstStatus typst_source_block(struct TypstStr source,
-                               size_t *out,
-                               struct TypstDiagnostics **diagnostics);
-
-/**
- * Finds where `source`, parsed in `syntax` mode (a TYPST_SYNTAX_* value), reads
- * members of the identifier `name`: each `name.member` in code, markup or math,
- * and each member listed in `import name: …`, in source order. A wildcard
- * import or other use of `name` as a whole value names no member; the view
- * reports it with TYPST_MEMBER_USES_WHOLE. Uses through another
- * value, as in `let m = name; m.x`, are not found. Syntax errors do not stop
- * the query. Available since ABI 1.8 with TYPST_CAP_MEMBER_USES.
- *
- * # Safety
- * `source` and `name` must be readable views for the call. `out` must be a
- * non-null writable handle slot; release the handle with
- * `typst_member_uses_release`. The optional diagnostics slot follows the module
- * pointer contract.
- */
-TypstStatus typst_source_member_uses(struct TypstStr source,
-                                     uint32_t syntax,
-                                     struct TypstStr name,
-                                     struct TypstMemberUses **out,
-                                     struct TypstDiagnostics **diagnostics);
-
-/**
- * Borrows the uses a `typst_source_member_uses` handle found.
- *
- * # Safety
- * `uses` must be live. `out` must point to aligned writable storage for one
- * `TypstMemberUseView`. Keep the handle alive for every access to the view.
- */
-TypstStatus typst_member_uses_view(const struct TypstMemberUses *uses,
-                                   struct TypstMemberUseView *out);
-
-/**
- * Releases a member-use handle; null is a no-op.
- *
- * # Safety
- * A non-null `value` must be a handle owned by the caller from this library.
- */
-void typst_member_uses_release(const struct TypstMemberUses *value);
-
-/**
- * The returned strings are static and remain valid while the library is mapped.
- *
- * # Safety
- * `out` must point to aligned, writable storage for one `TypstVersionInfo`.
- * Do not mutate the returned string views or use them after unloading the library.
- */
-TypstStatus typst_version_info(struct TypstVersionInfo *out);
-
 /**
  * Creates an immutable context by copying the supplied resources and inputs.
  *
@@ -843,75 +785,6 @@ TypstStatus typst_context_eval(const struct TypstContext *context,
                                const struct TypstEvalOptions *config,
                                struct TypstModule **out,
                                struct TypstDiagnostics **diagnostics);
-
-/**
- * Lays out one request into an independently owned native layout.
- *
- * # Safety
- * `context` must be live and `input` must point to one initialized request, with
- * readable source/setup views and an optional valid options prefix. `out` must
- * be a non-null writable handle slot. All pointers follow the module contract.
- * Release returned layout and optional diagnostic owners separately.
- */
-TypstStatus typst_context_layout(const struct TypstContext *context,
-                                 const struct TypstLayoutRequest *input,
-                                 struct TypstLayout **out,
-                                 struct TypstDiagnostics **diagnostics);
-
-/**
- * Processes independent requests in parallel and publishes results in input
- * order. Global success means all requests were processed; inspect each result
- * status. Every result owns its layout and diagnostics, including mixed errors.
- * A global argument error starts no work and initializes the result slots when
- * their pointer and count are valid. All input memory is borrowed for this call.
- *
- * # Safety
- * `context` must be live. For nonzero `count`, `inputs` must expose that many
- * initialized requests, including their nested views/options, and `outputs`
- * must expose that many aligned writable result slots. Their storage and the
- * optional diagnostic slot must be disjoint and follow the module contract.
- * Release every populated result layout/diagnostic and the global diagnostic
- * independently, including on failure; the caller owns the output array itself.
- */
-TypstStatus typst_context_layout_many(const struct TypstContext *context,
-                                      const struct TypstLayoutRequest *inputs,
-                                      size_t count,
-                                      struct TypstLayoutResult *outputs,
-                                      struct TypstDiagnostics **diagnostics);
-
-/**
- * Reads the dimensions and baseline of a layout.
- *
- * # Safety
- * `layout` must be a live layout from this library and `out` must point to one
- * aligned writable `TypstMetrics`, disjoint from the borrowed layout.
- */
-TypstStatus typst_layout_metrics(const struct TypstLayout *layout, struct TypstMetrics *out);
-
-/**
- * Reads conservative bounds in frame-local, y-down points, including logical
- * dimensions and painted overflow. Clips may make the visible extent smaller.
- * Native text, strokes and images remain native; no outline extraction occurs.
- * Available since ABI 1.1.
- *
- * # Safety
- * `layout` must be live. `out` must hold two aligned writable `TypstPoint`s,
- * disjoint from the layout, receiving the minimum and maximum respectively.
- */
-TypstStatus typst_layout_bounds(const struct TypstLayout *layout, struct TypstPoint *out);
-
-/**
- * Borrows every labeled element of a layout, read from the start and end tags
- * Typst places around content that carries a label. Elements appear in
- * document order, a label as often as it occurs. Records are made on the
- * first call and live as long as the layout. Available since ABI 1.6.
- *
- * # Safety
- * `layout` must be live. `out` must point to aligned writable storage for one
- * `TypstLabelView`, disjoint from the layout. Keep a layout reference alive
- * for every access to the returned view; do not mutate or free it.
- */
-TypstStatus typst_layout_labels(const struct TypstLayout *layout, struct TypstLabelView *out);
 
 /**
  * Returns the number of pages, or zero for a null document.
@@ -986,46 +859,6 @@ TypstStatus typst_layout_export_pdf(const struct TypstLayout *layout,
                                     struct TypstDiagnostics **diagnostics);
 
 /**
- * Imports a zero-based PDF page into a reusable native scene, at its natural
- * page dimensions in points. Copies the input bytes; the scene can outlive them.
- * The context only supplies the environment for Typst's decoder: the result
- * does not depend on its fonts, files or inputs, so any live context will do.
- * PDF output uses Typst's native PDF embedding, including its format restrictions.
- *
- * # Safety
- * `context` is borrowed for this call. `data` follows the module pointer contract. `out` must be a writable scene
- * slot; `diagnostics` is optional. Release the scene and diagnostics separately.
- */
-TypstStatus typst_scene_from_pdf(const struct TypstContext *context,
-                                 struct TypstBytes data,
-                                 size_t page,
-                                 struct TypstScene **out,
-                                 struct TypstDiagnostics **diagnostics);
-
-/**
- * Copies native scene commands and retains referenced layouts/nested scenes.
- *
- * # Safety
- * A non-null `config`, its declared prefix, items, paths, styles, dash arrays,
- * clips and option views must follow the module pointer contract. Referenced
- * layout/scene handles must be live and originate from this library. `out` must
- * be a non-null writable scene slot; `diagnostics` is optional. Release both
- * returned owners separately; the scene may outlive its input handles/views.
- */
-TypstStatus typst_scene_create(const struct TypstSceneOptions *config,
-                               struct TypstScene **out,
-                               struct TypstDiagnostics **diagnostics);
-
-/**
- * Reads scene dimensions and baseline.
- *
- * # Safety
- * `scene` must be live and `out` must point to one aligned writable
- * `TypstMetrics`, disjoint from the scene, for the duration of the call.
- */
-TypstStatus typst_scene_metrics(const struct TypstScene *scene, struct TypstMetrics *out);
-
-/**
  * Exports a scene into an independently owned SVG buffer.
  *
  * # Safety
@@ -1051,70 +884,156 @@ TypstStatus typst_scene_export_pdf(const struct TypstScene *scene,
                                    struct TypstDiagnostics **diagnostics);
 
 /**
- * Extracts optional editable outlines into an independently owned object.
+ * Draws a zero-based PDF page inside one transparency group at `opacity`,
+ * from 0 to 1, and returns a one-page PDF of the same size. The page then
+ * blends with what lies under it as a whole, as an SVG group's `opacity`
+ * does: unlike colors that each carry the opacity, overlapping parts of the
+ * page do not show through one another. Typst's groups have no opacity; a
+ * page exported with `typst_scene_export_pdf`, wrapped here and imported
+ * with `typst_scene_from_pdf` stands in for one. The result declares the
+ * input's PDF version, at least 1.4. Requires TYPST_CAP_PDF_PAGE_OPACITY.
  *
  * # Safety
- * `layout` must be live. `out` must be a non-null writable outline slot, and the
- * optional diagnostic slot must follow the module pointer contract. Release
- * the returned outline and diagnostic owners separately.
+ * `data` follows the module pointer contract. `out` must be a non-null writable
+ * buffer slot; `diagnostics` is optional. Release both returned owners separately.
  */
-TypstStatus typst_layout_outline(const struct TypstLayout *layout,
-                                 struct TypstOutline **out,
+TypstStatus typst_pdf_page_with_opacity(struct TypstBytes data,
+                                        size_t page,
+                                        double opacity,
+                                        struct TypstBuffer **out,
+                                        struct TypstDiagnostics **diagnostics);
+
+/**
+ * Lays out one request into an independently owned native layout.
+ *
+ * # Safety
+ * `context` must be live and `input` must point to one initialized request, with
+ * readable source/setup views and an optional valid options prefix. `out` must
+ * be a non-null writable handle slot. All pointers follow the module contract.
+ * Release returned layout and optional diagnostic owners separately.
+ */
+TypstStatus typst_context_layout(const struct TypstContext *context,
+                                 const struct TypstLayoutRequest *input,
+                                 struct TypstLayout **out,
                                  struct TypstDiagnostics **diagnostics);
 
 /**
- * Borrows the outline's immutable path, segment and dash arrays.
+ * Processes independent requests in parallel and publishes results in input
+ * order. Global success means all requests were processed; inspect each result
+ * status. Every result owns its layout and diagnostics, including mixed errors.
+ * A global argument error starts no work and initializes the result slots when
+ * their pointer and count are valid. All input memory is borrowed for this call.
  *
  * # Safety
- * `outline` must be live and `out` must point to aligned writable storage for
- * one `TypstOutlineView`, disjoint from the outline. Keep an outline reference
- * alive for every access to the returned views; do not mutate or free them.
+ * `context` must be live. For nonzero `count`, `inputs` must expose that many
+ * initialized requests, including their nested views/options, and `outputs`
+ * must expose that many aligned writable result slots. Their storage and the
+ * optional diagnostic slot must be disjoint and follow the module contract.
+ * Release every populated result layout/diagnostic and the global diagnostic
+ * independently, including on failure; the caller owns the output array itself.
  */
-TypstStatus typst_outline_view(const struct TypstOutline *outline, struct TypstOutlineView *out);
+TypstStatus typst_context_layout_many(const struct TypstContext *context,
+                                      const struct TypstLayoutRequest *inputs,
+                                      size_t count,
+                                      struct TypstLayoutResult *outputs,
+                                      struct TypstDiagnostics **diagnostics);
 
 /**
- * The view borrows the buffer and remains valid until its last release.
+ * Reads the dimensions and baseline of a layout.
  *
  * # Safety
- * A non-null `buffer` must be a live buffer from this library. Keep an owned
- * reference alive while reading the immutable byte view; do not free its data.
- * A null buffer returns an empty view.
+ * `layout` must be a live layout from this library and `out` must point to one
+ * aligned writable `TypstMetrics`, disjoint from the borrowed layout.
  */
-struct TypstBytes typst_buffer_data(const struct TypstBuffer *buffer);
+TypstStatus typst_layout_metrics(const struct TypstLayout *layout, struct TypstMetrics *out);
 
 /**
- * Returns the number of primary diagnostics, or zero for a null report.
+ * Reads conservative bounds in frame-local, y-down points, including logical
+ * dimensions and painted overflow. Clips may make the visible extent smaller.
+ * Native text, strokes and images remain native; no outline extraction occurs.
+ * Available since ABI 1.1.
  *
  * # Safety
- * A non-null `diagnostics` must be a live report from this library, with an
- * owned reference kept alive throughout the call.
+ * `layout` must be live. `out` must hold two aligned writable `TypstPoint`s,
+ * disjoint from the layout, receiving the minimum and maximum respectively.
  */
-size_t typst_diagnostics_count(const struct TypstDiagnostics *diagnostics);
+TypstStatus typst_layout_bounds(const struct TypstLayout *layout, struct TypstPoint *out);
 
 /**
- * Borrows a primary diagnostic; out-of-range indices return an error.
+ * Borrows every labeled element of a layout, read from the start and end tags
+ * Typst places around content that carries a label. Elements appear in
+ * document order, a label as often as it occurs. Records are made on the
+ * first call and live as long as the layout. Available since ABI 1.6.
  *
  * # Safety
- * `diagnostics` must be live and `out` must point to aligned writable storage
- * for one `TypstDiagnosticView`, disjoint from the report. Returned strings
- * remain borrowed: keep the report alive and do not mutate or free their data.
+ * `layout` must be live. `out` must point to aligned writable storage for one
+ * `TypstLabelView`, disjoint from the layout. Keep a layout reference alive
+ * for every access to the returned view; do not mutate or free it.
  */
-TypstStatus typst_diagnostics_get(const struct TypstDiagnostics *diagnostics,
-                                  size_t index,
-                                  struct TypstDiagnosticView *out);
+TypstStatus typst_layout_labels(const struct TypstLayout *layout, struct TypstLabelView *out);
+
+uint32_t typst_abi_version(void);
 
 /**
- * Borrows a diagnostic hint or trace note; invalid indices return an error.
+ * Returns the byte length of the first complete native content/code block.
+ * Syntax errors inside a closed block are left to the eventual evaluation.
  *
  * # Safety
- * `diagnostics` must be live and `out` must point to aligned writable storage
- * for one `TypstDiagnosticView`, disjoint from the report. Returned strings
- * remain borrowed: keep the report alive and do not mutate or free their data.
+ * `source` must be a readable view for the call and `out` a non-null writable
+ * `usize`. The optional diagnostics slot follows the module pointer contract;
+ * release any returned diagnostic with `typst_diagnostics_release`.
  */
-TypstStatus typst_diagnostics_get_note(const struct TypstDiagnostics *diagnostics,
-                                       size_t index,
-                                       size_t note,
-                                       struct TypstDiagnosticView *out);
+TypstStatus typst_source_block(struct TypstStr source,
+                               size_t *out,
+                               struct TypstDiagnostics **diagnostics);
+
+/**
+ * Finds where `source`, parsed in `syntax` mode (a TYPST_SYNTAX_* value), reads
+ * members of the identifier `name`: each `name.member` in code, markup or math,
+ * and each member listed in `import name: …`, in source order. A wildcard
+ * import or other use of `name` as a whole value names no member; the view
+ * reports it with TYPST_MEMBER_USES_WHOLE. Uses through another
+ * value, as in `let m = name; m.x`, are not found. Syntax errors do not stop
+ * the query. Available since ABI 1.8 with TYPST_CAP_MEMBER_USES.
+ *
+ * # Safety
+ * `source` and `name` must be readable views for the call. `out` must be a
+ * non-null writable handle slot; release the handle with
+ * `typst_member_uses_release`. The optional diagnostics slot follows the module
+ * pointer contract.
+ */
+TypstStatus typst_source_member_uses(struct TypstStr source,
+                                     uint32_t syntax,
+                                     struct TypstStr name,
+                                     struct TypstMemberUses **out,
+                                     struct TypstDiagnostics **diagnostics);
+
+/**
+ * Borrows the uses a `typst_source_member_uses` handle found.
+ *
+ * # Safety
+ * `uses` must be live. `out` must point to aligned writable storage for one
+ * `TypstMemberUseView`. Keep the handle alive for every access to the view.
+ */
+TypstStatus typst_member_uses_view(const struct TypstMemberUses *uses,
+                                   struct TypstMemberUseView *out);
+
+/**
+ * Releases a member-use handle; null is a no-op.
+ *
+ * # Safety
+ * A non-null `value` must be a handle owned by the caller from this library.
+ */
+void typst_member_uses_release(const struct TypstMemberUses *value);
+
+/**
+ * The returned strings are static and remain valid while the library is mapped.
+ *
+ * # Safety
+ * `out` must point to aligned, writable storage for one `TypstVersionInfo`.
+ * Do not mutate the returned string views or use them after unloading the library.
+ */
+TypstStatus typst_version_info(struct TypstVersionInfo *out);
 
 /**
  * Evict upstream process-wide memoization entries older than max_age epochs.
@@ -1265,6 +1184,112 @@ void typst_module_retain(const struct TypstModule *value);
  * library. This consumes that reference; do not reuse it without another owner.
  */
 void typst_module_release(const struct TypstModule *value);
+
+/**
+ * Imports a zero-based PDF page into a reusable native scene, at its natural
+ * page dimensions in points. Copies the input bytes; the scene can outlive them.
+ * The context only supplies the environment for Typst's decoder: the result
+ * does not depend on its fonts, files or inputs, so any live context will do.
+ * PDF output uses Typst's native PDF embedding, including its format restrictions.
+ *
+ * # Safety
+ * `context` is borrowed for this call. `data` follows the module pointer contract. `out` must be a writable scene
+ * slot; `diagnostics` is optional. Release the scene and diagnostics separately.
+ */
+TypstStatus typst_scene_from_pdf(const struct TypstContext *context,
+                                 struct TypstBytes data,
+                                 size_t page,
+                                 struct TypstScene **out,
+                                 struct TypstDiagnostics **diagnostics);
+
+/**
+ * Copies native scene commands and retains referenced layouts/nested scenes.
+ *
+ * # Safety
+ * A non-null `config`, its declared prefix, items, paths, styles, dash arrays,
+ * clips and option views must follow the module pointer contract. Referenced
+ * layout/scene handles must be live and originate from this library. `out` must
+ * be a non-null writable scene slot; `diagnostics` is optional. Release both
+ * returned owners separately; the scene may outlive its input handles/views.
+ */
+TypstStatus typst_scene_create(const struct TypstSceneOptions *config,
+                               struct TypstScene **out,
+                               struct TypstDiagnostics **diagnostics);
+
+/**
+ * Reads scene dimensions and baseline.
+ *
+ * # Safety
+ * `scene` must be live and `out` must point to one aligned writable
+ * `TypstMetrics`, disjoint from the scene, for the duration of the call.
+ */
+TypstStatus typst_scene_metrics(const struct TypstScene *scene, struct TypstMetrics *out);
+
+/**
+ * Extracts optional editable outlines into an independently owned object.
+ *
+ * # Safety
+ * `layout` must be live. `out` must be a non-null writable outline slot, and the
+ * optional diagnostic slot must follow the module pointer contract. Release
+ * the returned outline and diagnostic owners separately.
+ */
+TypstStatus typst_layout_outline(const struct TypstLayout *layout,
+                                 struct TypstOutline **out,
+                                 struct TypstDiagnostics **diagnostics);
+
+/**
+ * Borrows the outline's immutable path, segment and dash arrays.
+ *
+ * # Safety
+ * `outline` must be live and `out` must point to aligned writable storage for
+ * one `TypstOutlineView`, disjoint from the outline. Keep an outline reference
+ * alive for every access to the returned views; do not mutate or free them.
+ */
+TypstStatus typst_outline_view(const struct TypstOutline *outline, struct TypstOutlineView *out);
+
+/**
+ * The view borrows the buffer and remains valid until its last release.
+ *
+ * # Safety
+ * A non-null `buffer` must be a live buffer from this library. Keep an owned
+ * reference alive while reading the immutable byte view; do not free its data.
+ * A null buffer returns an empty view.
+ */
+struct TypstBytes typst_buffer_data(const struct TypstBuffer *buffer);
+
+/**
+ * Returns the number of primary diagnostics, or zero for a null report.
+ *
+ * # Safety
+ * A non-null `diagnostics` must be a live report from this library, with an
+ * owned reference kept alive throughout the call.
+ */
+size_t typst_diagnostics_count(const struct TypstDiagnostics *diagnostics);
+
+/**
+ * Borrows a primary diagnostic; out-of-range indices return an error.
+ *
+ * # Safety
+ * `diagnostics` must be live and `out` must point to aligned writable storage
+ * for one `TypstDiagnosticView`, disjoint from the report. Returned strings
+ * remain borrowed: keep the report alive and do not mutate or free their data.
+ */
+TypstStatus typst_diagnostics_get(const struct TypstDiagnostics *diagnostics,
+                                  size_t index,
+                                  struct TypstDiagnosticView *out);
+
+/**
+ * Borrows a diagnostic hint or trace note; invalid indices return an error.
+ *
+ * # Safety
+ * `diagnostics` must be live and `out` must point to aligned writable storage
+ * for one `TypstDiagnosticView`, disjoint from the report. Returned strings
+ * remain borrowed: keep the report alive and do not mutate or free their data.
+ */
+TypstStatus typst_diagnostics_get_note(const struct TypstDiagnostics *diagnostics,
+                                       size_t index,
+                                       size_t note,
+                                       struct TypstDiagnosticView *out);
 
 #ifdef __cplusplus
 }  // extern "C"

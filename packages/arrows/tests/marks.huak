@@ -1,0 +1,85 @@
+// The mark protocol: tiptoe's default sizes scale with the line, `.with`
+// sets parameters, and the combinators compose marks.
+import assertions.assert
+import color.rgb
+import math.{abs, sqrt}
+import geometry.{circle, compound, region_union}
+import object.{bounds, region}
+import "../arrows.huak" as arrows
+
+fn near(a:length, b:length) -> bool
+    return abs(a-b) < 0.01pt
+end
+
+// The extent of a mark's ink in tip coordinates: [min, max].
+fn extent(shape:arrows.Mark) -> list
+    return covering(arrows.glyph(shape))
+end
+
+fn covering(content:object) -> list
+    return bounds(region_union(region(content), compound([])))
+end
+
+// A mark drawn for a line; a function value is called through a name.
+fn made(mark:function, line:arrows.Line) -> arrows.Mark
+    return mark(line)
+end
+
+black := rgb(0, 0, 0)
+thin := arrows.Line(paint: black, thickness: 1pt)
+thick := arrows.Line(paint: black, thickness: 2pt)
+
+// Sizes: a fixed part plus a multiple of the width, or what is given.
+assert(near(arrows.stealth(thin).back, 4.5pt) and near(arrows.stealth(thick).back, 7.2pt), "stealth is 3pt + 4.5 widths long, notched 40% deep")
+box := extent(arrows.stealth(thin))
+low:vec2 := box[0]
+high:vec2 := box[1]
+assert(near(low.x, -7.5pt) and near(high.x, 0pt) and near(low.y, -3pt) and near(high.y, 3pt), "stealth spans its length behind the tip and 80% of it across")
+assert(near(made(arrows.stealth.with(length: 10pt), thin).back, 6pt), "with(length:) sets the length")
+assert(near(made(arrows.stealth.with(inset: 0.2), thin).back, 6pt), "with(inset:) sets the notch")
+assert(near(arrows.triangle(thin).back, 7.5pt), "a triangle's back is its full length")
+outlined := extent(made(arrows.stealth.with(fill: false), thick))
+filled := extent(arrows.stealth(thick))
+for i in 0:1 do
+    a:vec2 := outlined[i]
+    b:vec2 := filled[i]
+    assert(near(a.x, b.x) and near(a.y, b.y), "an outlined mark keeps the filled mark's size")
+end
+disk := extent(arrows.disk(thick))
+assert(near(disk[1].x-disk[0].x, 8pt) and near(disk[0].x, -4pt), "a disk is four widths across, centred on the end")
+diamond := extent(arrows.diamond(thin))
+assert(near(diamond[1].x-diamond[0].x, 4*sqrt(2)*1pt), "a diamond is 4 sqrt 2 widths long")
+bar := extent(arrows.bar(thin))
+assert(near(bar[1].y-bar[0].y, 6pt), "a bar is 2.4pt + 3.6 widths across")
+assert(arrows.stealth(thin).bend and not arrows.disk(thin).bend and not arrows.square(thin).bend, "heads bend with the line; centred shapes keep their shape")
+
+// Combinators.
+both := made(arrows.combine(arrows.bar, arrows.stealth), thin)
+assert(near(both.back, 4.5pt) and near(both.neck, arrows.stealth(thin).neck), "a combination lines its marks up and ends the shaft at the last")
+spaced := made(arrows.combine(arrows.stealth, arrows.gap(2pt)), thin)
+assert(near(spaced.back, 6.5pt) and near(spaced.neck, 6.5pt), "a gap adds space and moves the shaft back")
+assert(near(made(arrows.combine(arrows.stealth, arrows.stealth), thin).back, 9pt), "two heads take two backs")
+assert(not made(arrows.rigid(arrows.stealth), thin).bend, "rigid keeps a mark's shape")
+assert(not made(arrows.combine(arrows.stealth, arrows.disk), thin).bend, "a combination bends only if all its marks do")
+red := rgb(1, 0, 0)
+shape := made(arrows.inked(arrows.stealth, red), thin)
+painted:color := arrows.glyph(shape).children[0].fill
+assert(painted.r == 1 and painted.g == 0, "inked paints the mark with its own paint")
+assert(near(shape.back, 4.5pt), "inked keeps the line's width")
+
+// A toe points back from the start; a mark partway along is centred there.
+// Marks in a paint of their own are drawn apart from the line's path.
+toe := arrows.line((0pt, 0pt) -- (60pt, 0pt), pen(black, 1pt), toe: arrows.inked(arrows.stealth, red))
+ends := covering(toe.children[1])
+assert(near(ends[0].x, 0pt) and near(ends[1].x, 7.5pt), "a toe sits at the start, pointing back")
+for position in [0.25, 0.5] do
+    middle := arrows.line((0pt, 0pt) -- (100pt, 0pt), pen(black, 1pt), marks: [arrows.along(arrows.inked(arrows.stealth, red), position)])
+    mark := covering(middle.children[1])
+    assert(near((mark[0].x+mark[1].x)/2, position*100pt), "a mark along a line is centred at its position")
+end
+marked := [arrows.along(arrows.stealth, 0.25), arrows.along(arrows.stealth.with(rev: true), 0.75)]
+loop := arrows.line(circle((0pt, 0pt), 20pt), pen(black, 1pt), marks: marked)
+assert(len(loop.children) == 1 and loop.children[0].kind == "path", "a line and its marks in one paint are one path")
+apart := arrows.line(circle((0pt, 0pt), 20pt), pen(black, 1pt), marks: [arrows.along(arrows.inked(arrows.stealth, red), 0.25)])
+assert(len(apart.children) == 2 and len(covering(apart.children[1])) == 2, "a mark in another paint is drawn on its own")
+print("mark checks passed")

@@ -1,0 +1,113 @@
+// The mark protocol, after Typst's tiptoe package. A mark is a function whose
+// first parameter is the line it ends and whose other parameters have
+// defaults, set with `.with(...)`. It describes its ink in tip coordinates;
+// the line places that ink and paints it where the shaft is painted.
+import transform.{translate, transformed}
+import assertions.assert
+
+// What a mark knows of its line where it sits: the paint the line is drawn
+// with, and the line's width there.
+export struct Line
+    paint:any
+    thickness:length
+end
+
+// One piece of a mark's ink: a path in tip coordinates, filled with one
+// paint and stroked with another, either false when absent. A stroke is
+// `width` wide with the given cap and join.
+export struct Piece
+    path:path
+    fill:any = false
+    stroke:any = false
+    width:length = 0pt
+    cap:string = "butt"
+    join:string = "miter"
+end
+
+// A mark in tip coordinates: the tip at the origin, the line arriving from
+// -x. `back` is how far behind the tip the next mark of a combination
+// starts. `neck` is how far behind the tip the shaft ends: a point inside the
+// mark's ink, so that shaft and mark overlap and no seam shows. A mark that
+// bends follows the line's curve; one that does not keeps its shape.
+export struct Mark
+    pieces:list
+    back:length
+    neck:length
+    bend:bool = true
+end
+
+// A mark partway along a line, centred at `position` of its arc length.
+export struct Along
+    mark:function
+    position:float
+end
+
+export fn along(mark:function, position:float = 0.5) -> Along
+    assert(position >= 0 and position <= 1, "a mark's position along a line must be in [0, 1]")
+    return Along(mark: mark, position: position)
+end
+
+// A size the caller gave, or the mark's default for this line.
+export fn size_or(given:any, fallback:length) -> length
+    if given == false then return fallback end
+    return given
+end
+
+// The piece with its path transformed.
+export fn moved(piece:Piece, change:transform) -> Piece
+    result:Piece := copy(piece)
+    result.path = transformed(piece.path, change)
+    return result
+end
+
+// Marks one behind another, each starting where the one before it ends.
+// The shaft stops at the last mark's neck.
+export fn combine(parts:function...) -> function
+    assert(len(parts) > 0, "combine needs at least one mark")
+    return lined_up.with(parts: parts)
+end
+
+fn lined_up(line:Line, parts:list) -> Mark
+    pieces := []
+    position := 0pt
+    neck := 0pt
+    bend := true
+    for part in parts do
+        draw_part:function := part
+        shape:Mark := draw_part(line)
+        for piece in shape.pieces do pieces += [moved(piece, translate((-position, 0pt)))] end
+        neck = position+shape.neck
+        position = position+shape.back
+        bend = bend and shape.bend
+    end
+    return Mark(pieces: pieces, back: position, neck: neck, bend: bend)
+end
+
+// Empty space between the marks of a combination.
+export fn gap(distance:length) -> function
+    return spacing.with(distance: distance)
+end
+
+fn spacing(line:Line, distance:length) -> Mark
+    return Mark(pieces: [], back: distance, neck: distance)
+end
+
+// A mark that keeps its shape and turns as a whole instead of bending.
+export fn rigid(mark:function) -> function
+    return stiff.with(mark: mark)
+end
+
+fn stiff(line:Line, mark:function) -> Mark
+    shape:Mark := mark(line)
+    shape.bend = false
+    return shape
+end
+
+// A mark painted with another paint than its line's, at the line's width.
+export fn inked(mark:function, paint:any) -> function
+    return repainted.with(mark: mark, paint: paint)
+end
+
+fn repainted(line:Line, mark:function, paint:any) -> Mark
+    return mark(Line(paint: paint, thickness: line.thickness))
+end

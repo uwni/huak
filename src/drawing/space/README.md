@@ -24,6 +24,11 @@ in the same visibility calculation. Source and face indices start at zero.
   tangent-continuous guide to sweep. `s.loft(sections,solid:true)` joins successive
   closed cross-sections into a solid. Omit `solid:true` for an uncapped shell.
   See the [semicircle example](../../../examples/space/profiles.huak).
+- `s.surface(rows)` is one face through a grid of points: `rows` lists rows of
+  as many points, at least two by two, and OCCT interpolates the C2 B-spline
+  surface through them all (`GeomAPI_PointsToBSplineSurface`). A graph
+  z = f(x, y), a parametric surface or measured heights are grids of their
+  points; the script samples them.
 - `s.box(width,depth,height)` extrudes an ordinary rectangle. `s.sphere(radius)`,
   `s.cylinder(radius,height)` and `s.cone(base,height,top:0pt)` use analytic
   surfaces. A positive top radius produces a frustum.
@@ -54,42 +59,139 @@ in the same visibility calculation. Source and face indices start at zero.
   curves to cubic paths. OCCT uses its own intersection tolerances.
 
 For textbook shading under orthographic projection, pass a direction towards
-the light source, for example `light:(-1,-2,3)`, and paint each visible face
-with `s.shaded(face,ink)`. Set `spot:24deg` to add a gleam. Its boundary
+the light source, for example `light:(-1,-2,3)`, and paint the visible faces
+with `s.shaded(faces, inks)`, which takes `behind`, `paper` and `translucent`
+as `s.toned` does below. Set `spot:24deg` to add a gleam. Its boundary
 is where the surface normal makes that angle with the light/view half-vector
 (Stroila, Eisemann and Hart, *Clip Art Rendering of Smooth Isosurfaces*,
-Eq. 13). OCCT traces this contour on the face. Huak fits an ellipse to each
-connected projected highlight, with the area and principal moments OCCT
-measures, for the radial color falloff and clips it to the visible highlight
-boundary. See the [highlight example](../../../examples/space/highlight.huak).
+Eq. 13). Huak traces this contour on the face as it traces the others (see
+below), and fits an ellipse to each connected projected highlight, with the
+area and principal moments OCCT measures, for the radial color falloff and
+clips it to the visible highlight boundary. See the [highlight example](../../../examples/space/highlight.huak).
 
 With `smooth:true` the light is continuous instead of banded, and each front
 region becomes its own face carrying a field of n·l and of the gleam
 (`shading.zig`). Huak computes the fields; OCCT evaluates the surfaces, their
 normals and normal derivatives, finds where the contour crosses each cell side
 and where lines of sight meet a face, all in batches. A plane's field is constant; a cylinder seen across its axis
-varies along one direction, as a profile of samples. Other faces get
+varies along one direction, as a profile of samples. A cone's rulings meet
+at its apex, which OCCT names, and each carries constant light, so its field
+is a fan around the apex's projection: constant along each ray, and between
+neighbouring rulings linear along the chord joining their far ends. The
+rulings halve until a closed bound keeps the fan within `e / 8` of the light;
+outputs draw it within the rest, as one patch per pair of rulings in a PDF
+patch mesh and as triangles from the apex in SVG (`src/drawing/conic.zig`).
+A cone seen along one of its rulings has no fan. It and other faces get
 tensor-product Bézier patches over a grid of their parameters, each
 interpolating the projected surface and the light at sixteen samples. Cells
 turn the normal by at most `sqrt(4e)` for an accuracy `e` of 1/256, so that
 bilinear interpolation of each patch's corner values, which a PDF patch mesh
 paints, stays within `e`; where the gleam can be positive, finer patches carry
-it. Cells crossing the contour keep their front part, cut where n·v
+it, and elsewhere it is 0. Both lights thus lie on the same patches, as a
+cone's lie on the same rays, so flattening the gleam over n·l combines them
+patch by patch. Cells crossing the contour keep their front part, cut where n·v
 vanishes, and skirts carry the light of contour and face-boundary sides past
 the outline's tolerance. SVG output subdivides the patches into triangles
 (`src/drawing/patches.zig`).
 
+An open sheet may show its back, the side its normal points away from;
+which side a line of sight meets is the arrangement's to tell. A face that
+shows one side is shaded with that side's normal. A face that shows both
+gets a sheet of cells for each side, and each region takes the cells of
+both that nothing of the face lies in front of, judged at their centers as
+for a face that covers itself: where a sheet folds away at its outline, the
+side beyond lies behind the side before.
+
+The script may give a field of its own, `f(point, normal)`, with the point
+in world coordinates and the normal of the side that shows. The engine
+knows nothing of what it means: it samples it through the VM, as
+`transform.mapped` samples a point mapping, at the nodes the patches
+already use, recovering each node's world point from its screen position
+and depth along the camera's axes. With a field every face gets patches,
+since a field can vary in every direction. Patches start at most `step`
+apart on the page in their samples and halve, square by square, while
+their corner values, interpolated bilinearly as a PDF patch mesh paints
+them, stray from the field at their samples by more than the tolerance;
+a change narrower than the step may go unseen, and a square the lattice
+cannot halve again reports that the field is too rough for its tolerance.
+`s.colored(faces, colors, levels)` paints the field through color stops,
+optionally with the light over it.
+
+A few tones can stand in for the light. `s.page_light(camera)` is a direction
+that keeps its place on the page, from the upper left by default, and
+`s.Tones()` pairs isophote cuts with tones of the ink. Project with
+`light: s.page_light(camera), isophotes: tones.cuts`, then
+`s.toned(faces, inks)` cuts each face where its tone changes and
+`s.flat(faces, inks)` gives each face one color, the average of those tones
+by the area each takes on the page. Both are ordinary script in
+`stdlib/space/solids.huak` over the isophote bands. A reader anti-aliases every fill
+by itself and lets what is under two fills show along the edge they share, so
+the pieces of a solid are not filled side by side: pieces of one color go
+into one path, and the colors are laid from the darkest up, each over every
+piece at least as light, which leaves under any edge only colors between its
+two sides.
+
+Each solid is a picture with the ink's opacity (`object.opacity`), so an ink
+that is not opaque lets the paper and the picture `behind` show, such as the
+lines the faces hide. By default the result goes through
+`object.flatten_transparency` (`src/drawing/transparency.zig`) onto `paper`,
+and the output holds nothing translucent. With `translucent: true` the layers
+stay: SVG gives each group an `opacity`, and PDF makes each one a
+transparency group (see `src/render/pdf/README.md`). Over white paper the two
+look the same. See the [textbook example](../../../examples/space/textbook.huak).
+`s.shaded` builds its solids the same way, with the gleam as translucent white
+over opaque shading.
+
+Contours, the outlines where lines of sight graze a face, its isophotes and
+the boundaries of its highlights, are marched on a grid of the face's
+parameters (`contours.cpp`), with OCCT's contour function deciding the side of
+each node and placing every point. The function is computed from OCCT's own
+point and normal exactly as `Contap_SurfFunction` computes it
+(`contour_function.cpp`; `tests/space_contour_function.cpp` compares the two
+bit for bit), because the bound on its rounding needs the normal's length,
+which `Contap_SurfFunction` does not give. That bound follows from floating-point filter error analysis of the
+computation, from the lengths of the normal and the line of sight, and every
+decision rounding could tip uses it: a node's side, where the contour crosses
+itself or meets an edge, where Newton's method stops. The grid halves where the normal turns,
+holds the point where the function's gradient vanishes in a cell whose
+corners alternate sides, so that a contour crossing itself there is cut
+there, and is halved again where tracing finds the contour leaving a
+triangle between two nodes. Each traced piece is sampled evenly; where the
+contour lies on a line or a circle within what OCCT tells apart, it is that
+OCCT curve, as a sphere's outline is, and else a spline fitted to within
+that. Between each two samples the contour is measured against the curve
+where it stands farthest, as OCCT's minimizer finds it, and the edge has the
+tolerance measured, never less than what OCCT tells apart. Pieces end on the
+face's edges, at its singular points and where the contour crosses itself.
+
 Projection (`linework.zig`) draws each curve whole where its own shape decides
 its visibility, and otherwise splits it wherever it crosses another curve's
 image or pierces another shape, ranking each piece by the sheets in front of
-its middle. It then partitions the plane by the silhouettes, intersections and
-face boundaries, groups the cells by the face each sheet in front shows, and
-inserts lighting contours into occupied cells, excluding the empty background. This
+its middle. The adapter arranges the images in the plane (`arrangement.cpp`):
+they meet where they come within their tolerances, run along each other
+where they are proven to stay within them, and are cut wherever they meet,
+so that the arcs between the vertices bound the cells of the plane. One line
+of sight through each cell finds the sheets in front of it; the drawing's
+faces are the cells grouped by the face each sheet in front shows, with the
+lighting contours among the arcs, excluding the empty background. This
 preserves the boundary relationship at isophote tangencies; lighting does not
 turn silhouettes into interior cut edges.
-The adapter retains OCCT's computed curve-intersection parameters on both edges.
-This prevents a subsequent nearest-point query from losing an incidence near a
-turning point; it neither changes the curves nor increases their tolerances.
+
+A view asks where its lines of sight meet the faces through one index of
+their images (`sights.cpp`), built on its first such question: the middles
+of arcs, the points of cells and the light's culling all ask it. A plane,
+quadric or torus face is asked of OCCT's line and face intersector only
+where its box holds the point. Any other face keeps a grid of its
+parameters (`sights_grid.cpp`), halved where its cells bend, each cell's
+image widened by how far the surface may stand off its triangles, as
+OCCT's polyhedron estimates it, in OCCT's BVH; each triangle near the point
+starts OCCT's curve and surface solver once, and OCCT's classifier keeps the
+roots in the face. OCCT's own intersector would start its solver from every
+polyhedron edge near the line, over a hundred times for each crossing of a
+free-form face at a slant, for every face and every point. Near an outline,
+where the line crosses the surface twice close together, the solver also
+starts on either side of the outline and where the surface's osculating
+quadric puts the second crossing.
 
 ### Choosing a line style
 
@@ -136,7 +238,7 @@ zig build test-space -Docct="$OCCT_PREFIX"
 
 CMake can also discover a system SDK when the prefix is omitted. The native
 C++ toolchain uses the SDK's imported libraries. The versioned C entry point
-`huak_space_api_v3` returns the function table. The adapter only runs OCCT:
+`huak_space_api_v6` returns the function table. The adapter only runs OCCT:
 it builds a model and opens views of it, and each query is one OCCT operation
 over a batch, such as hidden-line removal of a shape, the image of curves,
 their crossings, where lines of sight meet the shapes, the partition of the

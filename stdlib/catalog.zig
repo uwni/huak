@@ -8,6 +8,8 @@ pub const modules = [_]Module{
     .{ .name = "std/paint.huak", .source = @embedFile("paint.huak"), .aliases = &.{"paint"} },
     .{ .name = "std/regions.huak", .source = @embedFile("regions.huak"), .aliases = &.{"regions"} },
     .{ .name = "std/space.huak", .source = @embedFile("space.huak"), .aliases = &.{"space"} },
+    .{ .name = "std/space/light.huak", .source = @embedFile("space/light.huak") },
+    .{ .name = "std/space/solids.huak", .source = @embedFile("space/solids.huak") },
     .{ .name = "std/drawing.huak", .source = @embedFile("drawing.huak"), .aliases = &.{"drawing"} },
     .{ .name = "std/brush.huak", .source = @embedFile("brush.huak"), .aliases = &.{"brush"} },
     .{ .name = "std/pen_motion.huak", .source = @embedFile("pen_motion.huak"), .aliases = &.{"pen_motion"} },

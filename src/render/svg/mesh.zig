@@ -15,7 +15,8 @@ const Color = @import("../../drawing/style.zig").Color;
 /// Native scene tag of the group holding one mesh's triangles. Typst writes
 /// it as `data-typst-label`.
 pub const label = "huak-mesh";
-const stylesheet = "<style>[data-typst-label=\"" ++ label ++ "\"] path{shape-rendering:crispEdges}</style>";
+/// The style rule of a document with mesh groups (`styles.zig` adds it).
+pub const rule = "[data-typst-label=\"" ++ label ++ "\"] path{shape-rendering:crispEdges}";
 
 /// Vertex colors off a common line by more than this need PDF.
 const collinear_tolerance = 1e-9;
@@ -119,13 +120,6 @@ fn color(value: @Vector(4, f64)) Color {
     return .{ .r = clamped[0], .g = clamped[1], .b = clamped[2], .a = clamped[3] };
 }
 
-/// Appends the mesh stylesheet to a document with mesh groups, before the
-/// root element's closing tag. The caller owns the result.
-pub fn addStylesheet(allocator: std.mem.Allocator, svg: []const u8) ![]u8 {
-    const close = std.mem.lastIndexOf(u8, svg, "</svg>") orelse return error.UnsupportedSvg;
-    return std.mem.concat(allocator, u8, &.{ svg[0..close], stylesheet, svg[close..] });
-}
-
 const t = std.testing;
 
 fn interpolate(colors: [3]Color, weights: [3]f64) @Vector(4, f64) {
@@ -190,11 +184,4 @@ test "expansion moves every edge out by the distance in either orientation" {
             }
         }
     }
-}
-
-test "the stylesheet ends the root element" {
-    const result = try addStylesheet(t.allocator, "<svg><g/></svg>\n");
-    defer t.allocator.free(result);
-    try t.expectEqualStrings("<svg><g/>" ++ stylesheet ++ "</svg>\n", result);
-    try t.expectError(error.UnsupportedSvg, addStylesheet(t.allocator, "<g/>"));
 }

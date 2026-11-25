@@ -1,7 +1,7 @@
 import assertions.assert
 import "../plot.huak".*
 import "../plot/statistics.huak" as stats
-import "../plot/render.huak" as renderer
+import "../plot/panels.huak" as stage
 import "../plot/scales.huak" as scales
 
 values := stats.sorted([4, false, 1, 3, 2])
@@ -29,7 +29,7 @@ plotting b do
     +bar categories ["B", "C"] values [1, 2]
 end
 link_x of fig axes [a, b]
-panels := renderer.prepare(fig)
+panels := stage.prepare(fig)
 assert(panels[0].layers[1].y[0] == 2)
 assert(panels[0].layers[1].data["y1"][0] == 6)
 assert(panels[0].layers[1].data["y1"][1] == -8)

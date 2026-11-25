@@ -12,15 +12,15 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "%s\n", dlerror());
     return 1;
   }
-  auto load = reinterpret_cast<decltype(&huak_space_api_v3)>(
-      dlsym(library, "huak_space_api_v3"));
+  auto load = reinterpret_cast<decltype(&huak_space_api_v6)>(
+      dlsym(library, "huak_space_api_v6"));
   const auto *api = load ? load() : nullptr;
   if (!api) return 1;
   // The table matches this header's version and size, with every entry.
   if (api->abi_version != HUAK_SPACE_ABI_VERSION || api->size != sizeof(*api))
     return 1;
   const char *entries = reinterpret_cast<const char *>(&api->build);
-  for (size_t at = 0; at + sizeof(void *) <= sizeof(*api) - offsetof(HuakProjectionV3, build);
+  for (size_t at = 0; at + sizeof(void *) <= sizeof(*api) - offsetof(HuakProjectionV6, build);
        at += sizeof(void *))
     if (!*reinterpret_cast<void *const *>(entries + at)) return 1;
 

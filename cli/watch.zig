@@ -4,6 +4,7 @@ const std = @import("std");
 const Session = @import("Session.zig");
 const Report = @import("Report.zig");
 const Output = @import("options.zig").Output;
+const WatchEvent = @import("options.zig").WatchEvent;
 
 var stopping: std.atomic.Value(bool) = .init(false);
 
@@ -53,11 +54,11 @@ fn rebuild(session: *Session, cwd: []const u8, observed: *Dependencies) !bool {
     var report: Report = .{ .allocator = temporary.allocator(), .io = io };
     const started = std.Io.Clock.Timestamp.now(io, .awake);
     if (session.options.json) {
-        try event(io, .{ .event = "build_start" });
+        try event(io, .{ .event = @tagName(WatchEvent.build_start) });
     } else std.debug.print("watch: building {s}\n", .{session.options.script.?});
     session.build(&report, .{ .ptr = observed, .vtable = &.{ .observe = Dependencies.observe } }) catch |err| {
         if (session.options.json) {
-            try event(io, .{ .event = "error", .message = report.message orelse @errorName(err) });
+            try event(io, .{ .event = @tagName(WatchEvent.@"error"), .message = report.message orelse @errorName(err) });
         } else {
             if (err != error.Reported) std.debug.print("huak: {s}\n", .{@errorName(err)});
             std.debug.print("watch: build failed; waiting for changes\n", .{});
@@ -71,7 +72,7 @@ fn rebuild(session: *Session, cwd: []const u8, observed: *Dependencies) !bool {
             .name = from.name,
             .path = try std.fs.path.resolve(report.allocator, &.{ cwd, from.path }),
         };
-        try event(io, .{ .event = "success", .outputs = absolute, .duration_ms = duration_ms });
+        try event(io, .{ .event = @tagName(WatchEvent.success), .outputs = absolute, .duration_ms = duration_ms });
     } else std.debug.print("watch: built in {d} ms; waiting for changes\n", .{duration_ms});
     return true;
 }

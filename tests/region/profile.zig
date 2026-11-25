@@ -1,7 +1,6 @@
 //! Existing profile contract exercised against the curve-region backend.
 const std = @import("std");
 const core = @import("drawing");
-const g = core.geometry;
 const Path = core.Path;
 const polygon = core.region;
 const profileOutline = polygon.profileStroke;

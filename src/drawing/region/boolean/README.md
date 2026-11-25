@@ -113,6 +113,14 @@ The following adaptations are intentional and apply to every input:
   rediscovered as the same event by coordinate distance. A projected cut must
   lie strictly inside its interval after mapping back to source parameters,
   so each subdivision advances in binary64.
+- Accept an intersection only where the two curves' points at its two
+  locations lie within the graph resolution of each other, since the graph
+  makes both one vertex. Two upstream paths can otherwise pair distant
+  points: the cubic classification, whose coefficients come from absolute
+  coordinates and are rounding noise for a straight cubic far from the
+  origin; and fat-line clipping, which keeps narrowing one curve against the
+  other once that has shrunk to a point, even a point that only lay on the
+  first curve's fat line. A point's zero chord makes its fat line vertical.
 - Test curve coincidence with the existing tolerance-aware `Curve.getTimeOf`.
   Nearest-point projection uses a different parameter stopping tolerance and
   cannot establish this membership predicate. Coincident edges with distinct
@@ -125,6 +133,16 @@ The following adaptations are intentional and apply to every input:
 - Report exhausted curve-intersection recursion as `GeometryWorkLimit`, rather
   than silently returning incomplete intersections. Public input/output and
   allocator-failure contracts remain those of `region.Options`.
+- Always pass the graph resolution as the tolerance of the intersection
+  stage, as upstream's Boolean operations pass theirs. Upstream's defaults
+  for calls without a tolerance serve only `Curve#getIntersections` and are
+  not ported.
+
+Tolerances keep upstream's names from `Numerical.js` (`EPSILON`,
+`MACHINE_EPSILON`, `CURVETIME_EPSILON`, `GEOMETRIC_EPSILON`) where upstream
+uses them, and fat-line clipping keeps its local `fatLineEpsilon`, call and
+depth limits and stalled-clip share as named constants. The margin of the
+hull certificates is this port's own.
 
 There is no polygon flattening, root-polishing fallback, per-fixture tolerance
 or alternate backend. The original region fixtures and stroke-section tests

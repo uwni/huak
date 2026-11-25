@@ -3,6 +3,7 @@
 const std = @import("std");
 const native = @import("libtypst");
 const Machine = @import("../Machine.zig");
+const Parser = @import("../Parser.zig");
 const units = @import("../../drawing/units.zig");
 const Color = @import("../../drawing/DisplayList.zig").Color;
 const c = native.c;
@@ -62,11 +63,11 @@ pub fn encode(allocator: std.mem.Allocator, bindings: []const Machine.TypstBindi
     const module = try allocator.create(c.TypstValueInput);
     module.* = std.mem.zeroes(c.TypstValueInput);
     module.kind = c.TYPST_VALUE_MODULE;
-    module.text = .{ .data = "huak", .len = 4 };
+    module.text = .{ .data = Parser.typst_namespace.ptr, .len = Parser.typst_namespace.len };
     module.bindings = members.ptr;
     module.binding_count = members.len;
     const roots = try allocator.alloc(c.TypstBinding, 1);
-    roots[0] = .{ .name = .{ .data = "huak", .len = 4 }, .value = module };
+    roots[0] = .{ .name = .{ .data = Parser.typst_namespace.ptr, .len = Parser.typst_namespace.len }, .value = module };
     return roots;
 }
 

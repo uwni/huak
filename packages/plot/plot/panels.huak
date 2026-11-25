@@ -1,0 +1,273 @@
+// A figure's panels: their layers, resolved and shared scales, and the mapping
+// from data to page coordinates that every later phase uses.
+import collections.get
+import assertions.assert
+import color.rgb
+import "model.huak".{Figure, Axis, Layer, horizontal, primary}
+import "rulers.huak" as rulers
+import "breaks.huak" as cuts
+import "scales.huak" as scales
+import "statistics.huak" as statistics
+
+export struct Panel
+    source:Axis
+    layers:list
+    x:scales.Scale
+    y:scales.Scale
+    xt:list = []
+    yt:list = []
+    rulers_by_side:dict = {}
+    x_piece:any = false
+    y_piece:any = false
+    origin:vec2 = (0pt, 0pt)
+    size:vec2 = (1pt, 1pt)
+    left:length = 0pt
+    right:length = 0pt
+    top:length = 0pt
+    bottom:length = 0pt
+    legends:list = []
+    legend_size:vec2 = (0pt, 0pt)
+    color_layer:any = false
+    color_ticks:list = []
+    color_labels:list = []
+    shared_x:any = false
+    shared_y:any = false
+    legend_right:length = 0pt
+    legend_bottom:length = 0pt
+    color_right:length = 0pt
+    color_bottom:length = 0pt
+end
+
+export fn palette(fig:Figure) -> list
+    colors:list := get(fig.options, "palette", [rgb(0, 0.45, 0.7), rgb(0.85, 0.33, 0.1), rgb(0, 0.6, 0.5), rgb(0.8, 0.47, 0.65), rgb(0.9, 0.6, 0), rgb(0.35, 0.7, 0.9)])
+    assert(len(colors) > 0, "palette must not be empty")
+    return colors
+end
+
+fn collect(layers:list, axis:string) -> list
+    result := []
+    for item in layers do
+        categories:list := get(item.data, "categories", [])
+        category_dimension:string := get(item.data, "category_dimension", "")
+        if item.kind == "cells" then
+            result += item.data[axis+"extent"]
+        elseif len(categories) > 0 and category_dimension == axis then
+            result += categories
+        elseif item.kind == "hline" then
+            if axis == "y" then result += item.y end
+        elseif item.kind == "vline" then
+            if axis == "x" then result += item.x end
+        else
+            for i in 0:len(item.x)-1 do
+                present := item.x[i] != false and item.y[i] != false
+                if item.kind == "band" or item.kind == "area" then present = present and item.data["upper"][i] != false end
+                if present then
+                    if axis == "x" then result += [item.x[i]] else result += [item.y[i]] end
+                    if item.kind == "rectangles" or item.kind == "segments" then
+                        result += [item.data[axis+"1"][i]]
+                    elseif item.kind == "band" or item.kind == "area" then
+                        upper:any := item.data["upper"][i]
+                        if axis == "y" and upper != false then result += [upper] end
+                    elseif item.kind == "errorbars" then
+                        lower:any := item.data["errors"][i]
+                        upper:list := get(item.options, "upper", item.data["errors"])
+                        assert(len(upper) == len(item.x), "upper errors length differs from data")
+                        if lower != false and upper[i] != false then
+                            assert(lower >= 0 and upper[i] >= 0, "error magnitudes must be nonnegative")
+                            horizontal := get(item.options, "orientation", "vertical") == "horizontal"
+                            if axis == "x" and horizontal then result += [item.x[i]-lower, item.x[i]+upper[i]] end
+                            if axis == "y" and not horizontal then result += [item.y[i]-lower, item.y[i]+upper[i]] end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return result
+end
+
+fn layers_for(layers:list, ax:Axis, dimension:string, side:string) -> list
+    fallback := primary(ax, dimension)
+    selected := []
+    for layer in layers do
+        if get(layer.options, dimension+"axis", fallback) == side then selected += [layer] end
+    end
+    return selected
+end
+
+// Statistics that combine layers (grouping and stacking) are local to a vec2
+// of axes. Put their primitives back in insertion order before painting.
+fn prepare_layers(ax:Axis, sides:dict) -> list
+    groups := {}
+    ordered := []
+    primary_x := primary(ax, "x"); primary_y := primary(ax, "y")
+    for i in 0:len(ax.layers)-1 do
+        layer := ax.layers[i]
+        x:string := get(layer.options, "xaxis", primary_x)
+        y:string := get(layer.options, "yaxis", primary_y)
+        assert(horizontal(x) and not horizontal(y), "invalid layer axis orientation")
+        assert(dict_contains(sides, x) and dict_contains(sides, y), "layer uses an undeclared axis side")
+        key := x+"/"+y
+        if not dict_contains(groups, key) then
+            settings := {}
+            if dict_contains(sides[x], "scale") then settings["xscale"] = sides[x]["scale"] end
+            if dict_contains(sides[y], "scale") then settings["yscale"] = sides[y]["scale"] end
+            groups[key] = {"layers": [], "indices": [], "settings": settings}
+        end
+        group := groups[key]
+        group["layers"] += [layer]
+        group["indices"] += [i]
+        ordered += [[]]
+    end
+    for key in keys(groups) do
+        group := groups[key]
+        for item in statistics.prepare(group["layers"], group["settings"], group["indices"]) do
+            i:int := item.options["series_index"]
+            ordered[i] += [item]
+        end
+    end
+    result := []
+    for primitives in ordered do result += primitives end
+    return result
+end
+
+export fn prepare(fig:Figure) -> list
+    panels := []
+    for ax in fig.axes do
+        x := primary(ax, "x"); y := primary(ax, "y")
+        assert(horizontal(x) and not horizontal(y), "invalid primary axis orientation")
+        sides := {}
+        names := [x, y]
+        names += keys(ax.sides)
+        for side in names do sides[side] = rulers.options(ax, side) end
+        layers := prepare_layers(ax, sides)
+        resolved := {}
+        for side in keys(sides) do
+            dim := "y"
+            if horizontal(side) then dim = "x" end
+            selected := layers_for(layers, ax, dim, side)
+            opts := sides[side]
+            kind := "linear"
+            for layer in selected do
+                if get(layer.data, "category_dimension", "") == dim then kind = "category" end
+            end
+            scale := scales.resolve(collect(selected, dim), get(opts, "scale", kind), get(opts, "limits", false), get(opts, "reverse", false))
+            resolved[side] = rulers.Ruler(side: side, scale: scale, options: opts)
+        end
+        panels += [Panel(source: ax, layers: layers, x: resolved[x].scale, y: resolved[y].scale, rulers_by_side: resolved)]
+    end
+    for panel in panels do
+        panel.x = shared_scale(fig, panels, panel, "x", fig.xlinks)
+        panel.y = shared_scale(fig, panels, panel, "y", fig.ylinks)
+        ax := panel.source
+        panel.rulers_by_side[primary(ax, "x")].scale = panel.x
+        panel.rulers_by_side[primary(ax, "y")].scale = panel.y
+        for side in keys(ax.sides) do
+            dim := "y"; inherited := panel.y
+            if horizontal(side) then dim = "x"; inherited = panel.x end
+            ruler := panel.rulers_by_side[side]
+            if side != primary(ax, dim) and not dict_contains(ruler.options, "scale") and not dict_contains(ruler.options, "limits") and len(layers_for(panel.layers, ax, dim, side)) == 0 then
+                ruler.scale = copy(inherited)
+                ruler.scale.reversed = get(ruler.options, "reverse", inherited.reversed)
+                original := panel.rulers_by_side[primary(ax, dim)]
+                for key in ["breaks", "break_gap"] do
+                    if not dict_contains(ruler.options, key) and dict_contains(original.options, key) then ruler.options[key] = original.options[key] end
+                end
+            end
+        end
+    end
+    return panels
+end
+
+export fn connected(source:Axis, groups:list, count:int) -> list
+    members := [source]
+    for iteration in 0:count-1 do
+        for group in groups do
+            overlap := false
+            for member in group do if scales.index(members, member) >= 0 then overlap = true end end
+            if overlap then
+                for member in group do if scales.index(members, member) < 0 then members += [member] end end
+            end
+        end
+    end
+    return members
+end
+
+fn shared_scale(fig:Figure, panels:list, panel:Panel, dimension:string, groups:list) -> scales.Scale
+    members := connected(panel.source, groups, len(fig.axes))
+    if len(members) == 1 then
+        if dimension == "x" then return panel.x else return panel.y end
+    end
+    reference := panel.rulers_by_side[primary(panel.source, dimension)]
+    kind := reference.scale.kind
+    limits:any := false
+    breaks:any := false; gap:any := false
+    values := []
+    for other in panels do
+        if scales.index(members, other.source) >= 0 then
+            side := primary(other.source, dimension)
+            ruler := other.rulers_by_side[side]
+            if dict_contains(ruler.options, "breaks") then
+                ranges := ruler.options["breaks"]
+                if breaks != false then assert(cuts.compatible(breaks, ranges), "shared axes have conflicting breaks") end
+                breaks = ranges
+            end
+            if dict_contains(ruler.options, "break_gap") then
+                if gap != false then assert(gap == ruler.options["break_gap"], "shared axes have conflicting break gaps") end
+                gap = ruler.options["break_gap"]
+            end
+            assert(ruler.scale.kind == kind, "shared axes must use the same scale")
+            candidate:any := get(ruler.options, "limits", false)
+            if candidate != false then
+                if limits != false then assert(candidate[0] == limits[0] and candidate[1] == limits[1], "shared axes have conflicting limits") end
+                limits = candidate
+            end
+            values += collect(layers_for(other.layers, other.source, dimension, side), dimension)
+        end
+    end
+    if breaks != false then reference.options["breaks"] = breaks end
+    if gap != false then reference.options["break_gap"] = gap end
+    return scales.resolve(values, kind, limits, reference.scale.reversed)
+end
+
+export fn point(panel:Panel, x:any, y:any) -> vec2
+    result := affine_point(panel, x, y)
+    for dim in ["x", "y"] do
+        partition := panel.rulers_by_side[primary(panel.source, dim)].partition
+        if len(partition.gaps) > 0 then
+            if dim == "x" then
+                distance:any := cuts.position(partition.pieces, x)
+                assert(distance != false, "point outside retained x intervals")
+                result = (panel.origin.x+distance, result.y)
+            else
+                distance:any := cuts.position(partition.pieces, y)
+                assert(distance != false, "point outside retained y intervals")
+                result = (result.x, panel.origin.y+distance)
+            end
+        end
+    end
+    return result
+end
+
+// Project the whole geometry onto the affine extension of this tile. Native
+// clipping then finds the actual crossings, including lines with both ends outside.
+export fn affine_point(panel:Panel, x:any, y:any) -> vec2
+    return panel.origin+(panel.size.x*scales.coordinate(panel.x, x), panel.size.y*scales.coordinate(panel.y, y))
+end
+
+fn raw_value(scale:scales.Scale, item:Layer, value:float, dimension:string, row:int) -> float
+    if scale.kind == "category" and get(item.data, "category_dimension", "") == dimension then
+        cats:list := item.data["categories"]
+        local:int := item.data["category_indices"][row]
+        assert(local >= 0 and local < len(cats), "category geometry exceeds its cell")
+        mapped := scales.index(scale.categories, cats[local])
+        assert(mapped >= 0, "unknown shared category")
+        return float(mapped)+value-local
+    end
+    return value
+end
+
+export fn raw_point(panel:Panel, item:Layer, x:float, y:float, row:int) -> vec2
+    return panel.origin+(panel.size.x*scales.numeric_coordinate(panel.x, raw_value(panel.x, item, x, "x", row)), panel.size.y*scales.numeric_coordinate(panel.y, raw_value(panel.y, item, y, "y", row)))
+end
+

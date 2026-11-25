@@ -37,6 +37,4 @@ for layer in dense.layers do
     assert(len(layer.faces) == 1)
     assert(abs(arclength(layer.faces[0].region)-36pt*PI) < 0.03pt, "lighting preserves both complete sphere sheets")
 end
-default drawing picture() do
-    for f in covered.visible_faces do +s.shaded(f, rgb(0.2, 0.6, 0.55)) end
-end
+default s.shaded(covered.visible_faces, [rgb(0.2, 0.6, 0.55), rgb(0.2, 0.6, 0.55)])
