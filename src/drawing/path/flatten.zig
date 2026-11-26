@@ -78,16 +78,7 @@ const Builder = struct {
 };
 
 fn distanceToSegment(point: g.Point, start: g.Point, end: g.Point) Error!f64 {
-    const delta = end.sub(start);
-    const relative = point.sub(start);
-    if (!delta.isFinite() or !relative.isFinite()) return error.NonFinite;
-    const length = delta.norm();
-    if (!std.math.isFinite(length)) return error.NonFinite;
-    if (length == 0) return relative.norm();
-    const direction = delta.scale(1 / length);
-    const projection = relative.dot(direction);
-    if (!std.math.isFinite(projection)) return error.NonFinite;
-    const distance = point.distance(start.add(direction.scale(std.math.clamp(projection, 0, length))));
+    const distance = g.distanceToSegment(point, start, end);
     if (!std.math.isFinite(distance)) return error.NonFinite;
     return distance;
 }

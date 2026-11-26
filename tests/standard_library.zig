@@ -9,4 +9,5 @@ test {
     _ = @import("standard_library/cut_outlines.zig");
     _ = @import("standard_library/objects.zig");
     _ = @import("standard_library/defaults.zig");
+    _ = @import("standard_library/solving.zig");
 }

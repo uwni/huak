@@ -7,6 +7,7 @@ const g = @import("../../drawing/geometry.zig");
 const DisplayList = @import("../../drawing/DisplayList.zig");
 const Path = @import("../../drawing/path/Path.zig");
 const pens = @import("../../drawing/pen/root.zig");
+const Workers = @import("workers");
 const mesh_pdf = @import("../pdf/mesh.zig");
 const svg_styles = @import("../svg/styles.zig");
 const pen_strokes = @import("scene/strokes.zig");
@@ -27,6 +28,8 @@ pub const SubmitOptions = struct {
     /// scene cannot hold, become PDF graphics that Typst imports. Otherwise
     /// they take the forms SVG has for them.
     pdf: bool = false,
+    /// Bounded worker budget for data-parallel SVG mesh triangulation.
+    workers: Workers = .serial,
 };
 
 pub const FrameBounds = struct {
@@ -78,6 +81,7 @@ fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: *con
         .pen_options = options.pen_geometry,
         .size = undefined,
         .pdf = options.pdf,
+        .workers = options.workers,
     };
     defer builder.deinit();
     const memory = builder.arena.allocator();
@@ -144,6 +148,7 @@ pub const Builder = struct {
     children: std.ArrayList(*c.TypstScene) = .empty,
     levels: std.ArrayList(Level) = .empty,
     pdf: bool = false,
+    workers: Workers = .serial,
     image_context: ?typst.Engine = null,
     /// Created on the first PDF graphic; every mesh and layer of the
     /// document reuses it.

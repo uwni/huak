@@ -101,17 +101,8 @@ const Singular *GridTrace::singularAt(const gp_Pnt &p) const {
 // all of whose degenerated edge stands for the point; or, within the
 // edge's tolerance, on an edge that the contour runs along.
 bool GridTrace::onAlong(const gp_Pnt &p) const {
-  return std::any_of(along.begin(), along.end(), [&](const TopoDS_Edge &edge) {
-    double f, l;
-    const auto on = BRep_Tool::Curve(edge, f, l);
-    if (on.IsNull())
-      return false;
-    const double within = BRep_Tool::Tolerance(edge) + Precision::Confusion();
-    if (on->Value(f).Distance(p) <= within || on->Value(l).Distance(p) <= within)
-      return true;
-    GeomAPI_ProjectPointOnCurve onto(p, on, f, l);
-    return onto.NbPoints() && onto.LowerDistance() <= within;
-  });
+  return std::any_of(along.begin(), along.end(),
+                     [&](const TopoDS_Edge &edge) { return pointOnEdge(edge, p, Precision::Confusion()); });
 }
 
 bool GridTrace::onEdge(const gp_Pnt2d &uv, TopAbs_State state) const {

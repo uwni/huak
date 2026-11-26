@@ -22,7 +22,7 @@ pub const tolerance: Tolerance = .{};
 /// point in huak.
 pub const curve_tolerance: f64 = 1e-3;
 
-pub const Point = struct {
+pub const Point = extern struct {
     x: f64,
     y: f64,
 
@@ -144,6 +144,12 @@ pub const BBox = struct {
     pub fn fromPoints(a: Point, b: Point) BBox {
         return .{ .min = .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y) }, .max = .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y) } };
     }
+    pub fn fromSlice(points: []const Point) BBox {
+        std.debug.assert(points.len > 0);
+        var result = fromPoint(points[0]);
+        for (points[1..]) |p| result = result.include(p);
+        return result;
+    }
     pub inline fn low(self: BBox, axis: usize) f64 {
         return if (axis == 0) self.min.x else self.min.y;
     }
@@ -259,6 +265,21 @@ pub const Cubic = struct {
         return result;
     }
 };
+
+/// Shortest Euclidean distance from `point` to the closed line segment `[start, end]`.
+/// Scales by segment length to avoid overflow on extreme finite coordinates;
+/// returns a non-finite value if any intermediate overflows.
+pub fn distanceToSegment(point: Point, start: Point, end: Point) f64 {
+    const delta = end.sub(start);
+    const relative = point.sub(start);
+    const length = delta.norm();
+    if (!std.math.isFinite(length)) return length;
+    if (length == 0) return relative.norm();
+    const direction = delta.scale(1 / length);
+    const projection = relative.dot(direction);
+    if (!std.math.isFinite(projection)) return projection;
+    return point.distance(start.add(direction.scale(std.math.clamp(projection, 0, length))));
+}
 
 /// Numerically stable real roots, including linear and repeated-root cases.
 pub fn quadraticRoots(a: f64, b: f64, c: f64, roots: *[2]f64) usize {

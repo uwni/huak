@@ -4,7 +4,7 @@
 // that where they overlap nothing is painted twice: no seam shows, and a
 // translucent or graded paint runs on unbroken.
 import math.{atan2, dot, max, min, norm, unit}
-import geometry.{arclength, compound, contour_ranges, measure, reverse, sample_at_length, subpaths}
+import geometry.{arclength, compound, contour_ranges, reverse, sample_at_length, signed_area, subpaths}
 import object.{append, bounds, draw, fill, filldraw, region}
 import transform.{bent, compose, rotate, scale, transformed, translate}
 import pen.{penoffset, stroke_sections}
@@ -137,27 +137,8 @@ end
 // A closed path wound counterclockwise, so that in a path filled by the
 // nonzero rule it adds to its neighbours instead of cancelling them.
 fn wound(shape:path) -> path
-    if twice_area(shape) < 0 then return reverse(shape) end
+    if signed_area(shape) < 0 then return reverse(shape) end
     return shape
-end
-
-// Twice the signed area a path encloses, exactly: Green's theorem over each
-// cubic segment's control points, with the integrals of products of
-// Bernstein polynomials as weights.
-fn twice_area(shape:path) -> float
-    total := 0.0
-    for segment in measure(shape).curves do
-        points:list := segment
-        for i in 0:3 do
-            for k in 0:2 do
-                p:vec2 := points[i]
-                step:vec2 := points[k+1]-points[k]
-                weight := [1, 3, 3, 1][i]*[1, 2, 1][k]/(6*[1, 5, 10, 10, 5, 1][i+k])
-                total = total+3*weight*((p.x/1pt)*(step.y/1pt)-(p.y/1pt)*(step.x/1pt))
-            end
-        end
-    end
-    return total
 end
 
 // A mark's pieces with its tip `distance` along the curve, pointing the way

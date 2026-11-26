@@ -43,6 +43,7 @@ const style = @import("style.zig");
 const regions = @import("region/root.zig");
 const enclosure = @import("enclosure.zig");
 const color_patches = @import("color_patches.zig");
+const Workers = @import("workers");
 const reading = @import("transparency/reading.zig");
 const levels = @import("transparency/levels.zig");
 const writing = @import("transparency/writing.zig");
@@ -61,6 +62,8 @@ pub const Options = struct {
     tolerance: f64 = g.curve_tolerance,
     /// The result shares patch arrays with pictures attached to this store.
     meshes: ?*DisplayList.MeshStore = null,
+    /// Bounded worker budget for data-parallel color-patch composition.
+    workers: Workers = .serial,
 };
 
 /// `source` is borrowed for the call. `labels` resolves a text into its
@@ -197,30 +200,58 @@ pub const Track = struct {
         if (first < past) return .{ self.colors[first], self.colors[past - 1] };
         if (first == 0) return .{ self.colors[0], self.colors[0] };
         if (first == self.at.len) return .{ self.colors[first - 1], self.colors[first - 1] };
-        const color = mix(self.colors[first - 1], self.colors[first], (position - self.at[first - 1]) / (self.at[first] - self.at[first - 1]));
+        const color = self.colors[first - 1].lerp(self.colors[first], (position - self.at[first - 1]) / (self.at[first] - self.at[first - 1]));
         return .{ color, color };
     }
 };
-
-pub fn mix(a: Color, b: Color, t: f64) Color {
-    return .{ .r = a.r + (b.r - a.r) * t, .g = a.g + (b.g - a.g) * t, .b = a.b + (b.b - a.b) * t, .a = a.a + (b.a - a.a) * t };
-}
 
 // Compositing, on premultiplied colors with channels in `enclosure.Real` or
 // `enclosure.Enclosure`.
 
 pub fn premultiplied(comptime T: type, color: Rgba(T)) Rgba(T) {
-    return .{ .r = color.r.mul(color.a), .g = color.g.mul(color.a), .b = color.b.mul(color.a), .a = color.a };
+    var result: Rgba(T) = undefined;
+    premultipliedInto(T, &color, &result);
+    return result;
+}
+
+pub fn premultipliedInto(comptime T: type, color: *const Rgba(T), out: *Rgba(T)) void {
+    std.debug.assert(out != color);
+    color.r.mulInto(&color.a, &out.r);
+    color.g.mulInto(&color.a, &out.g);
+    color.b.mulInto(&color.a, &out.b);
+    out.a = color.a;
 }
 
 /// Porter and Duff's source over.
 pub fn over(comptime T: type, top: Rgba(T), bottom: Rgba(T)) Rgba(T) {
-    const rest = T.constant(1).sub(top.a);
-    return .{ .r = top.r.add(rest.mul(bottom.r)), .g = top.g.add(rest.mul(bottom.g)), .b = top.b.add(rest.mul(bottom.b)), .a = top.a.add(rest.mul(bottom.a)) };
+    var result: Rgba(T) = undefined;
+    overInto(T, &top, &bottom, &result);
+    return result;
+}
+
+pub fn overInto(comptime T: type, top: *const Rgba(T), bottom: *const Rgba(T), out: *Rgba(T)) void {
+    std.debug.assert(out != top and out != bottom);
+    var one: T = undefined;
+    one.setConstant(1);
+    var rest: T = undefined;
+    one.subInto(&top.a, &rest);
+    inline for (.{ "r", "g", "b", "a" }) |channel| {
+        var under: T = undefined;
+        rest.mulInto(&@field(bottom.*, channel), &under);
+        @field(top.*, channel).addInto(&under, &@field(out.*, channel));
+    }
 }
 
 pub fn scaled(comptime T: type, color: Rgba(T), factor: f64) Rgba(T) {
-    return .{ .r = color.r.scale(factor), .g = color.g.scale(factor), .b = color.b.scale(factor), .a = color.a.scale(factor) };
+    var result: Rgba(T) = undefined;
+    scaledInto(T, &color, factor, &result);
+    return result;
+}
+
+pub fn scaledInto(comptime T: type, color: *const Rgba(T), factor: f64, out: *Rgba(T)) void {
+    inline for (.{ "r", "g", "b", "a" }) |channel| {
+        @field(color.*, channel).scaleInto(factor, &@field(out.*, channel));
+    }
 }
 
 /// A composite over the paper is opaque, so its channels are its color.
@@ -246,6 +277,8 @@ pub fn netsOf(gradient: *const Gradient) ?[]const [16]g.Point {
 }
 
 pub fn sameBits(a: anytype, b: @TypeOf(a)) bool {
+    if (a.len != b.len) return false;
+    if (a.ptr == b.ptr) return true;
     return std.mem.eql(u8, std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
 }
 
@@ -281,12 +314,18 @@ fn Flattener(comptime Labels: type) type {
         visible: std.AutoHashMapUnmanaged(u32, *Path) = .empty,
         /// What a group clips to where a paint paints, traced by lines.
         tracings: std.AutoHashMapUnmanaged(u32, *Path) = .empty,
+        /// Closed world-space fill curves, cached on `arena`.
+        closed_paths: std.AutoHashMapUnmanaged(u32, Path) = .empty,
+        /// Color-patch arrays adopted into `options.meshes`, released once
+        /// the output picture has taken its own references.
+        adopted_colors: std.ArrayList(*Gradient.ColorPatches.Shared) = .empty,
         /// The glyphs a text resolves into, and the pictures they view.
         glyphs: std.AutoHashMapUnmanaged(u32, []const u32) = .empty,
         resolved: std.ArrayList(*DisplayList) = .empty,
         serials: u32 = 0,
 
         fn deinit(self: *Self) void {
+            for (self.adopted_colors.items) |shared| shared.release();
             inline for (.{ &self.shapes, &self.clip_regions, &self.coverages, &self.leaf_coverages, &self.visible, &self.tracings }) |table| {
                 var values = table.valueIterator();
                 while (values.next()) |path| {

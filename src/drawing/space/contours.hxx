@@ -41,10 +41,24 @@
 #include <math_Vector.hxx>
 #include <math_BracketedRoot.hxx>
 #include <math_Function.hxx>
+#include <math_FunctionSetRoot.hxx>
+#include <math_FunctionSetWithDerivatives.hxx>
 #include <math_GaussSingleIntegration.hxx>
 #include <optional>
 
 namespace huak::space::contour {
+// Whether a point lies on `edge` within `within` plus the edge's tolerance.
+inline bool pointOnEdge(const TopoDS_Edge &edge, const gp_Pnt &p, double within) {
+  double a, b;
+  const auto curve = BRep_Tool::Curve(edge, a, b);
+  if (curve.IsNull())
+    return false;
+  const double reach = within + BRep_Tool::Tolerance(edge);
+  if (curve->Value(a).Distance(p) <= reach || curve->Value(b).Distance(p) <= reach)
+    return true;
+  GeomAPI_ProjectPointOnCurve onto(p, curve, a, b);
+  return onto.NbPoints() && onto.LowerDistance() <= reach;
+}
 // A singular point of a face: a degenerated edge, all of whose curve on the
 // face stands for the one point.
 struct Singular {

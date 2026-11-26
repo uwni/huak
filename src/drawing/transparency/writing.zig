@@ -76,9 +76,11 @@ fn enterClips(self: anytype, out: *DisplayList, id: ?u32) !usize {
 }
 
 fn closedPath(self: anytype, id: u32) !Path {
+    if (self.closed_paths.get(id)) |known| return known;
     const leaf = self.leaves.items[id];
     const view = try leaf.picture.geometry().view(self.arena, leaf.draw().path);
     var result = Path.init(self.arena);
+    try result.segments.ensureUnusedCapacity(self.arena, view.segments.items.len);
     for (view.segments.items) |segment| switch (segment) {
         .move => |point| {
             if (result.open) try result.close();
@@ -89,6 +91,7 @@ fn closedPath(self: anytype, id: u32) !Path {
         .close => try result.close(),
     };
     if (result.open) try result.close();
+    try self.closed_paths.put(self.arena, id, result);
     return result;
 }
 

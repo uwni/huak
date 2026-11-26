@@ -23,19 +23,21 @@ pub fn request(self: *Sheet, uv: g.Point, place: u8) !u32 {
 /// `CSLib::Normal` resolves singular poles and cone apices directly; if a
 /// normal is still undefined, returns `UndefinedNormal`.
 pub fn flush(self: *Sheet) Error!void {
-    const a = self.allocator;
     const fresh = self.nodes.items[self.pending..];
     if (fresh.len == 0) return;
     self.pending = self.nodes.items.len;
-    const uv = try a.alloc(g.Point, fresh.len);
+    const tmp = self.shading.allocator;
+    const uv = try tmp.alloc(g.Point, fresh.len);
+    defer tmp.free(uv);
     for (uv, fresh) |*position, n| position.* = n.uv;
-    const points = try a.alloc(Look, fresh.len);
-    try self.shading.surfaces.look(a, self.face, uv, points);
+    const points = try tmp.alloc(Look, fresh.len);
+    defer tmp.free(points);
+    try self.shading.surfaces.look(tmp, self.face, uv, points);
     for (fresh, points) |*n, point| {
         n.* = self.shading.node(n.uv, point, n.place);
         if (n.singular) return error.UndefinedNormal;
     }
-    try self.shading.sample(a, fresh);
+    try self.shading.sample(tmp, fresh);
 }
 
 pub fn inFront(self: *const Sheet, corner: Corner) bool {

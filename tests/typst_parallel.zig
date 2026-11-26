@@ -341,14 +341,14 @@ test "shared native layout batches survive ownership handoff and preserve select
         defer batch.deinit();
         var diagnostic: ?typst.Buffer = null;
         defer if (diagnostic) |*buffer| buffer.deinit();
-        var first = try batch.render(t.allocator, 0, .svg, &diagnostic);
+        var first = try batch.render(t.allocator, 0, .svg, .serial, &diagnostic);
         defer first.deinit();
         batch.release(0);
-        var alias = try batch.render(t.allocator, 1, .svg, &diagnostic);
+        var alias = try batch.render(t.allocator, 1, .svg, .serial, &diagnostic);
         defer alias.deinit();
         try t.expectEqualSlices(u8, first.bytes(), alias.bytes());
         batch.release(1);
-        var second = try batch.render(t.allocator, 2, .pdf, &diagnostic);
+        var second = try batch.render(t.allocator, 2, .pdf, .serial, &diagnostic);
         defer second.deinit();
         batch.release(2);
         const text = try pdf_text.text(second.bytes(), .{});

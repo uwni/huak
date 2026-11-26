@@ -44,6 +44,30 @@ impl Conversion<'_> {
         Ok(result)
     }
 
+    unsafe fn scope(
+        &mut self,
+        data: *const TypstBinding,
+        count: usize,
+        depth: usize,
+    ) -> Result<Scope, Error> {
+        if (count != 0 && depth > 64) || count > self.budget {
+            return Err(Error::invalid(
+                "binding value tree exceeds depth or node limit",
+            ));
+        }
+        let mut result = Scope::new();
+        for binding in unsafe { values(data, count, "bindings")? } {
+            let name = unsafe { text(binding.name, "binding name")? };
+            if result.get(name).is_some() {
+                return Err(Error::invalid(format!("duplicate binding name: {name}")));
+            }
+            let input = unsafe { required(binding.value, "binding value")? };
+            let value = unsafe { self.value(input, depth)? };
+            result.bind(name.into(), Binding::detached(value));
+        }
+        Ok(result)
+    }
+
     unsafe fn value(&mut self, input: &TypstValueInput, depth: usize) -> Result<Value, Error> {
         if depth > 64 || self.budget == 0 {
             return Err(Error::invalid(
@@ -74,7 +98,7 @@ impl Conversion<'_> {
                 if input.item_count > self.budget {
                     return Err(Error::invalid("binding value tree exceeds node limit"));
                 }
-                let mut items = Array::new();
+                let mut items = Array::with_capacity(input.item_count);
                 for value in unsafe { values(input.items, input.item_count, "binding array")? } {
                     items.push(unsafe { self.value(value, depth + 1)? });
                 }
@@ -86,12 +110,7 @@ impl Conversion<'_> {
             }
             TYPST_VALUE_MODULE => {
                 let name = unsafe { text(input.text, "module name")? };
-                let members =
-                    unsafe { self.bindings(input.bindings, input.binding_count, depth + 1)? };
-                let mut scope = Scope::new();
-                for (member, value) in members {
-                    scope.bind(member.into(), Binding::detached(value));
-                }
+                let scope = unsafe { self.scope(input.bindings, input.binding_count, depth + 1)? };
                 Value::Module(if name.is_empty() {
                     Module::anonymous(scope)
                 } else {
@@ -135,11 +154,7 @@ pub(super) unsafe fn bindings(
         references,
         budget: 1_000_000,
     };
-    let mut scope = Scope::new();
-    for (name, value) in unsafe { conversion.bindings(data, count, 0)? } {
-        scope.bind(name.into(), Binding::detached(value));
-    }
-    Ok(scope)
+    unsafe { conversion.scope(data, count, 0) }
 }
 #[cfg(test)]
 mod tests {

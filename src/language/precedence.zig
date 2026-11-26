@@ -9,8 +9,7 @@ const Binding = binder.Binding;
 
 pub const Id = u32;
 pub const max_groups = 512;
-const words = max_groups / 64;
-const Row = [words]u64;
+const Row = std.StaticBitSet(max_groups);
 pub const Error = Allocator.Error || error{ TooManyGroups, InvalidGroup, CyclicPrecedence };
 pub const Comparison = enum { higher, lower, same, unrelated };
 pub const Group = struct {
@@ -94,7 +93,7 @@ pub const Table = struct {
         try self.reach.ensureUnusedCapacity(self.allocator, 1);
         const id: Id = @intCast(self.groups.items.len);
         self.groups.appendAssumeCapacity(.{ .name = name, .module = module, .associativity = associativity, .span = span });
-        self.reach.appendAssumeCapacity(@splat(0));
+        self.reach.appendAssumeCapacity(.empty);
         return id;
     }
     pub fn above(self: *Table, higher: Id, lower: Id) Error!void {
@@ -103,15 +102,15 @@ pub const Table = struct {
         if (higher == lower or self.reaches(lower, higher)) return error.CyclicPrecedence;
         if (self.reaches(higher, lower)) return;
         var descendants = self.reach.items[lower];
-        descendants[lower / 64] |= bit(lower);
+        descendants.set(lower);
         for (self.reach.items, 0..) |*row, id| {
-            if (id != higher and !has(row.*, higher)) continue;
-            for (row, descendants) |*destination, mask| destination.* |= mask;
+            if (id != higher and !row.isSet(higher)) continue;
+            row.setUnion(descendants);
         }
     }
     pub fn validate(self: *const Table) Error!void {
         if (self.groups.items.len != self.reach.items.len) return error.InvalidGroup;
-        for (self.reach.items, 0..) |row, id| if (has(row, @intCast(id))) return error.CyclicPrecedence;
+        for (self.reach.items, 0..) |row, id| if (row.isSet(id)) return error.CyclicPrecedence;
     }
     pub fn compare(self: *const Table, a: Id, b: Id) Error!Comparison {
         try self.check(a);
@@ -125,13 +124,7 @@ pub const Table = struct {
         if (id >= self.groups.items.len) return error.InvalidGroup;
     }
     fn reaches(self: *const Table, a: Id, b: Id) bool {
-        return has(self.reach.items[a], b);
-    }
-    fn bit(id: Id) u64 {
-        return @as(u64, 1) << @as(u6, @intCast(id % 64));
-    }
-    fn has(row: Row, id: Id) bool {
-        return row[id / 64] & bit(id) != 0;
+        return self.reach.items[a].isSet(b);
     }
 };
 

@@ -220,3 +220,27 @@ test "unique style edits do not retain history or allocate new entries" {
     }
     pool.release(value);
 }
+
+test "color patches share arrays through one store and support zero-copy adoption" {
+    const t = std.testing;
+    var store = Gradient.Store.init(t.allocator);
+    defer store.deinit();
+    var first = Pool.initWithMeshes(t.allocator, &store);
+    defer first.deinit();
+    var second = Pool.initWithMeshes(t.allocator, &store);
+    defer second.deinit();
+    const target = store.lockedAllocator();
+    const pts = try target.dupe([16]g.Point, &test_patches.points);
+    errdefer target.free(pts);
+    const cols = try target.dupe([4]Color, &.{.{ .{ .r = 1 }, .{ .g = 1 }, .{ .b = 1 }, .white }});
+    errdefer target.free(cols);
+    const adopted = try (Gradient.ColorPatches{ .points = pts, .colors = cols }).adopt(t.allocator, &store);
+    defer adopted.shared.?.release();
+    const style: Style = .{ .fill = .{ .gradient = &.{ .color_patches = adopted } } };
+    const a = try first.intern(&style);
+    const b = try second.intern(a);
+    try t.expectEqual(pts.ptr, a.gradientFor(.fill).?.color_patches.points.ptr);
+    try t.expectEqual(pts.ptr, b.gradientFor(.fill).?.color_patches.points.ptr);
+    try t.expectEqual(@as(usize, 3), adopted.shared.?.referenceCount());
+    try t.expectEqual(@as(usize, 1), store.count());
+}

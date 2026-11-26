@@ -122,11 +122,11 @@ test "outline picture workers retain independent geometry after their borrowed o
         defer if (expected) |bytes| t.allocator.free(bytes);
         var steps: ?u64 = null;
         for ([_]usize{ 1, 4 }) |jobs| {
-            var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+            var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = &library, .workers = .init(t.io, jobs) }, .{});
             defer runtime.deinit();
             var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
             defer machine.deinit();
-            var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+            var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
             executor.attach(&machine);
             try execute(&machine);
             if (jobs == 4) try t.expectEqual(@as(usize, 2), executor.stats.tasks);

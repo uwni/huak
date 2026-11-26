@@ -6,7 +6,7 @@ const bc = @import("../bytecode.zig");
 const Machine = @import("../Machine.zig");
 const Runtime = @import("../Runtime.zig");
 const Value = @import("../types.zig").Value;
-const workers = @import("../../concurrency/worker.zig");
+const Workers = @import("workers");
 
 pub const Stats = struct {
     regions: usize = 0,
@@ -17,15 +17,13 @@ pub const Stats = struct {
 const Executor = @This();
 
 allocator: std.mem.Allocator,
-io: std.Io,
 runtime: *Runtime,
-jobs: ?usize = null,
 stats: Stats = .{},
 
 /// Keep the executor and Runtime at stable addresses through execution.
 /// The allocator must support allocation/free on the I/O worker threads.
 pub fn attach(self: *Executor, machine: *Machine) void {
-    if (workers.workerCount(2, self.jobs) <= 1 or machine.program.task_regions.len == 0) return;
+    if (self.runtime.backends.workers.limit(2) <= 1 or machine.program.task_regions.len == 0) return;
     // Effect proofs describe the canonical Runtime callbacks. A wrapper or
     // another task hook can change observable behavior; keep that host's
     // execution path rather than replacing its callbacks in child VMs.
@@ -37,7 +35,9 @@ pub fn attach(self: *Executor, machine: *Machine) void {
 
 fn dispatch(context: ?*anyopaque, parent: *Machine, region: *const bc.TaskRegion) Machine.Error!bool {
     const self: *Executor = @ptrCast(@alignCast(context.?));
-    const concurrency = workers.workerCount(region.tasks.len, self.jobs);
+    const budget = self.runtime.backends.workers;
+    const io = budget.io orelse return false;
+    const concurrency = budget.limit(region.tasks.len);
     if (concurrency <= 1) return false;
     if (region.function >= parent.program.functions.len or region.tasks.len < 2) return false;
     const code = parent.program.functions[region.function].code;
@@ -107,13 +107,15 @@ fn dispatch(context: ?*anyopaque, parent: *Machine, region: *const bc.TaskRegion
     defer if (!committed) self.runtime.rollbackTasks(checkpoint);
     var shared: Shared = .{
         .owner = self,
+        .io = io,
+        .child_workers = budget.nested(concurrency),
         .parent = parent,
         .region = region,
         .outcomes = outcomes,
         .inputs = inputs,
         .remaining = remaining,
     };
-    workers.runGraph(self.allocator, self.io, concurrency, dependencies, &shared, Shared.one) catch |err|
+    Workers.init(io, concurrency).runGraph(self.allocator, dependencies, &shared, Shared.one) catch |err|
         return parent.taskFailure(err);
     self.stats.regions += 1;
     self.stats.tasks += shared.executed.load(.acquire);
@@ -174,6 +176,8 @@ const Input = struct { global: u32, producer: usize };
 
 const Shared = struct {
     owner: *Executor,
+    io: std.Io,
+    child_workers: Workers,
     parent: *Machine,
     region: *const bc.TaskRegion,
     outcomes: []Outcome,
@@ -200,14 +204,14 @@ const Shared = struct {
         _ = self.peak.fetchMax(active, .monotonic);
         _ = self.executed.fetchAdd(1, .monotonic);
         defer _ = self.active.fetchSub(1, .release);
-        self.metadata.lockUncancelable(self.owner.io);
-        outcome.runtime = self.owner.runtime.forkTask() catch |err| {
-            self.metadata.unlock(self.owner.io);
+        self.metadata.lockUncancelable(self.io);
+        outcome.runtime = self.owner.runtime.forkTask(self.child_workers) catch |err| {
+            self.metadata.unlock(self.io);
             outcome.cause = hostError(err);
             outcome.infrastructure = err;
             return false;
         };
-        self.metadata.unlock(self.owner.io);
+        self.metadata.unlock(self.io);
         const ancestor_count = self.parent.frames.items.len - 1;
         outcome.machine = Machine.init(self.owner.allocator, self.parent.program, outcome.runtime.?.host(), self.parent.limits) catch |err| {
             outcome.cause = err;
@@ -237,8 +241,8 @@ const Shared = struct {
 
     fn publish(self: *Shared, index: usize) bool {
         const outcome = &self.outcomes[index];
-        self.metadata.lockUncancelable(self.owner.io);
-        defer self.metadata.unlock(self.owner.io);
+        self.metadata.lockUncancelable(self.io);
+        defer self.metadata.unlock(self.io);
         const available = self.remaining - self.spent;
         if (outcome.steps >= available) {
             self.budget_fallback = true;

@@ -11,6 +11,7 @@ const c = @import("space_c");
 const Model = @import("../Model.zig");
 const shading = @import("../shading.zig");
 const dot = shading.dot;
+const cross = shading.cross;
 const linework = @import("../linework.zig");
 const layer_light = @import("light.zig");
 const highlight_spots = @import("spots.zig");
@@ -205,7 +206,3 @@ pub const FaceLight = struct {
     start: usize = 0,
     count: usize = 0,
 };
-
-fn cross(a: [3]f64, b: [3]f64) [3]f64 {
-    return .{ a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
-}

@@ -4,7 +4,7 @@ const Translator = @import("translate_c").Translator;
 const Import = std.Build.Module.Import;
 const Configuration = @import("Configuration.zig");
 
-pub const Libraries = struct { binding: Import, native: Import, huak: Import, tooling: Import, options: Import, xml: *std.Build.Module, clap: Import, drawing: Import, space_c: Import };
+pub const Libraries = struct { binding: Import, native: Import, huak: Import, tooling: Import, options: Import, xml: *std.Build.Module, clap: Import, drawing: Import, workers: Import, space_c: Import };
 
 pub const Fixtures = struct { sample: Import, drawing: Import, animation: Import, drawing_workflow: Import, typst_workflow: Import, regions: Import };
 
@@ -12,6 +12,7 @@ const EngineModules = struct {
     binding: Import,
     native: Import,
     huak: Import,
+    workers: Import,
     standard_library: Import,
     csv: Import,
     xml: *std.Build.Module,
@@ -30,13 +31,14 @@ pub fn engineModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
     const xml = b.dependency("xml", .{ .target = target, .optimize = optimize }).module("xml");
     const csv: Import = .{ .name = "csvzero", .module = b.dependency("csvzero", .{ .target = target, .optimize = optimize }).module("csvzero") };
     const standard_library: Import = .{ .name = "huak_std", .module = b.createModule(.{ .root_source_file = b.path("stdlib/catalog.zig"), .target = target, .optimize = optimize }) };
-    const engine = engineModule(b, public, "huak", .{ .root_source_file = b.path("src/huak.zig"), .target = target, .optimize = optimize, .imports = &.{ native, loader, .{ .name = "xml_parser", .module = xml }, standard_library, csv } });
+    const workers: Import = .{ .name = "workers", .module = b.createModule(.{ .root_source_file = b.path("src/concurrency/Workers.zig"), .target = target, .optimize = optimize }) };
+    const engine = engineModule(b, public, "huak", .{ .root_source_file = b.path("src/huak.zig"), .target = target, .optimize = optimize, .imports = &.{ native, loader, .{ .name = "xml_parser", .module = xml }, standard_library, csv, workers } });
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", @import("../build.zig.zon").version);
     engine.module.addOptions("build_options", build_options);
     const projection: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("src/drawing/space/projection.h"), .target = target, .optimize = optimize });
     engine.module.addImport("space_c", projection.mod);
-    return .{ .binding = binding, .native = native, .huak = engine, .standard_library = standard_library, .csv = csv, .xml = xml, .space_c = .{ .name = "space_c", .module = projection.mod } };
+    return .{ .binding = binding, .native = native, .huak = engine, .workers = workers, .standard_library = standard_library, .csv = csv, .xml = xml, .space_c = .{ .name = "space_c", .module = projection.mod } };
 }
 
 fn engineModule(b: *std.Build, comptime public: bool, name: []const u8, options: std.Build.Module.CreateOptions) Import {
@@ -46,11 +48,11 @@ fn engineModule(b: *std.Build, comptime public: bool, name: []const u8, options:
 pub fn addLibraries(b: *std.Build, config: Configuration) Libraries {
     const engine = engineModules(b, config.target, config.optimize, true);
     const clap: Import = .{ .name = "clap", .module = b.dependency("clap", .{ .target = config.target, .optimize = config.optimize }).module("clap") };
-    const drawing: Import = .{ .name = "drawing", .module = module(b, config.target, config.optimize, "src/drawing/root.zig", &.{}) };
+    const drawing: Import = .{ .name = "drawing", .module = module(b, config.target, config.optimize, "src/drawing/root.zig", &.{engine.workers}) };
     const tooling = b.addModule("huak_tooling", .{ .root_source_file = b.path("src/tooling.zig"), .target = config.target, .optimize = config.optimize, .link_libc = true, .imports = &.{ engine.standard_library, engine.csv } });
     const defaults = b.addOptions();
     defaults.addOptionPathUntracked("library_path", config.typst.library);
-    return .{ .binding = engine.binding, .native = engine.native, .huak = engine.huak, .tooling = .{ .name = "huak_tooling", .module = tooling }, .options = .{ .name = "host_options", .module = defaults.createModule() }, .xml = engine.xml, .clap = clap, .drawing = drawing, .space_c = engine.space_c };
+    return .{ .binding = engine.binding, .native = engine.native, .huak = engine.huak, .tooling = .{ .name = "huak_tooling", .module = tooling }, .options = .{ .name = "host_options", .module = defaults.createModule() }, .xml = engine.xml, .clap = clap, .drawing = drawing, .workers = engine.workers, .space_c = engine.space_c };
 }
 
 pub fn fixtureModules(b: *std.Build, config: Configuration, libraries: Libraries) Fixtures {

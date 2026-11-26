@@ -1,6 +1,11 @@
 // The closed loops the arcs bound, as paths and as faces with their bounds
 // and moments.
 #include "view.hxx"
+#include <Geom2d_BezierCurve.hxx>
+#include <Geom2d_Line.hxx>
+#include <Geom_Plane.hxx>
+#include <NCollection_Array1.hxx>
+#include <Precision.hxx>
 
 namespace {
 HuakBox boxOf(const Bnd_Box &box) {
@@ -19,6 +24,65 @@ TopoDS_Edge edgeOf(HuakView *view, const HuakTurnedArc &turned) {
   return TopoDS::Edge(arc.edge.Oriented(turned.reversed ? TopAbs_REVERSED : TopAbs_FORWARD));
 }
 
+// A planar face carrying the 2D line and cubic Bézier pcurves of a region's
+// closed path commands, so OCCT's non-adaptive BRepGProp integrates each
+// degree-<=3 edge exactly without adaptive Kronrod refinement over multi-knot
+// B-splines.
+TopoDS_Face faceFromCommands(const Handle(Geom_Plane) & plane, const HuakPathCommand *commands, size_t count) {
+  BRep_Builder builder;
+  TopoDS_Face face;
+  builder.MakeFace(face, plane, Precision::Confusion());
+  TopoDS_Wire wire;
+  bool inWire = false;
+  gp_Pnt2d first(0, 0), current(0, 0);
+  const auto addLine = [&](const gp_Pnt2d &a, const gp_Pnt2d &b) {
+    const gp_Vec2d delta(a, b);
+    const double length = delta.Magnitude();
+    if (!(length > gp::Resolution()))
+      return;
+    TopoDS_Edge edge;
+    builder.MakeEdge(edge);
+    builder.UpdateEdge(edge, new Geom2d_Line(a, gp_Dir2d(delta)), face, Precision::Confusion());
+    builder.Range(edge, face, 0.0, length);
+    builder.Add(wire, edge);
+  };
+  for (size_t i = 0; i < count; ++i) {
+    const auto &cmd = commands[i];
+    if (cmd.op == HUAK_MOVE) {
+      if (inWire)
+        builder.Add(face, wire);
+      builder.MakeWire(wire);
+      inWire = true;
+      first = current = gp_Pnt2d(cmd.p[0].x, cmd.p[0].y);
+    } else if (cmd.op == HUAK_LINE) {
+      const gp_Pnt2d next(cmd.p[0].x, cmd.p[0].y);
+      addLine(current, next);
+      current = next;
+    } else if (cmd.op == HUAK_BEZIER) {
+      NCollection_Array1<gp_Pnt2d> poles(1, 4);
+      poles(1) = current;
+      poles(2) = gp_Pnt2d(cmd.p[0].x, cmd.p[0].y);
+      poles(3) = gp_Pnt2d(cmd.p[1].x, cmd.p[1].y);
+      poles(4) = gp_Pnt2d(cmd.p[2].x, cmd.p[2].y);
+      TopoDS_Edge edge;
+      builder.MakeEdge(edge);
+      builder.UpdateEdge(edge, new Geom2d_BezierCurve(poles), face, Precision::Confusion());
+      builder.Range(edge, face, 0.0, 1.0);
+      builder.Add(wire, edge);
+      current = poles(4);
+    } else if (cmd.op == HUAK_CLOSE) {
+      addLine(current, first);
+      if (inWire) {
+        builder.Add(face, wire);
+        inWire = false;
+      }
+    }
+  }
+  if (inWire)
+    builder.Add(face, wire);
+  return face;
+}
+
 // The closed loops of a set of arcs that bound a region lying to their left
 // as they are turned, each an arc after another around it.
 //
@@ -31,56 +95,69 @@ std::vector<std::vector<HuakTurnedArc>> loopsOf(HuakView *view, const HuakTurned
   // An arc as it is turned, between the points it leaves and reaches.
   struct Turned {
     HuakTurnedArc arc;
-    int tail, head;
+    size_t tail, head;
     bool used;
   };
   ShapeIndex points;
   std::vector<Turned> turned;
-  std::map<int, std::vector<size_t>> leaving;
+  turned.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     const auto &arc = element(view->arcs, arcs[i].arc, "arc");
     TopoDS_Vertex tail, head;
     TopExp::Vertices(arc.edge, tail, head);
     if (arcs[i].reversed)
       std::swap(tail, head);
-    turned.push_back({arcs[i], points.Add(tail), points.Add(head), false});
-    leaving[turned.back().tail].push_back(turned.size() - 1);
+    turned.push_back({arcs[i], static_cast<size_t>(points.Add(tail)), static_cast<size_t>(points.Add(head)), false});
   }
+  const size_t nv = static_cast<size_t>(points.Extent()) + 1;
+  std::vector<size_t> end(nv, 0);
+  for (const auto &t : turned)
+    ++end[t.tail];
+  size_t total = 0;
+  for (size_t v = 0; v < nv; ++v) {
+    total += end[v];
+    end[v] = total;
+  }
+  std::vector<size_t> cursor = end;
+  std::vector<size_t> outgoing(total);
+  for (size_t i = 0; i < turned.size(); ++i)
+    outgoing[--cursor[turned[i].tail]] = i;
   std::vector<std::vector<HuakTurnedArc>> loops;
   std::vector<size_t> path;
-  std::map<int, size_t> passed;
+  constexpr size_t unseen = std::numeric_limits<size_t>::max();
+  std::vector<size_t> passed(nv, unseen);
   for (size_t first = 0; first < turned.size(); ++first) {
     if (turned[first].used)
       continue;
-    int at = turned[first].tail;
+    size_t at = turned[first].tail;
     path.clear();
-    passed.clear();
     passed[at] = 0;
     for (;;) {
-      auto &from = leaving[at];
-      while (!from.empty() && turned[from.back()].used)
-        from.pop_back();
-      if (from.empty()) {
+      size_t &lo = cursor[at];
+      const size_t hi = end[at];
+      while (lo < hi && turned[outgoing[lo]].used)
+        ++lo;
+      if (lo == hi) {
         if (!path.empty())
           throw std::runtime_error("the arcs bounding a region do not close");
+        passed[at] = unseen;
         break;
       }
-      const size_t next = from.back();
-      from.pop_back();
+      const size_t next = outgoing[lo++];
       turned[next].used = true;
       path.push_back(next);
       at = turned[next].head;
-      const auto before = passed.find(at);
-      if (before == passed.end()) {
+      if (passed[at] == unseen) {
         passed[at] = path.size();
         continue;
       }
-      const size_t loop = before->second;
+      const size_t loop = passed[at];
       loops.emplace_back();
+      loops.back().reserve(path.size() - loop);
       for (size_t i = loop; i < path.size(); ++i)
         loops.back().push_back(turned[path[i]].arc);
       for (size_t i = loop; i + 1 < path.size(); ++i)
-        passed.erase(turned[path[i]].head);
+        passed[turned[path[i]].head] = unseen;
       path.resize(loop);
     }
   }
@@ -114,34 +191,53 @@ void writeLoop(HuakView *view, std::vector<HuakPathCommand> &commands, const std
 // reach as far as the arcs stand apart: two straight arcs between the same
 // two vertices are one segment, run there and back.
 int windingOf(HuakView *view, const std::vector<HuakTurnedArc> &loop) {
-  std::vector<gp_Pnt2d> path;
+  bool hasPoint = false, hasWay = false;
+  gp_Pnt2d firstPoint, prevPoint;
+  double firstWay = 0, prevWay = 0, turns = 0;
+  // The way of each chord, and the turn from each to the next, within a
+  // half turn; a point that stands where the one before it does makes no
+  // chord.
+  const auto step = [&](const gp_Pnt2d &a, const gp_Pnt2d &b) {
+    const gp_Vec2d chord(a, b);
+    if (chord.SquareMagnitude() > 0) {
+      const double way = std::atan2(chord.Y(), chord.X());
+      if (hasWay)
+        turns += std::remainder(way - prevWay, 2 * M_PI);
+      else
+        firstWay = way;
+      prevWay = way;
+      hasWay = true;
+    }
+  };
+  const auto visit = [&](const gp_Pnt2d &p) {
+    if (!hasPoint) {
+      firstPoint = prevPoint = p;
+      hasPoint = true;
+      return;
+    }
+    step(prevPoint, p);
+    prevPoint = p;
+  };
   for (const auto &turned : loop) {
     const auto &arc = element(view->arcs, turned.arc, "arc");
     const double from = turned.reversed ? arc.headLeaves : arc.tailLeaves;
     const double to = turned.reversed ? arc.tailLeaves : arc.headLeaves;
-    path.push_back(arc.curve->Value(from));
+    visit(arc.curve->Value(from));
     // The polyline's points between, the way the loop runs.
     const size_t n = arc.at.size();
+    const double lo = std::min(from, to), hi = std::max(from, to);
     for (size_t i = 0; i < n; ++i) {
       const size_t j = turned.reversed ? n - 1 - i : i;
-      if (std::min(from, to) < arc.at[j] && arc.at[j] < std::max(from, to))
-        path.push_back(arc.points[j]);
+      if (lo < arc.at[j] && arc.at[j] < hi)
+        visit(arc.points[j]);
     }
-    path.push_back(arc.curve->Value(to));
-    path.push_back(turned.reversed ? arc.tail : arc.head);
+    visit(arc.curve->Value(to));
+    visit(turned.reversed ? arc.tail : arc.head);
   }
-  // The way of each chord, and the turn from each to the next, within a
-  // half turn; a point that stands where the one before it does makes no
-  // chord.
-  std::vector<double> ways;
-  for (size_t i = 0; i < path.size(); ++i) {
-    const gp_Vec2d chord(path[i], path[(i + 1) % path.size()]);
-    if (chord.SquareMagnitude() > 0)
-      ways.push_back(std::atan2(chord.Y(), chord.X()));
-  }
-  double turns = 0;
-  for (size_t i = 0; i < ways.size(); ++i)
-    turns += std::remainder(ways[(i + 1) % ways.size()] - ways[i], 2 * M_PI);
+  if (hasPoint)
+    step(prevPoint, firstPoint);
+  if (hasWay)
+    turns += std::remainder(firstWay - prevWay, 2 * M_PI);
   return static_cast<int>(std::lround(turns / (2 * M_PI)));
 }
 } // namespace
@@ -156,6 +252,7 @@ int fill(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, size_
     require(out, "out");
     auto &starts = view->result(view->indices);
     auto &commands = view->result(view->paths);
+    starts.reserve(count + 1);
     starts.push_back(0);
     for (size_t k = 0; k < count; ++k) {
       if (offsets[k] > offsets[k + 1])
@@ -180,9 +277,15 @@ int regions(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, si
     auto &commands = view->result(view->paths);
     auto &boxes = view->result(view->regionBoxes);
     std::vector<HuakMoments> *measures = compute_moments ? &view->result(view->regionMoments) : nullptr;
+    sets.reserve(count + 1);
+    starts.reserve(count + 1);
+    boxes.reserve(count);
+    if (measures)
+      measures->reserve(count);
     sets.push_back(0);
     starts.push_back(0);
     const gp_Pln plane(gp::XOY());
+    const Handle(Geom_Plane) flat = measures ? new Geom_Plane(gp::XOY()) : Handle(Geom_Plane)();
     for (size_t k = 0; k < count; ++k) {
       if (offsets[k] > offsets[k + 1])
         throw InvalidArgument("arc sets out of order");
@@ -249,14 +352,23 @@ int regions(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, si
             holed.Add(inner[h].wire);
           region = holed.Face();
         }
+        const size_t regionStart = commands.size();
         writeFace(commands, region, tolerance);
         starts.push_back(commands.size());
         Bnd_Box box;
         BRepBndLib::Add(region, box);
-        boxes.push_back(boxOf(box));
+        const HuakBox b = boxOf(box);
+        boxes.push_back(b);
         if (measures) {
-          GProp_GProps props;
-          BRepGProp::SurfaceProperties(region, props, 1e-7);
+          const gp_Pnt origin = b.empty ? gp::Origin() : gp_Pnt(0.5 * (b.x0 + b.x1), 0.5 * (b.y0 + b.y1), 0.0);
+          GProp_GProps props(origin);
+          const TopoDS_Face cubic =
+              faceFromCommands(flat, commands.data() + regionStart, commands.size() - regionStart);
+          BRepGProp::SurfaceProperties(cubic, props);
+          if (!(props.Mass() > 0)) {
+            props = GProp_GProps(origin);
+            BRepGProp::SurfaceProperties(region, props, 1e-7);
+          }
           HuakMoments result{};
           result.area = props.Mass();
           copy(props.CentreOfMass().XYZ(), result.center);

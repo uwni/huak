@@ -335,10 +335,8 @@ mod tests {
             .paths
             .iter()
             .any(|path| path.flags & TYPST_STYLE_STROKE != 0));
-        let commands = outline
-            .paths
-            .iter()
-            .map(|path| SceneCommand {
+        let commands = outline.paths.iter().map(|path| {
+            Ok(SceneCommand {
                 content: SceneContent::Path {
                     segments: &outline.segments[path.segment_offset..][..path.segment_count],
                     style: PathStyle {
@@ -362,7 +360,7 @@ mod tests {
                 tag: None,
                 isolate_transform: false,
             })
-            .collect();
+        });
         let scene = Scene::new(width, height, commands).unwrap();
         drop(outline);
         let output = crate::export::svg(&crate::export::from_frame(&scene.frame), 0).unwrap();

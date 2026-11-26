@@ -126,11 +126,11 @@ const Prepared = struct {
 };
 
 fn prepare(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library, program: *const l.bytecode.Program, jobs: usize, names: []const []const u8) !Prepared {
-    var runtime = try l.Runtime.init(allocator, allocator, library, .{});
+    var runtime = try l.Runtime.initWithBackends(allocator, allocator, .{ .typst = library, .workers = .init(io, jobs) }, .{});
     defer runtime.deinit();
     var machine = try l.Machine.init(allocator, program, runtime.host(), .{});
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = allocator, .io = io, .runtime = &runtime, .jobs = jobs };
+    var executor: l.tasks.Executor = .{ .allocator = allocator, .runtime = &runtime };
     executor.attach(&machine);
     _ = machine.execute(&.{}) catch |err| {
         if (machine.failure) |failure| std.debug.print("VM: {s}: {s}\n", .{ failure.text(), failure.native_message });
@@ -159,6 +159,7 @@ const Exported = struct {
 const Exports = struct {
     batch: *l.OutputBatch,
     results: []Exported,
+    render_workers: huak.Workers,
     active: std.atomic.Value(usize) = .init(0),
     peak: std.atomic.Value(usize) = .init(0),
 
@@ -171,7 +172,7 @@ const Exports = struct {
         var scratch: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
         defer scratch.deinit();
         const result = &self.results[index];
-        var svg = self.batch.render(scratch.allocator(), index, .svg, &result.diagnostic) catch |err| {
+        var svg = self.batch.render(scratch.allocator(), index, .svg, self.render_workers, &result.diagnostic) catch |err| {
             result.cause = err;
             return false;
         };
@@ -197,8 +198,13 @@ fn execute(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library, pr
     defer allocator.free(results);
     @memset(results, .{});
     defer for (results) |*result| if (result.diagnostic) |*detail| detail.deinit();
-    var exports: Exports = .{ .batch = &prepared.batch, .results = results };
-    try huak.worker.run(io, results.len, config.output, &exports, Exports.one);
+    const export_workers = huak.Workers.init(io, config.output);
+    var exports: Exports = .{
+        .batch = &prepared.batch,
+        .results = results,
+        .render_workers = export_workers.nested(export_workers.limit(results.len)),
+    };
+    try export_workers.run(results.len, &exports, Exports.one);
     // Workers keep their native diagnostic owners; only the caller prints.
     for (results, 0..) |result, index| if (result.cause) |cause| {
         std.debug.print("output {d}: {s}\n", .{ index, @errorName(cause) });

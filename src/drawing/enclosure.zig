@@ -32,7 +32,17 @@ pub fn Rgba(comptime T: type) type {
 
 /// The channels of a color, as constants.
 pub fn constants(comptime T: type, color: anytype) Rgba(T) {
-    return .{ .r = .constant(color.r), .g = .constant(color.g), .b = .constant(color.b), .a = .constant(color.a) };
+    var result: Rgba(T) = undefined;
+    constantsInto(T, color, &result);
+    return result;
+}
+
+/// Writes the channels of a color as constants into `out`.
+pub fn constantsInto(comptime T: type, color: anytype, out: *Rgba(T)) void {
+    out.r.setConstant(color.r);
+    out.g.setConstant(color.g);
+    out.b.setConstant(color.b);
+    out.a.setConstant(color.a);
 }
 
 /// A channel at a point.
@@ -42,84 +52,163 @@ pub const Real = struct {
     pub fn constant(c: f64) Real {
         return .{ .value = c };
     }
+    pub fn setConstant(self: *Real, c: f64) void {
+        self.value = c;
+    }
     pub fn add(a: Real, b: Real) Real {
         return .{ .value = a.value + b.value };
+    }
+    pub fn addInto(a: *const Real, b: *const Real, out: *Real) void {
+        out.value = a.value + b.value;
     }
     pub fn sub(a: Real, b: Real) Real {
         return .{ .value = a.value - b.value };
     }
+    pub fn subInto(a: *const Real, b: *const Real, out: *Real) void {
+        out.value = a.value - b.value;
+    }
     pub fn mul(a: Real, b: Real) Real {
         return .{ .value = a.value * b.value };
     }
+    pub fn mulInto(a: *const Real, b: *const Real, out: *Real) void {
+        out.value = a.value * b.value;
+    }
     pub fn scale(a: Real, k: f64) Real {
         return .{ .value = a.value * k };
+    }
+    pub fn scaleInto(a: *const Real, k: f64, out: *Real) void {
+        out.value = a.value * k;
     }
 };
 
 /// A channel across the domain: the sum of b[i][j] B_i(u) B_j(v) over
 /// i <= degree[0] and j <= degree[1], with B the Bernstein polynomials of
-/// those degrees, plus the sum of unknowns[k] times unknown k, plus
-/// something in [low, high].
+/// those degrees, plus the sum of unknowns[k] times unknown k (for bits
+/// set in `unknown_mask`), plus something in [low, high]. Entries outside
+/// `degree` or unset in `unknown_mask` are undefined and never read.
 pub const Enclosure = struct {
     degree: [2]usize = .{ 0, 0 },
-    b: [max_degree + 1][max_degree + 1]f64 = @splat(@splat(0)),
-    unknowns: [max_unknowns]f64 = @splat(0),
+    unknown_mask: u16 = 0,
     low: f64 = 0,
     high: f64 = 0,
+    b: [max_degree + 1][max_degree + 1]f64 = undefined,
+    unknowns: [max_unknowns]f64 = undefined,
+
+    pub fn setConstant(self: *Enclosure, c: f64) void {
+        self.degree = .{ 0, 0 };
+        self.unknown_mask = 0;
+        self.low = 0;
+        self.high = 0;
+        self.b[0][0] = c;
+    }
 
     pub fn constant(c: f64) Enclosure {
-        var result: Enclosure = .{};
-        result.b[0][0] = c;
+        var result: Enclosure = undefined;
+        result.setConstant(c);
         return result;
     }
 
     /// Bilinear, with `corners` at (u, v) = (0, 0), (0, 1), (1, 1), (1, 0).
+    pub fn setBilinear(self: *Enclosure, corners: [4]f64) void {
+        self.degree = .{ 1, 1 };
+        self.unknown_mask = 0;
+        self.low = 0;
+        self.high = 0;
+        self.b[0][0] = corners[0];
+        self.b[0][1] = corners[1];
+        self.b[1][1] = corners[2];
+        self.b[1][0] = corners[3];
+    }
+
     pub fn bilinear(corners: [4]f64) Enclosure {
-        var result: Enclosure = .{ .degree = .{ 1, 1 } };
-        result.b[0][0] = corners[0];
-        result.b[0][1] = corners[1];
-        result.b[1][1] = corners[2];
-        result.b[1][0] = corners[3];
+        var result: Enclosure = undefined;
+        result.setBilinear(corners);
         return result;
     }
 
     /// Linear in the first parameter, from `start` to `end`.
+    pub fn setLinear(self: *Enclosure, start: f64, end: f64) void {
+        self.degree = .{ 1, 0 };
+        self.unknown_mask = 0;
+        self.low = 0;
+        self.high = 0;
+        self.b[0][0] = start;
+        self.b[1][0] = end;
+    }
+
     pub fn linear(start: f64, end: f64) Enclosure {
-        var result: Enclosure = .{ .degree = .{ 1, 0 } };
-        result.b[0][0] = start;
-        result.b[1][0] = end;
+        var result: Enclosure = undefined;
+        result.setLinear(start, end);
         return result;
+    }
+
+    /// Adds a function across the domain that ranges over [low, high]:
+    /// unknown `index`, which must stand for no other.
+    pub fn addUncertainty(self: *Enclosure, index: usize, low: f64, high: f64) void {
+        const middle = (low + high) / 2;
+        for (0..self.degree[0] + 1) |i| for (0..self.degree[1] + 1) |j| {
+            self.b[i][j] += middle;
+        };
+        const flag: u16 = @as(u16, 1) << @intCast(index);
+        const radius = (high - low) / 2;
+        if ((self.unknown_mask & flag) != 0) {
+            self.unknowns[index] += radius;
+        } else {
+            self.unknown_mask |= flag;
+            self.unknowns[index] = radius;
+        }
     }
 
     /// What it encloses plus a function across the domain that ranges over
     /// [low, high]: unknown `index`, which must stand for no other.
     pub fn uncertain(self: Enclosure, index: usize, low: f64, high: f64) Enclosure {
         var result = self;
-        const middle = (low + high) / 2;
-        for (&result.b) |*row| for (row) |*c| {
-            c.* += middle;
-        };
-        result.unknowns[index] += (high - low) / 2;
+        result.addUncertainty(index, low, high);
         return result;
     }
 
     pub fn add(a: Enclosure, b: Enclosure) Enclosure {
-        return sum(a, b);
+        var result: Enclosure = undefined;
+        a.addInto(&b, &result);
+        return result;
+    }
+
+    pub fn addInto(a: *const Enclosure, b: *const Enclosure, out: *Enclosure) void {
+        sumInto(a, b, false, out);
     }
 
     pub fn sub(a: Enclosure, b: Enclosure) Enclosure {
-        return sum(a, b.scale(-1));
+        var result: Enclosure = undefined;
+        a.subInto(&b, &result);
+        return result;
+    }
+
+    pub fn subInto(a: *const Enclosure, b: *const Enclosure, out: *Enclosure) void {
+        sumInto(a, b, true, out);
     }
 
     pub fn scale(a: Enclosure, k: f64) Enclosure {
-        var result = a;
-        for (&result.b) |*row| for (row) |*c| {
-            c.* *= k;
-        };
-        for (&result.unknowns) |*c| c.* *= k;
-        result.low = @min(a.low * k, a.high * k);
-        result.high = @max(a.low * k, a.high * k);
+        var result: Enclosure = undefined;
+        a.scaleInto(k, &result);
         return result;
+    }
+
+    pub fn scaleInto(a: *const Enclosure, k: f64, out: *Enclosure) void {
+        out.degree = a.degree;
+        out.unknown_mask = a.unknown_mask;
+        for (0..a.degree[0] + 1) |i| for (0..a.degree[1] + 1) |j| {
+            out.b[i][j] = a.b[i][j] * k;
+        };
+        var mask = a.unknown_mask;
+        while (mask != 0) {
+            const bit: usize = @ctz(mask);
+            mask &= mask - 1;
+            out.unknowns[bit] = a.unknowns[bit] * k;
+        }
+        const ak0 = a.low * k;
+        const ak1 = a.high * k;
+        out.low = @min(ak0, ak1);
+        out.high = @max(ak0, ak1);
     }
 
     /// The degree of a product must stay within `max_degree`. With p and q
@@ -128,51 +217,92 @@ pub const Enclosure = struct {
     /// middles of p and q, plus intervals for p t + s q off those middles,
     /// for s t, and for the products with i and j.
     pub fn mul(a: Enclosure, b: Enclosure) Enclosure {
-        var result = product(a, b);
+        var result: Enclosure = undefined;
+        a.mulInto(&b, &result);
+        return result;
+    }
+
+    pub fn mulInto(a: *const Enclosure, b: *const Enclosure, out: *Enclosure) void {
+        std.debug.assert(out != a and out != b);
+        productInto(a, b, out);
+        const mask = a.unknown_mask | b.unknown_mask;
+        const has_interval = a.low != 0 or a.high != 0 or b.low != 0 or b.high != 0;
+        if (mask == 0 and !has_interval) {
+            out.unknown_mask = 0;
+            out.low = 0;
+            out.high = 0;
+            return;
+        }
         const p = a.hull();
         const q = b.hull();
         const middles = [2]f64{ (p[0] + p[1]) / 2, (q[0] + q[1]) / 2 };
         const radii = [2]f64{ (p[1] - p[0]) / 2, (q[1] - q[0]) / 2 };
         var spreads: [2]f64 = .{ 0, 0 };
-        for (a.unknowns, b.unknowns, &result.unknowns) |s, t, *out| {
-            out.* = middles[0] * t + middles[1] * s;
+        out.unknown_mask = mask;
+        var bits = mask;
+        while (bits != 0) {
+            const k: usize = @ctz(bits);
+            const flag: u16 = @as(u16, 1) << @intCast(k);
+            bits &= bits - 1;
+            const s = if ((a.unknown_mask & flag) != 0) a.unknowns[k] else 0;
+            const t = if ((b.unknown_mask & flag) != 0) b.unknowns[k] else 0;
+            out.unknowns[k] = middles[0] * t + middles[1] * s;
             spreads[0] += @abs(s);
             spreads[1] += @abs(t);
         }
         const off = radii[0] * spreads[1] + radii[1] * spreads[0] + spreads[0] * spreads[1];
-        const terms = [_][2]f64{
-            .{ -off, off },
-            times(.{ p[0] - spreads[0], p[1] + spreads[0] }, .{ b.low, b.high }),
-            times(.{ a.low, a.high }, .{ q[0] - spreads[1], q[1] + spreads[1] }),
-            times(.{ a.low, a.high }, .{ b.low, b.high }),
-        };
-        for (terms) |term| {
-            result.low += term[0];
-            result.high += term[1];
+        var low = -off;
+        var high = off;
+        if (b.low != 0 or b.high != 0) {
+            const term = times(.{ p[0] - spreads[0], p[1] + spreads[0] }, .{ b.low, b.high });
+            low += term[0];
+            high += term[1];
         }
-        return result;
+        if (a.low != 0 or a.high != 0) {
+            const term = times(.{ a.low, a.high }, .{ q[0] - spreads[1], q[1] + spreads[1] });
+            low += term[0];
+            high += term[1];
+        }
+        if ((a.low != 0 or a.high != 0) and (b.low != 0 or b.high != 0)) {
+            const term = times(.{ a.low, a.high }, .{ b.low, b.high });
+            low += term[0];
+            high += term[1];
+        }
+        out.low = low;
+        out.high = high;
     }
 
     /// How far what it encloses strays from the bilinear interpolation of
     /// its values at the corners of the domain.
-    pub fn interpolationError(self: Enclosure) f64 {
+    pub fn interpolationError(self: *const Enclosure) f64 {
         const m = self.degree[0];
         const n = self.degree[1];
-        const corners = [4]f64{ self.b[0][0], self.b[0][n], self.b[m][n], self.b[m][0] };
         var largest: f64 = 0;
-        for (0..m + 1) |i| for (0..n + 1) |j| {
-            const u = if (m == 0) 0 else @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(m));
-            const v = if (n == 0) 0 else @as(f64, @floatFromInt(j)) / @as(f64, @floatFromInt(n));
-            const interpolated = (1 - u) * (1 - v) * corners[0] + (1 - u) * v * corners[1] + u * v * corners[2] + u * (1 - v) * corners[3];
-            largest = @max(largest, @abs(self.b[i][j] - interpolated));
-        };
+        if (m > 1 or n > 1) {
+            const corners = [4]f64{ self.b[0][0], self.b[0][n], self.b[m][n], self.b[m][0] };
+            const inv_m: f64 = if (m == 0) 0 else 1.0 / @as(f64, @floatFromInt(m));
+            const inv_n: f64 = if (n == 0) 0 else 1.0 / @as(f64, @floatFromInt(n));
+            for (0..m + 1) |i| {
+                const u = @as(f64, @floatFromInt(i)) * inv_m;
+                for (0..n + 1) |j| {
+                    const v = @as(f64, @floatFromInt(j)) * inv_n;
+                    const interpolated = (1 - u) * (1 - v) * corners[0] + (1 - u) * v * corners[1] + u * v * corners[2] + u * (1 - v) * corners[3];
+                    largest = @max(largest, @abs(self.b[i][j] - interpolated));
+                }
+            }
+        }
         var rest = self.high - self.low;
-        for (self.unknowns) |c| rest += 2 * @abs(c);
+        var mask = self.unknown_mask;
+        while (mask != 0) {
+            const k: usize = @ctz(mask);
+            mask &= mask - 1;
+            rest += 2 * @abs(self.unknowns[k]);
+        }
         return largest + rest;
     }
 
     /// A bound on the polynomial's second derivative in the first parameter.
-    pub fn curvature(self: Enclosure) f64 {
+    pub fn curvature(self: *const Enclosure) f64 {
         const m = self.degree[0];
         if (m < 2) return 0;
         var largest: f64 = 0;
@@ -184,7 +314,7 @@ pub const Enclosure = struct {
 
     /// The least and greatest of the polynomial's coefficients, between
     /// which it lies.
-    fn hull(self: Enclosure) [2]f64 {
+    fn hull(self: *const Enclosure) [2]f64 {
         var result: [2]f64 = .{ std.math.inf(f64), -std.math.inf(f64) };
         for (0..self.degree[0] + 1) |i| for (0..self.degree[1] + 1) |j| {
             result[0] = @min(result[0], self.b[i][j]);
@@ -193,47 +323,118 @@ pub const Enclosure = struct {
         return result;
     }
 
-    /// Same degree in each parameter, the polynomials added, and the
-    /// unknowns and the intervals too.
-    fn sum(a: Enclosure, b: Enclosure) Enclosure {
-        const degree: [2]usize = .{ @max(a.degree[0], b.degree[0]), @max(a.degree[1], b.degree[1]) };
-        var result = a.elevated(degree);
-        const other = b.elevated(degree);
-        for (&result.b, other.b) |*row, more| for (row, more) |*c, d| {
-            c.* += d;
-        };
-        for (&result.unknowns, other.unknowns) |*c, d| c.* += d;
-        result.low += other.low;
-        result.high += other.high;
-        return result;
+    /// Same degree in each parameter, the polynomials added (or subtracted
+    /// when `negate_b`), and the unknowns and the intervals too.
+    fn sumInto(a: *const Enclosure, b: *const Enclosure, comptime negate_b: bool, out: *Enclosure) void {
+        if (a.degree[0] == b.degree[0] and a.degree[1] == b.degree[1]) {
+            out.degree = a.degree;
+            for (0..a.degree[0] + 1) |i| for (0..a.degree[1] + 1) |j| {
+                out.b[i][j] = if (negate_b) a.b[i][j] - b.b[i][j] else a.b[i][j] + b.b[i][j];
+            };
+        } else if (a.degree[0] == 0 and a.degree[1] == 0) {
+            const c = a.b[0][0];
+            out.degree = b.degree;
+            for (0..b.degree[0] + 1) |i| for (0..b.degree[1] + 1) |j| {
+                out.b[i][j] = if (negate_b) c - b.b[i][j] else c + b.b[i][j];
+            };
+        } else if (b.degree[0] == 0 and b.degree[1] == 0) {
+            const c = b.b[0][0];
+            out.degree = a.degree;
+            for (0..a.degree[0] + 1) |i| for (0..a.degree[1] + 1) |j| {
+                out.b[i][j] = if (negate_b) a.b[i][j] - c else a.b[i][j] + c;
+            };
+        } else {
+            const degree: [2]usize = .{ @max(a.degree[0], b.degree[0]), @max(a.degree[1], b.degree[1]) };
+            var ea_buf: Enclosure = undefined;
+            var eb_buf: Enclosure = undefined;
+            const ea: *const Enclosure = if (a.degree[0] == degree[0] and a.degree[1] == degree[1]) a else blk: {
+                elevatePoly(a, degree, &ea_buf);
+                break :blk &ea_buf;
+            };
+            const eb: *const Enclosure = if (b.degree[0] == degree[0] and b.degree[1] == degree[1]) b else blk: {
+                elevatePoly(b, degree, &eb_buf);
+                break :blk &eb_buf;
+            };
+            out.degree = degree;
+            for (0..degree[0] + 1) |i| for (0..degree[1] + 1) |j| {
+                out.b[i][j] = if (negate_b) ea.b[i][j] - eb.b[i][j] else ea.b[i][j] + eb.b[i][j];
+            };
+        }
+        const mask = a.unknown_mask | b.unknown_mask;
+        out.unknown_mask = mask;
+        var bits = mask;
+        while (bits != 0) {
+            const k: usize = @ctz(bits);
+            const flag: u16 = @as(u16, 1) << @intCast(k);
+            bits &= bits - 1;
+            const av = if ((a.unknown_mask & flag) != 0) a.unknowns[k] else 0;
+            const bv = if ((b.unknown_mask & flag) != 0) b.unknowns[k] else 0;
+            out.unknowns[k] = if (negate_b) av - bv else av + bv;
+        }
+        if (negate_b) {
+            out.low = a.low - b.high;
+            out.high = a.high - b.low;
+        } else {
+            out.low = a.low + b.low;
+            out.high = a.high + b.high;
+        }
     }
 
-    /// The same, at higher degrees: times one at the difference in degree,
-    /// whose coefficients are all one.
-    fn elevated(self: Enclosure, degree: [2]usize) Enclosure {
-        if (std.mem.eql(usize, &self.degree, &degree)) return self;
-        var one: Enclosure = .{ .degree = .{ degree[0] - self.degree[0], degree[1] - self.degree[1] } };
-        for (0..one.degree[0] + 1) |i| for (0..one.degree[1] + 1) |j| {
-            one.b[i][j] = 1;
+    /// Polynomial-only elevation to higher degrees: times one at the
+    /// difference in degree, whose coefficients are all one.
+    fn elevatePoly(self: *const Enclosure, degree: [2]usize, out: *Enclosure) void {
+        out.degree = degree;
+        const dm = degree[0] - self.degree[0];
+        const dn = degree[1] - self.degree[1];
+        for (0..degree[0] + 1) |i| for (0..degree[1] + 1) |j| {
+            out.b[i][j] = 0;
         };
-        var result = product(self, one);
-        result.unknowns = self.unknowns;
-        result.low = self.low;
-        result.high = self.high;
-        return result;
+        for (0..self.degree[0] + 1) |ai| for (0..dm + 1) |bi| {
+            const in_u = binomial[self.degree[0]][ai] * binomial[dm][bi] / binomial[degree[0]][ai + bi];
+            for (0..self.degree[1] + 1) |aj| {
+                const base = self.b[ai][aj] * in_u;
+                for (0..dn + 1) |bj| {
+                    const in_v = binomial[self.degree[1]][aj] * binomial[dn][bj] / binomial[degree[1]][aj + bj];
+                    out.b[ai + bi][aj + bj] += base * in_v;
+                }
+            }
+        };
     }
 
     /// The product of the polynomials alone.
-    fn product(a: Enclosure, b: Enclosure) Enclosure {
+    fn productInto(a: *const Enclosure, b: *const Enclosure, out: *Enclosure) void {
+        if (a.degree[0] == 0 and a.degree[1] == 0) {
+            const c = a.b[0][0];
+            out.degree = b.degree;
+            for (0..b.degree[0] + 1) |i| for (0..b.degree[1] + 1) |j| {
+                out.b[i][j] = c * b.b[i][j];
+            };
+            return;
+        }
+        if (b.degree[0] == 0 and b.degree[1] == 0) {
+            const c = b.b[0][0];
+            out.degree = a.degree;
+            for (0..a.degree[0] + 1) |i| for (0..a.degree[1] + 1) |j| {
+                out.b[i][j] = a.b[i][j] * c;
+            };
+            return;
+        }
         const degree: [2]usize = .{ a.degree[0] + b.degree[0], a.degree[1] + b.degree[1] };
         std.debug.assert(degree[0] <= max_degree and degree[1] <= max_degree);
-        var result: Enclosure = .{ .degree = degree };
-        for (0..a.degree[0] + 1) |ai| for (0..a.degree[1] + 1) |aj| for (0..b.degree[0] + 1) |bi| for (0..b.degree[1] + 1) |bj| {
-            const in_u = binomial[a.degree[0]][ai] * binomial[b.degree[0]][bi] / binomial[degree[0]][ai + bi];
-            const in_v = binomial[a.degree[1]][aj] * binomial[b.degree[1]][bj] / binomial[degree[1]][aj + bj];
-            result.b[ai + bi][aj + bj] += a.b[ai][aj] * b.b[bi][bj] * in_u * in_v;
+        out.degree = degree;
+        for (0..degree[0] + 1) |i| for (0..degree[1] + 1) |j| {
+            out.b[i][j] = 0;
         };
-        return result;
+        for (0..a.degree[0] + 1) |ai| for (0..b.degree[0] + 1) |bi| {
+            const in_u = binomial[a.degree[0]][ai] * binomial[b.degree[0]][bi] / binomial[degree[0]][ai + bi];
+            for (0..a.degree[1] + 1) |aj| {
+                const a_val = a.b[ai][aj] * in_u;
+                for (0..b.degree[1] + 1) |bj| {
+                    const in_v = binomial[a.degree[1]][aj] * binomial[b.degree[1]][bj] / binomial[degree[1]][aj + bj];
+                    out.b[ai + bi][aj + bj] += a_val * b.b[bi][bj] * in_v;
+                }
+            }
+        };
     }
 };
 
@@ -242,7 +443,7 @@ fn times(a: [2]f64, b: [2]f64) [2]f64 {
     return .{ std.mem.min(f64, &products), std.mem.max(f64, &products) };
 }
 
-const binomial = table: {
+pub const binomial = table: {
     var rows: [2 * max_degree + 1][2 * max_degree + 1]f64 = @splat(@splat(0));
     for (0..rows.len) |n| {
         rows[n][0] = 1;
@@ -251,80 +452,6 @@ const binomial = table: {
     break :table rows;
 };
 
-const testing = std.testing;
-
-/// The polynomial and the unknowns' terms at (u, v), with each unknown at
-/// the value given.
-fn at(e: Enclosure, u: f64, v: f64, unknowns: [max_unknowns]f64) f64 {
-    var total: f64 = 0;
-    for (0..e.degree[0] + 1) |i| for (0..e.degree[1] + 1) |j| {
-        const bu = binomial[e.degree[0]][i] * std.math.pow(f64, u, @floatFromInt(i)) * std.math.pow(f64, 1 - u, @floatFromInt(e.degree[0] - i));
-        const bv = binomial[e.degree[1]][j] * std.math.pow(f64, v, @floatFromInt(j)) * std.math.pow(f64, 1 - v, @floatFromInt(e.degree[1] - j));
-        total += e.b[i][j] * bu * bv;
-    };
-    for (e.unknowns, unknowns) |c, x| total += c * x;
-    return total;
-}
-
-const none: [max_unknowns]f64 = @splat(0);
-
-test "products and sums of enclosures are the products and sums of their polynomials" {
-    const p = Enclosure.bilinear(.{ 0.2, 0.9, -0.4, 0.5 });
-    const q = Enclosure.bilinear(.{ 1, 0.3, 0.7, -0.6 });
-    const r = Enclosure.linear(0.25, 2);
-    const composite = p.mul(q).add(r.mul(p)).sub(Enclosure.constant(0.5)).scale(-3);
-    for ([_][2]f64{ .{ 0, 0 }, .{ 0.3, 0.8 }, .{ 1, 0.5 }, .{ 0.6, 0.1 } }) |uv| {
-        const u, const v = uv;
-        const bp = (1 - u) * (1 - v) * 0.2 + (1 - u) * v * 0.9 + u * v * -0.4 + u * (1 - v) * 0.5;
-        const bq = (1 - u) * (1 - v) * 1 + (1 - u) * v * 0.3 + u * v * 0.7 + u * (1 - v) * -0.6;
-        const br = 0.25 + 1.75 * u;
-        try testing.expectApproxEqAbs(-3 * (bp * bq + br * bp - 0.5), at(composite, u, v, none), 1e-12);
-    }
-    try testing.expectEqual(@as(f64, 0), composite.high - composite.low);
-}
-
-test "a product's rest holds every product of what the factors enclose" {
-    const p = Enclosure.bilinear(.{ 0.1, 0.4, 0.9, 0.3 }).uncertain(0, -0.05, 0.02);
-    var q = Enclosure.linear(-0.5, 0.5).uncertain(1, 0, 0.1);
-    q.low = -0.01;
-    q.high = 0.03;
-    const pq = p.mul(q);
-    var random: std.Random.DefaultPrng = .init(3);
-    for (0..1000) |_| {
-        const u = random.random().float(f64);
-        const v = random.random().float(f64);
-        var unknowns = none;
-        unknowns[0] = 2 * random.random().float(f64) - 1;
-        unknowns[1] = 2 * random.random().float(f64) - 1;
-        const x = at(p, u, v, unknowns);
-        const y = at(q, u, v, unknowns) + (-0.01 + 0.04 * random.random().float(f64));
-        const rest = x * y - at(pq, u, v, unknowns);
-        try testing.expect(rest >= pq.low - 1e-12 and rest <= pq.high + 1e-12);
-    }
-}
-
-test "an unknown that enters twice cancels" {
-    // An opacity a with an uncertain kink: a + (1 - a) is one, exactly.
-    const a = Enclosure.bilinear(.{ 0.2, 0.5, 0.9, 0.3 }).uncertain(3, 0, 0.01);
-    const whole = a.add(Enclosure.constant(1).sub(a).mul(Enclosure.bilinear(.{ 1, 1, 1, 1 })));
-    try testing.expectApproxEqAbs(@as(f64, 0), whole.interpolationError(), 1e-12);
-    // Translucent white over b: a + (1 - a) b, whose rest is (1 - b) times
-    // a's, not (1 + b) times as intervals would have it.
-    const b = Enclosure.constant(0.6);
-    const lit = a.add(Enclosure.constant(1).sub(a).mul(b));
-    try testing.expectApproxEqAbs(@as(f64, 2 * 0.4 * 0.005), lit.interpolationError(), 1e-12);
-}
-
-test "the interpolation error bounds the distance from bilinear interpolation" {
-    // u^2 v is 1/4 from its bilinear interpolation u v at u = 1/2, v = 1.
-    // At degree 3 in u its coefficients are 0, 0, 1/3, 1 where v = 1, at
-    // most 1/3 from u v's 0, 1/3, 2/3, 1.
-    var square = Enclosure.linear(0, 1).mul(Enclosure.linear(0, 1)).mul(Enclosure.bilinear(.{ 0, 1, 1, 0 }));
-    try testing.expectEqual(@as(f64, 0), Enclosure.bilinear(.{ 0.3, 0.1, 0.8, 0.2 }).interpolationError());
-    try testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0), square.interpolationError(), 1e-12);
-    square = square.uncertain(5, -0.1, 0.2);
-    try testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0 + 0.3), square.interpolationError(), 1e-12);
-    // 3 u^2 - 2 u bends by 6.
-    const bent = Enclosure.linear(0, 1).mul(Enclosure.linear(0, 3)).sub(Enclosure.linear(0, 2));
-    try testing.expectApproxEqAbs(@as(f64, 6), bent.curvature(), 1e-12);
+test {
+    _ = @import("enclosure_test.zig");
 }

@@ -52,7 +52,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, backends: language.Runt
     });
     defer runtime.deinit();
     machine.host = runtime.host();
-    var workers: language.tasks.Executor = .{ .allocator = allocator, .io = io, .runtime = &runtime, .jobs = options.jobs };
+    var workers: language.tasks.Executor = .{ .allocator = allocator, .runtime = &runtime };
     workers.attach(&machine);
     _ = machine.execute(&.{}) catch |err| return report.machineFailure(&machine, path, source, err);
     const printed = runtime.printedText();

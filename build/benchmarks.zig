@@ -13,7 +13,7 @@ const Program = executables.Program;
 const desktopExecutable = executables.desktopExecutable;
 const runInstalled = executables.runInstalled;
 
-pub fn addBenchmarks(b: *std.Build, config: Configuration, libraries: Libraries, fixtures: Fixtures, cli: *std.Build.Step.Compile, desktop: Import) void {
+pub fn addBenchmarks(b: *std.Build, config: Configuration, libraries: Libraries, fixtures: Fixtures, cli: *std.Build.Step.InstallArtifact, backend: ?*std.Build.Step, desktop: Import) void {
     const resources: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("bench/support/resources.h"), .target = config.target, .optimize = config.optimize });
     const metrics: Import = .{ .name = "metrics", .module = module(b, config.target, config.optimize, "bench/support/metrics.zig", &.{.{ .name = "resources", .module = resources.mod }}) };
     _ = program(b, config, .{ .name = "bench-regions", .source = "bench/regions.zig", .step = "bench-regions", .description = "Measure validated f64 curve-region operations", .imports = &.{ fixtures.regions, metrics, libraries.clap } });
@@ -43,10 +43,18 @@ pub fn addBenchmarks(b: *std.Build, config: Configuration, libraries: Libraries,
     const batch = b.addExecutable(.{ .name = "bench-outputs", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "bench/outputs.zig", &.{}) });
     const batch_run = b.addRunArtifact(batch);
     config.typst.loadIn(batch_run);
-    batch_run.addArtifactArg(cli);
+    batch_run.addArtifactArg(cli.artifact);
     batch_run.addFileArg(config.typst.library);
     batch_run.addPassthruArgs();
     b.step("bench-outputs", "Compare serial and parallel multi-output CLI execution").dependOn(&batch_run.step);
+    const space_bench = b.addExecutable(.{ .name = "bench-space", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "bench/space.zig", &.{}) });
+    const space_run = b.addRunArtifact(space_bench);
+    space_run.addFileArg2(b.graph.path(.install_bin, cli.artifact.name), .{});
+    space_run.step.dependOn(&cli.step);
+    space_run.step.dependOn(config.typst.install);
+    if (backend) |install| space_run.step.dependOn(install);
+    space_run.addPassthruArgs();
+    b.step("bench-space", "Measure 3D projection, smooth shading and Type 7/SVG mesh export").dependOn(&space_run.step);
     const simd_api = b.createModule(.{ .root_source_file = b.path("src/drawing/simd.zig"), .target = config.target, .optimize = .ReleaseSafe });
     const simd = b.addExecutable(.{ .name = "bench-simd", .use_llvm = config.use_llvm, .root_module = module(b, config.target, .ReleaseSafe, "bench/simd.zig", &.{.{ .name = "simd", .module = simd_api }}) });
     b.step("bench-simd", "Compare scalar and SIMD transforms").dependOn(&b.addRunArtifact(simd).step);

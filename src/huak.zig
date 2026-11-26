@@ -6,7 +6,7 @@ pub const language = @import("language/root.zig");
 pub const tooling = @import("tooling.zig");
 pub const backend = @import("render/typst/scene.zig");
 pub const render = @import("render/root.zig");
-pub const worker = @import("concurrency/worker.zig");
+pub const Workers = @import("workers");
 pub const animation = @import("animation/root.zig");
 pub const sampling = @import("animation/sampling.zig");
 pub const motion = @import("animation/motion.zig");
@@ -27,7 +27,7 @@ test {
     _ = @import("render/svg/styles.zig");
     _ = render;
     _ = language;
-    _ = worker;
+    _ = Workers;
     _ = animation;
     _ = sampling;
     _ = motion;

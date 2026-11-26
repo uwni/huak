@@ -62,7 +62,23 @@ pub const Shared = struct {
         return shared;
     }
 
-    fn view(self: *Shared) Patches {
+    /// Takes ownership of `patches` whose slices were already allocated from
+    /// `store.lockedAllocator()` (when `store != null`) or `allocator`.
+    /// On failure, `patches` remains owned by the caller.
+    pub fn adopt(allocator: std.mem.Allocator, store: ?*Store, patches: Patches) !*Shared {
+        var owned = patches;
+        owned.shared = null;
+        const digest_ = owned.digest();
+        const heap = if (store) |owner| owner.allocator else allocator;
+        if (store) |owner| std.Io.Threaded.mutexLockUncancelable(&owner.mutex);
+        defer if (store) |owner| std.Io.Threaded.mutexUnlock(&owner.mutex);
+        const shared = try heap.create(Shared);
+        shared.* = .{ .references = .init(1), .store = store, .allocator = heap, .digest = digest_, .arrays = owned };
+        if (store) |owner| _ = owner.live.fetchAdd(1, .monotonic);
+        return shared;
+    }
+
+    pub fn view(self: *Shared) Patches {
         var patches = self.arrays;
         patches.shared = self;
         return patches;
@@ -98,7 +114,12 @@ pub fn pooled(self: Patches, allocator: std.mem.Allocator, store: ?*Store) !Patc
     return (try Shared.create(allocator, store, self)).view();
 }
 
-/// Pooled patches hash once, when their arrays are copied.
+/// Adopts arrays already allocated from `store.lockedAllocator()` or `allocator`.
+pub fn adopt(self: Patches, allocator: std.mem.Allocator, store: ?*Store) !Patches {
+    return (try Shared.adopt(allocator, store, self)).view();
+}
+
+/// Pooled patches hash once, when their arrays are copied or adopted.
 pub fn digest(self: Patches) u64 {
     if (self.shared) |shared| return shared.digest;
     const hashBytes = std.hash.Wyhash.hash;

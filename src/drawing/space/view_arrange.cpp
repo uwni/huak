@@ -83,17 +83,6 @@ double onImage(HuakView *view, const HuakView::Arc &arc, const HuakView::Arc::Al
 
 namespace huak::space::entry {
 double leaving(const HuakView::Arc &arc, bool fromTail, const gp_Pnt2d &centre, double reach) {
-  struct Away : math_Function {
-    const Adaptor2d_Curve2d &curve;
-    gp_Pnt2d centre;
-    double reach;
-    Away(const Adaptor2d_Curve2d &curve, const gp_Pnt2d &centre, double reach)
-        : curve(curve), centre(centre), reach(reach) {}
-    bool Value(double t, double &f) override {
-      f = curve.Value(t).Distance(centre) - reach;
-      return true;
-    }
-  };
   const size_t n = arc.points.size();
   const auto from = [&](size_t i) { return fromTail ? i : n - 1 - i; };
   size_t farthest = from(0);
@@ -106,7 +95,10 @@ double leaving(const HuakView::Arc &arc, bool fromTail, const gp_Pnt2d &centre, 
     }
     if (i == 0)
       return arc.at[from(i)];
-    Away away(*arc.curve, centre, reach);
+    const std::function<double(double)> distance = [&](double t) {
+      return arc.curve->Value(t).Distance(centre) - reach;
+    };
+    Scalar away(distance);
     const double a = arc.at[from(i - 1)], b = arc.at[from(i)];
     math_BracketedRoot root(away, std::min(a, b), std::max(a, b), Precision::PConfusion());
     if (!root.IsDone())
@@ -125,12 +117,14 @@ int arrange(HuakView *view, const size_t *images, size_t count, const HuakCut *c
     require(out, "out");
     std::map<size_t, size_t> toolOf;
     std::vector<TopoDS_Edge> edges;
+    edges.reserve(count);
     for (size_t k = 0; k < count; ++k) {
       edges.push_back(view->image(images[k]));
       if (!toolOf.emplace(images[k], k).second)
         throw InvalidArgument("an image is arranged twice");
     }
     std::vector<Passage> apart;
+    apart.reserve(cut_count);
     for (size_t k = 0; k < cut_count; ++k) {
       const auto found = toolOf.find(cuts[k].image);
       if (found == toolOf.end())
@@ -140,21 +134,25 @@ int arrange(HuakView *view, const size_t *images, size_t count, const HuakCut *c
     // What lies beside an image differs from one side to the other where
     // its curve bounds layers.
     std::vector<bool> bounds;
+    bounds.reserve(count);
     for (size_t k = 0; k < count; ++k)
       bounds.push_back(boundsLayers(view, view->sources[images[k]].curve));
-    const auto pieces =
+    auto pieces =
         arrangeImages(edges, bounds, meetingsOf(view, images, count), apart);
     view->arcs.clear();
+    view->arcs.reserve(pieces.size());
     auto &items = view->result(view->arcItems);
+    items.reserve(pieces.size());
     auto &rows = view->result(view->arcOrigins);
-    for (const auto &piece : pieces) {
+    rows.reserve(pieces.size());
+    for (auto &piece : pieces) {
       HuakView::Arc arc;
-      arc.edge = piece.edge;
+      arc.edge = std::move(piece.edge);
       BRep_Tool::Range(arc.edge, arc.first, arc.last);
       arc.curve = new Geom2dAdaptor_Curve(piece.plane);
-      arc.at = piece.at;
-      arc.points = piece.points;
-      arc.offs = piece.offs;
+      arc.at = std::move(piece.at);
+      arc.points = std::move(piece.points);
+      arc.offs = std::move(piece.offs);
       arc.blur = BRep_Tool::Tolerance(arc.edge);
       TopoDS_Vertex tail, head;
       TopExp::Vertices(arc.edge, tail, head);

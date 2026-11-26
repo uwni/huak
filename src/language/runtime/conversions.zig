@@ -59,13 +59,24 @@ pub fn paintResult(self: *Runtime, value: DisplayList.Paint) !Value {
     };
 }
 
-/// Stores a copy of a gradient with arrays of its own; pens and paints
-/// refer to it while the runtime lives.
+/// Stores a copy of a gradient with arrays of its own (or shared through the
+/// runtime's mesh store); pens and paints refer to it while the runtime lives.
 pub fn storeGradient(self: *Runtime, value: DisplayList.Gradient) !Value {
     const owned = try self.gpa.create(DisplayList.Gradient);
     errdefer self.gpa.destroy(owned);
-    owned.* = try value.clone(self.gpa, null);
+    owned.* = try value.clone(self.gpa, self.backends.meshes);
     errdefer owned.deinit(self.gpa);
+    const index = self.gradients.items.len;
+    try self.gradients.append(self.gpa, owned);
+    return handle(.gradient, index);
+}
+
+/// Stores an already-owned/adopted gradient without cloning its arrays.
+/// On failure, the caller still owns `value`.
+pub fn adoptGradient(self: *Runtime, value: DisplayList.Gradient) !Value {
+    const owned = try self.gpa.create(DisplayList.Gradient);
+    errdefer self.gpa.destroy(owned);
+    owned.* = value;
     const index = self.gradients.items.len;
     try self.gradients.append(self.gpa, owned);
     return handle(.gradient, index);

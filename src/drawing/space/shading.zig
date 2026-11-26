@@ -25,6 +25,10 @@ pub fn dot(a: Vec3, b: Vec3) f64 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+pub fn cross(a: Vec3, b: Vec3) Vec3 {
+    return .{ a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+}
+
 /// `v` scaled to length 1.
 pub fn unit(v: Vec3) Vec3 {
     const length = @sqrt(dot(v, v));
@@ -340,14 +344,21 @@ pub const Shading = struct {
     pub fn sample(self: *const Shading, scratch: std.mem.Allocator, nodes: []Node) Error!void {
         const scalar = self.scalar orelse return;
         var points: std.ArrayList(Vec3) = .empty;
+        defer points.deinit(scratch);
         var normals: std.ArrayList(Vec3) = .empty;
+        defer normals.deinit(scratch);
         var owners: std.ArrayList(usize) = .empty;
+        defer owners.deinit(scratch);
+        try points.ensureTotalCapacity(scratch, nodes.len);
+        try normals.ensureTotalCapacity(scratch, nodes.len);
+        try owners.ensureTotalCapacity(scratch, nodes.len);
         for (nodes, 0..) |n, index| if (!n.singular) {
-            try points.append(scratch, self.world(n));
-            try normals.append(scratch, n.normal);
-            try owners.append(scratch, index);
+            points.appendAssumeCapacity(self.world(n));
+            normals.appendAssumeCapacity(n.normal);
+            owners.appendAssumeCapacity(index);
         };
         const found = try scratch.alloc(f64, owners.items.len);
+        defer scratch.free(found);
         try scalar.sampler.values(points.items, normals.items, found);
         for (owners.items, found) |owner, value| nodes[owner].value = value;
     }

@@ -24,17 +24,13 @@ pub const Lined = struct {
     line: [2]Color,
 };
 
-fn distance(a: Color, b: Color) f64 {
-    return @max(@max(@abs(a.r - b.r), @abs(a.g - b.g)), @max(@abs(a.b - b.b), @abs(a.a - b.a)));
-}
-
 /// The line through the two corner colors farthest apart, where along it
 /// each corner lies, and how far the farthest corner lies off it.
 fn fit(colors: [4]Color) struct { line: [2]Color, at: [4]f64, off: f64 } {
     var best: [2]usize = .{ 0, 0 };
     var spread: f64 = -1;
     for (0..4) |i| for (i + 1..4) |j| {
-        const d = distance(colors[i], colors[j]);
+        const d = colors[i].maxDiff(colors[j]);
         if (d > spread) {
             spread = d;
             best = .{ i, j };
@@ -58,38 +54,41 @@ fn fit(colors: [4]Color) struct { line: [2]Color, at: [4]f64, off: f64 } {
 /// Pieces keep the order of their patches.
 pub fn lines(allocator: std.mem.Allocator, patches: Gradient.ColorPatches, tolerance: f64, max_pieces: usize) Error![]Lined {
     if (!(tolerance > 0)) return error.InvalidPatches;
+    if (patches.points.len > max_pieces) return error.GeometryWorkLimit;
     var result: std.ArrayList(Lined) = .empty;
     errdefer result.deinit(allocator);
-    for (patches.points, patches.colors) |net, colors| {
-        const Piece = struct {
-            allocator: std.mem.Allocator,
-            result: *std.ArrayList(Lined),
-            net: [16]g.Point,
-            colors: [4]Color,
-            tolerance: f64,
-            max_pieces: usize,
+    try result.ensureTotalCapacity(allocator, patches.points.len);
+    const Piece = struct {
+        allocator: std.mem.Allocator,
+        result: *std.ArrayList(Lined),
+        net: *const [16]g.Point,
+        colors: *const [4]Color,
+        tolerance: f64,
+        max_pieces: usize,
 
-            fn at(self: @This(), u: [2]f64, v: [2]f64) [4]Color {
-                var result_: [4]Color = undefined;
-                for (corner_uv, &result_) |uv, *out| out.* = bilinearColor(self.colors, u[@intFromFloat(uv[0])], v[@intFromFloat(uv[1])]);
-                return result_;
-            }
-            pub fn accept(self: @This(), u: [2]f64, v: [2]f64) Error!bool {
-                return fit(self.at(u, v)).off <= self.tolerance;
-            }
-            pub fn emit(self: @This(), u: [2]f64, v: [2]f64) Error!void {
-                if (self.result.items.len >= self.max_pieces) return error.GeometryWorkLimit;
-                const fitted = fit(self.at(u, v));
-                // The field is bilinear: its coefficients are its values at
-                // (i / 3, j / 3).
-                var values: [16]f64 = undefined;
-                for (0..4) |i| for (0..4) |j| {
-                    values[i * 4 + j] = bilinear(fitted.at, @as(f64, @floatFromInt(i)) / 3, @as(f64, @floatFromInt(j)) / 3);
-                };
-                try self.result.append(self.allocator, .{ .net = subnet(self.net, u, v), .values = values, .line = fitted.line });
-            }
-        };
-        try subdivide(Piece{ .allocator = allocator, .result = &result, .net = net, .colors = colors, .tolerance = tolerance, .max_pieces = max_pieces }, variation(Color, colors), .{ 0, 1 }, .{ 0, 1 }, 0);
+        fn at(self: *const @This(), u: [2]f64, v: [2]f64) [4]Color {
+            var result_: [4]Color = undefined;
+            for (corner_uv, &result_) |uv, *out| out.* = bilinearColor(self.colors.*, u[@intFromFloat(uv[0])], v[@intFromFloat(uv[1])]);
+            return result_;
+        }
+        pub fn accept(self: *const @This(), u: [2]f64, v: [2]f64) Error!bool {
+            return fit(self.at(u, v)).off <= self.tolerance;
+        }
+        pub fn emit(self: *const @This(), u: [2]f64, v: [2]f64) Error!void {
+            if (self.result.items.len >= self.max_pieces) return error.GeometryWorkLimit;
+            const fitted = fit(self.at(u, v));
+            // The field is bilinear: its coefficients are its values at
+            // (i / 3, j / 3).
+            var values: [16]f64 = undefined;
+            for (0..4) |i| for (0..4) |j| {
+                values[i * 4 + j] = bilinear(fitted.at, @as(f64, @floatFromInt(i)) / 3, @as(f64, @floatFromInt(j)) / 3);
+            };
+            try self.result.append(self.allocator, .{ .net = subnet(self.net, u, v), .values = values, .line = fitted.line });
+        }
+    };
+    for (patches.points, patches.colors) |*net, *colors| {
+        const piece: Piece = .{ .allocator = allocator, .result = &result, .net = net, .colors = colors, .tolerance = tolerance, .max_pieces = max_pieces };
+        try subdivide(&piece, variation(Color, colors.*), .{ 0, 1 }, .{ 0, 1 }, 0);
     }
     return result.toOwnedSlice(allocator);
 }

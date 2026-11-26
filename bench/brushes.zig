@@ -117,7 +117,7 @@ const Profile = struct {
 
 const Prepared = struct { batch: l.OutputBatch, executed: std.Io.Timestamp, steps: u64, commands: usize, paths: usize, tasks: usize };
 fn prepare(a: std.mem.Allocator, io: std.Io, library: *typst.Library, program: *const l.bytecode.Program, profile: ?*Profile) !Prepared {
-    var runtime = try l.Runtime.init(a, a, library, .{});
+    var runtime = try l.Runtime.initWithBackends(a, a, .{ .typst = library, .workers = if (profile == null) .init(io, null) else .serial }, .{});
     defer runtime.deinit();
     const host = if (profile) |p| wrapped: {
         if (program.task_regions.len != 0) return error.ProfileWouldChangeTaskScheduling;
@@ -126,7 +126,7 @@ fn prepare(a: std.mem.Allocator, io: std.Io, library: *typst.Library, program: *
     } else runtime.host();
     var machine = try l.Machine.init(a, program, host, .{});
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = a, .io = io, .runtime = &runtime };
+    var executor: l.tasks.Executor = .{ .allocator = a, .runtime = &runtime };
     if (profile == null) executor.attach(&machine);
     _ = machine.execute(&.{}) catch |err| {
         if (machine.failure) |failure| std.debug.print("{s}: {s}\n", .{ failure.text(), failure.native_message });
@@ -177,7 +177,7 @@ fn phases(init: std.process.Init, library_path: []const u8, script: []const u8, 
         errdefer prepared.batch.deinit();
         var native_error: ?typst.Buffer = null;
         errdefer if (native_error) |*detail| detail.deinit();
-        var svg = try prepared.batch.render(scratch.allocator(), 0, .svg, &native_error);
+        var svg = try prepared.batch.render(scratch.allocator(), 0, .svg, .init(io, null), &native_error);
         errdefer svg.deinit();
         const rendered = std.Io.Clock.awake.now(io);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = output, .data = svg.bytes() });

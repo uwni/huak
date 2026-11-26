@@ -5,6 +5,7 @@
 const std = @import("std");
 const space_shading = @import("../shading.zig");
 const patches_mod = @import("patches.zig");
+const patch_math = @import("../../patches.zig");
 const Patch = space_shading.Patch;
 const DepthPatch = patches_mod.DepthPatch;
 const g = @import("../../geometry.zig");
@@ -37,17 +38,22 @@ pub const NodePatch = struct {
     subdiv_depth: u8,
     alive: bool = true,
 
-    pub fn fromDepth(dp: DepthPatch) NodePatch {
-        var px: [16]f64 = undefined;
-        var py: [16]f64 = undefined;
-        for (dp.patch.points, &px, &py) |pt, *x, *y| {
+    pub fn fromDepthInto(self: *NodePatch, dp: *const DepthPatch) void {
+        for (dp.patch.points, &self.px, &self.py) |pt, *x, *y| {
             x.* = pt.x;
             y.* = pt.y;
         }
-        return init(px, py, dp.pz, dp.patch.diffuse, dp.patch.glint, dp.patch.values, dp.sheet, 0);
+        self.pz = dp.pz;
+        self.diffuse = dp.patch.diffuse;
+        self.glint = dp.patch.glint;
+        self.values = dp.patch.values;
+        self.finalize(dp.sheet, 0);
     }
 
-    pub fn init(px: [16]f64, py: [16]f64, pz: [16]f64, diffuse: [16]f64, glint: [16]f64, values: [16]f64, sheet: u8, subdiv_depth: u8) NodePatch {
+    pub fn finalize(self: *NodePatch, sheet: u8, subdiv_depth: u8) void {
+        const px = &self.px;
+        const py = &self.py;
+        const pz = &self.pz;
         var x_min = px[0];
         var x_max = px[0];
         var y_min = py[0];
@@ -66,63 +72,47 @@ pub const NodePatch = struct {
         }
         // Newell diagonal cross product (p15 - p0) x (p3 - p12): non-zero for
         // both quads and collapsed triangles (p3 == p15).
-        const ux = px[15] - px[0];
-        const uy = py[15] - py[0];
-        const uz = pz[15] - pz[0];
-        const vx = px[3] - px[12];
-        const vy = py[3] - py[12];
-        const vz = pz[3] - pz[12];
-        var nx = uy * vz - uz * vy;
-        var ny = uz * vx - ux * vz;
-        var nz = ux * vy - uy * vx;
-        const nlen = @sqrt(nx * nx + ny * ny + nz * nz);
+        const diag_u: space_shading.Vec3 = .{ px[15] - px[0], py[15] - py[0], pz[15] - pz[0] };
+        const diag_v: space_shading.Vec3 = .{ px[3] - px[12], py[3] - py[12], pz[3] - pz[12] };
+        var normal = space_shading.cross(diag_u, diag_v);
+        const nlen = @sqrt(space_shading.dot(normal, normal));
         var d_min: f64 = 0;
         var d_max: f64 = 0;
-        if (nlen > 0 and @abs(nz) > 1e-12 * nlen) {
-            const sign: f64 = if (nz < 0) -1.0 / nlen else 1.0 / nlen;
-            nx *= sign;
-            ny *= sign;
-            nz *= sign;
-            d_min = nx * px[0] + ny * py[0] + nz * pz[0];
+        if (nlen > 0 and @abs(normal[2]) > 1e-12 * nlen) {
+            const sign: f64 = if (normal[2] < 0) -1.0 / nlen else 1.0 / nlen;
+            normal = .{ normal[0] * sign, normal[1] * sign, normal[2] * sign };
+            d_min = space_shading.dot(normal, .{ px[0], py[0], pz[0] });
             d_max = d_min;
             for (1..16) |k| {
-                const d = nx * px[k] + ny * py[k] + nz * pz[k];
+                const d = space_shading.dot(normal, .{ px[k], py[k], pz[k] });
                 d_min = @min(d_min, d);
                 d_max = @max(d_max, d);
             }
         } else {
-            nx = 0;
-            ny = 0;
-            nz = 0;
+            normal = .{ 0, 0, 0 };
         }
-        return .{
-            .px = px,
-            .py = py,
-            .pz = pz,
-            .diffuse = diffuse,
-            .glint = glint,
-            .values = values,
-            .x_min = x_min,
-            .x_max = x_max,
-            .y_min = y_min,
-            .y_max = y_max,
-            .z_min = z_min,
-            .z_max = z_max,
-            .z_avg = z_sum / 16.0,
-            .nx = nx,
-            .ny = ny,
-            .nz = nz,
-            .d_min = d_min,
-            .d_max = d_max,
-            .sheet = sheet,
-            .subdiv_depth = subdiv_depth,
-        };
+        self.x_min = x_min;
+        self.x_max = x_max;
+        self.y_min = y_min;
+        self.y_max = y_max;
+        self.z_min = z_min;
+        self.z_max = z_max;
+        self.z_avg = z_sum / 16.0;
+        self.nx = normal[0];
+        self.ny = normal[1];
+        self.nz = normal[2];
+        self.d_min = d_min;
+        self.d_max = d_max;
+        self.sheet = sheet;
+        self.subdiv_depth = subdiv_depth;
+        self.alive = true;
     }
 
-    pub fn toPatch(self: *const NodePatch) Patch {
-        var pts: [16]g.Point = undefined;
-        for (&pts, self.px, self.py) |*pt, x, y| pt.* = .{ .x = x, .y = y };
-        return .{ .points = pts, .diffuse = self.diffuse, .glint = self.glint, .values = self.values };
+    pub fn toPatchInto(self: *const NodePatch, out: *Patch) void {
+        for (&out.points, self.px, self.py) |*pt, x, y| pt.* = .{ .x = x, .y = y };
+        out.diffuse = self.diffuse;
+        out.glint = self.glint;
+        out.values = self.values;
     }
 
     pub fn screenSize(self: *const NodePatch) f64 {
@@ -133,7 +123,7 @@ pub const NodePatch = struct {
         return self.subdiv_depth < max_subdiv_depth and @max(self.x_max - self.x_min, self.y_max - self.y_min) > min_size;
     }
 
-    pub fn subdivide(self: *const NodePatch) [2]NodePatch {
+    pub fn subdivideInto(self: *const NodePatch, out: *[2]NodePatch) void {
         const span_s = @max(
             std.math.hypot(self.px[12] - self.px[0], self.py[12] - self.py[0]),
             std.math.hypot(self.px[15] - self.px[3], self.py[15] - self.py[3]),
@@ -143,17 +133,15 @@ pub const NodePatch = struct {
             std.math.hypot(self.px[15] - self.px[12], self.py[15] - self.py[12]),
         );
         const along_s = span_s >= span_t;
-        const px = splitArray(self.px, along_s);
-        const py = splitArray(self.py, along_s);
-        const pz = splitArray(self.pz, along_s);
-        const diffuse = splitArray(self.diffuse, along_s);
-        const glint = splitArray(self.glint, along_s);
-        const values = splitArray(self.values, along_s);
+        patch_math.splitArrayInto(&self.px, along_s, &out[0].px, &out[1].px);
+        patch_math.splitArrayInto(&self.py, along_s, &out[0].py, &out[1].py);
+        patch_math.splitArrayInto(&self.pz, along_s, &out[0].pz, &out[1].pz);
+        patch_math.splitArrayInto(&self.diffuse, along_s, &out[0].diffuse, &out[1].diffuse);
+        patch_math.splitArrayInto(&self.glint, along_s, &out[0].glint, &out[1].glint);
+        patch_math.splitArrayInto(&self.values, along_s, &out[0].values, &out[1].values);
         const depth = self.subdiv_depth + 1;
-        return .{
-            init(px[0], py[0], pz[0], diffuse[0], glint[0], values[0], self.sheet, depth),
-            init(px[1], py[1], pz[1], diffuse[1], glint[1], values[1], self.sheet, depth),
-        };
+        out[0].finalize(self.sheet, depth);
+        out[1].finalize(self.sheet, depth);
     }
 };
 
@@ -164,10 +152,11 @@ pub fn compare(a: *const NodePatch, b: *const NodePatch, scale: f64) Relation {
     if (separated2D(a, b)) return .disjoint;
 
     if (b.nz > 0) {
-        var amin = b.nx * a.px[0] + b.ny * a.py[0] + b.nz * a.pz[0];
+        const nb: space_shading.Vec3 = .{ b.nx, b.ny, b.nz };
+        var amin = space_shading.dot(nb, .{ a.px[0], a.py[0], a.pz[0] });
         var amax = amin;
         for (1..16) |k| {
-            const d = b.nx * a.px[k] + b.ny * a.py[k] + b.nz * a.pz[k];
+            const d = space_shading.dot(nb, .{ a.px[k], a.py[k], a.pz[k] });
             amin = @min(amin, d);
             amax = @max(amax, d);
         }
@@ -175,10 +164,11 @@ pub fn compare(a: *const NodePatch, b: *const NodePatch, scale: f64) Relation {
         if (amin >= b.d_max) return .b_behind_a;
     }
     if (a.nz > 0) {
-        var bmin = a.nx * b.px[0] + a.ny * b.py[0] + a.nz * b.pz[0];
+        const na: space_shading.Vec3 = .{ a.nx, a.ny, a.nz };
+        var bmin = space_shading.dot(na, .{ b.px[0], b.py[0], b.pz[0] });
         var bmax = bmin;
         for (1..16) |k| {
-            const d = a.nx * b.px[k] + a.ny * b.py[k] + a.nz * b.pz[k];
+            const d = space_shading.dot(na, .{ b.px[k], b.py[k], b.pz[k] });
             bmin = @min(bmin, d);
             bmax = @max(bmax, d);
         }
@@ -354,19 +344,9 @@ fn checkBoundaryCrossings(a: *const NodePatch, b: *const NodePatch, scale: f64, 
     }
 }
 
-fn bernstein(u: f64) [4]f64 {
-    const r = 1 - u;
-    return .{ r * r * r, 3 * u * r * r, 3 * u * u * r, u * u * u };
-}
-
-fn dBernstein(u: f64) [4]f64 {
-    const r = 1 - u;
-    return .{ -3 * r * r, 3 * r * (1 - 3 * u), 3 * u * (2 - 3 * u), 3 * u * u };
-}
-
 fn evalPoint(p: *const NodePatch, s: f64, t: f64) [3]f64 {
-    const bs = bernstein(s);
-    const bt = bernstein(t);
+    const bs = patch_math.bernstein(s);
+    const bt = patch_math.bernstein(t);
     var x: f64 = 0;
     var y: f64 = 0;
     var z: f64 = 0;
@@ -378,16 +358,6 @@ fn evalPoint(p: *const NodePatch, s: f64, t: f64) [3]f64 {
         z += p.pz[k] * w;
     };
     return .{ x, y, z };
-}
-
-fn evalScalar(c: *const [16]f64, s: f64, t: f64) f64 {
-    const bs = bernstein(s);
-    const bt = bernstein(t);
-    var v: f64 = 0;
-    for (0..4) |i| for (0..4) |j| {
-        v += c[i * 4 + j] * bs[i] * bt[j];
-    };
-    return v;
 }
 
 fn invertPatch(p: *const NodePatch, x: f64, y: f64, scale: f64) ?f64 {
@@ -414,10 +384,10 @@ fn invertPatch(p: *const NodePatch, x: f64, y: f64, scale: f64) ?f64 {
         var s = start[0];
         var t = start[1];
         for (0..12) |_| {
-            const bs = bernstein(s);
-            const bt = bernstein(t);
-            const dbs = dBernstein(s);
-            const dbt = dBernstein(t);
+            const bs = patch_math.bernstein(s);
+            const bt = patch_math.bernstein(t);
+            const dbs = patch_math.dBernstein(s);
+            const dbt = patch_math.dBernstein(t);
             var ex: f64 = -x;
             var ey: f64 = -y;
             var x_s: f64 = 0;
@@ -438,7 +408,7 @@ fn invertPatch(p: *const NodePatch, x: f64, y: f64, scale: f64) ?f64 {
             };
             if (@abs(ex) + @abs(ey) <= tol) {
                 if (s >= -1e-6 and s <= 1 + 1e-6 and t >= -1e-6 and t <= 1 + 1e-6) {
-                    return evalScalar(&p.pz, std.math.clamp(s, 0, 1), std.math.clamp(t, 0, 1));
+                    return patch_math.evalScalar(&p.pz, std.math.clamp(s, 0, 1), std.math.clamp(t, 0, 1));
                 }
                 break;
             }
@@ -449,36 +419,4 @@ fn invertPatch(p: *const NodePatch, x: f64, y: f64, scale: f64) ?f64 {
         }
     }
     return null;
-}
-
-fn splitCubic(c: [4]f64) [2][4]f64 {
-    const q0 = 0.5 * (c[0] + c[1]);
-    const q1 = 0.5 * (c[1] + c[2]);
-    const q2 = 0.5 * (c[2] + c[3]);
-    const r0 = 0.5 * (q0 + q1);
-    const r1 = 0.5 * (q1 + q2);
-    const mid = 0.5 * (r0 + r1);
-    return .{ .{ c[0], q0, r0, mid }, .{ mid, r1, q2, c[3] } };
-}
-
-fn splitArray(src: [16]f64, along_s: bool) [2][16]f64 {
-    var out: [2][16]f64 = undefined;
-    if (along_s) {
-        for (0..4) |j| {
-            const parts = splitCubic(.{ src[j], src[4 + j], src[8 + j], src[12 + j] });
-            for (0..4) |i| {
-                out[0][i * 4 + j] = parts[0][i];
-                out[1][i * 4 + j] = parts[1][i];
-            }
-        }
-    } else {
-        for (0..4) |i| {
-            const parts = splitCubic(.{ src[i * 4], src[i * 4 + 1], src[i * 4 + 2], src[i * 4 + 3] });
-            for (0..4) |j| {
-                out[0][i * 4 + j] = parts[0][j];
-                out[1][i * 4 + j] = parts[1][j];
-            }
-        }
-    }
-    return out;
 }

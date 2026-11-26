@@ -111,6 +111,10 @@ bool ContourFunction::normalAt(double u, double v) const {
   return normal.SquareMagnitude() > 0;
 }
 
+void ContourFunction::d1(double u, double v, gp_Pnt &point, gp_Vec &du, gp_Vec &dv) const {
+  surface->D1(u, v, point, du, dv);
+}
+
 ContourFunction::Reading ContourFunction::value(double u, double v) const {
   gp_Pnt point;
   gp_Vec normal;

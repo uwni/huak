@@ -40,7 +40,11 @@ pub fn path(self: *Builder, range: DisplayList.PathRef) !*const c.TypstPath {
 }
 
 pub fn pathData(self: *Builder, segments: []const c.TypstPathSegment) !*const c.TypstPath {
-    const result = try self.arena.allocator().create(c.TypstPath);
+    return pathDataIn(self.arena.allocator(), segments);
+}
+
+pub fn pathDataIn(memory: std.mem.Allocator, segments: []const c.TypstPathSegment) !*const c.TypstPath {
+    const result = try memory.create(c.TypstPath);
     result.* = .{ .segments = segments.ptr, .segment_count = segments.len };
     return result;
 }
@@ -48,13 +52,16 @@ pub fn pathData(self: *Builder, segments: []const c.TypstPathSegment) !*const c.
 /// An item placed by `transform`, clipped by `clip`, labeled by `id`, with
 /// the gradients of `paints`: of its fill and of its stroke.
 pub fn item(self: *Builder, transform: g.Transform, clip: ?DisplayList.PathRef, id: u64, paints: ?*const DisplayList.Style) !c.TypstSceneItem {
+    return itemIn(self, self.arena.allocator(), transform, clip, id, paints);
+}
+
+pub fn itemIn(self: *Builder, memory: std.mem.Allocator, transform: g.Transform, clip: ?DisplayList.PathRef, id: u64, paints: ?*const DisplayList.Style) !c.TypstSceneItem {
     var result = std.mem.zeroes(c.TypstSceneItem);
     result.transform = nativeTransform(transform);
     if (clip) |range| result.clip = try path(self, range);
     const fill_gradient = if (paints) |style_| style_.gradientFor(.fill) else null;
     const stroke_gradient = if (paints) |style_| style_.gradientFor(.stroke) else null;
     if (id == 0 and fill_gradient == null and stroke_gradient == null) return result;
-    const memory = self.arena.allocator();
     const options = try memory.create(c.TypstSceneItemOptions);
     options.* = std.mem.zeroes(c.TypstSceneItemOptions);
     options.struct_size = @sizeOf(c.TypstSceneItemOptions);
@@ -63,14 +70,13 @@ pub fn item(self: *Builder, transform: g.Transform, clip: ?DisplayList.PathRef, 
         options.flags = c.TYPST_SCENE_ITEM_ISOLATE_TRANSFORM;
         options.tag = .{ .data = tag.ptr, .len = tag.len };
     }
-    if (fill_gradient) |gradient| options.fill_gradient = try nativeGradient(self, gradient);
-    if (stroke_gradient) |gradient| options.stroke_gradient = try nativeGradient(self, gradient);
+    if (fill_gradient) |gradient| options.fill_gradient = try nativeGradientIn(self, memory, gradient);
+    if (stroke_gradient) |gradient| options.stroke_gradient = try nativeGradientIn(self, memory, gradient);
     result.options = options;
     return result;
 }
 
-fn nativeGradient(self: *Builder, gradient: *const Gradient) !*const c.TypstGradient {
-    const memory = self.arena.allocator();
+fn nativeGradientIn(self: *Builder, memory: std.mem.Allocator, gradient: *const Gradient) !*const c.TypstGradient {
     const ramp = switch (gradient.*) {
         // `paint` encodes mesh fills before any native item exists, and a
         // stroke painted with a mesh is drawn as its footprint.
@@ -95,7 +101,11 @@ fn nativeGradient(self: *Builder, gradient: *const Gradient) !*const c.TypstGrad
 }
 
 pub fn style(self: *Builder, value: *const DisplayList.Style) !*const c.TypstStyle {
-    const result = try self.arena.allocator().create(c.TypstStyle);
+    return styleIn(self.arena.allocator(), value);
+}
+
+pub fn styleIn(memory: std.mem.Allocator, value: *const DisplayList.Style) !*const c.TypstStyle {
+    const result = try memory.create(c.TypstStyle);
     result.* = std.mem.zeroes(c.TypstStyle);
     result.fill_rule = switch (value.fill_rule) {
         .nonzero => c.TYPST_FILL_NONZERO,

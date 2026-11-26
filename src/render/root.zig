@@ -5,6 +5,7 @@ const typst = @import("libtypst");
 const g = @import("../drawing/geometry.zig");
 const DisplayList = @import("../drawing/DisplayList.zig");
 const animation = @import("../animation/root.zig");
+const Workers = @import("workers");
 const backend = @import("typst/scene.zig");
 const svg = @import("svg/animation.zig");
 const svg_mesh = @import("svg/mesh.zig");
@@ -72,6 +73,7 @@ pub const Scene = struct {
     frames: []const typst.FrameRef = &.{},
     object_ids: ?[]const u64 = null,
     tracks: ?animation.Animation = null,
+    workers: Workers = .serial,
 
     pub fn validate(self: Scene, format: Format) !void {
         return format.validate(self.tracks != null);
@@ -87,6 +89,7 @@ pub const Scene = struct {
             .frames = self.frames,
             .object_ids = self.object_ids,
             .pdf = format == .pdf,
+            .workers = self.workers,
         }) catch |err| {
             diagnostic.* = library.lastError() catch null;
             return err;

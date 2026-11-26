@@ -97,28 +97,71 @@ GridTrace::GridTrace(const TopoDS_Face &face, const ContourFunction &function,
 }
 
 // Where the function's gradient vanishes in the cell from `lo` to `hi`, as
-// Newton's method reaches it from `start`, the gradient's derivatives
-// taken by its change over a millionth of the cell; none where the method
-// leaves the cell or does not settle.
+// OCCT's box-bounded solver reaches it from `start`, the gradient's derivatives
+// taken by its change over a millionth of the cell; none where the solver does
+// not settle at a true stationary point inside the cell.
 std::optional<gp_Pnt2d> GridTrace::criticalIn(const gp_Pnt2d &lo, const gp_Pnt2d &hi, const gp_Pnt2d &start) const {
   const double hu = 1e-6 * (hi.X() - lo.X()), hv = 1e-6 * (hi.Y() - lo.Y());
-  gp_Pnt2d at = start;
-  for (int step = 0; step < 32; ++step) {
-    const gp_Vec2d g = gradientAt(at), gu = gradientAt(at.Translated(gp_Vec2d(hu, 0))),
-                   gv = gradientAt(at.Translated(gp_Vec2d(0, hv)));
-    const double a = (gu.X() - g.X()) / hu, b = (gv.X() - g.X()) / hv;
-    const double c = (gu.Y() - g.Y()) / hu, d = (gv.Y() - g.Y()) / hv;
-    const double det = a * d - b * c;
-    if (!(std::abs(det) > 0))
-      return std::nullopt;
-    const gp_Vec2d move((b * g.Y() - d * g.X()) / det, (c * g.X() - a * g.Y()) / det);
-    at.Translate(move);
-    if (at.X() < lo.X() || at.X() > hi.X() || at.Y() < lo.Y() || at.Y() > hi.Y())
-      return std::nullopt;
-    if (move.Magnitude() <= 1e-3 * Precision::PConfusion())
-      return at;
-  }
-  return std::nullopt;
+  if (!(hu > 0) || !(hv > 0))
+    return std::nullopt;
+  class Gradient : public math_FunctionSetWithDerivatives {
+  public:
+    Gradient(const GridTrace &trace, double hu, double hv) : trace(trace), hu(hu), hv(hv) {}
+    int NbVariables() const override { return 2; }
+    int NbEquations() const override { return 2; }
+    bool Value(const math_Vector &x, math_Vector &f) override {
+      const gp_Vec2d g = trace.gradientAt(gp_Pnt2d(x(1), x(2)));
+      f(1) = g.X();
+      f(2) = g.Y();
+      return true;
+    }
+    bool Derivatives(const math_Vector &x, math_Matrix &d) override {
+      math_Vector f(1, 2);
+      return Values(x, f, d);
+    }
+    bool Values(const math_Vector &x, math_Vector &f, math_Matrix &d) override {
+      const gp_Pnt2d at(x(1), x(2));
+      const gp_Vec2d g = trace.gradientAt(at);
+      const gp_Vec2d gu = trace.gradientAt(at.Translated(gp_Vec2d(hu, 0)));
+      const gp_Vec2d gv = trace.gradientAt(at.Translated(gp_Vec2d(0, hv)));
+      f(1) = g.X();
+      f(2) = g.Y();
+      d(1, 1) = (gu.X() - g.X()) / hu;
+      d(1, 2) = (gv.X() - g.X()) / hv;
+      d(2, 1) = (gu.Y() - g.Y()) / hu;
+      d(2, 2) = (gv.Y() - g.Y()) / hv;
+      return true;
+    }
+
+  private:
+    const GridTrace &trace;
+    double hu, hv;
+  };
+  Gradient fn(*this, hu, hv);
+  const double stepTol = 1e-3 * Precision::PConfusion();
+  math_Vector tol(1, 2), lower(1, 2), upper(1, 2), seed(1, 2);
+  tol(1) = tol(2) = stepTol;
+  lower(1) = lo.X(), lower(2) = lo.Y();
+  upper(1) = hi.X(), upper(2) = hi.Y();
+  seed(1) = std::clamp(start.X(), lo.X(), hi.X());
+  seed(2) = std::clamp(start.Y(), lo.Y(), hi.Y());
+  math_FunctionSetRoot solver(fn, tol, 32);
+  solver.Perform(fn, seed, lower, upper);
+  if (!solver.IsDone())
+    return std::nullopt;
+  const math_Vector &root = solver.Root();
+  math_Vector f(1, 2);
+  math_Matrix d(1, 2, 1, 2);
+  if (!fn.Values(root, f, d))
+    return std::nullopt;
+  const double det = d(1, 1) * d(2, 2) - d(1, 2) * d(2, 1);
+  if (!(std::abs(det) > 0))
+    return std::nullopt;
+  const double du = (d(1, 2) * f(2) - d(2, 2) * f(1)) / det;
+  const double dv = (d(2, 1) * f(1) - d(1, 1) * f(2)) / det;
+  if (std::hypot(du, dv) > stepTol)
+    return std::nullopt;
+  return gp_Pnt2d(root(1), root(2));
 }
 
 // The contour point between a point past the contour, where the function

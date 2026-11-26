@@ -54,6 +54,9 @@ public:
   // to the function, has length: where it has none, the function is nil and
   // tells nothing.
   bool normalAt(double u, double v) const;
+  // The surface point and first partial derivatives through the function's
+  // cached surface adaptor (reusing its BSpline span cache).
+  void d1(double u, double v, gp_Pnt &point, gp_Vec &du, gp_Vec &dv) const;
 
 private:
   enum class Kind { direction, eye, angle };
@@ -108,7 +111,7 @@ public:
   // the rounding bound and the residual.
   std::optional<Reached> operator()(const gp_Pnt2d &uv, double limit) const {
     constexpr double eps = std::numeric_limits<double>::epsilon();
-    const double stepTol = std::cbrt(eps * eps);
+    static const double stepTol = std::cbrt(eps * eps);
     gp_Pnt2d at = uv;
     auto reading = function.values(at.X(), at.Y());
     for (int step = 0; step < 8; ++step) {
@@ -160,6 +163,11 @@ public:
   // Whether the function tells anything at a point: whether OCCT's normal
   // has length there.
   bool tells(const gp_Pnt2d &uv) const { return function.normalAt(uv.X(), uv.Y()); }
+
+  // Point and first partial derivatives via the contour function's cached adaptor.
+  void surfaceD1(double u, double v, gp_Pnt &point, gp_Vec &du, gp_Vec &dv) const {
+    function.d1(u, v, point, du, dv);
+  }
 
 private:
   const ContourFunction &function;

@@ -55,6 +55,10 @@ cuts: std.AutoHashMapUnmanaged([2]u32, u32) = .empty,
 thirds: std.AutoHashMapUnmanaged([2]u32, [2]u32) = .empty,
 /// Index j * cu + i.
 cells: []Cell,
+/// Flat per-sheet patch link nodes and skirts, avoiding per-cell ArrayLists and
+/// DepthPatch value copies.
+patch_nodes: std.ArrayList(PatchNode) = .empty,
+skirts: std.ArrayList(SkirtPatch) = .empty,
 
 pub fn init(shading: *const Shading, allocator: std.mem.Allocator, face: Face, info: Info) Error!Sheet {
     var period: [2]f64 = .{ 0, 0 };
@@ -136,16 +140,24 @@ pub fn build(self: *Sheet) Error!void {
     @memset(stray, 0);
     const flipped = try a.alloc(bool, self.cells.len);
     @memset(flipped, false);
-    for (front.items, coarse, offs) |placed, dp, off| {
+    var max_skirts: usize = 0;
+    for (front.items) |placed| for (side_ends) |ends| {
+        const p = self.nodes.items[placed.piece[ends[0]].node];
+        const q = self.nodes.items[placed.piece[ends[1]].node];
+        if (p.place & q.place & (on_contour | on_bounds) != 0) max_skirts += 1;
+    };
+    try self.patch_nodes.ensureUnusedCapacity(a, front.items.len);
+    try self.skirts.ensureUnusedCapacity(a, max_skirts);
+    for (front.items, coarse, offs) |placed, *dp, off| {
         const cell = &self.cells[placed.cell];
         stray[placed.cell] = @max(stray[placed.cell], off);
         if (dp.facing_flipped) flipped[placed.cell] = true;
-        try cell.addPatch(a, dp);
+        self.addPatch(cell, dp);
         for (side_ends, 0..) |ends, side| {
             const p = self.nodes.items[placed.piece[ends[0]].node];
             const q = self.nodes.items[placed.piece[ends[1]].node];
             if (p.place & q.place & (on_contour | on_bounds) == 0) continue;
-            if (skirt(dp, side, self.shading.tolerance)) |made| try cell.addSkirt(a, made);
+            if (skirt(dp.*, side, self.shading.tolerance)) |made| self.addSkirt(cell, made);
         }
     }
     var squares: std.ArrayList(Square) = .empty;
@@ -219,7 +231,7 @@ fn refine(self: *Sheet, squares: []const Square) Error!void {
         @memset(off, 0);
         const flipped = try a.alloc(bool, pending.len);
         @memset(flipped, false);
-        for (placed.items, finer, found) |p, dp, s| {
+        for (placed.items, finer, found) |p, *dp, s| {
             off[p.group] = @max(off[p.group], s);
             if (dp.facing_flipped) flipped[p.group] = true;
         }
@@ -235,14 +247,19 @@ fn refine(self: *Sheet, squares: []const Square) Error!void {
                 split.* = true;
             }
         }
-        for (placed.items, finer) |p, dp| {
+        var keep_count: usize = 0;
+        for (placed.items) |p| keep_count += @intFromBool(!split_group[p.group]);
+        try self.patch_nodes.ensureUnusedCapacity(a, keep_count);
+        for (placed.items, finer) |p, *dp| {
             if (split_group[p.group]) continue;
             const cell = &self.cells[p.cell];
             if (!cell.refined) {
                 cell.refined = true;
-                cell.patches.clearRetainingCapacity();
+                cell.patch_head = no_patch;
+                cell.patch_tail = no_patch;
+                cell.patch_count = 0;
             }
-            try cell.addPatch(a, dp);
+            self.addPatch(cell, dp);
         }
         pending = next.items;
     }
@@ -282,24 +299,43 @@ pub const Piece = [4]Corner;
 
 pub const Placed = struct { cell: usize, group: usize = 0, piece: Piece };
 
+const no_patch = std.math.maxInt(u32);
+const PatchNode = struct { dp: *const DepthPatch, next: u32 };
+
 const Cell = struct {
-    patches: std.ArrayList(DepthPatch) = .empty,
-    skirts: std.ArrayList(SkirtPatch) = .empty,
+    patch_head: u32 = no_patch,
+    patch_tail: u32 = no_patch,
+    patch_count: u32 = 0,
+    skirt_start: u32 = 0,
+    skirt_len: u32 = 0,
     bounds: ?g.BBox = null,
     front: bool = false,
     gleams: bool = false,
     refined: bool = false,
-
-    pub fn addPatch(cell: *Cell, allocator: std.mem.Allocator, dp: DepthPatch) !void {
-        try cell.patches.append(allocator, dp);
-        for (dp.patch.points) |point| cell.bounds = if (cell.bounds) |bounds| bounds.include(point) else .fromPoint(point);
-    }
-
-    pub fn addSkirt(cell: *Cell, allocator: std.mem.Allocator, sp: SkirtPatch) !void {
-        try cell.skirts.append(allocator, sp);
-        for (sp.patch.points) |point| cell.bounds = if (cell.bounds) |bounds| bounds.include(point) else .fromPoint(point);
-    }
 };
+
+fn addPatch(self: *Sheet, cell: *Cell, dp: *const DepthPatch) void {
+    const id: u32 = @intCast(self.patch_nodes.items.len);
+    self.patch_nodes.appendAssumeCapacity(.{ .dp = dp, .next = no_patch });
+    if (cell.patch_tail == no_patch) {
+        cell.patch_head = id;
+    } else {
+        self.patch_nodes.items[cell.patch_tail].next = id;
+    }
+    cell.patch_tail = id;
+    cell.patch_count += 1;
+    const box = g.BBox.fromSlice(&dp.patch.points);
+    cell.bounds = if (cell.bounds) |bounds| bounds.unite(box) else box;
+}
+
+fn addSkirt(self: *Sheet, cell: *Cell, sp: SkirtPatch) void {
+    if (cell.skirt_len == 0) cell.skirt_start = @intCast(self.skirts.items.len);
+    std.debug.assert(cell.skirt_start + cell.skirt_len == self.skirts.items.len);
+    self.skirts.appendAssumeCapacity(sp);
+    cell.skirt_len += 1;
+    const box = g.BBox.fromSlice(&sp.patch.points);
+    cell.bounds = if (cell.bounds) |bounds| bounds.unite(box) else box;
+}
 
 fn patchBounds(points: *const [16]g.Point) g.BBox {
     var box: g.BBox = .fromPoint(points[0]);
@@ -341,41 +377,58 @@ pub fn regionFields(self: *Shading, sheets: []const Sheet, scratch: std.mem.Allo
             }
             if (members.items.len == 0) continue;
             std.mem.sort(usize, members.items, {}, std.sort.asc(usize));
+            var total: usize = 0;
+            for (primary.items) |index| total += sheet.cells[index].skirt_len;
+            for (members.items) |index| total += sheet.cells[index].patch_count;
+            if (total > self.budget) return error.ShadingLimit;
             const start = out.patches.items.len;
-            for (primary.items) |index| for (sheet.cells[index].skirts.items) |sp| try out.patches.append(self.allocator, sp.patch);
-            for (members.items) |index| for (sheet.cells[index].patches.items) |dp| try out.patches.append(self.allocator, dp.patch);
-            const used = out.patches.items.len - start;
-            if (used > self.budget) return error.ShadingLimit;
-            self.budget -= used;
-            field.* = .{ .patches = .{ .start = start, .count = used } };
+            try out.patches.ensureUnusedCapacity(self.allocator, total);
+            for (primary.items) |index| {
+                const c = sheet.cells[index];
+                for (sheet.skirts.items[c.skirt_start..][0..c.skirt_len]) |*sp| out.patches.appendAssumeCapacity(sp.patch);
+            }
+            for (members.items) |index| {
+                var cur = sheet.cells[index].patch_head;
+                while (cur != no_patch) {
+                    const node = sheet.patch_nodes.items[cur];
+                    out.patches.appendAssumeCapacity(node.dp.patch);
+                    cur = node.next;
+                }
+            }
+            self.budget -= total;
+            field.* = .{ .patches = .{ .start = start, .count = total } };
         }
         return;
     }
 
-    var skirts_list: std.ArrayList(SkirtPatch) = .empty;
-    var depth_list: std.ArrayList(DepthPatch) = .empty;
+    var skirts_list: std.ArrayList(*const SkirtPatch) = .empty;
+    var depth_list: std.ArrayList(*const DepthPatch) = .empty;
     for (regions, result) |box, *field| {
         skirts_list.clearRetainingCapacity();
         depth_list.clearRetainingCapacity();
-        for (sheets) |sheet| for (sheet.cells) |cell| {
+        for (sheets) |*sheet| for (sheet.cells) |cell| {
             const bounds = cell.bounds orelse continue;
             if (!cell.front or !box.overlaps(bounds, 0)) continue;
-            for (cell.skirts.items) |sp| {
+            for (sheet.skirts.items[cell.skirt_start..][0..cell.skirt_len]) |*sp| {
                 if (box.overlaps(patchBounds(&sp.patch.points), 0)) try skirts_list.append(scratch, sp);
             }
-            for (cell.patches.items) |dp| {
-                if (box.overlaps(patchBounds(&dp.patch.points), 0)) try depth_list.append(scratch, dp);
+            var cur = cell.patch_head;
+            while (cur != no_patch) {
+                const node = sheet.patch_nodes.items[cur];
+                if (box.overlaps(patchBounds(&node.dp.patch.points), 0)) try depth_list.append(scratch, node.dp);
+                cur = node.next;
             }
         };
         if (depth_list.items.len == 0 and skirts_list.items.len == 0) continue;
-        std.mem.sort(SkirtPatch, skirts_list.items, {}, struct {
-            fn farther(_: void, a: SkirtPatch, b: SkirtPatch) bool {
+        std.mem.sort(*const SkirtPatch, skirts_list.items, {}, struct {
+            fn farther(_: void, a: *const SkirtPatch, b: *const SkirtPatch) bool {
                 return a.depth < b.depth;
             }
         }.farther);
+        if (skirts_list.items.len + depth_list.items.len > self.budget) return error.ShadingLimit;
         const start = out.patches.items.len;
-        if (skirts_list.items.len > self.budget) return error.ShadingLimit;
-        for (skirts_list.items) |sp| try out.patches.append(self.allocator, sp.patch);
+        try out.patches.ensureUnusedCapacity(self.allocator, skirts_list.items.len + depth_list.items.len);
+        for (skirts_list.items) |sp| out.patches.appendAssumeCapacity(sp.patch);
         self.budget -= skirts_list.items.len;
         try depth_order.emit(self.allocator, scratch, depth_list.items, self.tolerance, &self.budget, &out.patches);
         field.* = .{ .patches = .{ .start = start, .count = out.patches.items.len - start } };

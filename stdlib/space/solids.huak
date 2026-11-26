@@ -1,6 +1,6 @@
 // Solids in tones, in flat colors or in their light, each one layer flattened
 // onto the paper, and faces colored by the script's field.
-import geometry.{compound, subpaths, measure}
+import geometry.{compound, signed_area}
 import math.abs
 import object.{fill, append, opacity, flatten_transparency}
 import color.rgb
@@ -34,22 +34,9 @@ fn tone_rows(face:VisibleFace, tones:Tones) -> list
     return rows
 end
 
-fn wedge(p:any, q:any) -> float
-    return (p.x/1pt)*(q.y/1pt) - (p.y/1pt)*(q.x/1pt)
-end
-
-// The area a region covers on the page, in square points: Green's theorem on
-// each cubic of a contour, and on the chord that closes it.
+// The area a region covers on the page, in square points.
 fn area(curve:path) -> float
-    total := 0.0
-    for contour in subpaths(curve) do
-        curves := measure(contour).curves
-        for c in curves do
-            total = total + 0.3*wedge(c[0], c[1]) + 0.15*wedge(c[0], c[2]) + 0.05*wedge(c[0], c[3]) + 0.15*wedge(c[1], c[2]) + 0.15*wedge(c[1], c[3]) + 0.3*wedge(c[2], c[3])
-        end
-        if len(curves) > 0 then total = total + 0.5*wedge(curves[len(curves)-1][3], curves[0][0]) end
-    end
-    return abs(total)
+    return abs(signed_area(curve))
 end
 
 fn same_color(a:color, b:color) -> bool

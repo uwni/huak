@@ -146,12 +146,11 @@ pub fn deinit(self: *Measure) void {
 pub fn sample(self: Measure, distance: f64) !Sample {
     if (!std.math.isFinite(distance) or distance < 0 or distance > self.length) return error.InvalidParameter;
     if (self.contours.len == 0) return error.EmptyPath;
-    var low: usize = 0;
-    var high = self.contours.len;
-    while (low < high) {
-        const middle = low + (high - low) / 2;
-        if (self.contours[middle].end <= distance) low = middle + 1 else high = middle;
-    }
+    const low = std.sort.partitionPoint(@TypeOf(self.contours[0]), self.contours, distance, struct {
+        fn below(target: f64, contour: @TypeOf(self.contours[0])) bool {
+            return contour.end <= target;
+        }
+    }.below);
     return self.sampleContour(@min(low, self.contours.len - 1), distance);
 }
 
@@ -185,12 +184,11 @@ fn sampleContour(self: Measure, index: usize, distance: f64) !Sample {
     var result: Sample = .{ .distance = distance, .u = if (self.length == 0) 0 else distance / self.length, .time = contour.time, .point = contour.point, .tangent = .zero, .contour = index };
     if (contour.count == 0) return result;
     const candidates = self.edges[contour.first..][0..contour.count];
-    var low: usize = 0;
-    var high = candidates.len;
-    while (low < high) {
-        const middle = low + (high - low) / 2;
-        if (candidates[middle].end <= distance) low = middle + 1 else high = middle;
-    }
+    const low = std.sort.partitionPoint(@TypeOf(candidates[0]), candidates, distance, struct {
+        fn below(target: f64, item: @TypeOf(candidates[0])) bool {
+            return item.end <= target;
+        }
+    }.below);
     const edge = candidates[@min(low, candidates.len - 1)];
     const fraction = if (edge.end == edge.begin) 1 else std.math.clamp((distance - edge.begin) / (edge.end - edge.begin), 0, 1);
     result.time = edge.start_time * (1 - fraction) + edge.end_time * fraction;

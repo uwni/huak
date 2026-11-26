@@ -149,22 +149,22 @@ test "one picture container supports automatic extent nested export copies and i
     defer batch.deinit();
     var diagnostic: ?typst.Buffer = null;
     defer if (diagnostic) |*buffer| buffer.deinit();
-    var whole = try batch.render(t.allocator, 0, .svg, &diagnostic);
+    var whole = try batch.render(t.allocator, 0, .svg, .serial, &diagnostic);
     defer whole.deinit();
-    var nested = try batch.render(t.allocator, 1, .svg, &diagnostic);
+    var nested = try batch.render(t.allocator, 1, .svg, .serial, &diagnostic);
     defer nested.deinit();
     try t.expectEqualSlices(u8, direct.bytes(), nested.bytes());
     try t.expect(std.mem.indexOf(u8, whole.bytes(), "viewBox=\"0 0 30 15\"") != null);
     try t.expect(std.mem.indexOf(u8, whole.bytes(), " 3s ") != null);
     try t.expect(std.mem.indexOf(u8, nested.bytes(), " 2s ") != null);
     try t.expect(std.mem.indexOf(u8, nested.bytes(), " infinite") == null);
-    var plain = try batch.render(t.allocator, 3, .svg, &diagnostic);
+    var plain = try batch.render(t.allocator, 3, .svg, .serial, &diagnostic);
     defer plain.deinit();
-    var duplicate = try batch.render(t.allocator, 4, .svg, &diagnostic);
+    var duplicate = try batch.render(t.allocator, 4, .svg, .serial, &diagnostic);
     defer duplicate.deinit();
     try t.expectEqualSlices(u8, plain.bytes(), duplicate.bytes());
     try t.expect(std.mem.indexOf(u8, plain.bytes(), "viewBox=\"0 0 100 80\"") != null);
-    var cropped = try batch.render(t.allocator, 5, .svg, &diagnostic);
+    var cropped = try batch.render(t.allocator, 5, .svg, .serial, &diagnostic);
     defer cropped.deinit();
     try t.expect(std.mem.indexOf(u8, cropped.bytes(), "viewBox=\"0 0 30 15\"") != null);
 }

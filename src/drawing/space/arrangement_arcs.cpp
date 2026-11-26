@@ -159,10 +159,12 @@ int Arranging::leaving(const Piece &piece) const {
 // them, within a tolerance that covers them.
 std::vector<ArcPiece> Arranging::emit() {
   std::vector<ArcPiece> result;
+  result.reserve(bundles.size());
   for (const auto &[lead, members] : bundles) {
     const auto &piece = pieces[lead];
     ArcPiece arc;
     const double tolerance = spreadOf(lead, members);
+    arc.parts.reserve(members.size());
     for (const size_t member : members) {
       const auto &other = pieces[member];
       if (!(other.from == piece.from && other.to == piece.to) && !(other.from == piece.to && other.to == piece.from))
@@ -172,10 +174,14 @@ std::vector<ArcPiece> Arranging::emit() {
     arc.edge = edgeOf(piece, tolerance);
     // The arc's polyline is its image's, between its ends.
     const auto &image = images[piece.tool];
+    const auto firstIt = std::upper_bound(image.at.begin(), image.at.end(), piece.lo + Precision::PConfusion());
+    const auto lastIt = std::lower_bound(firstIt, image.at.end(), piece.hi - Precision::PConfusion());
+    const size_t spanCount = static_cast<size_t>(lastIt - firstIt);
+    arc.at.reserve(spanCount + 2);
+    arc.points.reserve(spanCount + 2);
     arc.at.push_back(piece.lo);
     arc.points.push_back(at(piece.tool, piece.lo));
-    for (auto it = std::upper_bound(image.at.begin(), image.at.end(), piece.lo + Precision::PConfusion());
-         it != image.at.end() && *it < piece.hi - Precision::PConfusion(); ++it) {
+    for (auto it = firstIt; it != lastIt; ++it) {
       arc.at.push_back(*it);
       arc.points.push_back(image.points[static_cast<size_t>(it - image.at.begin())]);
     }
@@ -183,10 +189,11 @@ std::vector<ArcPiece> Arranging::emit() {
     arc.points.push_back(at(piece.tool, piece.hi));
     // How far the image may stand from each segment, as the control
     // points of its pieces over the segment tell.
+    arc.offs.reserve(arc.at.size() - 1);
     for (size_t n = 0; n + 1 < arc.at.size(); ++n)
       arc.offs.push_back(hullOf(piece.tool, arc.at[n], arc.at[n + 1], arc.points[n], arc.points[n + 1]).off);
     arc.plane = image.plane;
-    result.push_back(arc);
+    result.push_back(std::move(arc));
   }
   return result;
 }

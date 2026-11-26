@@ -34,6 +34,7 @@ pub fn invoke(self: *Runtime, a: std.mem.Allocator, comptime id: builtin.Id, arg
             const curve = try (try self.path(arg.curve)).curveAt(try numeric(arg.time));
             return .{ .vec2 = types.Vec2.fromPoint(if (id == .point_at) curve.curve.at(curve.t) else curve.curve.derivative(curve.t)) };
         },
+        .signed_area => return .{ .number = (try self.path(arg.curve)).signedArea() },
         .arclength, .sample_path, .sample_at_length, .sample_at_fraction, .samples_at_length => {
             var options: Measure.Options = .{};
             if (arg.tolerance) |given| options.tolerance = try lengthPoints(given);
@@ -160,6 +161,10 @@ test "path queries keep source geometry and release native scratch and caller re
             const closed_path = try runtime.path(closed);
             try std.testing.expect(!closed_path.open and closed_path.segments.items.len == 3);
             try std.testing.expect(closed_path.segments.items.ptr != original.segments.items.ptr);
+            const arch_area = try builtin_calls.invoke(&runtime, out, .signed_area, &.{closed});
+            try std.testing.expectApproxEqAbs(@as(f64, -2.4), arch_area.number, 1e-12);
+            const rev_closed = try builtin_calls.invoke(&runtime, out, .reverse, &.{closed});
+            try std.testing.expectApproxEqAbs(@as(f64, 2.4), (try builtin_calls.invoke(&runtime, out, .signed_area, &.{rev_closed})).number, 1e-12);
             const crossing = try builtin_calls.invoke(&runtime, out, .path, &.{
                 .{ .vec2 = .{ .x = 1, .y = -1 } },
                 .{ .vec2 = .{ .x = 1, .y = 2 } },

@@ -1,0 +1,10 @@
+import solver as systems
+
+// Rebind `==` lexically inside the block so constraints read as equations,
+// while ordinary equality outside the block keeps its usual meaning.
+export expand_block solving(target:solver)
+    constrain := systems.equation.with(solver: target)
+    mixfix(constrain) _ == _ in equality
+    ...
+    return systems.solve(target)
+end

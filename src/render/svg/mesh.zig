@@ -36,13 +36,22 @@ pub fn triangle(points: [3]g.Point, colors: [3]Color) ?Paint {
     const second = points[2].sub(points[0]);
     const area = first.x * second.y - first.y * second.x;
     if (area == 0 or !std.math.isFinite(area)) return .none;
+    const max_spread = @max(colors[0].maxDiff(colors[1]), colors[0].maxDiff(colors[2]), colors[1].maxDiff(colors[2]));
+    if (max_spread == 0) return .{ .flat = colors[0] };
+    if (max_spread <= Color.tolerance) {
+        const c0 = vector(colors[0]);
+        const c1 = vector(colors[1]);
+        const c2 = vector(colors[2]);
+        const lo = @min(@min(c0, c1), c2);
+        const hi = @max(@max(c0, c1), c2);
+        return .{ .flat = color((lo + hi) * @as(@Vector(4, f64), @splat(0.5))) };
+    }
     const origin = vector(colors[0]);
     const deltas = [2]@Vector(4, f64){ vector(colors[1]) - origin, vector(colors[2]) - origin };
     const lengths = [2]f64{ @reduce(.Add, deltas[0] * deltas[0]), @reduce(.Add, deltas[1] * deltas[1]) };
     // Color changes by `axis` per unit of the scalar s, which is 0 at the
     // first vertex and affine across the triangle.
     const longer: usize = if (lengths[0] >= lengths[1]) 0 else 1;
-    if (lengths[longer] == 0) return .{ .flat = colors[0] };
     const axis = deltas[longer];
     var s: [3]f64 = .{ 0, 0, 0 };
     for (deltas, 1..) |delta, index| {

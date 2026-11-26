@@ -68,7 +68,7 @@ fn detachedBatch(allocator: std.mem.Allocator, library: *typst.Library) !OutputB
 fn render(batch: *const OutputBatch, index: usize, format: huak.render.Format) !huak.render.Output {
     var diagnostic: ?typst.Buffer = null;
     defer if (diagnostic) |*buffer| buffer.deinit();
-    return batch.render(t.allocator, index, format, &diagnostic) catch |err| {
+    return batch.render(t.allocator, index, format, .serial, &diagnostic) catch |err| {
         if (diagnostic) |message| std.debug.print("native: {s}\n", .{message.bytes()});
         return err;
     };

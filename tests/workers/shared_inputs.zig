@@ -150,11 +150,11 @@ test "list writes remain ordered when pictures share a captured collection" {
         defer program.deinit();
         try t.expectEqual(@as(usize, 0), program.task_regions.len);
         for ([_]usize{ 1, 4 }) |jobs| {
-            var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+            var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = &library, .workers = .init(t.io, jobs) }, .{});
             defer runtime.deinit();
             var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
             defer machine.deinit();
-            var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+            var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
             executor.attach(&machine);
             _ = try machine.execute(&.{});
             try t.expectEqual(@as(usize, 0), executor.stats.tasks);

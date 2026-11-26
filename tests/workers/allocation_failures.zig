@@ -15,18 +15,18 @@ fn allocationScenario(allocator: std.mem.Allocator, io: std.Io, library: *typst.
     const stable = allocation_only.allocator();
     var scene_allocator = t.FailingAllocator.init(stable, .{ .resize_fail_index = 0 });
     defer std.debug.assert(scene_allocator.allocated_bytes == scene_allocator.freed_bytes);
-    var runtime = try l.Runtime.init(stable, scene_allocator.allocator(), library, .{});
+    var runtime = try l.Runtime.initWithBackends(stable, scene_allocator.allocator(), .{ .typst = library, .workers = .init(io, 4) }, .{});
     defer runtime.deinit();
     var machine = try l.Machine.init(stable, program, runtime.host(), .{});
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = stable, .io = io, .runtime = &runtime, .jobs = 4 };
+    var executor: l.tasks.Executor = .{ .allocator = stable, .runtime = &runtime };
     executor.attach(&machine);
     _ = try machine.execute(&.{});
     var batch = try runtime.takeOutputs(&.{ machine.getGlobal("first").?, machine.getGlobal("second").? });
     defer batch.deinit();
     var diagnostic: ?typst.Buffer = null;
     defer if (diagnostic) |*detail| detail.deinit();
-    var svg = try batch.render(stable, 0, .svg, &diagnostic);
+    var svg = try batch.render(stable, 0, .svg, .serial, &diagnostic);
     defer svg.deinit();
     try t.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
     try t.expect(executor.stats.tasks >= 2);
@@ -61,11 +61,11 @@ test "worker snapshots publication diagnostics and moved owners survive every al
 fn failureAllocationScenario(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library, program: *const l.bytecode.Program) !void {
     var allocation_only = t.FailingAllocator.init(allocator, .{ .resize_fail_index = 0 });
     const stable = allocation_only.allocator();
-    var runtime = try l.Runtime.init(stable, stable, library, .{});
+    var runtime = try l.Runtime.initWithBackends(stable, stable, .{ .typst = library, .workers = .init(io, 4) }, .{});
     defer runtime.deinit();
     var machine = try l.Machine.init(stable, program, runtime.host(), .{});
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = stable, .io = io, .runtime = &runtime, .jobs = 4 };
+    var executor: l.tasks.Executor = .{ .allocator = stable, .runtime = &runtime };
     executor.attach(&machine);
     _ = machine.execute(&.{}) catch |err| {
         // A failed diagnostic copy must not publish a handle and then roll

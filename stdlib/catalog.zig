@@ -11,6 +11,7 @@ pub const modules = [_]Module{
     .{ .name = "std/space/light.huak", .source = @embedFile("space/light.huak") },
     .{ .name = "std/space/solids.huak", .source = @embedFile("space/solids.huak") },
     .{ .name = "std/drawing.huak", .source = @embedFile("drawing.huak"), .aliases = &.{"drawing"} },
+    .{ .name = "std/solving.huak", .source = @embedFile("solving.huak"), .aliases = &.{"solving"} },
     .{ .name = "std/brush.huak", .source = @embedFile("brush.huak"), .aliases = &.{"brush"} },
     .{ .name = "std/pen_motion.huak", .source = @embedFile("pen_motion.huak"), .aliases = &.{"pen_motion"} },
     .{ .name = "std/engraving.huak", .source = @embedFile("engraving.huak"), .aliases = &.{"engraving"} },
@@ -38,6 +39,7 @@ test "standard aliases retain canonical source identity" {
     try std.testing.expect(resolve("math") == null);
     try std.testing.expect(resolve("std/math.huak") == null);
     try std.testing.expectEqualStrings("std/drawing.huak", resolve("drawing").?.name);
+    try std.testing.expectEqualStrings("std/solving.huak", resolve("solving").?.name);
     try std.testing.expectEqualStrings("std/collections.huak", resolve("collections").?.name);
     try std.testing.expectEqualStrings("std/assertions.huak", resolve("assertions").?.name);
     try std.testing.expectEqualStrings(source("std/paint.huak").?, source("paint").?);

@@ -2,18 +2,16 @@
 //! composite that vary across the page, and a composite as one color or as
 //! one gradient on the geometry its varying paints share.
 const std = @import("std");
-const g = @import("../geometry.zig");
 const style = @import("../style.zig");
-const outline = @import("../outline.zig");
 const enclosure = @import("../enclosure.zig");
 const color_patches = @import("../color_patches.zig");
-const conic_mesh = @import("../conic.zig");
 const Color = style.Color;
 const Gradient = style.Gradient;
 const Real = enclosure.Real;
 const Enclosure = enclosure.Enclosure;
 const Rgba = enclosure.Rgba;
 const transparency = @import("../transparency.zig");
+const meshes = @import("meshes.zig");
 const visibility = @import("visibility.zig");
 const Expr = transparency.Expr;
 const Unit = transparency.Unit;
@@ -21,10 +19,9 @@ const Piece = transparency.Piece;
 const max_varying = transparency.max_varying;
 const Varying = transparency.Varying;
 const Track = transparency.Track;
-const mix = transparency.mix;
-const premultiplied = transparency.premultiplied;
-const over = transparency.over;
-const scaled = transparency.scaled;
+const premultipliedInto = transparency.premultipliedInto;
+const overInto = transparency.overInto;
+const scaledInto = transparency.scaledInto;
 const opaqueColor = transparency.opaqueColor;
 const rampOf = transparency.rampOf;
 const netsOf = transparency.netsOf;
@@ -123,19 +120,41 @@ pub fn claims(self: anytype, unit: Unit) !bool {
 
 /// The composite `value`, premultiplied, computed in T: `colors[i]`
 /// is the color of the varying paint `ids[i]`.
-fn composed(self: anytype, comptime T: type, value: *const Expr, ids: []const u32, colors: []const Rgba(T)) Rgba(T) {
-    return switch (value.*) {
-        .leaf => |id| premultiplied(T, if (std.mem.indexOfScalar(u32, ids, id)) |index| colors[index] else enclosure.constants(T, paintOf(self, id).color)),
-        .over => |pair| over(T, composed(self, T, pair.top, ids, colors), composed(self, T, pair.bottom, ids, colors)),
-        .group => |group| scaled(T, composed(self, T, group.inner, ids, colors), group.opacity),
-        .empty => enclosure.constants(T, Color{ .a = 0 }),
-        .paper => premultiplied(T, enclosure.constants(T, self.options.paper)),
-    };
+pub fn composedInto(self: anytype, comptime T: type, value: *const Expr, ids: []const u32, colors: []const Rgba(T), out: *Rgba(T)) void {
+    switch (value.*) {
+        .leaf => |id| {
+            if (std.mem.indexOfScalar(u32, ids, id)) |index| {
+                premultipliedInto(T, &colors[index], out);
+            } else {
+                const c = paintOf(self, id).color;
+                enclosure.constantsInto(T, Color{ .r = c.r * c.a, .g = c.g * c.a, .b = c.b * c.a, .a = c.a }, out);
+            }
+        },
+        .over => |pair| {
+            var top: Rgba(T) = undefined;
+            var bottom: Rgba(T) = undefined;
+            composedInto(self, T, pair.top, ids, colors, &top);
+            composedInto(self, T, pair.bottom, ids, colors, &bottom);
+            overInto(T, &top, &bottom, out);
+        },
+        .group => |group| {
+            var inner: Rgba(T) = undefined;
+            composedInto(self, T, group.inner, ids, colors, &inner);
+            scaledInto(T, &inner, group.opacity, out);
+        },
+        .empty => enclosure.constantsInto(T, Color{ .a = 0 }, out),
+        .paper => {
+            const p = self.options.paper;
+            enclosure.constantsInto(T, Color{ .r = p.r * p.a, .g = p.g * p.a, .b = p.b * p.a, .a = p.a }, out);
+        },
+    }
 }
 
 /// The color of a composite of solid paints over the paper.
 pub fn solidColor(self: anytype, value: *const Expr) Color {
-    return opaqueColor(composed(self, Real, value, &.{}, &.{}));
+    var result: Rgba(Real) = undefined;
+    composedInto(self, Real, value, &.{}, &.{}, &result);
+    return opaqueColor(result);
 }
 
 /// The composite `value` as one gradient on the geometry its
@@ -155,7 +174,7 @@ pub fn composite(self: anytype, value: *const Expr, paints: Varying, where: Wher
         // One field keeps its own, with stops recolored.
         .patches => |patches| if (ids.len == 1) one: {
             var colorings = [_]color_patches.Coloring{.{ .field = .{ .values = patches.values, .stops = patches.stops } }};
-            const nets = try showingPatches(self, patches.points, &colorings, where, !isOpaque(self, ids[0])) orelse return null;
+            const nets = try meshes.showingPatches(self, patches.points, &colorings, where, !isOpaque(self, ids[0])) orelse return null;
             break :one .{ .patches = .{
                 .points = nets,
                 .values = colorings[0].field.values,
@@ -163,48 +182,16 @@ pub fn composite(self: anytype, value: *const Expr, paints: Varying, where: Wher
                 .tolerance = patches.tolerance,
                 .margin = patches.margin,
             } };
-        } else try compositeMesh(self, value, ids, where) orelse return null,
+        } else try meshes.compositeMesh(self, value, ids, where) orelse return null,
         .fan => |conic| if (ids.len == 1) .{ .fan = .{
             .center = conic.center,
             .points = conic.points,
             .values = conic.values,
             .stops = try compositeStops(self, value, ids, conic.stops),
             .tolerance = conic.tolerance,
-        } } else try compositeMesh(self, value, ids, where) orelse return null,
-        .color_patches => try compositeMesh(self, value, ids, where) orelse return null,
+        } } else try meshes.compositeMesh(self, value, ids, where) orelse return null,
+        .color_patches => try meshes.compositeMesh(self, value, ids, where) orelse return null,
     };
-    return result;
-}
-
-/// Of patches `nets` with `colorings`, which are narrowed to match,
-/// those that can show, or null when none can: those that can meet
-/// `where`, and with `painting` only those where no field is
-/// transparent across the patch. A field paint claims nothing (see
-/// `claims`), so where it paints nothing other pieces paint what
-/// shows, as long as every piece of its group leaves the same patches
-/// out: pieces on a paint's own patches do, but conic paints are
-/// lowered to different patches for different pieces.
-fn showingPatches(self: anytype, nets: []const [16]g.Point, colorings: []color_patches.Coloring, where: Where, painting: bool) !?[]const [16]g.Point {
-    var kept: std.ArrayList(usize) = .empty;
-    for (nets, 0..) |*net, k| {
-        if (!where.meets(net, self.options.tolerance)) continue;
-        const shows = !painting or for (colorings) |coloring| {
-            if (coloring == .field and !coloring.field.stops.paints(&coloring.field.values[k])) break false;
-        } else true;
-        if (shows) try kept.append(self.arena, k);
-    }
-    if (kept.items.len == 0) return null;
-    if (kept.items.len == nets.len) return nets;
-    for (colorings) |*coloring| switch (coloring.*) {
-        .field => |*field| field.values = try select(self, [16]f64, field.values, kept.items),
-        .corners => |*corners| corners.* = try select(self, [4]Color, corners.*, kept.items),
-    };
-    return try select(self, [16]g.Point, nets, kept.items);
-}
-
-fn select(self: anytype, comptime T: type, items: []const T, kept: []const usize) ![]const T {
-    const result = try self.arena.alloc(T, kept.len);
-    for (kept, result) |k, *item| item.* = items[k];
     return result;
 }
 
@@ -247,17 +234,20 @@ fn compositeTrack(self: anytype, value: *const Expr, ids: []const u32, tracks: [
         if (last) |from| {
             var leaves: [max_varying]Rgba(Enclosure) = undefined;
             for (leaves[0..tracks.len], previous[0..tracks.len], before[0..tracks.len]) |*leaf, start, end| {
-                inline for (.{ "r", "g", "b", "a" }) |channel| @field(leaf.*, channel) = .linear(@field(start, channel), @field(end, channel));
+                inline for (.{ "r", "g", "b", "a" }) |channel| @field(leaf.*, channel).setLinear(@field(start, channel), @field(end, channel));
             }
-            const bound = composed(self, Enclosure, value, ids, leaves[0..tracks.len]);
+            var bound: Rgba(Enclosure) = undefined;
+            composedInto(self, Enclosure, value, ids, leaves[0..tracks.len], &bound);
             const curvature = @max(bound.r.curvature(), bound.g.curvature(), bound.b.curvature());
             const steps: usize = @max(1, @as(usize, @intFromFloat(@ceil(@sqrt(curvature / (8 * Color.tolerance))))));
             for (1..steps) |step| {
                 const fraction = @as(f64, @floatFromInt(step)) / @as(f64, @floatFromInt(steps));
                 var inside: [max_varying]Rgba(Real) = undefined;
-                for (inside[0..tracks.len], previous[0..tracks.len], before[0..tracks.len]) |*color, start, end| color.* = enclosure.constants(Real, mix(start, end, fraction));
+                for (inside[0..tracks.len], previous[0..tracks.len], before[0..tracks.len]) |*color, start, end| enclosure.constantsInto(Real, start.lerp(end, fraction), color);
                 try at.append(self.arena, from + (position - from) * fraction);
-                try out.append(self.arena, opaqueColor(composed(self, Real, value, ids, inside[0..tracks.len])));
+                var step_color: Rgba(Real) = undefined;
+                composedInto(self, Real, value, ids, inside[0..tracks.len], &step_color);
+                try out.append(self.arena, opaqueColor(step_color));
             }
             try at.append(self.arena, position);
             try out.append(self.arena, colorAt(self, value, ids, before[0..tracks.len]));
@@ -274,51 +264,10 @@ fn compositeTrack(self: anytype, value: *const Expr, ids: []const u32, tracks: [
 
 fn colorAt(self: anytype, value: *const Expr, ids: []const u32, colors: []const Color) Color {
     var reals: [max_varying]Rgba(Real) = undefined;
-    for (colors, reals[0..colors.len]) |color, *out| out.* = enclosure.constants(Real, color);
-    return opaqueColor(composed(self, Real, value, ids, reals[0..colors.len]));
-}
-
-/// Colors at patch corners for a composite of paints on the same
-/// patches, or of conic paints on the same rays, lowered to the
-/// same patches; null where none of them can show `where`.
-fn compositeMesh(self: anytype, value: *const Expr, ids: []const u32, where: Where) !?Gradient {
-    var colorings: [max_varying]color_patches.Coloring = undefined;
-    var nets: []const [16]g.Point = undefined;
-    const lowered = paintOf(self, ids[0]).gradient.* == .fan;
-    if (lowered) {
-        var conics: [max_varying]Gradient.Conic = undefined;
-        for (ids, conics[0..ids.len]) |id, *conic| conic.* = paintOf(self, id).gradient.fan;
-        const shared = try conic_mesh.sharedPatches(self.arena, conics[0..ids.len], where.cover, outline.max_items);
-        nets = shared.points;
-        for (conics[0..ids.len], colorings[0..ids.len], 0..) |conic, *coloring, index| {
-            coloring.* = .{ .field = .{ .values = shared.field(index), .stops = conic.stops } };
-        }
-    } else {
-        nets = netsOf(paintOf(self, ids[0]).gradient).?;
-        for (ids, colorings[0..ids.len]) |id, *coloring| coloring.* = switch (paintOf(self, id).gradient.*) {
-            .patches => |patches| .{ .field = .{ .values = patches.values, .stops = patches.stops } },
-            .color_patches => |patches| .{ .corners = patches.colors },
-            else => unreachable,
-        };
-    }
-    const Flattening = @TypeOf(self);
-    const Combine = struct {
-        flattener: Flattening,
-        value: *const Expr,
-        ids: []const u32,
-
-        pub fn color(context: @This(), comptime T: type, colors: []const Rgba(T)) Rgba(T) {
-            return composed(context.flattener, T, context.value, context.ids, colors);
-        }
-    };
-    var has_opaque = false;
-    for (ids) |id| if (isOpaque(self, id)) {
-        has_opaque = true;
-        break;
-    };
-    const shown = try showingPatches(self, nets, colorings[0..ids.len], where, !lowered and !has_opaque) orelse return null;
-    const owned = try color_patches.compose(self.arena, shown, colorings[0..ids.len], Combine{ .flattener = self, .value = value, .ids = ids }, Color.tolerance, outline.max_items);
-    return .{ .color_patches = owned.view() };
+    for (colors, reals[0..colors.len]) |color, *out| enclosure.constantsInto(Real, color, out);
+    var result: Rgba(Real) = undefined;
+    composedInto(self, Real, value, ids, reals[0..colors.len], &result);
+    return opaqueColor(result);
 }
 
 /// A piece painting `value` where `natural` paints: with the curves of

@@ -137,6 +137,19 @@ Contours traceOutlines(const TopoDS_Face &, const HLRAlgo_Projector &);
 // cone's apex.
 std::vector<TopoDS_Vertex> singularPoints(const TopoDS_Face &);
 
+// Halves the parts between parameters that are marked.
+inline void halve(std::vector<double> &at, const std::vector<bool> &split) {
+  std::vector<double> finer;
+  finer.reserve(at.size() * 2);
+  finer.push_back(at.front());
+  for (size_t k = 0; k + 1 < at.size(); ++k) {
+    if (split[k])
+      finer.push_back((at[k] + at[k + 1]) / 2);
+    finer.push_back(at[k + 1]);
+  }
+  at = std::move(finer);
+}
+
 // How far along a segment, as a part of it, a point stands nearest.
 inline double along(const gp_Pnt2d &p, const gp_Pnt2d &a, const gp_Pnt2d &b) {
   const gp_Vec2d way(a, b);

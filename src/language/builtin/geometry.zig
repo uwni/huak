@@ -19,6 +19,7 @@ pub const geometry = .{
     .point_at = .{ .args = .{ .curve = .path, .time = .number }, .minimum = 2, .result = .vec2 },
     .tangent_at = .{ .args = .{ .curve = .path, .time = .number }, .minimum = 2, .result = .vec2 },
     .arclength = .{ .args = .{ .curve = .any, .tolerance = .length }, .minimum = 1, .result = .length },
+    .signed_area = .{ .args = .{ .curve = .path }, .minimum = 1, .result = .number },
     .sample_path = .{ .args = .{ .curve = .any, .count = .int, .tolerance = .length }, .minimum = 2, .result = .list },
     .sample_at_length = .{ .args = .{ .curve = .any, .distance = .length, .tolerance = .length }, .minimum = 2, .result = .list },
     .sample_at_fraction = .{ .args = .{ .curve = .any, .fraction = .number, .tolerance = .length }, .minimum = 2, .result = .list },

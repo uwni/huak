@@ -37,16 +37,6 @@ Contours march(TopoDS_Face face, const contour::ContourFunction &function, doubl
   }
   us.push_back(u1);
   vs.push_back(v1);
-  // Halves the parts of a row of the grid's lines marked to split.
-  const auto refine = [](std::vector<double> &at, const std::vector<bool> &split) {
-    std::vector<double> finer{at.front()};
-    for (size_t k = 0; k + 1 < at.size(); ++k) {
-      if (split[k])
-        finer.push_back((at[k] + at[k + 1]) / 2);
-      finer.push_back(at[k + 1]);
-    }
-    at = std::move(finer);
-  };
   // The grid's normals, row by row; none where the surface tells none.
   std::vector<std::optional<gp_Dir>> normals;
   const auto index = [&](size_t i, size_t j) { return i * vs.size() + j; };
@@ -72,8 +62,8 @@ Contours march(TopoDS_Face face, const contour::ContourFunction &function, doubl
       }
     if (!any)
       break;
-    refine(us, splitU);
-    refine(vs, splitV);
+    halve(us, splitU);
+    halve(vs, splitV);
   }
   // The contour along an edge of the face is that edge, as the function
   // tells to first order at its ends, its middle and its quarters, where it
@@ -109,8 +99,8 @@ Contours march(TopoDS_Face face, const contour::ContourFunction &function, doubl
       std::vector<bool> splitU(us.size() - 1, false), splitV(vs.size() - 1, false);
       splitU[cell.i] = us[cell.i + 1] - us[cell.i] > Precision::PConfusion();
       splitV[cell.j] = vs[cell.j + 1] - vs[cell.j] > Precision::PConfusion();
-      refine(us, splitU);
-      refine(vs, splitV);
+      halve(us, splitU);
+      halve(vs, splitV);
     }
   }
 }

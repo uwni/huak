@@ -7,6 +7,7 @@ const typesetting = @import("typesetting.zig");
 const typeset_text = @import("typeset_text.zig");
 const types = @import("../types.zig");
 const Scene = @import("../../drawing/Scene.zig");
+const Workers = @import("workers");
 
 /// Each registry's length when a child was forked, named like the Runtime
 /// field. The child shares those entries with its parent and owns only the
@@ -75,16 +76,18 @@ pub fn rollback(parent: *Runtime, marker: Checkpoint) void {
     parent.texts.shrinkRetainingCapacity(marker.texts);
 }
 
-pub fn fork(parent: *Runtime) !Runtime {
+pub fn fork(parent: *Runtime, child_workers: Workers) !Runtime {
     if (parent.outputs_taken or parent.task_borrow != null) return error.InvalidState;
     var lengths: Lengths = .{};
     inline for (@typeInfo(Lengths).@"struct".field_names) |name| @field(lengths, name) = @field(parent, name).items.len;
+    var backends = parent.backends;
+    backends.workers = child_workers;
     // The borrow is recorded first, so a failed copy releases only the
     // child's own list buffers.
     var child: Runtime = .{
         .gpa = parent.gpa,
         .scene_allocator = parent.scene_allocator,
-        .backends = parent.backends,
+        .backends = backends,
         .options = parent.options,
         .shared_engine = if (parent.engine) |*engine| engine else null,
         .task_borrow = .{ .parent = parent, .lengths = lengths },

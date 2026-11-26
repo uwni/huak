@@ -201,7 +201,7 @@ fn projectionOrder(a: Point, b: Point, direction: Point) i2 {
     // The filter covers the rounded differences, products and sum. Fall back
     // for overflow, underflow or cancellation; no geometric epsilon decides
     // which vertex wins a support sector.
-    if (std.math.isFinite(value) and std.math.isFinite(bound) and bound >= std.math.floatMin(f64) and @abs(value) > bound) return sign(value);
+    if (std.math.isFinite(value) and std.math.isFinite(bound) and bound >= std.math.floatMin(f64) and @abs(value) > bound) return std.math.sign(value);
 
     // Each product of two finite binary64 values is exact in binary128:
     // <=106 significant bits, with exponents [-2148,2048], all in range.
@@ -261,24 +261,20 @@ test "support projection sign retains extreme cancellation and subnormal product
     try std.testing.expectEqual(@as(i2, 0), projectionOrder(a, a, direction));
 }
 
-fn sign(value: f64) i2 {
-    return if (value > 0) 1 else if (value < 0) -1 else 0;
-}
-
 fn turnDirection(curve: g.Cubic) Error!i2 {
     const first = try startDirection(curve);
     const last = try endDirection(curve);
-    var turn = sign(first.cross(last));
+    var turn = std.math.sign(first.cross(last));
     if (turn == 0) {
         const chord = curve.p3.sub(curve.p0);
         if (!chord.isFinite()) return error.NonFinite;
         if (!zero(chord)) {
             const unit = try chord.normalized();
-            turn = sign(first.cross(unit) + unit.cross(last));
+            turn = std.math.sign(first.cross(unit) + unit.cross(last));
         }
     }
     // MetaPost's tie for an exactly indeterminate cusp is lexicographic.
-    if (turn == 0) turn = if (first.x != 0) sign(first.x) else sign(first.y);
+    if (turn == 0) turn = if (first.x != 0) std.math.sign(first.x) else std.math.sign(first.y);
     return turn;
 }
 

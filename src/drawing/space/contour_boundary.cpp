@@ -46,15 +46,7 @@ bool onBoundary(const TopoDS_Face &face, const gp_Pnt &p, double within) {
     const auto &edge = TopoDS::Edge(e.Current());
     if (BRep_Tool::Degenerated(edge) || BRep_Tool::IsClosed(edge, face))
       continue;
-    double a, b;
-    const auto curve = BRep_Tool::Curve(edge, a, b);
-    if (curve.IsNull())
-      continue;
-    const double reach = within + BRep_Tool::Tolerance(edge);
-    if (curve->Value(a).Distance(p) <= reach || curve->Value(b).Distance(p) <= reach)
-      return true;
-    GeomAPI_ProjectPointOnCurve onto(p, curve, a, b);
-    if (onto.NbPoints() && onto.LowerDistance() <= reach)
+    if (pointOnEdge(edge, p, within))
       return true;
   }
   return false;

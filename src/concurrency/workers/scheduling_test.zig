@@ -1,191 +1,89 @@
-//! Bounded work on the I/O backend's reusable threads. Callbacks own their
-//! indexed results; scheduling never retains application objects after return.
+//! Unit tests for `Workers` scheduling, nesting budgets, chunking and graphs.
 const std = @import("std");
+const builtin = @import("builtin");
+const Workers = @import("../Workers.zig");
 
-pub fn workerCount(task_count: usize, jobs: ?usize) usize {
-    const requested = jobs orelse (std.Thread.getCpuCount() catch 1);
-    return @min(task_count, @max(@as(usize, 1), requested));
-}
-
-/// Runs independent indexed tasks. A callback returning false stops further
-/// claims; callbacks already running finish before return. Results and errors
-/// belong to the caller, which can report them in index order.
-pub fn run(
-    io: std.Io,
-    task_count: usize,
-    jobs: ?usize,
-    context: anytype,
-    comptime task: fn (@TypeOf(context), usize) bool,
-) std.Io.Cancelable!void {
-    if (task_count == 0) return;
-    const State = struct {
-        context: @TypeOf(context),
-        count: usize,
-        next: std.atomic.Value(usize) = .init(0),
-        stop: std.atomic.Value(bool) = .init(false),
-
-        fn work(self: *@This()) void {
-            while (!self.stop.load(.acquire)) {
-                const index = self.next.fetchAdd(1, .monotonic);
-                if (index >= self.count) return;
-                if (!task(self.context, index)) self.stop.store(true, .release);
-            }
-        }
-    };
-    var state: State = .{ .context = context, .count = task_count };
-    var group: std.Io.Group = .init;
-    defer group.cancel(io);
-    for (1..workerCount(task_count, jobs)) |_| {
-        // The caller and tasks already started drain the queue when this
-        // backend cannot supply another concurrent worker.
-        group.concurrent(io, State.work, .{&state}) catch break;
-    }
-    state.work();
-    try group.await(io);
-}
-
-pub const GraphError = std.mem.Allocator.Error || std.Io.Cancelable || error{InvalidDependency};
-
-/// Runs a graph in which every dependency precedes its node in source order.
-/// A node is claimed only after all dependencies finish successfully. Failed
-/// nodes suppress their descendants; independent work continues. Metadata is
-/// O(nodes + edges), and all callbacks finish before its storage is released.
-pub fn runGraph(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    jobs: ?usize,
-    dependencies: []const []const usize,
-    context: anytype,
-    comptime task: fn (@TypeOf(context), usize) bool,
-) GraphError!void {
-    const count = dependencies.len;
-    if (count == 0) return;
-    var arena: std.heap.ArenaAllocator = .init(allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const offsets = try a.alloc(usize, std.math.add(usize, count, 1) catch return error.InvalidDependency);
-    @memset(offsets, 0);
-    var edge_count: usize = 0;
-    for (dependencies, 0..) |parents, index| {
-        edge_count = std.math.add(usize, edge_count, parents.len) catch return error.InvalidDependency;
-        for (parents) |parent| {
-            if (parent >= index) return error.InvalidDependency;
-            offsets[parent + 1] += 1;
-        }
-    }
-    for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
-    const children = try a.alloc(usize, edge_count);
-    const cursors = try a.dupe(usize, offsets[0..count]);
-    for (dependencies, 0..) |parents, index| for (parents) |parent| {
-        children[cursors[parent]] = index;
-        cursors[parent] += 1;
-    };
-    const remaining = try a.alloc(usize, count);
-    const blocked = try a.alloc(bool, count);
-    @memset(blocked, false);
-    const ready = try a.alloc(usize, count);
-    var tail: usize = 0;
-    for (dependencies, 0..) |parents, index| {
-        remaining[index] = parents.len;
-        if (parents.len == 0) {
-            ready[tail] = index;
-            tail += 1;
-        }
-    }
-    const State = struct {
-        io: std.Io,
-        context: @TypeOf(context),
-        offsets: []const usize,
-        children: []const usize,
-        remaining: []usize,
-        blocked: []bool,
-        ready: []usize,
-        head: usize = 0,
-        tail: usize,
-        completed: usize = 0,
-        mutex: std.Io.Mutex = .init,
-        changed: std.Io.Condition = .init,
-
-        fn work(self: *@This()) std.Io.Cancelable!void {
-            while (try self.take()) |index| {
-                const succeeded = task(self.context, index);
-                // Completion must be published even if cancellation arrived
-                // during a callback; dependents must not wait on a lost node.
-                self.mutex.lockUncancelable(self.io);
-                self.finish(index, succeeded);
-                self.changed.broadcast(self.io);
-                self.mutex.unlock(self.io);
-            }
-        }
-
-        fn take(self: *@This()) std.Io.Cancelable!?usize {
-            try self.mutex.lock(self.io);
-            defer self.mutex.unlock(self.io);
-            while (true) {
-                while (self.head < self.tail) {
-                    const index = self.ready[self.head];
-                    self.head += 1;
-                    if (!self.blocked[index]) return index;
-                    // Propagate skipped descendants iteratively, using the
-                    // same bounded queue rather than recursion along a chain.
-                    self.finish(index, false);
-                    self.changed.broadcast(self.io);
-                }
-                if (self.completed == self.ready.len) return null;
-                // Idle workers wait for ready work, never claim a node and
-                // wait for its dependencies while occupying the work queue.
-                try self.changed.wait(self.io, &self.mutex);
-            }
-        }
-
-        fn finish(self: *@This(), index: usize, succeeded: bool) void {
-            self.completed += 1;
-            for (self.children[self.offsets[index]..self.offsets[index + 1]]) |child| {
-                self.blocked[child] = self.blocked[child] or !succeeded;
-                self.remaining[child] -= 1;
-                if (self.remaining[child] == 0) {
-                    self.ready[self.tail] = child;
-                    self.tail += 1;
-                }
-            }
-        }
-    };
-    var state: State = .{
-        .io = io,
-        .context = context,
-        .offsets = offsets,
-        .children = children,
-        .remaining = remaining,
-        .blocked = blocked,
-        .ready = ready,
-        .tail = tail,
-    };
-    var group: std.Io.Group = .init;
-    defer group.cancel(io);
-    for (1..workerCount(count, jobs)) |_| {
-        group.concurrent(io, State.work, .{&state}) catch break;
-    }
-    try state.work();
-    try group.await(io);
-}
-
-test "worker counts and empty workloads respect explicit bounds" {
+test "worker limits, nesting budgets, chunks and empty workloads respect bounds" {
     const t = std.testing;
-    try t.expectEqual(@as(usize, 0), workerCount(0, 4));
-    try t.expectEqual(@as(usize, 1), workerCount(1, 4));
-    try t.expectEqual(@as(usize, 1), workerCount(8, 0));
-    try t.expectEqual(@as(usize, 3), workerCount(8, 3));
+    const serial = Workers.serial;
+    try t.expectEqual(@as(usize, 0), serial.limit(0));
+    try t.expectEqual(@as(usize, 1), serial.limit(8));
+    try t.expectEqual(@as(?std.Io, null), serial.nested(1).io);
+    try t.expectEqual(@as(usize, 1), serial.chunkCount(4096, 256, 32));
+
+    const four = Workers.init(t.io, 4);
+    try t.expectEqual(@as(usize, 0), four.limit(0));
+    try t.expectEqual(@as(usize, 1), four.limit(1));
+    try t.expectEqual(@as(usize, 1), Workers.init(t.io, 0).limit(8));
+    try t.expectEqual(@as(usize, 1), Workers.init(t.io, 1).limit(8));
+    try t.expectEqual(@as(usize, if (builtin.single_threaded) 1 else 3), Workers.init(t.io, 3).limit(8));
+
+    // Nested budgets keep outer * inner <= total, and outer == 1 passes through.
+    const eight = Workers.init(t.io, 8);
+    try t.expectEqual(@as(?usize, 8), eight.nested(1).jobs);
+    if (!builtin.single_threaded) {
+        try t.expectEqual(@as(?usize, 4), eight.nested(2).jobs);
+        try t.expectEqual(@as(?usize, 2), eight.nested(3).jobs);
+        try t.expectEqual(@as(?usize, 2), eight.nested(4).jobs);
+        try t.expectEqual(@as(?std.Io, null), eight.nested(8).io);
+        try t.expectEqual(@as(?std.Io, null), Workers.init(t.io, 1).nested(2).io);
+        try t.expectEqual(@as(usize, 1), Workers.init(t.io, 1).chunkCount(4096, 256, 32));
+        try t.expectEqual(@as(usize, 1), eight.chunkCount(400, 256, 32));
+        try t.expectEqual(@as(usize, 2), eight.chunkCount(600, 256, 32));
+        try t.expectEqual(@as(usize, 16), four.chunkCount(10_000, 256, 32));
+        try t.expectEqual(@as(usize, 32), eight.chunkCount(10_000, 256, 32));
+    }
+
+    // Chunk ranges partition 0..item_count contiguously without gaps or overlap.
+    const item_count: usize = 1003;
+    const chunk_count: usize = 17;
+    var cursor: usize = 0;
+    for (0..chunk_count) |i| {
+        const r = Workers.chunkRange(item_count, chunk_count, i);
+        try t.expectEqual(cursor, r.start);
+        try t.expect(r.end > r.start);
+        cursor = r.end;
+    }
+    try t.expectEqual(item_count, cursor);
+
     const Never = struct {
         fn call(_: void, _: usize) bool {
             unreachable;
         }
     };
-    try run(t.io, 0, 4, {}, Never.call);
-    try runGraph(t.allocator, t.io, 4, &.{}, {}, Never.call);
+    try four.run(0, {}, Never.call);
+    try serial.run(0, {}, Never.call);
+    try four.runGraph(t.allocator, &.{}, {}, Never.call);
+    try serial.runGraph(t.allocator, &.{}, {}, Never.call);
+}
+
+test "serial workers run flat and graph work synchronously without an Io backend" {
+    const t = std.testing;
+    const State = struct {
+        visited: [5]usize = @splat(0),
+        order: [5]usize = @splat(0),
+        len: usize = 0,
+        fail_at: ?usize = null,
+
+        fn call(self: *@This(), index: usize) bool {
+            self.visited[index] += 1;
+            self.order[self.len] = index;
+            self.len += 1;
+            return self.fail_at != index;
+        }
+    };
+    var flat: State = .{ .fail_at = 2 };
+    try Workers.serial.run(5, &flat, State.call);
+    try t.expectEqual(@as(usize, 3), flat.len);
+    try t.expectEqualSlices(usize, &.{ 0, 1, 2 }, flat.order[0..3]);
+
+    var graph: State = .{ .fail_at = 1 };
+    try Workers.serial.runGraph(t.allocator, &.{ &.{}, &.{0}, &.{0}, &.{1}, &.{2} }, &graph, State.call);
+    try t.expectEqualSlices(usize, &.{ 1, 1, 1, 0, 1 }, &graph.visited);
 }
 
 test "independent tasks run once with bounded concurrency on reused backend threads" {
-    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
     const t = std.testing;
     var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = .limited(3) });
     defer threaded.deinit();
@@ -204,13 +102,55 @@ test "independent tasks run once with bounded concurrency on reused backend thre
             return true;
         }
     };
+    const workers = Workers.init(threaded.io(), 4);
     var state: State = .{ .io = threaded.io() };
     // A new batch reuses the same backend and its already-created threads.
-    for (0..3) |_| try run(threaded.io(), state.visits.len, 4, &state, State.call);
+    for (0..3) |_| try workers.run(state.visits.len, &state, State.call);
     try t.expectEqual(@as(usize, 0), state.active.load(.acquire));
     try t.expect(state.peak.load(.monotonic) > 1);
     try t.expect(state.peak.load(.monotonic) <= 4);
     for (&state.visits) |*visits| try t.expectEqual(@as(usize, 3), visits.load(.monotonic));
+}
+
+test "nested worker runs respect total budget and never deadlock under tight limits" {
+    if (builtin.single_threaded) return error.SkipZigTest;
+    const t = std.testing;
+    for ([_]std.Io.Limit{ .nothing, .limited(2), .limited(7) }) |cap| {
+        var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = cap });
+        defer threaded.deinit();
+        const total_jobs: usize = 6;
+        const outer_count: usize = 2;
+        const inner_count: usize = 8;
+        const outer_workers = Workers.init(threaded.io(), total_jobs);
+        const inner_workers = outer_workers.nested(outer_workers.limit(outer_count));
+        const State = struct {
+            inner: Workers,
+            active: std.atomic.Value(usize) = .init(0),
+            peak: std.atomic.Value(usize) = .init(0),
+            visits: [outer_count * inner_count]std.atomic.Value(usize) = @splat(.init(0)),
+
+            fn runOuter(self: *@This(), outer: usize) bool {
+                const Inner = struct {
+                    parent: *@TypeOf(self.*),
+                    outer: usize,
+                    fn call(ctx: @This(), i: usize) bool {
+                        const active = ctx.parent.active.fetchAdd(1, .acq_rel) + 1;
+                        defer _ = ctx.parent.active.fetchSub(1, .release);
+                        _ = ctx.parent.peak.fetchMax(active, .monotonic);
+                        _ = ctx.parent.visits[ctx.outer * inner_count + i].fetchAdd(1, .monotonic);
+                        return true;
+                    }
+                };
+                self.inner.run(inner_count, Inner{ .parent = self, .outer = outer }, Inner.call) catch return false;
+                return true;
+            }
+        };
+        var state: State = .{ .inner = inner_workers };
+        try outer_workers.run(outer_count, &state, State.runOuter);
+        try t.expectEqual(@as(usize, 0), state.active.load(.acquire));
+        try t.expect(state.peak.load(.monotonic) <= total_jobs);
+        for (&state.visits) |*v| try t.expectEqual(@as(usize, 1), v.load(.monotonic));
+    }
 }
 
 test "unavailable concurrency falls back to the caller for flat and graph work" {
@@ -227,15 +167,16 @@ test "unavailable concurrency falls back to the caller for flat and graph work" 
             return true;
         }
     };
+    const workers = Workers.init(threaded.io(), 4);
     var state: State = .{ .expected = std.Thread.getCurrentId() };
-    try run(threaded.io(), 12, 4, &state, State.call);
-    try runGraph(t.allocator, threaded.io(), 4, &.{ &.{}, &.{0}, &.{0}, &.{ 1, 2 } }, &state, State.call);
+    try workers.run(12, &state, State.call);
+    try workers.runGraph(t.allocator, &.{ &.{}, &.{0}, &.{0}, &.{ 1, 2 } }, &state, State.call);
     try t.expectEqual(@as(usize, 16), state.count);
     try t.expect(state.same_thread);
 }
 
 test "a flat failure waits for started callbacks and leaves later tasks unclaimed" {
-    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
     const t = std.testing;
     var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = .limited(1) });
     defer threaded.deinit();
@@ -263,13 +204,13 @@ test "a flat failure waits for started callbacks and leaves later tasks unclaime
         }
     };
     var state: State = .{ .io = threaded.io() };
-    try run(threaded.io(), 100, 2, &state, State.call);
+    try Workers.init(threaded.io(), 2).run(100, &state, State.call);
     try t.expect(state.second_finished.load(.acquire));
     try t.expectEqual(@as(usize, 2), state.visits.load(.monotonic));
 }
 
 test "a diamond graph computes every shared dependency once before its consumers" {
-    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
     const t = std.testing;
     var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = .limited(3) });
     defer threaded.deinit();
@@ -292,14 +233,14 @@ test "a diamond graph computes every shared dependency once before its consumers
     const dependencies: []const []const usize = &.{ &.{}, &.{0}, &.{0}, &.{ 1, 2 }, &.{ 0, 3 } };
     for ([_]usize{ 1, 4, 4 }) |jobs| {
         var state: State = .{};
-        try runGraph(t.allocator, threaded.io(), jobs, dependencies, &state, State.call);
+        try Workers.init(threaded.io(), jobs).runGraph(t.allocator, dependencies, &state, State.call);
         try t.expectEqualSlices(usize, &.{ 7, 14, 21, 35, 42 }, &state.values);
         try t.expectEqualSlices(usize, &.{ 1, 1, 1, 1, 1 }, &state.visits);
     }
 }
 
 test "idle graph workers wake when a narrow dependency opens into parallel work" {
-    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
     const t = std.testing;
     var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = .limited(3) });
     defer threaded.deinit();
@@ -319,7 +260,7 @@ test "idle graph workers wake when a narrow dependency opens into parallel work"
         }
     };
     var state: State = .{ .io = threaded.io() };
-    try runGraph(t.allocator, threaded.io(), 4, &.{ &.{}, &.{0}, &.{0}, &.{0}, &.{0}, &.{0}, &.{0}, &.{ 1, 2, 3, 4, 5, 6 }, &.{7} }, &state, State.call);
+    try Workers.init(threaded.io(), 4).runGraph(t.allocator, &.{ &.{}, &.{0}, &.{0}, &.{0}, &.{0}, &.{0}, &.{0}, &.{ 1, 2, 3, 4, 5, 6 }, &.{7} }, &state, State.call);
     try t.expectEqual(@as(usize, 0), state.active.load(.acquire));
     try t.expect(state.peak.load(.monotonic) > 1);
     try t.expect(state.peak.load(.monotonic) <= 4);
@@ -338,7 +279,7 @@ test "failed graph nodes suppress descendants while independent tasks complete" 
         }
     };
     var state: State = .{};
-    try runGraph(t.allocator, threaded.io(), 4, &.{ &.{}, &.{0}, &.{1}, &.{}, &.{3}, &.{ 2, 4 }, &.{4} }, &state, State.call);
+    try Workers.init(threaded.io(), 4).runGraph(t.allocator, &.{ &.{}, &.{0}, &.{1}, &.{}, &.{3}, &.{ 2, 4 }, &.{4} }, &state, State.call);
     try t.expectEqualSlices(usize, &.{ 1, 0, 0, 1, 1, 0, 1 }, &state.visits);
 }
 
@@ -362,16 +303,17 @@ test "long chains complete or suppress descendants without recursive propagation
             return !self.fail;
         }
     };
+    const workers = Workers.init(threaded.io(), 4);
     var success: State = .{ .fail = false };
-    try runGraph(t.allocator, threaded.io(), 4, &dependencies, &success, State.call);
+    try workers.runGraph(t.allocator, &dependencies, &success, State.call);
     try t.expectEqual(links.len, success.count);
     var failure: State = .{ .fail = true };
-    try runGraph(t.allocator, threaded.io(), 4, &dependencies, &failure, State.call);
+    try workers.runGraph(t.allocator, &dependencies, &failure, State.call);
     try t.expectEqual(@as(usize, 1), failure.count);
 }
 
 test "canceling graph execution joins running callbacks and idle workers" {
-    if (@import("builtin").single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
     const t = std.testing;
     var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = .limited(3) });
     defer threaded.deinit();
@@ -398,8 +340,8 @@ test "canceling graph execution joins running callbacks and idle workers" {
             return true;
         }
 
-        fn execute(self: *@This()) GraphError!void {
-            try runGraph(t.allocator, self.io, 2, &.{ &.{}, &.{0} }, self, call);
+        fn execute(self: *@This()) Workers.GraphError!void {
+            try Workers.init(self.io, 2).runGraph(t.allocator, &.{ &.{}, &.{0} }, self, call);
         }
     };
     var state: State = .{ .io = threaded.io() };
@@ -419,12 +361,16 @@ test "invalid graph edges fail before any callback runs" {
             unreachable;
         }
     };
-    try t.expectError(error.InvalidDependency, runGraph(t.allocator, t.io, 1, &.{&.{0}}, {}, Never.call));
-    try t.expectError(error.InvalidDependency, runGraph(t.allocator, t.io, 1, &.{ &.{1}, &.{0} }, {}, Never.call));
-    try t.expectError(error.InvalidDependency, runGraph(t.allocator, t.io, 1, &.{ &.{}, &.{2} }, {}, Never.call));
+    const serial = Workers.init(t.io, 1);
+    const parallel = Workers.init(t.io, 4);
+    for ([_]Workers{ .serial, serial, parallel }) |w| {
+        try t.expectError(error.InvalidDependency, w.runGraph(t.allocator, &.{&.{0}}, {}, Never.call));
+        try t.expectError(error.InvalidDependency, w.runGraph(t.allocator, &.{ &.{1}, &.{0} }, {}, Never.call));
+        try t.expectError(error.InvalidDependency, w.runGraph(t.allocator, &.{ &.{}, &.{2} }, {}, Never.call));
+    }
 }
 
-fn graphAllocationScenario(allocator: std.mem.Allocator) !void {
+fn graphAllocationScenario(allocator: std.mem.Allocator, workers: Workers) !void {
     const State = struct {
         visits: [4]usize = @splat(0),
         fn call(self: *@This(), index: usize) bool {
@@ -433,10 +379,14 @@ fn graphAllocationScenario(allocator: std.mem.Allocator) !void {
         }
     };
     var state: State = .{};
-    try runGraph(allocator, std.testing.io, 1, &.{ &.{}, &.{0}, &.{0}, &.{ 1, 2 } }, &state, State.call);
+    try workers.runGraph(allocator, &.{ &.{}, &.{0}, &.{0}, &.{ 1, 2 } }, &state, State.call);
     try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, &state.visits);
 }
 
 test "every graph metadata allocation failure releases scheduling storage" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, graphAllocationScenario, .{});
+    const t = std.testing;
+    var threaded: std.Io.Threaded = .init(t.allocator, .{ .concurrent_limit = .nothing });
+    defer threaded.deinit();
+    try t.checkAllAllocationFailures(t.allocator, graphAllocationScenario, .{Workers.serial});
+    try t.checkAllAllocationFailures(t.allocator, graphAllocationScenario, .{Workers.init(threaded.io(), 4)});
 }

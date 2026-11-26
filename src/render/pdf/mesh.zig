@@ -57,14 +57,9 @@ pub const Encoded = struct {
 /// page holds nothing translucent. Inputs are borrowed for the call.
 pub fn encodeColors(allocator: std.mem.Allocator, workspace: *Workspace, patches: Gradient.ColorPatches, clip: []const Segment, evenodd: bool) !Encoded {
     patches.validate() catch return error.InvalidMesh;
+    const bounds = try controlBounds(patches.points);
     if (clip.len == 0) return error.InvalidPath;
-    var bounds: g.BBox = .fromPoint(patches.points[0][0]);
-    for (patches.points) |patch| for (patch) |point| {
-        bounds = bounds.include(point);
-    };
-    const size = bounds.max.sub(bounds.min);
-    if (!size.isFinite() or size.x <= 0 or size.y <= 0) return error.InvalidMesh;
-    const unit: Unit = .{ .origin = bounds.min, .size = size };
+    const unit: Unit = .{ .origin = bounds.min, .size = bounds.max.sub(bounds.min) };
     var pdf = try std.Io.Writer.Allocating.initCapacity(allocator, 1024 +| clip.len *| 96 +| patches.points.len *| color_record / 2);
     errdefer pdf.deinit();
     writeColors(&pdf, workspace, patches, clip, unit, evenodd) catch |err| return switch (err) {
@@ -107,7 +102,8 @@ fn writeColors(pdf: *std.Io.Writer.Allocating, workspace: *Workspace, patches: G
 /// Inputs are borrowed for the call. Objects and compressed streams go
 /// straight into the returned buffer, which is the only allocation.
 pub fn encode(allocator: std.mem.Allocator, workspace: *Workspace, patches: Patches, clip: []const Segment, evenodd: bool) !Encoded {
-    const bounds = try controlBounds(patches);
+    patches.validate() catch return error.InvalidMesh;
+    const bounds = try controlBounds(patches.points);
     if (clip.len == 0) return error.InvalidPath;
     const plan: Plan = .of(patches.stops, valueRange(patches));
     var pdf = try std.Io.Writer.Allocating.initCapacity(allocator, capacityHint(patches, clip.len));
@@ -127,14 +123,10 @@ fn capacityHint(patches: Patches, segments: usize) usize {
     return 2048 +| segments *| 96 +| patches.points.len *| patch_record / 2 +| patches.stops.levels.len *| 400;
 }
 
-/// Storage validates stored paints the same way; `encode` is also usable
-/// alone. A patch lies within the hull of its control points.
-fn controlBounds(patches: Patches) !g.BBox {
-    patches.validate() catch return error.InvalidMesh;
-    var bounds: g.BBox = .fromPoint(patches.points[0][0]);
-    for (patches.points) |patch| for (patch) |point| {
-        bounds = bounds.include(point);
-    };
+/// A patch lies within the hull of its control points.
+fn controlBounds(points: []const [16]g.Point) !g.BBox {
+    var bounds = g.BBox.fromSlice(&points[0]);
+    for (points[1..]) |*patch| bounds = bounds.unite(g.BBox.fromSlice(patch));
     const size = bounds.max.sub(bounds.min);
     if (!size.isFinite() or size.x <= 0 or size.y <= 0) return error.InvalidMesh;
     return bounds;

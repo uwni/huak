@@ -28,6 +28,17 @@ pub const Color = struct {
         }
         return true;
     }
+    pub fn lerp(self: Color, other: Color, t: f64) Color {
+        return .{
+            .r = self.r + (other.r - self.r) * t,
+            .g = self.g + (other.g - self.g) * t,
+            .b = self.b + (other.b - self.b) * t,
+            .a = self.a + (other.a - self.a) * t,
+        };
+    }
+    pub fn maxDiff(self: Color, other: Color) f64 {
+        return @max(@max(@abs(self.r - other.r), @abs(self.g - other.g)), @max(@abs(self.b - other.b), @abs(self.a - other.a)));
+    }
 };
 const strokes = @import("pen/stroke.zig");
 pub const Cap = strokes.Cap;
@@ -248,9 +259,7 @@ pub const Gradient = union(enum) {
             if (next == self.levels.len) return self.colors[next - 1];
             const low = self.levels[next - 1];
             const fraction = (value - low) / (self.levels[next] - low);
-            const a = self.colors[next - 1];
-            const b = self.colors[next];
-            return .{ .r = a.r + (b.r - a.r) * fraction, .g = a.g + (b.g - a.g) * fraction, .b = a.b + (b.b - a.b) * fraction, .a = a.a + (b.a - a.a) * fraction };
+            return self.colors[next - 1].lerp(self.colors[next], fraction);
         }
     };
 
@@ -260,37 +269,13 @@ pub const Gradient = union(enum) {
 
     pub const ColorPatches = @import("style/ColorPatches.zig");
 
-    /// Explicit owner of the patch arrays a host's pictures share. Pools
-    /// attached to the same store reference one copy of each paint's arrays;
-    /// any other pool copies them for itself. Like an allocator, a store
-    /// stays at a stable address until every pool attached to it is gone;
-    /// `deinit` asserts that no arrays are left. Pools on several threads may
-    /// use one store: it serializes its allocator.
-    pub const Store = struct {
-        allocator: std.mem.Allocator,
-        mutex: std.Io.Mutex = .init,
-        live: std.atomic.Value(usize) = .init(0),
-
-        pub fn init(allocator: std.mem.Allocator) Store {
-            return .{ .allocator = allocator };
-        }
-
-        pub fn deinit(self: *Store) void {
-            std.debug.assert(self.live.load(.acquire) == 0);
-            self.* = undefined;
-        }
-
-        /// Paints whose arrays the store currently holds.
-        pub fn count(self: *const Store) usize {
-            return self.live.load(.acquire);
-        }
-    };
+    pub const Store = @import("style/Store.zig");
 
     pub fn clone(self: Gradient, allocator: std.mem.Allocator, store: ?*Store) !Gradient {
         switch (self) {
             .patches => |patches| return .{ .patches = try patches.pooled(allocator, store) },
             .fan => |conic| return .{ .fan = try conic.dupe(allocator) },
-            .color_patches => |patches| return .{ .color_patches = try patches.dupe(allocator) },
+            .color_patches => |patches| return .{ .color_patches = try patches.pooled(allocator, store) },
             inline .linear, .radial => |ramp, tag| {
                 const colors = try allocator.dupe(Color, ramp.colors);
                 errdefer allocator.free(colors);
@@ -305,7 +290,7 @@ pub const Gradient = union(enum) {
         switch (self) {
             .patches => |patches| patches.shared.?.release(),
             .fan => |conic| conic.free(allocator),
-            .color_patches => |patches| patches.free(allocator),
+            .color_patches => |patches| patches.shared.?.release(),
             .linear, .radial => |ramp| {
                 allocator.free(ramp.colors);
                 allocator.free(ramp.offsets);
@@ -363,7 +348,10 @@ pub const Gradient = union(enum) {
                 h = hashBytes(h, std.mem.asBytes(&digest));
             },
             .fan => |conic| h = conic.hash(h),
-            .color_patches => |patches| h = patches.hash(h),
+            .color_patches => |patches| {
+                const digest = patches.digest();
+                h = hashBytes(h, std.mem.asBytes(&digest));
+            },
             .linear, .radial => |ramp| {
                 h = hashBytes(h, bits(&ramp.start));
                 h = hashBytes(h, bits(&ramp.end));

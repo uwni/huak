@@ -34,18 +34,47 @@ pub fn invoke(self: *Runtime, comptime id: builtin.Id, arg: builtin.Arguments(id
         .gradient_patches => {
             const point_values = types.sequence(arg.points) orelse return error.TypeMismatch;
             const field_values = types.sequence(arg.values) orelse return error.TypeMismatch;
+            const color_values = types.sequence(arg.colors) orelse return error.TypeMismatch;
+            const level_values = types.sequence(arg.levels) orelse return error.TypeMismatch;
             // Sixteen control points and field coefficients per patch.
-            if (point_values.len % 16 != 0 or field_values.len != point_values.len) return error.InvalidStyle;
-            const points = try scratch.alloc([16]g.Point, point_values.len / 16);
-            for (points, 0..) |*patch, index| for (patch, point_values[index * 16 ..][0..16]) |*dest, value| {
-                dest.* = try point(value);
-            };
-            const values = try scratch.alloc([16]f64, field_values.len / 16);
-            for (values, 0..) |*patch, index| for (patch, field_values[index * 16 ..][0..16]) |*dest, value| {
-                dest.* = try numeric(value);
-            };
+            if (point_values.len == 0 or point_values.len % 16 != 0 or field_values.len != point_values.len) return error.InvalidStyle;
+            if (color_values.len == 0 or color_values.len != level_values.len) return error.InvalidStyle;
+            const tolerance = try numeric(arg.tolerance);
             const margin = if (arg.margin) |given| try lengthPoints(given) else 0;
-            return stored(self, .{ .patches = .{ .points = points, .values = values, .stops = try stops(self, scratch, arg.colors, arg.levels), .tolerance = try numeric(arg.tolerance), .margin = margin } });
+            if (!std.math.isFinite(tolerance) or !(tolerance > 0)) return error.InvalidStyle;
+            if (!std.math.isFinite(margin) or !(margin >= 0)) return error.InvalidStyle;
+            const target = if (self.backends.meshes) |store| store.lockedAllocator() else self.gpa;
+            const points = try target.alloc([16]g.Point, point_values.len / 16);
+            errdefer target.free(points);
+            for (points, 0..) |*patch, index| for (patch, point_values[index * 16 ..][0..16]) |*dest, value| {
+                const p = try point(value);
+                if (!p.isFinite()) return error.NonFinite;
+                dest.* = p;
+            };
+            const values = try target.alloc([16]f64, field_values.len / 16);
+            errdefer target.free(values);
+            for (values, 0..) |*patch, index| for (patch, field_values[index * 16 ..][0..16]) |*dest, value| {
+                const v = try numeric(value);
+                if (!std.math.isFinite(v)) return error.NonFinite;
+                dest.* = v;
+            };
+            const colors = try target.alloc(DisplayList.Color, color_values.len);
+            errdefer target.free(colors);
+            for (color_values, colors) |value, *dest| dest.* = try conversions.color(self, value);
+            const levels = try target.alloc(f64, level_values.len);
+            errdefer target.free(levels);
+            for (level_values, levels) |value, *dest| dest.* = try numeric(value);
+            const raw: DisplayList.Gradient.Patches = .{
+                .points = points,
+                .values = values,
+                .stops = .{ .levels = levels, .colors = colors },
+                .tolerance = tolerance,
+                .margin = margin,
+            };
+            try raw.stops.validate();
+            const adopted = try raw.adopt(self.gpa, self.backends.meshes);
+            errdefer adopted.shared.?.release();
+            return conversions.adoptGradient(self, .{ .patches = adopted });
         },
         .gradient_fan => {
             const point_values = types.sequence(arg.points) orelse return error.TypeMismatch;

@@ -240,8 +240,8 @@ public:
   }
 
 private:
-  Handle(Geom_Surface) surface_;
-  TopoDS_Face face_;
+  const Handle(Geom_Surface) & surface_;
+  const TopoDS_Face &face_;
   gp_XY from_, to_;
   gp_Dir direction_;
   double value_;
@@ -303,13 +303,31 @@ int samples(HuakView *view, size_t source, size_t index, const HuakUV *uv,
     requireArray(uv, count, "uv");
     requireArray(out, count, "out");
     const auto &f = faceOf(&view->model, source, index);
-    const Handle(Geom_Surface) surface = BRep_Tool::Surface(f);
+    if (count == 0)
+      return;
+    const BRepAdaptor_Surface surface(f, false);
+    const bool reversed = f.Orientation() == TopAbs_REVERSED;
+    Handle(Geom_Surface) geometry;
     for (size_t k = 0; k < count; ++k) {
       const gp_Pnt2d at(uv[k].u, uv[k].v);
+      gp_Pnt point;
+      gp_Vec du, dv;
+      surface.D1(at.X(), at.Y(), point, du, dv);
       HuakSample result{};
-      result.look = view->look(surface->Value(at.X(), at.Y()));
+      result.look = view->look(point);
+      CSLib_NormalStatus status;
       gp_Dir normal;
-      if (normalOf(surface, f, at, normal)) {
+      CSLib::Normal(du, dv, Precision::Confusion(), status, normal);
+      bool defined = status == CSLib_Defined;
+      if (defined) {
+        if (reversed)
+          normal.Reverse();
+      } else {
+        if (geometry.IsNull())
+          geometry = BRep_Tool::Surface(f);
+        defined = normalOf(geometry, f, at, normal);
+      }
+      if (defined) {
         copy(normal.XYZ(), result.normal);
         result.defined = 1;
       }
@@ -328,6 +346,7 @@ int sightings(HuakView *view, size_t source, size_t index, const HuakXY *points,
     auto &sights = view->sights();
     auto &offsets = view->result(view->indices);
     auto &found = view->result(view->sightings);
+    offsets.reserve(count + 1);
     offsets.push_back(0);
     std::vector<huak::space::Sight> met;
     for (size_t k = 0; k < count; ++k) {
@@ -349,6 +368,7 @@ int rays(HuakView *view, const HuakXY *points, size_t count, HuakShapeHits *out,
     auto &sights = view->sights();
     auto &offsets = view->result(view->indices);
     auto &found = view->result(view->hits);
+    offsets.reserve(count + 1);
     offsets.push_back(0);
     std::vector<huak::space::Sight> met;
     for (size_t k = 0; k < count; ++k) {

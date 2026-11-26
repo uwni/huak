@@ -191,8 +191,7 @@ pub unsafe extern "C" fn typst_scene_create(
                         isolate_transform: item_options.flags & TYPST_SCENE_ITEM_ISOLATE_TRANSFORM
                             != 0,
                     })
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
+                });
             let scene = crate::scene::Scene::new(config.width_pt, config.height_pt, commands)?;
             out.write(owned(TypstScene { inner: scene }));
             Ok(Report::default())

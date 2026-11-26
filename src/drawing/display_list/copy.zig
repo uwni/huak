@@ -206,6 +206,9 @@ test "pictures attached to one mesh store share patch arrays when appended" {
     }.first;
     const original = try arraysOf(&source);
     try std.testing.expectEqual(original, try arraysOf(&shared));
+    var cloned = try source.copy(a);
+    defer cloned.deinit();
+    try std.testing.expectEqual(original, try arraysOf(&cloned));
     try std.testing.expect(try arraysOf(&separate) != original);
     try std.testing.expectEqual(@as(usize, 1), store.count());
 }

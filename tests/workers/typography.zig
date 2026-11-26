@@ -101,11 +101,11 @@ test "imported builders share module text while initialization and local setting
     var reference: [names.len]?[]u8 = @splat(null);
     defer for (reference) |bytes| if (bytes) |value| t.allocator.free(value);
     for ([_]usize{ 1, 4, 4 }) |jobs| {
-        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = &library, .workers = .init(t.io, jobs) }, .{});
         defer runtime.deinit();
         var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
         defer machine.deinit();
-        var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+        var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
         executor.attach(&machine);
         _ = try machine.execute(&.{});
         try t.expectEqualStrings("worker library initialized\n", runtime.printedText());

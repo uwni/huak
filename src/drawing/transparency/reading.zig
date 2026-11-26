@@ -22,7 +22,7 @@ fn scope(self: anytype, picture: *const DisplayList, index: *usize, transform: g
         switch (command) {
             .pop => {
                 if (!grouped) return error.UnbalancedGroups;
-                return items.toOwnedSlice(self.arena);
+                return items.items;
             },
             .push => |group| {
                 const inner = group.transform.then(transform);
@@ -53,7 +53,7 @@ fn scope(self: anytype, picture: *const DisplayList, index: *usize, transform: g
         }
     }
     if (grouped) return error.UnbalancedGroups;
-    return items.toOwnedSlice(self.arena);
+    return items.items;
 }
 
 fn addClip(self: anytype, picture: *const DisplayList, reference: DisplayList.PathRef, transform: g.Transform, parent: ?u32) !u32 {

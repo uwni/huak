@@ -16,13 +16,12 @@ const Boxes = struct {
 
 // Lower bound is the original binarySearch result plus one.
 fn lowerBoundHigh(boxes: Boxes, indices: []const usize, axis: usize, value: f64) usize {
-    var low: usize = 0;
-    var high = indices.len;
-    while (low < high) {
-        const middle = low + (high - low) / 2;
-        if (boxes.at(indices[middle]).high(axis) < value) low = middle + 1 else high = middle;
-    }
-    return low;
+    const Context = struct { boxes: Boxes, axis: usize, value: f64 };
+    return std.sort.partitionPoint(usize, indices, Context{ .boxes = boxes, .axis = axis, .value = value }, struct {
+        fn below(context: Context, index: usize) bool {
+            return context.boxes.at(index).high(context.axis) < context.value;
+        }
+    }.below);
 }
 
 /// Paper.js bounds sweep. Equal input slices enable symmetric self collisions;

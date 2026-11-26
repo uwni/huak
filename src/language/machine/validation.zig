@@ -37,6 +37,18 @@ pub fn coerce(self: *Machine, value: Value, expected: Type) Error!Value {
     if (!Type.accepts(expected, actual))
         return self.fail("expected {s}, received {s}", .{ typeName(self, expected), typeName(self, actual) });
     try checkFinite(self, value);
+    return convertValidated(self, value, expected);
+}
+
+/// Coerces a value whose reachable graph has already been validated.
+pub fn coerceValidated(self: *Machine, value: Value, expected: Type) Error!Value {
+    const actual = value.valueType();
+    if (!Type.accepts(expected, actual))
+        return self.fail("expected {s}, received {s}", .{ typeName(self, expected), typeName(self, actual) });
+    return convertValidated(self, value, expected);
+}
+
+fn convertValidated(self: *Machine, value: Value, expected: Type) Error!Value {
     if (expected == .number and value == .int) return .{ .number = @floatFromInt(value.int) };
     if ((expected == .length or expected == .angle) and (value == .int or value == .number)) {
         const magnitude = try number(self, value);
@@ -70,48 +82,62 @@ fn ownsValidated(self: *const Machine, value: Value) bool {
     };
 }
 
-fn checkFiniteGraph(self: *Machine, value: Value, external: bool) Error!void {
-    try checkFiniteLeaf(self, value);
-    switch (value) {
-        .list, .dict, .record => {},
-        .function => |function| if (function != .bound) return,
-        else => return,
+fn isContainer(value: Value) bool {
+    return switch (value) {
+        .list, .dict, .record => true,
+        .function => |function| function == .bound,
+        else => false,
+    };
+}
+
+fn checkChildren(self: *Machine, pending: *std.ArrayList(Value), items: []const Value, external: bool) Error!void {
+    for (items) |child| {
+        if (isContainer(child)) {
+            if (child == .list and child.list.items().len == 0) continue;
+            if (external or !ownsValidated(self, child)) try pending.append(self.gpa, child);
+        } else try checkFiniteLeaf(self, child);
     }
+}
+
+fn checkFiniteGraph(self: *Machine, value: Value, external: bool) Error!void {
+    if (!isContainer(value)) return checkFiniteLeaf(self, value);
     if (!external and ownsValidated(self, value)) return;
+    if (value == .list and value.list.items().len == 0) return;
     var pending: std.ArrayList(Value) = .empty;
     defer pending.deinit(self.gpa);
     var seen: std.AutoHashMapUnmanaged(SequenceKey, void) = .empty;
     defer seen.deinit(self.gpa);
     try pending.append(self.gpa, value);
     while (pending.pop()) |item| {
-        try checkFiniteLeaf(self, item);
-        if (!external and ownsValidated(self, item)) continue;
         const key: SequenceKey = switch (item) {
-            .list => |list| .{ .address = @intFromPtr(list.items().ptr), .length = list.items().len },
+            .list => |list| switch (list) {
+                .view => |items| .{ .address = @intFromPtr(items.ptr), .length = items.len },
+                .owned => |storage| .{ .address = @intFromPtr(storage), .kind = .owned_list },
+            },
             .dict => |dict| .{ .address = @intFromPtr(dict), .kind = .dict },
             .record => |record_value| .{ .address = @intFromPtr(record_value), .kind = .record },
-            .function => |function| if (function == .bound) .{ .address = @intFromPtr(function.bound), .kind = .function } else continue,
-            else => continue,
+            .function => |function| .{ .address = @intFromPtr(function.bound), .kind = .function },
+            else => unreachable,
         };
         const visited = try seen.getOrPut(self.gpa, key);
         if (visited.found_existing) continue;
         switch (item) {
-            .list => |list| try pending.appendSlice(self.gpa, list.items()),
+            .list => |list| try checkChildren(self, &pending, list.items(), external),
             .dict => |dict| {
                 for (dict.entries.keys()) |name| if (!std.unicode.utf8ValidateSlice(name)) return self.fail("dictionary key must be valid UTF-8", .{});
-                try pending.appendSlice(self.gpa, dict.entries.values());
+                try checkChildren(self, &pending, dict.entries.values(), external);
             },
             .record => |record_value| {
                 const descriptor = try aggregates.recordDescriptor(self, record_value);
                 for (descriptor.fields, record_value.fields) |field, field_value| {
                     if (!Type.accepts(field.kind, field_value.valueType())) return self.fail("field '{s}' expects {s}, received {s}", .{ field.name, typeName(self, field.kind), typeName(self, field_value.valueType()) });
                 }
-                try pending.appendSlice(self.gpa, record_value.fields);
+                try checkChildren(self, &pending, record_value.fields, external);
             },
             .function => |function| {
                 const bound = function.bound;
                 if (bound.names.len != bound.arguments.len) return self.fail("invalid bound function argument names", .{});
-                try pending.appendSlice(self.gpa, bound.arguments);
+                try checkChildren(self, &pending, bound.arguments, external);
             },
             else => unreachable,
         }

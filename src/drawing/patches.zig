@@ -46,11 +46,44 @@ pub const Options = struct {
     max_triangles: usize,
 };
 
+/// Borrowed slices valid until the next `Workspace.triangulate` or `deinit`.
+pub const TriangulatedView = struct {
+    points: []const g.Point,
+    values: []const f64,
+    triangles: []const [3]u32,
+};
+
+/// Reusable patch triangulator avoiding per-call map/list allocations.
+pub const Workspace = struct {
+    builder: Builder,
+
+    pub fn init(allocator: std.mem.Allocator) Workspace {
+        return .{ .builder = .{ .allocator = allocator } };
+    }
+
+    pub fn deinit(self: *Workspace) void {
+        self.builder.deinit();
+    }
+
+    pub fn triangulate(self: *Workspace, points: []const [16]g.Point, values: []const [16]f64, options: Options) Error!TriangulatedView {
+        if (points.len != values.len or points.len >= std.math.maxInt(u32) or !std.math.isFinite(options.tolerance) or !(options.tolerance > 0)) return error.InvalidPatches;
+        for (points, values) |*patch, *field| {
+            for (patch) |point| if (!point.isFinite()) return error.InvalidPatches;
+            for (field) |value| if (!std.math.isFinite(value)) return error.InvalidPatches;
+        }
+        self.builder.reset(points, values, options);
+        try self.builder.identifyEdges();
+        for (0..points.len) |patch| try self.builder.split(@intCast(patch));
+        for (self.builder.cells.items) |cell| try self.builder.emit(cell);
+        return .{ .points = self.builder.nodes.items, .values = self.builder.fields.items, .triangles = self.builder.triangles.items };
+    }
+};
+
 /// Triangles keep the order of their patches, so later patches still paint
 /// over earlier ones.
 pub fn triangulate(allocator: std.mem.Allocator, points: []const [16]g.Point, values: []const [16]f64, options: Options) Error!Triangulated {
     if (points.len != values.len or points.len >= std.math.maxInt(u32) or !std.math.isFinite(options.tolerance) or !(options.tolerance > 0)) return error.InvalidPatches;
-    for (points, values) |patch, field| {
+    for (points, values) |*patch, *field| {
         for (patch) |point| if (!point.isFinite()) return error.InvalidPatches;
         for (field) |value| if (!std.math.isFinite(value)) return error.InvalidPatches;
     }
@@ -99,7 +132,7 @@ pub const Outline = struct {
                 const cubic: g.Cubic = .{ .p0 = current, .p1 = curve.c1, .p2 = curve.c2, .p3 = curve.end };
                 // Chords of n equal parameter spans stray from the curve by
                 // about the control points' distance from the chord over n^2.
-                const across = @max(distanceToSegment(curve.c1, current, curve.end), distanceToSegment(curve.c2, current, curve.end));
+                const across = @max(g.distanceToSegment(curve.c1, current, curve.end), g.distanceToSegment(curve.c2, current, curve.end));
                 const count: usize = @intFromFloat(@min(4096, @max(1, @ceil(@sqrt(4 * across / margin)))));
                 var previous = current;
                 for (1..count + 1) |k| {
@@ -177,7 +210,7 @@ pub const Outline = struct {
         const range = self.cells.get(self.cellOf(point)) orelse return false;
         for (self.members[range[0]..][0..range[1]]) |index| {
             const piece = self.pieces[index];
-            if (distanceToSegment(point, piece[0], piece[1]) < self.margin) return true;
+            if (g.distanceToSegment(point, piece[0], piece[1]) < self.margin) return true;
         }
         return false;
     }
@@ -213,13 +246,6 @@ pub const Outline = struct {
     };
 };
 
-fn distanceToSegment(point: g.Point, a: g.Point, b: g.Point) f64 {
-    const along = b.sub(a);
-    const squared = along.dot(along);
-    const fraction = if (squared > 0) std.math.clamp(point.sub(a).dot(along) / squared, 0, 1) else 0;
-    return point.distance(a.add(along.scale(fraction)));
-}
-
 pub const Sample = struct { point: g.Point, value: f64 };
 
 /// The patch point and field value at (u, v).
@@ -236,9 +262,56 @@ pub fn evaluate(patch: *const [16]g.Point, field: *const [16]f64, u: f64, v: f64
     return .{ .point = point, .value = value };
 }
 
-fn bernstein(s: f64) [4]f64 {
+pub fn evalScalar(c: *const [16]f64, u: f64, v: f64) f64 {
+    const bu = bernstein(u);
+    const bv = bernstein(v);
+    var value: f64 = 0;
+    for (0..4) |i| for (0..4) |j| {
+        value += c[i * 4 + j] * bu[i] * bv[j];
+    };
+    return value;
+}
+
+pub fn bernstein(s: f64) [4]f64 {
     const r = 1 - s;
     return .{ r * r * r, 3 * s * r * r, 3 * s * s * r, s * s * s };
+}
+
+pub fn dBernstein(s: f64) [4]f64 {
+    const r = 1 - s;
+    return .{ -3 * r * r, 3 * r * (1 - 3 * s), 3 * s * (2 - 3 * s), 3 * s * s };
+}
+
+/// Exact midpoint de Casteljau split of a scalar cubic Bézier curve.
+pub fn splitCubic(c: [4]f64) [2][4]f64 {
+    const q0 = 0.5 * (c[0] + c[1]);
+    const q1 = 0.5 * (c[1] + c[2]);
+    const q2 = 0.5 * (c[2] + c[3]);
+    const r0 = 0.5 * (q0 + q1);
+    const r1 = 0.5 * (q1 + q2);
+    const mid = 0.5 * (r0 + r1);
+    return .{ .{ c[0], q0, r0, mid }, .{ mid, r1, q2, c[3] } };
+}
+
+/// Exact midpoint de Casteljau split of a 4x4 scalar tensor-product Bézier net.
+pub fn splitArrayInto(src: *const [16]f64, along_s: bool, out0: *[16]f64, out1: *[16]f64) void {
+    if (along_s) {
+        for (0..4) |j| {
+            const parts = splitCubic(.{ src[j], src[4 + j], src[8 + j], src[12 + j] });
+            for (0..4) |i| {
+                out0[i * 4 + j] = parts[0][i];
+                out1[i * 4 + j] = parts[1][i];
+            }
+        }
+    } else {
+        for (0..4) |i| {
+            const parts = splitCubic(.{ src[i * 4], src[i * 4 + 1], src[i * 4 + 2], src[i * 4 + 3] });
+            for (0..4) |j| {
+                out0[i * 4 + j] = parts[0][j];
+                out1[i * 4 + j] = parts[1][j];
+            }
+        }
+    }
 }
 
 test {

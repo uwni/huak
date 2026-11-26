@@ -1,6 +1,7 @@
 import drawing.drawing
+import solving.solving
 import math.{sin, abs}
-import solver.{unknown, equation, solve, value}
+import solver.{unknown, value}
 import paint.{rgb, pen, circle, path, draw, fill, label, picture}
 import assertions.assert
 param count: int = 7
@@ -44,9 +45,10 @@ end
 
 s := solver()
 u := unknown(s); v := unknown(s)
-equation(s, 2 * u + v, 8)
-equation(s, u - v, 1)
-answer := solve(s)
+answer := solving s do
+    2 * u + v == 8
+    u - v == 1
+end
 assert(abs(value(answer, u) - 3) < 0.000001)
 print("huak compiled bytecode: native geometry and retained Typst text")
 

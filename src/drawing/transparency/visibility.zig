@@ -13,9 +13,7 @@ pub const Where = struct {
     /// Whether a patch, which lies within its control points, can show
     /// there; `slack` is how closely the lines trace their region.
     pub fn meets(self: Where, net: *const [16]g.Point, slack: f64) bool {
-        var box: g.BBox = .fromPoint(net[0]);
-        for (net[1..]) |point| box = box.include(point);
-        if (!box.overlaps(self.cover, 0)) return false;
+        if (!g.BBox.fromSlice(net).overlaps(self.cover, 0)) return false;
         const inside = self.within orelse return true;
         var world: g.BBox = .fromPoint(inside.transform.apply(net[0]));
         for (net[1..]) |point| world = world.include(inside.transform.apply(point));

@@ -21,6 +21,7 @@ const std = @import("std");
 const g = @import("geometry.zig");
 const style = @import("style.zig");
 const enclosure = @import("enclosure.zig");
+const Workers = @import("workers");
 const Color = style.Color;
 const Gradient = style.Gradient;
 const Real = enclosure.Real;
@@ -31,6 +32,13 @@ const Rgba = enclosure.Rgba;
 pub const scalar = @import("color_patches/scalar.zig");
 
 pub const Error = error{ InvalidPatches, GeometryWorkLimit, OutOfMemory };
+pub const ComposeError = Error || std.Io.Cancelable;
+
+pub const ComposeOptions = struct {
+    tolerance: f64,
+    max_patches: usize,
+    workers: Workers = .serial,
+};
 
 /// How often a piece may split.
 pub const max_depth = 12;
@@ -42,7 +50,8 @@ pub const corner_index = [4]u8{ 0, 3, 15, 12 };
 
 /// The net of a patch's restriction to [u0, u1] x [v0, v1]. Point i * 4 + j
 /// weighs B_i(u) B_j(v).
-pub fn subnet(net: [16]g.Point, u: [2]f64, v: [2]f64) [16]g.Point {
+pub fn subnet(net: *const [16]g.Point, u: [2]f64, v: [2]f64) [16]g.Point {
+    if (u[0] == 0 and u[1] == 1 and v[0] == 0 and v[1] == 1) return net.*;
     var across: [16]g.Point = undefined;
     for (0..4) |j| {
         const curve: g.Cubic = .{ .p0 = net[j], .p1 = net[4 + j], .p2 = net[8 + j], .p3 = net[12 + j] };
@@ -156,67 +165,163 @@ pub const Coloring = union(enum) {
 /// How many colorings `compose` combines.
 pub const max_colorings = 4;
 
-/// Colors at the corners of `nets`, within `tolerance` of a composite of
-/// colorings of them: `combine.color(comptime T, colors: []const Rgba(T))
-/// Rgba(T)` is the opaque color where the colorings have `colors`, computed
-/// with T either `enclosure.Real` or `enclosure.Enclosure`, of degree at
-/// most `enclosure.max_degree` in each parameter. Arrays are owned by
-/// `allocator`.
-pub fn compose(allocator: std.mem.Allocator, nets: []const [16]g.Point, colorings: []const Coloring, combine: anytype, tolerance: f64, max_patches: usize) Error!Owned {
-    if (!(tolerance > 0) or colorings.len == 0 or colorings.len > max_colorings) return error.InvalidPatches;
+/// Colors at the corners of `nets`, within `options.tolerance` of a composite of
+/// colorings of them: `combine.colorInto(comptime T, colors: []const Rgba(T),
+/// out: *Rgba(T))` (or `combine.color(comptime T, colors: []const Rgba(T))
+/// Rgba(T)`) gives the opaque color where the colorings have `colors`,
+/// computed with T either `enclosure.Real` or `enclosure.Enclosure`, of
+/// degree at most `enclosure.max_degree` in each parameter. Arrays are owned
+/// by `allocator`.
+pub fn compose(allocator: std.mem.Allocator, nets: []const [16]g.Point, colorings: []const Coloring, combine: anytype, options: ComposeOptions) ComposeError!Owned {
+    var builder: Builder = .{ .allocator = allocator, .max_patches = options.max_patches };
+    defer builder.deinit();
+    try composeInto(&builder, nets, colorings, combine, options);
+    return builder.finish();
+}
+
+/// Like `compose`, returning slices directly backed by `arena` without a
+/// shrinking `toOwnedSlice` copy.
+pub fn composeArena(arena: std.mem.Allocator, nets: []const [16]g.Point, colorings: []const Coloring, combine: anytype, options: ComposeOptions) ComposeError!Gradient.ColorPatches {
+    var builder: Builder = .{ .allocator = arena, .max_patches = options.max_patches };
+    try composeInto(&builder, nets, colorings, combine, options);
+    return .{ .points = builder.points.items, .colors = builder.colors.items };
+}
+
+const min_parallel_chunk = 256;
+const max_chunks = 32;
+
+fn composeInto(builder: *Builder, nets: []const [16]g.Point, colorings: []const Coloring, combine: anytype, options: ComposeOptions) ComposeError!void {
+    if (!(options.tolerance > 0) or colorings.len == 0 or colorings.len > max_colorings) return error.InvalidPatches;
     for (colorings) |coloring| switch (coloring) {
         .field => |field| if (field.values.len != nets.len) return error.InvalidPatches,
         .corners => |corners| if (corners.len != nets.len) return error.InvalidPatches,
     };
-    var builder: Builder = .{ .allocator = allocator, .max_patches = max_patches };
-    defer builder.deinit();
-    for (nets, 0..) |net, k| {
-        const Piece = struct {
-            builder: *Builder,
-            net: [16]g.Point,
-            colorings: []const Coloring,
-            patch: usize,
-            combine: @TypeOf(combine),
-            tolerance: f64,
+    if (nets.len > builder.max_patches) return error.GeometryWorkLimit;
+    const chunk_count = options.workers.chunkCount(nets.len, min_parallel_chunk, max_chunks);
+    if (chunk_count > 1) return composeParallel(builder, nets, colorings, combine, options, chunk_count);
+    try builder.points.ensureUnusedCapacity(builder.allocator, nets.len);
+    try builder.colors.ensureUnusedCapacity(builder.allocator, nets.len);
+    try composeRange(builder, nets, 0, nets.len, colorings, combine, options.tolerance);
+}
 
-            fn values(self: @This(), field: []const [16]f64, u: [2]f64, v: [2]f64) [4]f64 {
-                const whole = cornerValues(field[self.patch]);
-                var result: [4]f64 = undefined;
-                for (corner_uv, &result) |uv, *out| out.* = bilinear(whole, u[@intFromFloat(uv[0])], v[@intFromFloat(uv[1])]);
-                return result;
+fn composeParallel(builder: *Builder, nets: []const [16]g.Point, colorings: []const Coloring, combine: anytype, options: ComposeOptions, chunk_count: usize) ComposeError!void {
+    const Combine = @TypeOf(combine);
+    const Chunk = struct {
+        builder: Builder,
+        err: ?Error = null,
+    };
+    const Shared = struct {
+        chunks: []Chunk,
+        nets: []const [16]g.Point,
+        colorings: []const Coloring,
+        combine: Combine,
+        tolerance: f64,
+
+        fn one(self: *@This(), index: usize) bool {
+            const chunk = &self.chunks[index];
+            const range = Workers.chunkRange(self.nets.len, self.chunks.len, index);
+            chunk.builder.points.ensureUnusedCapacity(chunk.builder.allocator, range.end - range.start) catch |e| {
+                chunk.err = e;
+                return false;
+            };
+            chunk.builder.colors.ensureUnusedCapacity(chunk.builder.allocator, range.end - range.start) catch |e| {
+                chunk.err = e;
+                return false;
+            };
+            composeRange(&chunk.builder, self.nets, range.start, range.end, self.colorings, self.combine, self.tolerance) catch |e| {
+                chunk.err = e;
+                return false;
+            };
+            return true;
+        }
+    };
+    var chunks: [max_chunks]Chunk = undefined;
+    for (chunks[0..chunk_count]) |*chunk| {
+        chunk.* = .{ .builder = .{ .allocator = std.heap.page_allocator, .max_patches = builder.max_patches } };
+    }
+    defer for (chunks[0..chunk_count]) |*chunk| chunk.builder.deinit();
+    var shared: Shared = .{
+        .chunks = chunks[0..chunk_count],
+        .nets = nets,
+        .colorings = colorings,
+        .combine = combine,
+        .tolerance = options.tolerance,
+    };
+    try options.workers.run(chunk_count, &shared, Shared.one);
+    var total: usize = 0;
+    for (chunks[0..chunk_count]) |*chunk| {
+        if (chunk.err) |e| return e;
+        total += chunk.builder.points.items.len;
+        if (builder.points.items.len + total > builder.max_patches) return error.GeometryWorkLimit;
+    }
+    try builder.points.ensureUnusedCapacity(builder.allocator, total);
+    try builder.colors.ensureUnusedCapacity(builder.allocator, total);
+    for (chunks[0..chunk_count]) |*chunk| {
+        builder.points.appendSliceAssumeCapacity(chunk.builder.points.items);
+        builder.colors.appendSliceAssumeCapacity(chunk.builder.colors.items);
+    }
+}
+
+fn composeRange(builder: *Builder, nets: []const [16]g.Point, start: usize, end: usize, colorings: []const Coloring, combine: anytype, tolerance: f64) Error!void {
+    const Combine = @TypeOf(combine);
+    const has_into = @hasDecl(Combine, "colorInto");
+    const Piece = struct {
+        builder: *Builder,
+        net: *const [16]g.Point,
+        colorings: []const Coloring,
+        patch: usize,
+        combine: Combine,
+        tolerance: f64,
+
+        fn values(self: *const @This(), field: []const [16]f64, u: [2]f64, v: [2]f64) [4]f64 {
+            const whole = cornerValues(field[self.patch]);
+            var result: [4]f64 = undefined;
+            for (corner_uv, &result) |uv, *out| out.* = bilinear(whole, u[@intFromFloat(uv[0])], v[@intFromFloat(uv[1])]);
+            return result;
+        }
+        fn colors(self: *const @This(), corners: []const [4]Color, u: [2]f64, v: [2]f64) [4]Color {
+            var result: [4]Color = undefined;
+            for (corner_uv, &result) |uv, *out| out.* = bilinearColor(corners[self.patch], u[@intFromFloat(uv[0])], v[@intFromFloat(uv[1])]);
+            return result;
+        }
+        pub fn accept(self: *const @This(), u: [2]f64, v: [2]f64) Error!bool {
+            var leaves: [max_colorings]Rgba(Enclosure) = undefined;
+            for (self.colorings, leaves[0..self.colorings.len], 0..) |coloring, *leaf, index| switch (coloring) {
+                .field => |field| encloseInto(field.stops, self.values(field.values, u, v), index, leaf),
+                .corners => |corners| bilinearEnclosureInto(self.colors(corners, u, v), leaf),
+            };
+            var composite: Rgba(Enclosure) = undefined;
+            if (has_into) {
+                self.combine.colorInto(Enclosure, leaves[0..self.colorings.len], &composite);
+            } else {
+                composite = self.combine.color(Enclosure, leaves[0..self.colorings.len]);
             }
-            fn colors(self: @This(), corners: []const [4]Color, u: [2]f64, v: [2]f64) [4]Color {
-                var result: [4]Color = undefined;
-                for (corner_uv, &result) |uv, *out| out.* = bilinearColor(corners[self.patch], u[@intFromFloat(uv[0])], v[@intFromFloat(uv[1])]);
-                return result;
-            }
-            pub fn accept(self: @This(), u: [2]f64, v: [2]f64) Error!bool {
-                var leaves: [max_colorings]Rgba(Enclosure) = undefined;
-                for (self.colorings, leaves[0..self.colorings.len], 0..) |coloring, *leaf, index| leaf.* = switch (coloring) {
-                    .field => |field| enclose(field.stops, self.values(field.values, u, v), index),
-                    .corners => |corners| bilinearEnclosure(self.colors(corners, u, v)),
-                };
-                const composite = self.combine.color(Enclosure, leaves[0..self.colorings.len]);
-                return @max(composite.r.interpolationError(), composite.g.interpolationError(), composite.b.interpolationError()) <= self.tolerance;
-            }
-            pub fn emit(self: @This(), u: [2]f64, v: [2]f64) Error!void {
-                var corners: [4][max_colorings]Rgba(Real) = undefined;
-                for (self.colorings, 0..) |coloring, i| switch (coloring) {
-                    .field => |field| for (self.values(field.values, u, v), &corners) |value, *corner| {
-                        corner[i] = enclosure.constants(Real, field.stops.at(value));
-                    },
-                    .corners => |given| for (self.colors(given, u, v), &corners) |color, *corner| {
-                        corner[i] = enclosure.constants(Real, color);
-                    },
-                };
-                var result: [4]Color = undefined;
-                for (&corners, &result) |*corner, *color| {
-                    const composite = self.combine.color(Real, corner[0..self.colorings.len]);
-                    color.* = .{ .r = std.math.clamp(composite.r.value, 0, 1), .g = std.math.clamp(composite.g.value, 0, 1), .b = std.math.clamp(composite.b.value, 0, 1) };
+            return @max(composite.r.interpolationError(), composite.g.interpolationError(), composite.b.interpolationError()) <= self.tolerance;
+        }
+        pub fn emit(self: *const @This(), u: [2]f64, v: [2]f64) Error!void {
+            var corners: [4][max_colorings]Rgba(Real) = undefined;
+            for (self.colorings, 0..) |coloring, i| switch (coloring) {
+                .field => |field| for (self.values(field.values, u, v), &corners) |value, *corner| {
+                    enclosure.constantsInto(Real, field.stops.at(value), &corner[i]);
+                },
+                .corners => |given| for (self.colors(given, u, v), &corners) |color, *corner| {
+                    enclosure.constantsInto(Real, color, &corner[i]);
+                },
+            };
+            var result: [4]Color = undefined;
+            for (&corners, &result) |*corner, *color| {
+                var composite: Rgba(Real) = undefined;
+                if (has_into) {
+                    self.combine.colorInto(Real, corner[0..self.colorings.len], &composite);
+                } else {
+                    composite = self.combine.color(Real, corner[0..self.colorings.len]);
                 }
-                try self.builder.add(subnet(self.net, u, v), result);
+                color.* = .{ .r = std.math.clamp(composite.r.value, 0, 1), .g = std.math.clamp(composite.g.value, 0, 1), .b = std.math.clamp(composite.b.value, 0, 1) };
             }
-        };
+            try self.builder.add(subnet(self.net, u, v), result);
+        }
+    };
+    for (nets[start..end], start..) |*net, k| {
         // Fields and colors are bilinear: a piece varies in a parameter only
         // where its patch does.
         var split: Split = .{ .u = false, .v = false };
@@ -227,22 +332,23 @@ pub fn compose(allocator: std.mem.Allocator, nets: []const [16]g.Point, coloring
             };
             split = .{ .u = split.u or varies.u, .v = split.v or varies.v };
         }
-        try subdivide(Piece{ .builder = &builder, .net = net, .colorings = colorings, .patch = k, .combine = combine, .tolerance = tolerance }, split, .{ 0, 1 }, .{ 0, 1 }, 0);
+        const piece: Piece = .{ .builder = builder, .net = net, .colorings = colorings, .patch = k, .combine = combine, .tolerance = tolerance };
+        try subdivide(&piece, split, .{ 0, 1 }, .{ 0, 1 }, 0);
     }
-    return builder.finish();
 }
 
-fn bilinearChannel(corners: [4]f64) Enclosure {
-    if (corners[0] == corners[1] and corners[0] == corners[2] and corners[0] == corners[3]) return Enclosure.constant(corners[0]);
-    return Enclosure.bilinear(corners);
+fn setBilinearChannel(corners: [4]f64, out: *Enclosure) void {
+    if (corners[0] == corners[1] and corners[0] == corners[2] and corners[0] == corners[3]) {
+        out.setConstant(corners[0]);
+    } else {
+        out.setBilinear(corners);
+    }
 }
 
-fn bilinearEnclosure(corners: [4]Color) Rgba(Enclosure) {
-    var result: Rgba(Enclosure) = undefined;
+fn bilinearEnclosureInto(corners: [4]Color, out: *Rgba(Enclosure)) void {
     inline for (.{ "r", "g", "b", "a" }) |channel| {
-        @field(result, channel) = bilinearChannel(.{ @field(corners[0], channel), @field(corners[1], channel), @field(corners[2], channel), @field(corners[3], channel) });
+        setBilinearChannel(.{ @field(corners[0], channel), @field(corners[1], channel), @field(corners[2], channel), @field(corners[3], channel) }, &@field(out.*, channel));
     }
-    return result;
 }
 
 /// The color of a field with `values` at the corners of a piece: the chord
@@ -250,11 +356,10 @@ fn bilinearEnclosure(corners: [4]Color) Rgba(Enclosure) {
 /// bilinearly keep to, and in each channel the stops' distance from that
 /// chord, which ranges between its least and greatest at the levels inside
 /// the range. That distance is unknown 4 `index` + the channel's.
-fn enclose(stops: Gradient.Stops, values: [4]f64, index: usize) Rgba(Enclosure) {
+fn encloseInto(stops: Gradient.Stops, values: [4]f64, index: usize, out: *Rgba(Enclosure)) void {
     comptime std.debug.assert(4 * max_colorings <= enclosure.max_unknowns);
     const range: [2]f64 = .{ std.mem.min(f64, &values), std.mem.max(f64, &values) };
     const ends: [2]Color = .{ stops.at(range[0]), stops.at(range[1]) };
-    var result: Rgba(Enclosure) = undefined;
     inline for (.{ "r", "g", "b", "a" }, 0..) |channel, offset| {
         const chord: [2]f64 = .{ @field(ends[0], channel), @field(ends[1], channel) };
         var corners: [4]f64 = undefined;
@@ -267,10 +372,10 @@ fn enclose(stops: Gradient.Stops, values: [4]f64, index: usize) Rgba(Enclosure) 
             below = @min(below, off);
             above = @max(above, off);
         }
-        const base = bilinearChannel(corners);
-        @field(result, channel) = if (below != 0 or above != 0) base.uncertain(4 * index + offset, below, above) else base;
+        const target = &@field(out.*, channel);
+        setBilinearChannel(corners, target);
+        if (below != 0 or above != 0) target.addUncertainty(4 * index + offset, below, above);
     }
-    return result;
 }
 
 /// Linear from chord[0] at range[0] to chord[1] at range[1].
@@ -288,7 +393,10 @@ pub fn fromField(allocator: std.mem.Allocator, patches: Gradient.Patches, tolera
             return colors[0];
         }
     };
-    return compose(allocator, patches.points, &.{.{ .field = .{ .values = patches.values, .stops = patches.stops } }}, Itself{}, tolerance, max_patches);
+    return compose(allocator, patches.points, &.{.{ .field = .{ .values = patches.values, .stops = patches.stops } }}, Itself{}, .{ .tolerance = tolerance, .max_patches = max_patches }) catch |err| switch (err) {
+        error.Canceled => unreachable,
+        else => |e| e,
+    };
 }
 
 test {

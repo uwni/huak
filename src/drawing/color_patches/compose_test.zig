@@ -1,5 +1,6 @@
 //! Tests of corner colors: sub-nets, fields as corner colors, composites within the tolerance and splitting along the parameters that vary.
 const std = @import("std");
+const g = @import("../geometry.zig");
 const style = @import("../style.zig");
 const enclosure = @import("../enclosure.zig");
 const Color = style.Color;
@@ -7,6 +8,7 @@ const Gradient = style.Gradient;
 const Rgba = enclosure.Rgba;
 const testing = std.testing;
 const color_patches = @import("../color_patches.zig");
+const Workers = @import("workers");
 const fixtures = @import("testing.zig");
 const plane = fixtures.plane;
 const subnet = color_patches.subnet;
@@ -18,7 +20,7 @@ const compose = color_patches.compose;
 test "a sub-net is the restriction of the patch" {
     var net = plane(30, 12);
     net[5] = .{ .x = 14, .y = 9 };
-    const part = subnet(net, .{ 0.25, 0.75 }, .{ 0.5, 1 });
+    const part = subnet(&net, .{ 0.25, 0.75 }, .{ 0.5, 1 });
     const flat: [16]f64 = @splat(0);
     for ([_][2]f64{ .{ 0, 0 }, .{ 0.3, 0.7 }, .{ 1, 1 }, .{ 0.5, 0.5 } }) |uv| {
         const whole = @import("../patches.zig").evaluate(&net, &flat, 0.25 + 0.5 * uv[0], 0.5 + 0.5 * uv[1]).point;
@@ -113,9 +115,8 @@ test "two fields on the same patches compose within the tolerance" {
         }
     };
     const tolerance = Color.tolerance;
-    const composed = try compose(a, &.{plane(10, 10)}, &.{ .{ .field = .{ .values = &.{light}, .stops = shade } }, .{ .field = .{ .values = &.{glint}, .stops = glow } } }, Over{}, tolerance, 100_000);
+    const composed = try compose(a, &.{plane(10, 10)}, &.{ .{ .field = .{ .values = &.{light}, .stops = shade } }, .{ .field = .{ .values = &.{glint}, .stops = glow } } }, Over{}, .{ .tolerance = tolerance, .max_patches = 100_000 });
     defer composed.deinit(a);
-    try testing.expect(composed.points.len > 1);
     const Want = struct {
         shade: Gradient.Stops,
         glow: Gradient.Stops,
@@ -125,8 +126,9 @@ test "two fields on the same patches compose within the tolerance" {
             return .{ .r = top.a + (1 - top.a) * under.r, .g = top.a + (1 - top.a) * under.g, .b = top.a + (1 - top.a) * under.b };
         }
     };
+    try testing.expect(composed.points.len > 1);
     try testing.expect(try worst(composed, Want{ .shade = shade, .glow = glow }) <= tolerance);
-    try testing.expectError(error.InvalidPatches, compose(a, &.{plane(10, 10)}, &.{.{ .field = .{ .values = &.{ light, light }, .stops = shade } }}, Over{}, tolerance, 100));
+    try testing.expectError(error.InvalidPatches, compose(a, &.{plane(10, 10)}, &.{.{ .field = .{ .values = &.{ light, light }, .stops = shade } }}, Over{}, .{ .tolerance = tolerance, .max_patches = 100 }));
 }
 
 test "a patch splits only along the parameters it varies in" {
@@ -143,5 +145,47 @@ test "a patch splits only along the parameters it varies in" {
     for (split.points) |net| {
         try testing.expectEqual(@as(f64, 0), net[0].y);
         try testing.expectEqual(@as(f64, 10), net[3].y);
+    }
+}
+
+test "parallel composition matches serial patch-by-patch output bit-for-bit" {
+    const a = testing.allocator;
+    const count = 600;
+    const nets = try a.alloc([16]g.Point, count);
+    defer a.free(nets);
+    const values = try a.alloc([16]f64, count);
+    defer a.free(values);
+    for (0..count) |k| {
+        nets[k] = plane(10, 10);
+        const shift: f64 = @as(f64, @floatFromInt(k)) * 0.25;
+        for (&nets[k]) |*p| p.x += shift;
+        const base: f64 = @as(f64, @floatFromInt(k % 17)) / 20.0;
+        for (0..4) |i| for (0..4) |j| {
+            values[k][i * 4 + j] = base + 0.15 * @as(f64, @floatFromInt(i + j)) / 6.0;
+        };
+    }
+    const stops: Gradient.Stops = .{ .levels = &.{ 0, 0.4, 1 }, .colors = &.{ .{ .r = 0.1, .g = 0.2, .b = 0.3 }, .{ .r = 0.8, .g = 0.4, .b = 0.1 }, .{ .r = 1, .g = 1, .b = 0.9 } } };
+    const Itself = struct {
+        pub fn colorInto(_: @This(), comptime T: type, colors: []const Rgba(T), out: *Rgba(T)) void {
+            out.* = colors[0];
+        }
+    };
+    var threaded: std.Io.Threaded = .init(a, .{ .concurrent_limit = .limited(3) });
+    defer threaded.deinit();
+    var expected_points: std.ArrayList([16]g.Point) = .empty;
+    defer expected_points.deinit(a);
+    var expected_colors: std.ArrayList([4]Color) = .empty;
+    defer expected_colors.deinit(a);
+    for (0..count) |k| {
+        const single = try compose(a, nets[k .. k + 1], &.{.{ .field = .{ .values = values[k .. k + 1], .stops = stops } }}, Itself{}, .{ .tolerance = Color.tolerance, .max_patches = 100_000 });
+        defer single.deinit(a);
+        try expected_points.appendSlice(a, single.points);
+        try expected_colors.appendSlice(a, single.colors);
+    }
+    for ([_]Workers{ .serial, Workers.init(threaded.io(), 1), Workers.init(threaded.io(), 4) }) |workers| {
+        const got = try compose(a, nets, &.{.{ .field = .{ .values = values, .stops = stops } }}, Itself{}, .{ .tolerance = Color.tolerance, .max_patches = 100_000, .workers = workers });
+        defer got.deinit(a);
+        try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(expected_points.items), std.mem.sliceAsBytes(got.points));
+        try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(expected_colors.items), std.mem.sliceAsBytes(got.colors));
     }
 }

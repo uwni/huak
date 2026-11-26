@@ -18,7 +18,6 @@ const transparency = @import("../transparency.zig");
 const premultiplied = transparency.premultiplied;
 const over = transparency.over;
 const scaled = transparency.scaled;
-const mix = transparency.mix;
 
 pub fn rectangle(allocator: Allocator, x: f64, y: f64, width: f64, height: f64) !Path {
     return Path.rectangle(allocator, .{ .x = x, .y = y }, width, height);
@@ -100,7 +99,7 @@ fn gradientAt(gradient: *const Gradient, local: g.Point) ?Color {
             const positions = ramp.offsets;
             while (k + 1 < positions.len and positions[k] < t) k += 1;
             const span = positions[k] - positions[k - 1];
-            return mix(ramp.colors[k - 1], ramp.colors[k], if (span == 0) 1 else (t - positions[k - 1]) / span);
+            return ramp.colors[k - 1].lerp(ramp.colors[k], if (span == 0) 1 else (t - positions[k - 1]) / span);
         },
         .patches => |patches| {
             const k, const u, const v = topmostPatch(patches.points, local) orelse return null;

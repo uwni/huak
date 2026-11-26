@@ -20,6 +20,14 @@ pub fn materialize(self: *Machine, value: Value) Error!Value {
     // Source descriptors remain external/immutable. Validate their entire
     // graph before any clone receives the execution's trusted owner.
     try validation.checkFiniteExternal(self, value);
+    return materializeValidated(self, value);
+}
+
+/// Materializes a graph that has already passed `checkFiniteExternal`.
+/// Read-only `.view` lists are cloned into execution storage; freshly built
+/// ownerless `List.Owned` nodes (allocated on `self.arena`) are claimed in place.
+pub fn materializeValidated(self: *Machine, value: Value) Error!Value {
+    if (!isTemplate(value)) return value;
     if (value == .list) {
         const items = value.list.items();
         var nested = false;
@@ -27,7 +35,17 @@ pub fn materialize(self: *Machine, value: Value) Error!Value {
             nested = true;
             break;
         };
-        if (!nested) return lists.makeList(self, items);
+        if (!nested) switch (value.list) {
+            .view => {
+                const copy = try lists.allocateList(self, items);
+                copy.list.owned.owner = self.identity;
+                return copy;
+            },
+            .owned => |storage| {
+                storage.owner = self.identity;
+                return value;
+            },
+        };
     }
     var seen: std.AutoHashMapUnmanaged(SequenceKey, Value) = .empty;
     defer seen.deinit(self.gpa);
@@ -47,11 +65,14 @@ pub fn finishGraph(self: *Machine, seen: *std.AutoHashMapUnmanaged(SequenceKey, 
     };
 }
 
-pub const SequenceKey = struct { address: usize, length: usize = 0, kind: enum { list, dict, record, function } = .list };
+pub const SequenceKey = struct { address: usize, length: usize = 0, kind: enum { list, owned_list, dict, record, function } = .list };
 
 fn isTemplate(value: Value) bool {
     return switch (value) {
-        .list => |list| list == .view,
+        .list => |list| switch (list) {
+            .view => true,
+            .owned => |storage| storage.owner == null,
+        },
         .dict => |dict| dict.owner == null,
         .record => |record_value| record_value.owner == null,
         .function => |function| function == .bound and function.bound.owner == null,
@@ -62,7 +83,10 @@ fn isTemplate(value: Value) bool {
 pub fn materializeGraph(self: *Machine, value: Value, seen: *std.AutoHashMapUnmanaged(SequenceKey, Value), depth: usize) Error!Value {
     if (!isTemplate(value)) return value;
     const key: SequenceKey = switch (value) {
-        .list => |list| .{ .address = @intFromPtr(list.items().ptr), .length = list.items().len },
+        .list => |list| switch (list) {
+            .view => |items| .{ .address = @intFromPtr(items.ptr), .length = items.len },
+            .owned => |storage| .{ .address = @intFromPtr(storage), .kind = .owned_list },
+        },
         .dict => |dict| .{ .address = @intFromPtr(dict), .kind = .dict },
         .record => |record_value| .{ .address = @intFromPtr(record_value), .kind = .record },
         .function => |function| .{ .address = @intFromPtr(function.bound), .kind = .function },
@@ -71,11 +95,22 @@ pub fn materializeGraph(self: *Machine, value: Value, seen: *std.AutoHashMapUnma
     if (seen.get(key)) |previous| return previous;
     if (depth > 256) return self.fail("native collection nesting exceeds 256", .{});
     switch (value) {
-        .list => |list| {
-            const result = try lists.allocateList(self, list.items());
-            if (list.items().len != 0) try seen.put(self.gpa, key, result) else result.list.owned.owner = self.identity;
-            for (result.list.owned.values.items) |*item| item.* = try materializeGraph(self, item.*, seen, depth + 1);
-            return result;
+        .list => |list| switch (list) {
+            .view => |items| {
+                const result = try lists.allocateList(self, items);
+                if (items.len != 0) try seen.put(self.gpa, key, result) else result.list.owned.owner = self.identity;
+                for (result.list.owned.values.items) |*item| if (isTemplate(item.*)) {
+                    item.* = try materializeGraph(self, item.*, seen, depth + 1);
+                };
+                return result;
+            },
+            .owned => |storage| {
+                try seen.put(self.gpa, key, value);
+                for (storage.values.items) |*item| if (isTemplate(item.*)) {
+                    item.* = try materializeGraph(self, item.*, seen, depth + 1);
+                };
+                return value;
+            },
         },
         .dict => |dict| {
             const result = try self.arena.allocator().create(types.Dict);
@@ -204,4 +239,38 @@ test "task results materialize templates like the coordinating store" {
     try std.testing.expectEqual(@as(usize, 1), serial.getGlobal("value").?.list.owned.values.items.len);
     try std.testing.expect(result.list.owned != serial.getGlobal("value").?.list.owned);
     try std.testing.expectEqual(@as(usize, 1), constants[0].list.items().len);
+}
+
+test "ownerless arena lists are claimed in place while read-only views still clone" {
+    var program = try testProgram(&.{.{ .name = "script", .code = &.{ins(.halt, 0)}, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{}, &.{}, &.{});
+    defer program.deinit();
+    var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
+    defer machine.deinit();
+    const arena = machine.arena.allocator();
+    const fresh_items = try arena.dupe(Value, &.{ .{ .int = 1 }, .{ .number = 2.5 } });
+    const fresh = try arena.create(types.List.Owned);
+    fresh.* = .{ .values = .fromOwnedSlice(fresh_items) };
+    const readonly = [_]Value{.{ .int = 9 }};
+    const outer = types.listView(&.{ .{ .list = .{ .owned = fresh } }, types.listView(&readonly) });
+    const materialized = try materialize(&machine, outer);
+    try std.testing.expectEqual(machine.identity, materialized.list.owned.owner.?);
+    const claimed = materialized.list.items()[0];
+    const cloned = materialized.list.items()[1];
+    try std.testing.expectEqual(fresh, claimed.list.owned);
+    try std.testing.expectEqual(fresh_items.ptr, claimed.list.owned.values.items.ptr);
+    try std.testing.expectEqual(machine.identity, claimed.list.owned.owner.?);
+    try std.testing.expect(@intFromPtr(cloned.list.owned.values.items.ptr) != @intFromPtr(&readonly));
+    try std.testing.expectEqual(machine.identity, cloned.list.owned.owner.?);
+    try lists.appendList(&machine, claimed, .{ .int = 3 });
+    try lists.appendList(&machine, cloned, .{ .int = 10 });
+    try std.testing.expectEqual(@as(usize, 3), claimed.list.items().len);
+    try std.testing.expectEqual(@as(usize, 2), cloned.list.items().len);
+    try std.testing.expectEqual(@as(i64, 9), readonly[0].int);
+    const flat_items = try arena.dupe(Value, &.{ .{ .int = 4 }, .{ .int = 5 } });
+    const flat = try arena.create(types.List.Owned);
+    flat.* = .{ .values = .fromOwnedSlice(flat_items) };
+    const claimed_flat = try materializeValidated(&machine, .{ .list = .{ .owned = flat } });
+    try std.testing.expectEqual(flat, claimed_flat.list.owned);
+    try std.testing.expectEqual(flat_items.ptr, claimed_flat.list.owned.values.items.ptr);
+    try std.testing.expectEqual(machine.identity, claimed_flat.list.owned.owner.?);
 }

@@ -69,6 +69,7 @@ pub fn build(self: *Session, report: *Report, observer: ?huak.tooling.Frontend.O
     // the batch, so each build checks that every picture has let go of them.
     var meshes: huak.core.DisplayList.MeshStore = .init(std.heap.c_allocator);
     defer meshes.deinit();
+    const workers = huak.Workers.init(self.io, self.options.jobs);
     // The bytecode and VM are released before the output workers start.
     var batch = evaluate: {
         var program = frontend.compile(source, canonical, &diagnostic) catch |err| return self.reportCompilationFailure(path, source, &diagnostic, err, report);
@@ -95,11 +96,12 @@ pub fn build(self: *Session, report: *Report, observer: ?huak.tooling.Frontend.O
             .typst = library,
             .projection = if (self.projection) |backend| backend.vtable else null,
             .meshes = &meshes,
+            .workers = workers,
         }, &program, self.options, path, source, report);
     };
     defer batch.deinit();
     const publication: outputs.Publication = if (self.options.command == .watch) .atomic else .in_place;
-    try outputs.write(self.io, self.allocator, &batch, self.options.outputs, self.options.jobs, path, publication, report);
+    try outputs.write(self.io, self.allocator, &batch, self.options.outputs, workers, path, publication, report);
 }
 
 fn reportTypesetterLoadFailure(self: *const Session, cause: anyerror, report: *Report) error{Reported} {

@@ -130,7 +130,7 @@ pub fn append(self: *DisplayList, other: *const DisplayList, transform: g.Transf
 
 /// Own a copy of the command stream, including any borrowed geometry.
 pub fn copy(self: *const DisplayList, allocator: std.mem.Allocator) Error!DisplayList {
-    var result = DisplayList.init(allocator);
+    var result = DisplayList.initWithMeshes(allocator, self.storage.styles.meshes);
     errdefer result.deinit();
     try copying.copyCommands(&result, self, null);
     return result;

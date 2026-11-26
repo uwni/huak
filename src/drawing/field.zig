@@ -43,9 +43,14 @@ pub fn colorMesh(allocator: std.mem.Allocator, points: []const g.Point, values: 
     var pieces: std.ArrayList([3]u32) = .empty;
     errdefer pieces.deinit(allocator);
     try vertices.ensureTotalCapacity(allocator, points.len);
+    try pieces.ensureTotalCapacity(allocator, triangles.len);
     for (points, values) |point, value| vertices.appendAssumeCapacity(vertex(point, stops.at(value)));
     var cuts: std.AutoHashMapUnmanaged(Cut, u32) = .empty;
     defer cuts.deinit(allocator);
+    var ring: std.ArrayList(Node) = .empty;
+    defer ring.deinit(allocator);
+    var polygon: std.ArrayList(u32) = .empty;
+    defer polygon.deinit(allocator);
 
     for (triangles) |triangle| {
         const low = @min(values[triangle[0]], values[triangle[1]], values[triangle[2]]);
@@ -60,8 +65,7 @@ pub fn colorMesh(allocator: std.mem.Allocator, points: []const g.Point, values: 
         }
         // Boundary ring: each corner, then the cut points on its outgoing edge
         // in order along the edge. Spanned levels are first..last-1.
-        var ring: std.ArrayList(Node) = .empty;
-        defer ring.deinit(allocator);
+        ring.clearRetainingCapacity();
         for (0..3) |side| {
             const from = triangle[side];
             const to = triangle[(side + 1) % 3];
@@ -85,8 +89,6 @@ pub fn colorMesh(allocator: std.mem.Allocator, points: []const g.Point, values: 
         }
         // One convex piece per band between consecutive levels, from the
         // ring nodes with values inside the band, fanned from its first node.
-        var polygon: std.ArrayList(u32) = .empty;
-        defer polygon.deinit(allocator);
         for (first..last + 1) |band| {
             const floor = if (band == first) -std.math.inf(f64) else stops.levels[band - 1];
             const ceiling = if (band == last) std.math.inf(f64) else stops.levels[band];

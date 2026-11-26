@@ -6,6 +6,7 @@ const typst = @import("libtypst");
 const Scene = @import("../drawing/Scene.zig");
 const objects = @import("runtime/objects.zig");
 const renderer = @import("../render/root.zig");
+const Workers = @import("workers");
 
 /// Every reachable Scene must belong to an objects.Owner. Standalone geometry
 /// scenes are not language output sources; their storage has a different owner.
@@ -178,9 +179,11 @@ pub fn validate(self: *const OutputBatch, index: usize, format: renderer.Format)
     try format.validate((try target.view.animation()) != null);
 }
 
-pub fn render(self: *const OutputBatch, allocator: std.mem.Allocator, index: usize, format: renderer.Format, diagnostic: *?typst.Buffer) !renderer.Output {
+pub fn render(self: *const OutputBatch, allocator: std.mem.Allocator, index: usize, format: renderer.Format, workers: Workers, diagnostic: *?typst.Buffer) !renderer.Output {
     const target = self.entries[index] orelse return error.ReleasedOutput;
-    return (try target.scene()).render(allocator, self.library, format, diagnostic);
+    var scene = try target.scene();
+    scene.workers = workers;
+    return scene.render(allocator, self.library, format, diagnostic);
 }
 
 /// Different indices may be released concurrently. The same index must not

@@ -154,7 +154,8 @@ bool keeps(Sights::Face &f, const gp_Pnt2d &uv, const gp_Pnt &point) {
 }
 } // namespace
 
-Sights::Sights(const HuakModel &model, const HLRAlgo_Projector &projector) : projector(projector) {
+Sights::Sights(const HuakModel &model, const HLRAlgo_Projector &projector)
+    : projector(projector), rayTol(1, 3), rayLower(1, 3), rayUpper(1, 3), raySeed(1, 3), rayVal(1, 3) {
   for (size_t source = 0; source < model.shapes.size(); ++source) {
     const auto &index = model.faces[source];
     for (int k = 1; k <= index.Extent(); ++k) {
@@ -287,24 +288,33 @@ void Sights::meetFace(Face &f, const gp_Lin &line, const gp_Pnt2d &at, const Ent
   // cells would not do: across a sliver of a face, as a loft leaves where
   // its sections' joins nearly meet, a parameter moves the surface so
   // little that the solver's steps along it run far beyond them.
-  const Handle(GeomAdaptor_Curve) curve = new GeomAdaptor_Curve(new Geom_Line(line));
-  IntCurveSurface_TheCSFunctionOfHInter function(f.surface, curve);
-  math_Vector tolerance(1, 3), lower(1, 3), upper(1, 3), seed(1, 3), x(1, 3), value(1, 3);
-  tolerance(1) = f.surface->UResolution(Precision::Confusion());
-  tolerance(2) = f.surface->VResolution(Precision::Confusion());
-  tolerance(3) = Precision::Confusion();
-  math_FunctionSetRoot solver(function, tolerance);
-  lower(1) = f.us.front(), upper(1) = f.us.back();
-  lower(2) = f.vs.front(), upper(2) = f.vs.back();
-  lower(3) = w0 - pad;
-  upper(3) = w1 + pad;
-  const auto run = [&](const gp_XYZ &from) -> std::optional<gp_XYZ> {
-    seed(1) = from.X(), seed(2) = from.Y(), seed(3) = from.Z();
-    solver.Perform(function, seed, lower, upper);
-    if (!solver.IsDone())
+  if (rayLine.IsNull()) {
+    rayLine = new Geom_Line(line);
+    rayCurve = new GeomAdaptor_Curve(rayLine);
+  } else {
+    rayLine->SetLin(line);
+    rayCurve->Reset();
+    rayCurve->Load(rayLine);
+  }
+  IntCurveSurface_TheCSFunctionOfHInter function(f.surface, rayCurve);
+  rayTol(1) = f.surface->UResolution(Precision::Confusion());
+  rayTol(2) = f.surface->VResolution(Precision::Confusion());
+  rayTol(3) = Precision::Confusion();
+  if (!raySolver)
+    raySolver = std::make_unique<math_FunctionSetRoot>(function, rayTol);
+  else
+    raySolver->SetTolerance(rayTol);
+  rayLower(1) = f.us.front(), rayUpper(1) = f.us.back();
+  rayLower(2) = f.vs.front(), rayUpper(2) = f.vs.back();
+  rayLower(3) = w0 - pad;
+  rayUpper(3) = w1 + pad;
+  const auto run = [&](const gp_XYZ &guess) -> std::optional<gp_XYZ> {
+    raySeed(1) = guess.X(), raySeed(2) = guess.Y(), raySeed(3) = guess.Z();
+    raySolver->Perform(function, raySeed, rayLower, rayUpper);
+    if (!raySolver->IsDone())
       return std::nullopt;
-    solver.Root(x);
-    if (!function.Value(x, value) || value.Norm2() > solved)
+    const math_Vector &x = raySolver->Root();
+    if (!function.Value(x, rayVal) || rayVal.Norm2() > solved)
       return std::nullopt;
     return gp_XYZ(x(1), x(2), x(3));
   };
@@ -325,20 +335,26 @@ void Sights::meetFace(Face &f, const gp_Lin &line, const gp_Pnt2d &at, const Ent
     const double cu[4] = {f.us[i], f.us[i + 1], f.us[i + 1], f.us[i]};
     const double cv[4] = {f.vs[j], f.vs[j], f.vs[j + 1], f.vs[j + 1]};
     bool seeded = false;
+    std::optional<gp_XYZ> prevFound;
     for (const auto &t : {std::array<int, 3>{0, 1, 2}, std::array<int, 3>{0, 2, 3}}) {
       const auto weight = nearestIn(at, f.images[corner[t[0]]], f.images[corner[t[1]]], f.images[corner[t[2]]]);
       gp_XY near(0, 0);
-      gp_XYZ from(0, 0, 0);
+      gp_XYZ guess(0, 0, 0);
       for (int k = 0; k < 3; ++k) {
         near += weight[k] * f.images[corner[t[k]]].XY();
-        from += weight[k] * gp_XYZ(cu[t[k]], cv[t[k]], along(f.nodes[corner[t[k]]]));
+        guess += weight[k] * gp_XYZ(cu[t[k]], cv[t[k]], along(f.nodes[corner[t[k]]]));
       }
       if (gp_Pnt2d(near).Distance(at) > f.reach[cell])
         continue;
       seeded = true;
-      const auto found = run(from);
+      const auto found = run(guess);
       if (!found)
         continue;
+      if (prevFound && std::abs(found->X() - prevFound->X()) <= rayTol(1) &&
+          std::abs(found->Y() - prevFound->Y()) <= rayTol(2) &&
+          std::abs(found->Z() - prevFound->Z()) <= rayTol(3))
+        continue;
+      prevFound = found;
       keep(*found);
       // The quadric tells of the surface about the root, so a second
       // crossing it puts more than a cell beyond the seed's cell tells
@@ -348,8 +364,8 @@ void Sights::meetFace(Face &f, const gp_Lin &line, const gp_Pnt2d &at, const Ent
       const double du = cu[1] - cu[0], dv = cv[2] - cv[1];
       if (again && again->X() >= cu[0] - du && again->X() <= cu[1] + du && again->Y() >= cv[0] - dv &&
           again->Y() <= cv[2] + dv)
-        if (const auto other = run(gp_XYZ(std::clamp(again->X(), lower(1), upper(1)),
-                                          std::clamp(again->Y(), lower(2), upper(2)), again->Z())))
+        if (const auto other = run(gp_XYZ(std::clamp(again->X(), rayLower(1), rayUpper(1)),
+                                          std::clamp(again->Y(), rayLower(2), rayUpper(2)), again->Z())))
           keep(*other);
     }
     // Where the line grazes the surface, it crosses it twice, close together

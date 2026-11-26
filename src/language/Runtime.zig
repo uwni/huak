@@ -10,6 +10,7 @@ const outline = @import("../text/outline.zig");
 const Machine = @import("Machine.zig");
 const types = @import("types.zig");
 const renderer = @import("../render/root.zig");
+const Workers = @import("workers");
 const OutputBatch = @import("OutputBatch.zig");
 const task_owners = @import("runtime/tasks.zig");
 const Value = types.Value;
@@ -52,6 +53,9 @@ pub const Backends = struct {
     /// library, it stays at a stable address until this Runtime and every
     /// exported result are freed. Without a store each picture copies meshes.
     meshes: ?*DisplayList.MeshStore = null,
+    /// Bounded concurrency budget shared by automatic construction tasks and
+    /// data-parallel host operations such as transparency flattening.
+    workers: Workers = .serial,
 };
 pub const Options = struct {
     /// Configuration bytes are copied during Runtime.init. Library is borrowed
@@ -219,8 +223,8 @@ pub fn prepareTasks(self: *Runtime, needs_typst: bool) !void {
 
 /// Snapshot metadata on the coordinator; run the returned runtime on one
 /// worker only. The root allocator must support concurrent allocation.
-pub fn forkTask(self: *Runtime) !Runtime {
-    return task_owners.fork(self);
+pub fn forkTask(self: *Runtime, child_workers: Workers) !Runtime {
+    return task_owners.fork(self, child_workers);
 }
 
 /// Move a completed task's fresh picture back on the coordinator. The
@@ -259,6 +263,7 @@ pub fn render(self: *Runtime, value: Value, format: Format) !Output {
         .frames = self.frames.items,
         .object_ids = if (selected.tracks.items.len != 0) selected.snapshot.ids.items else null,
         .tracks = tracks,
+        .workers = self.backends.workers,
     };
     var diagnostic_buffer: ?typst.Buffer = null;
     defer if (diagnostic_buffer) |*buffer| buffer.deinit();

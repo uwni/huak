@@ -58,7 +58,7 @@ fn invokeNamed(self: *Runtime, a: std.mem.Allocator, comptime id: builtin.Id, ar
         .pen, .pencircle, .pensquare, .makepen, .makepath, .penoffset, .envelope, .stroke_outline, .stroke_sections => return pen.invoke(self, a, id, arg),
         .matrix, .translate, .scale, .rotate, .compose, .apply, .mapped, .bent, .transformed => return transforms.invoke(self, id, arg),
         .len, .bezier, .rectangle, .circle, .ellipse, .arc, .smooth, .compound, .contour_ranges, .subpaths, .reverse, .closed, .joined, .trimmed, .clipped, .fillet => return paths.invoke(self, a, id, arg),
-        .measure, .point_at, .tangent_at, .arclength, .sample_path, .sample_at_length, .sample_at_fraction, .samples_at_length, .bounds, .intersections, .intersection_times, .path_crossings => return path_queries.invoke(self, a, id, arg),
+        .measure, .point_at, .tangent_at, .arclength, .signed_area, .sample_path, .sample_at_length, .sample_at_fraction, .samples_at_length, .bounds, .intersections, .intersection_times, .path_crossings => return path_queries.invoke(self, a, id, arg),
         .profile_outline, .region, .region_union, .region_intersection, .region_difference, .region_xor, .offset, .stroke_path, .clip_region, .clip_lines => return region_builtins.invoke(self, id, arg),
         .object_transform, .object_remove, .object_before, .object_style, .object_visible, .object_clip, .object_reset_clip, .object_opacity, .copy, .object_exclude, .snapshot, .flatten_transparency, .canvas, .append, .draw, .fill, .filldraw, .label, .object, .picture => return pictures.invoke(self, id, arg),
         .timeline, .animate, .motion, .animation_snapshot => return animation.invoke(self, id, arg),

@@ -55,7 +55,7 @@ pub fn build(b: *std.Build) void {
     const editors = addEditorTools(b, config, libraries, desktop, tools);
     const fixtures = fixtureModules(b, config, libraries);
     addExamples(b, config, libraries, fixtures, desktop);
-    addBenchmarks(b, config, libraries, fixtures, cli.artifact, desktop);
+    addBenchmarks(b, config, libraries, fixtures, cli, if (occt != null) backend.install else null, desktop);
     addTests(b, config, libraries, fixtures, cli.artifact, editors);
     addSpaceTests(b, config, libraries, cli.artifact, backend, occt != null);
 }

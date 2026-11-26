@@ -77,7 +77,7 @@ const orientations: [8][16]u8 = table: {
     break :table result;
 };
 
-fn quantized(patch: [16]g.Point, field: [16]f64, unit: Unit, range: [2]f64) Quantized {
+fn quantized(patch: *const [16]g.Point, field: *const [16]f64, unit: Unit, range: [2]f64) Quantized {
     var result: Quantized = undefined;
     for (patch, &result.points) |point, *out| out.* = .{ quantize(u24, unit.x(point.x)), quantize(u24, unit.y(point.y)) };
     for (corner_order, &result.corners) |index, *out| out.* = quantize(u16, (field[index] - range[0]) / (range[1] - range[0]));
@@ -92,7 +92,7 @@ fn slot(index: u8) usize {
 /// `next` laid out to begin with an edge it shares with `last`, and the
 /// flag naming that edge; null when they share none. The comparison is of
 /// the encoded values, so a shared edge decodes exactly as written in full.
-fn join(comptime Corner: type, last: Record(Corner), next: Record(Corner)) ?struct { flag: u8, patch: Record(Corner) } {
+fn join(comptime Corner: type, last: *const Record(Corner), next: *const Record(Corner)) ?struct { flag: u8, patch: Record(Corner) } {
     for (orientations) |map| for (shared_edges, 1..) |edge, flag| {
         const same = for (0..4) |k| {
             if (!std.mem.eql(u24, &next.points[map[k]], &last.points[edge.points[k]])) break false;
@@ -113,7 +113,7 @@ pub fn compressPatches(workspace: *Workspace, out: *std.Io.Writer, patches: Patc
         unit: Unit,
         range: [2]f64,
         pub fn record(self: @This(), index: usize) Quantized {
-            return quantized(self.patches.points[index], self.patches.values[index], self.unit, self.range);
+            return quantized(&self.patches.points[index], &self.patches.values[index], self.unit, self.range);
         }
     };
     try compressRecords(u16, workspace, out, patches.points.len, Fields{ .patches = patches, .unit = unit, .range = range });
@@ -130,7 +130,7 @@ pub fn compressRecords(comptime Corner: type, workspace: *Workspace, out: *std.I
     var previous: ?Record(Corner) = null;
     for (0..count) |index| {
         const native = source.record(index);
-        const joined = if (previous) |last| join(Corner, last, native) else null;
+        const joined = if (previous) |*last| join(Corner, last, &native) else null;
         const written = if (joined) |shared| shared.patch else native;
         // A flag leaves out the first edge: four points and two corners.
         const skip: usize = if (joined != null) 4 else 0;

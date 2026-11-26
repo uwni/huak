@@ -53,35 +53,24 @@ fn bezier(first: f64, second: f64, s: f64) f64 {
     return 3 * rest * rest * s * first + 3 * rest * s * s * second + s * s * s;
 }
 
-fn mix(from: f64, to: f64, progress: f64) f64 {
-    return from + (to - from) * progress;
-}
-
 pub fn scalar(keys: []const animation.ScalarKey, easing: animation.Easing, at: f64) f64 {
     const at_key = position(keys, easing, at);
     if (at_key.progress == 0) return keys[at_key.from].value;
-    return mix(keys[at_key.from].value, keys[at_key.from + 1].value, at_key.progress);
+    return std.math.lerp(keys[at_key.from].value, keys[at_key.from + 1].value, at_key.progress);
 }
 
 pub fn point(keys: []const animation.PointKey, easing: animation.Easing, at: f64) g.Point {
     const at_key = position(keys, easing, at);
     const from = keys[at_key.from].value;
     if (at_key.progress == 0) return from;
-    const to = keys[at_key.from + 1].value;
-    return .{ .x = mix(from.x, to.x, at_key.progress), .y = mix(from.y, to.y, at_key.progress) };
+    return from.lerp(keys[at_key.from + 1].value, at_key.progress);
 }
 
 pub fn color(keys: []const animation.ColorKey, easing: animation.Easing, at: f64) DisplayList.Color {
     const at_key = position(keys, easing, at);
     const from = keys[at_key.from].value;
     if (at_key.progress == 0) return from;
-    const to = keys[at_key.from + 1].value;
-    return .{
-        .r = mix(from.r, to.r, at_key.progress),
-        .g = mix(from.g, to.g, at_key.progress),
-        .b = mix(from.b, to.b, at_key.progress),
-        .a = mix(from.a, to.a, at_key.progress),
-    };
+    return from.lerp(keys[at_key.from + 1].value, at_key.progress);
 }
 
 /// Interpolate every coordinate of keys that share one topology, as the
@@ -93,19 +82,15 @@ pub fn path(out: *Path, keys: []const animation.PathKey, easing: animation.Easin
     const to = keys[at_key.from + 1].value;
     try out.segments.ensureUnusedCapacity(out.allocator, from.len);
     for (from, to) |start, end| out.segments.appendAssumeCapacity(switch (start) {
-        .move => |p| .{ .move = mixPoint(p, end.move, at_key.progress) },
-        .line => |p| .{ .line = mixPoint(p, end.line, at_key.progress) },
+        .move => |p| .{ .move = p.lerp(end.move, at_key.progress) },
+        .line => |p| .{ .line = p.lerp(end.line, at_key.progress) },
         .cubic => |curve| .{ .cubic = .{
-            .c1 = mixPoint(curve.c1, end.cubic.c1, at_key.progress),
-            .c2 = mixPoint(curve.c2, end.cubic.c2, at_key.progress),
-            .end = mixPoint(curve.end, end.cubic.end, at_key.progress),
+            .c1 = curve.c1.lerp(end.cubic.c1, at_key.progress),
+            .c2 = curve.c2.lerp(end.cubic.c2, at_key.progress),
+            .end = curve.end.lerp(end.cubic.end, at_key.progress),
         } },
         .close => .close,
     });
-}
-
-fn mixPoint(from: g.Point, to: g.Point, progress: f64) g.Point {
-    return .{ .x = mix(from.x, to.x, progress), .y = mix(from.y, to.y, progress) };
 }
 
 /// The wrapper transform of a translate, rotate, scale or motion track at

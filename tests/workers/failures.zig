@@ -27,11 +27,11 @@ fn failing(library: *typst.Library, program: *const l.bytecode.Program, jobs: us
 }
 
 fn failingOptions(library: *typst.Library, program: *const l.bytecode.Program, jobs: usize, limits: l.Machine.Limits, runtime_options: l.Runtime.Options) !Failure {
-    var runtime = try l.Runtime.init(t.allocator, t.allocator, library, runtime_options);
+    var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = library, .workers = .init(t.io, jobs) }, runtime_options);
     defer runtime.deinit();
     var machine = try l.Machine.init(t.allocator, program, runtime.host(), limits);
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+    var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
     executor.attach(&machine);
     try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
     const detail = machine.failure orelse return error.MissingExpectedDiagnostic;

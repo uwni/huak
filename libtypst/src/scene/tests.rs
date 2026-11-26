@@ -43,7 +43,7 @@ fn native_scene_preserves_nested_content_transform_clip_and_stroke() {
         Scene::new(
             50.0,
             30.0,
-            vec![SceneCommand {
+            [Ok(SceneCommand {
                 content: SceneContent::Path {
                     segments: &line(),
                     style: PathStyle {
@@ -71,7 +71,7 @@ fn native_scene_preserves_nested_content_transform_clip_and_stroke() {
                 clip: None,
                 tag: None,
                 isolate_transform: false,
-            }],
+            })],
         )
         .unwrap(),
     );
@@ -79,7 +79,7 @@ fn native_scene_preserves_nested_content_transform_clip_and_stroke() {
     let parent = Scene::new(
         80.0,
         50.0,
-        vec![SceneCommand {
+        [Ok(SceneCommand {
             content: SceneContent::Frame(&child.frame),
             transform: TypstTransform {
                 xx: 2.0,
@@ -89,7 +89,7 @@ fn native_scene_preserves_nested_content_transform_clip_and_stroke() {
             clip: Some(&line()),
             tag: Some("stable-scene-item"),
             isolate_transform: true,
-        }],
+        })],
     )
     .unwrap();
     drop(child);
@@ -121,13 +121,13 @@ fn native_frame_owns_text_after_layout_scene_and_context_owners_drop() {
         Scene::new(
             150.0,
             60.0,
-            vec![SceneCommand {
+            [Ok(SceneCommand {
                 content: SceneContent::Frame(&layout.frame),
                 transform: TypstTransform::default(),
                 clip: None,
                 tag: None,
                 isolate_transform: false,
-            }],
+            })],
         )
         .unwrap(),
     );
@@ -137,13 +137,13 @@ fn native_frame_owns_text_after_layout_scene_and_context_owners_drop() {
     let parent = Scene::new(
         180.0,
         80.0,
-        vec![SceneCommand {
+        [Ok(SceneCommand {
             content: SceneContent::Frame(&child.frame),
             transform: TypstTransform::default(),
             clip: None,
             tag: None,
             isolate_transform: false,
-        }],
+        })],
     )
     .unwrap();
     drop(child);
@@ -167,5 +167,5 @@ fn invalid_curve_and_style_fail_before_native_rendering() {
     let mut path = line();
     path[0].p1.x = f64::NAN;
     assert!(curve(&path).is_err());
-    assert!(Scene::new(f64::INFINITY, 30.0, Vec::new()).is_err());
+    assert!(Scene::new(f64::INFINITY, 30.0, std::iter::empty()).is_err());
 }

@@ -75,13 +75,12 @@ pub fn hash(self: *const Motion, seed: u64) u64 {
 }
 
 fn interval(keys: []const Key, t: f64) usize {
-    var lo: usize = 0;
-    var hi = keys.len - 1;
-    while (hi - lo > 1) {
-        const mid = lo + (hi - lo) / 2;
-        if (t < keys[mid].t) hi = mid else lo = mid;
-    }
-    return lo;
+    const next = std.sort.partitionPoint(Key, keys, t, struct {
+        fn notAbove(target: f64, key: Key) bool {
+            return key.t <= target;
+        }
+    }.notAbove);
+    return if (next == 0) 0 else @min(next - 1, keys.len - 2);
 }
 
 fn value(keys: []const Key, polynomial: bool, t: f64) f64 {

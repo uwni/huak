@@ -51,11 +51,11 @@ const Evaluation = struct {
 /// Only detached picture/layout owners survive; all task VMs and construction
 /// arenas are gone before either native exporter is called by the tests.
 pub fn evaluate(library: *typst.Library, program: *const l.bytecode.Program, jobs: usize, names: []const []const u8) !Evaluation {
-    var runtime = try l.Runtime.init(t.allocator, t.allocator, library, .{});
+    var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = library, .workers = .init(t.io, jobs) }, .{});
     defer runtime.deinit();
     var machine = try l.Machine.init(t.allocator, program, runtime.host(), .{});
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+    var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
     executor.attach(&machine);
     _ = machine.execute(&.{}) catch |err| {
         if (machine.failure) |detail| std.debug.print("VM: {s}: {s}\n", .{ detail.text(), detail.native_message });
@@ -70,7 +70,7 @@ pub fn evaluate(library: *typst.Library, program: *const l.bytecode.Program, job
 pub fn render(batch: *const l.OutputBatch, index: usize, format: huak.render.Format) !huak.render.Output {
     var diagnostic: ?typst.Buffer = null;
     defer if (diagnostic) |*detail| detail.deinit();
-    return batch.render(t.allocator, index, format, &diagnostic) catch |err| {
+    return batch.render(t.allocator, index, format, .serial, &diagnostic) catch |err| {
         if (diagnostic) |detail| std.debug.print("native: {s}\n", .{detail.bytes()});
         return err;
     };

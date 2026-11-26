@@ -114,10 +114,10 @@ impl Scene {
         ))
     }
 
-    pub fn new(
+    pub fn new<'a>(
         width_pt: f64,
         height_pt: f64,
-        commands: Vec<SceneCommand<'_>>,
+        commands: impl IntoIterator<Item = Result<SceneCommand<'a>, Error>>,
     ) -> Result<Self, Error> {
         if !width_pt.is_finite() || !height_pt.is_finite() || width_pt <= 0.0 || height_pt <= 0.0 {
             return Err(Error::invalid(
@@ -127,10 +127,25 @@ impl Scene {
         let size = Size::new(Abs::pt(width_pt), Abs::pt(height_pt));
         let mut frame = Frame::hard(size);
         for command in commands {
+            let command = command?;
             let transform = transform(command.transform)?;
             let clip = command.clip.map(curve).transpose()?;
+            let plain = transform == Transform::identity()
+                && clip.is_none()
+                && command.tag.is_none()
+                && !command.isolate_transform;
+            if plain {
+                if let SceneContent::Path { segments, style } = command.content {
+                    style.push_into(segments, &mut frame)?;
+                    continue;
+                }
+            }
             let mut child = match command.content {
-                SceneContent::Path { segments, style } => style.frame(segments, size)?,
+                SceneContent::Path { segments, style } => {
+                    let mut child = Frame::soft(size);
+                    style.push_into(segments, &mut child)?;
+                    child
+                }
                 // Typst frames share their immutable item storage.
                 SceneContent::Frame(frame) => frame.clone(),
             };
@@ -154,14 +169,13 @@ impl Scene {
 }
 
 impl PathStyle<'_> {
-    fn frame(self, segments: &[TypstPathSegment], size: Size) -> Result<Frame, Error> {
+    fn push_into(self, segments: &[TypstPathSegment], child: &mut Frame) -> Result<(), Error> {
         let mut shape = Shape {
             geometry: Geometry::Curve(curve(segments)?),
             fill: self.fill.map(color).transpose()?.map(Paint::Solid),
             fill_rule: fill_rule(self.fill_rule)?,
             stroke: self.stroke.map(stroke).transpose()?,
         };
-        let mut child = Frame::soft(size);
         let mut placement = None;
         if let Some((paint, bounds)) = self.fill_gradient {
             if shape.fill.is_none() {
@@ -184,16 +198,16 @@ impl PathStyle<'_> {
                     fill_rule: shape.fill_rule,
                     stroke: None,
                 };
-                fill.push(&mut child, base);
+                fill.push(child, base);
             }
             placement = Some(bounds);
         }
         if let Some(bounds) = placement {
-            bounds.push(&mut child, shape);
+            bounds.push(child, shape);
         } else {
             child.push(Point::zero(), FrameItem::Shape(shape, Span::detached()));
         }
-        Ok(child)
+        Ok(())
     }
 }
 

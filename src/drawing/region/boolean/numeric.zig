@@ -16,9 +16,6 @@ pub const CURVETIME_EPSILON: f64 = 1e-8;
 pub const GEOMETRIC_EPSILON: f64 = 1e-7;
 /// For trigonometric checks, such as cross products testing collinearity.
 pub const TRIGONOMETRIC_EPSILON: f64 = 1e-8;
-pub fn clamp(value: f64, min: f64, max: f64) f64 {
-    return if (value < min) min else if (value > max) max else value;
-}
 pub fn isZero(value: f64) bool {
     return value >= -EPSILON and value <= EPSILON;
 }
@@ -95,11 +92,11 @@ pub fn solveQuadratic(a_: f64, b_: f64, c_: f64, roots: *[2]f64, min: ?f64, max:
     const min_b = (min orelse 0) - EPSILON;
     const max_b = (max orelse 0) + EPSILON;
     if (std.math.isFinite(x1) and (min == null or (x1 > min_b and x1 < max_b))) {
-        roots[count] = if (min) |m| clamp(x1, m, max.?) else x1;
+        roots[count] = if (min) |m| std.math.clamp(x1, m, max.?) else x1;
         count += 1;
     }
     if (x2 != x1 and std.math.isFinite(x2) and (min == null or (x2 > min_b and x2 < max_b))) {
-        roots[count] = if (min) |m| clamp(x2, m, max.?) else x2;
+        roots[count] = if (min) |m| std.math.clamp(x2, m, max.?) else x2;
         count += 1;
     }
     return @intCast(count);
@@ -162,7 +159,7 @@ pub fn solveCubic(a_: f64, b_: f64, c_: f64, d_: f64, roots: *[3]f64, min: ?f64,
     var count = solveQuadratic(a, b1, c2, &quadratic, min, max);
     if (count > 0) @memcpy(roots[0..@intCast(count)], quadratic[0..@intCast(count)]);
     if (std.math.isFinite(x) and (count == 0 or (count > 0 and x != quadratic[0] and x != quadratic[1])) and (min == null or (x > min.? - EPSILON and x < max.? + EPSILON))) {
-        roots[@intCast(count)] = if (min) |m| clamp(x, m, max.?) else x;
+        roots[@intCast(count)] = if (min) |m| std.math.clamp(x, m, max.?) else x;
         count += 1;
     }
     return count;
@@ -206,7 +203,7 @@ pub fn findRoot(context: anytype, comptime f: anytype, comptime df: anytype, x_:
             x = if (nx >= b) (a + b) * 0.5 else nx;
         }
     }
-    return clamp(x, a, b);
+    return if (std.math.isFinite(x) and a <= b) std.math.clamp(x, a, b) else x;
 }
 pub fn solveBernstein(allocator: std.mem.Allocator, coefficients: []const f64, errors: []const f64, roots: *std.ArrayList(f64), width: f64) std.mem.Allocator.Error!usize {
     std.debug.assert(coefficients.len <= 10 and coefficients.len == errors.len);

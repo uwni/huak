@@ -198,19 +198,19 @@ public:
   struct Point {
     double t, away, blurred;
   };
-  Deviation(Handle(Geom2d_Curve) leading, Handle(Geom_Surface) surface, const OnContour &onContour,
+  Deviation(Handle(Geom2d_Curve) leading, const OnContour &onContour,
             std::function<double(const gp_Pnt &, double)> distance)
-      : leading(std::move(leading)), surface(std::move(surface)), onContour(onContour), distance(std::move(distance)) {}
+      : leading(std::move(leading)), onContour(onContour), distance(std::move(distance)) {}
 
   // The measure at a parameter, Newton's method moving no farther than
   // `limit`; none where it does not reach the contour.
   std::optional<Point> at(double t, double limit) const {
-    const auto reached = onContour(leading->Value(t), limit);
+    const auto reached = onContour(leading.Value(t), limit);
     if (!reached)
       return std::nullopt;
     gp_Pnt p;
     gp_Vec du, dv;
-    surface->D1(reached->uv.X(), reached->uv.Y(), p, du, dv);
+    onContour.surfaceD1(reached->uv.X(), reached->uv.Y(), p, du, dv);
     return Point{t, distance(p, t), reached->blur * stretch(du, dv)};
   }
 
@@ -231,26 +231,42 @@ public:
   // (U2 - U1) / range) particles (lines 984-994), and Brent's method again
   // about the best it finds (lines 997-1000). None where Newton's method
   // reaches no contour point at a parameter measured: the deviation there
-  // is unknown.
+  // is unknown. Once a point proves the span exceeds Confusion + blurred,
+  // refinement stops early because the span will be halved anyway; every
+  // passing span still runs Brent (and PSO if needed) to sqrt(eps).
   std::optional<Point> farthest(double first, double last, double limit, double range) const {
-    std::optional<Point> worst;
-    bool unknown = false;
+    const double mid = (first + last) / 2.;
+    const auto middle = at(mid, limit);
+    if (!middle)
+      return std::nullopt;
+    if (middle->away > Precision::Confusion() + middle->blurred)
+      return *middle;
+    std::optional<Point> worst = *middle;
+    bool unknown = false, far = false;
     const std::function<std::optional<double>(double)> nearness = [&](double t) -> std::optional<double> {
+      if (unknown || far)
+        return std::nullopt;
       const auto point = at(t, limit);
       if (!point) {
         unknown = true;
         return std::nullopt;
       }
-      if (!worst || point->away > worst->away)
+      if (point->away > worst->away)
         worst = *point;
+      if (point->away > Precision::Confusion() + point->blurred) {
+        far = true;
+        worst = *point;
+        return std::nullopt;
+      }
       return -point->away * point->away;
     };
     Partial function(nearness);
-    math_BrentMinimum search(std::sqrt(std::numeric_limits<double>::epsilon()));
-    search.Perform(function, first, (first + last) / 2., last);
+    static const double tol = std::sqrt(std::numeric_limits<double>::epsilon());
+    math_BrentMinimum search(tol, -middle->away * middle->away);
+    search.Perform(function, first, mid, last);
     if (unknown)
       return std::nullopt;
-    if (search.IsDone())
+    if (far || search.IsDone())
       return worst;
     constexpr double utol = 1.0e-9;
     math_Vector low(1, 1), high(1, 1), steps(1, 1), best(1, 1);
@@ -261,15 +277,19 @@ public:
     double value = 0.0;
     math_PSO swarm(&swarmed, low, high, steps, std::max(8, RealToInt(32 * (last - first) / range)));
     swarm.Perform(steps, value, best);
-    search.Perform(function, std::max(best(1) - steps(1), first), best(1), std::min(best(1) + steps(1), last));
+    if (unknown)
+      return std::nullopt;
+    if (far)
+      return worst;
+    math_BrentMinimum refine(tol);
+    refine.Perform(function, std::max(best(1) - steps(1), first), best(1), std::min(best(1) + steps(1), last));
     if (unknown)
       return std::nullopt;
     return worst;
   }
 
 private:
-  Handle(Geom2d_Curve) leading;
-  Handle(Geom_Surface) surface;
+  Geom2dAdaptor_Curve leading;
   const OnContour &onContour;
   std::function<double(const gp_Pnt &, double)> distance;
 };
@@ -283,7 +303,8 @@ struct Measured {
   std::vector<bool> far;
   double tolerance;
 };
-Measured measure(const Deviation &deviation, const std::vector<Sample> &samples, const std::vector<double> &at) {
+Measured measure(const Deviation &deviation, const std::vector<Sample> &samples, const std::vector<double> &at,
+                 bool stopOnFirstFar = false) {
   const size_t spans = samples.size() - 1;
   Measured measured{std::vector<bool>(spans), Precision::Confusion()};
   for (size_t k = 0; k < spans; ++k) {
@@ -292,6 +313,8 @@ Measured measure(const Deviation &deviation, const std::vector<Sample> &samples,
     const auto worst = deviation.farthest(at[k], at[k + 1], samples[k].uv.Distance(samples[k + 1].uv) / 2,
                                           at.back() - at.front());
     measured.far[k] = !worst || worst->away > Precision::Confusion() + worst->blurred;
+    if (measured.far[k] && stopOnFirstFar)
+      return measured;
     if (worst)
       measured.tolerance = std::max(measured.tolerance, worst->away + worst->blurred);
   }
@@ -305,12 +328,13 @@ Measured measure(const Deviation &deviation, const std::vector<Sample> &samples,
 // long. A span is halved at the contour point `locate` finds halfway along
 // the traced contour between its samples. A span shorter than OCCT tells
 // apart that is still to be halved is no contour that fitting can follow.
-Fit fitContour(std::vector<Sample> samples, const Handle(Geom_Surface) & surface, const OnContour &onContour,
+Fit fitContour(std::vector<Sample> samples, const Handle(Geom_Surface) &, const OnContour &onContour,
                const std::function<Sample(double)> &locate) {
   for (;;) {
     Fit fit = interpolate(samples);
-    const Deviation deviation(fit.curve2d, surface, onContour,
-                              [&fit](const gp_Pnt &p, double t) { return fit.curve->Value(t).Distance(p); });
+    const GeomAdaptor_Curve curve(fit.curve);
+    const Deviation deviation(fit.curve2d, onContour,
+                              [&curve](const gp_Pnt &p, double t) { return curve.Value(t).Distance(p); });
     Measured measured = measure(deviation, samples, fit.at);
     auto &halve = measured.far;
     if (std::find(halve.begin(), halve.end(), true) == halve.end()) {
@@ -318,14 +342,18 @@ Fit fitContour(std::vector<Sample> samples, const Handle(Geom_Surface) & surface
       return fit;
     }
     spread(halve, fit.at);
-    for (size_t k = halve.size(); k-- > 0;) {
-      if (!halve[k])
-        continue;
-      if (samples[k].p.Distance(samples[k + 1].p) <= Precision::Confusion())
-        throw std::runtime_error("cannot fit a contour to its points");
-      samples.insert(samples.begin() + static_cast<std::ptrdiff_t>(k + 1),
-                     locate((samples[k].along + samples[k + 1].along) / 2));
+    std::vector<Sample> next;
+    next.reserve(samples.size() + static_cast<size_t>(std::count(halve.begin(), halve.end(), true)));
+    next.push_back(samples.front());
+    for (size_t k = 0; k < halve.size(); ++k) {
+      if (halve[k]) {
+        if (samples[k].p.Distance(samples[k + 1].p) <= Precision::Confusion())
+          throw std::runtime_error("cannot fit a contour to its points");
+        next.push_back(locate((samples[k].along + samples[k + 1].along) / 2));
+      }
+      next.push_back(samples[k + 1]);
     }
+    samples.swap(next);
   }
 }
 
@@ -394,22 +422,23 @@ std::optional<Through> throughPoints(const std::vector<Sample> &points,
 // leaves the contour, and so does the contour between them, as `measure`
 // finds it from the curve on the face through the samples. Its tolerance is
 // the most measured, at least how far the samples stand from it.
-std::optional<Exact> exactCurve(const std::vector<Sample> &samples, const Handle(Geom_Surface) & surface,
+std::optional<Exact> exactCurve(const std::vector<Sample> &samples, const Handle(Geom_Surface) &,
                                 const OnContour &onContour) {
   const auto allowed = [&](const Sample &sample) {
+    const double blur = onContour.blur(sample.uv);
     gp_Pnt p;
     gp_Vec du, dv;
-    surface->D1(sample.uv.X(), sample.uv.Y(), p, du, dv);
-    return Precision::Confusion() + onContour.blur(sample.uv) * stretch(du, dv);
+    onContour.surfaceD1(sample.uv.X(), sample.uv.Y(), p, du, dv);
+    return Precision::Confusion() + blur * stretch(du, dv);
   };
   auto through = throughPoints(samples, allowed);
   if (!through)
     return std::nullopt;
   std::vector<Sample> settled = samples;
   const std::vector<double> at = chordsOf(settled);
-  const Deviation deviation(onFace(settled, at), surface, onContour,
+  const Deviation deviation(onFace(settled, at), onContour,
                             [&](const gp_Pnt &p, double) { return through->distance(p); });
-  const Measured measured = measure(deviation, settled, at);
+  const Measured measured = measure(deviation, settled, at, true);
   if (std::find(measured.far.begin(), measured.far.end(), true) != measured.far.end())
     return std::nullopt;
   through->exact.tolerance = std::max(measured.tolerance, through->off);

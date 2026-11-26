@@ -50,7 +50,7 @@ test "standard root exports module namespaces and preserves nested native and so
             root = module;
         };
         try t.expect(root != null);
-        const names = [_][]const u8{ "math", "geometry", "color", "pen", "transform", "picture", "object", "text", "animation", "solver", "assertions", "collections", "brush", "engraving", "paint", "weave", "regions", "pen_motion" };
+        const names = [_][]const u8{ "math", "geometry", "color", "pen", "transform", "picture", "object", "text", "animation", "solver", "assertions", "collections", "brush", "engraving", "paint", "weave", "regions", "pen_motion", "solving" };
         try t.expectEqual(names.len, root.?.exports.len);
         for (root.?.exports) |exposed| {
             try t.expect(exposed.target == .namespace);

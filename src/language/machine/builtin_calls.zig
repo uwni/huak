@@ -26,15 +26,18 @@ pub fn callBuiltin(self: *Machine, index_: u32, count: usize) Error!void {
         const expected = if (index < signature.args.len) signature.args[index] else signature.variadic.?;
         arg.* = try validation.coerce(self, arg.*, expected);
     }
-    const result = if (try coreBuiltin(self, id, args)) |value| value else native: {
-        if (self.host.vtable.call_builtin == null) return self.fail("builtin '{s}' requires a host", .{signature.name});
-        const value = self.host.callBuiltin(self.arena.allocator(), id, args, self) catch |err| return failures.nativeFailure(self, err);
-        try validation.checkFiniteExternal(self, value);
-        break :native value;
-    };
+    if (try coreBuiltin(self, id, args)) |value| {
+        self.stack.items.len -= count;
+        try validation.checkFinite(self, value);
+        try self.push(try validation.coerceValidated(self, try templates.materializeValidated(self, value), signature.result));
+        return;
+    }
+    if (self.host.vtable.call_builtin == null) return self.fail("builtin '{s}' requires a host", .{signature.name});
+    const value = self.host.callBuiltin(self.arena.allocator(), id, args, self) catch |err| return failures.nativeFailure(self, err);
+    try validation.checkFiniteExternal(self, value);
     self.stack.items.len -= count;
-    try validation.checkFinite(self, result);
-    try self.push(try validation.coerce(self, try templates.materialize(self, result), signature.result));
+    const materialized = try templates.materializeValidated(self, value);
+    try self.push(try validation.coerceValidated(self, materialized, signature.result));
 }
 
 /// Language primitives need no geometry/typesetting host.
@@ -118,4 +121,60 @@ test "aggregate VM optional builtin omissions remain distinct from explicit unit
     defer invalid.deinit();
     try std.testing.expectError(error.RuntimeFailed, invalid.execute(&.{}));
     try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "expected number") != null);
+}
+
+test "host builtin claims fresh ownerless lists in place and checks leaves inline once" {
+    const Probe = struct {
+        poison: bool = false,
+        inner: ?*types.List.Owned = null,
+        items_ptr: ?[*]Value = null,
+        fn call(context: ?*anyopaque, allocator: std.mem.Allocator, _: builtin.Id, _: []const Value, _: ?*Machine) !Value {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            const items = try allocator.alloc(Value, 256);
+            for (items, 0..) |*slot, i| slot.* = .{ .number = @floatFromInt(i) };
+            if (self.poison) items[200] = .{ .number = std.math.nan(f64) };
+            const inner = try allocator.create(types.List.Owned);
+            inner.* = .{ .values = .fromOwnedSlice(items) };
+            self.inner = inner;
+            self.items_ptr = items.ptr;
+            return types.listView(try allocator.dupe(Value, &.{.{ .list = .{ .owned = inner } }}));
+        }
+    };
+    const code = [_]I{
+        ins(.constant, 0),
+        .{ .op = .call_builtin, .a = @backingInt(builtin.Id.bounds), .b = 1 },
+        ins(.store_global, 0),
+        ins(.halt, 0),
+    };
+    var program = try testProgram(&.{.{ .name = "script", .code = &code, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{.{ .int = 0 }}, &.{"result"}, &.{.list});
+    defer program.deinit();
+    var probe: Probe = .{};
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .call_builtin = Probe.call } }, .{});
+    defer machine.deinit();
+    _ = try machine.execute(&.{});
+    const result = machine.getGlobal("result").?;
+    try std.testing.expectEqual(machine.identity, result.list.owned.owner.?);
+    const child = result.list.items()[0];
+    try std.testing.expectEqual(probe.inner.?, child.list.owned);
+    try std.testing.expectEqual(probe.items_ptr.?, child.list.owned.values.items.ptr);
+    try std.testing.expectEqual(machine.identity, child.list.owned.owner.?);
+
+    var bad_probe: Probe = .{ .poison = true };
+    var invalid = try Machine.init(std.testing.allocator, &program, .{ .ptr = &bad_probe, .vtable = &.{ .call_builtin = Probe.call } }, .{});
+    defer invalid.deinit();
+    try std.testing.expectError(error.RuntimeFailed, invalid.execute(&.{}));
+    try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "non-finite") != null);
+
+    const small_buf = [_]Value{ .{ .number = 1 }, .{ .number = 2 } };
+    var large_buf: [512]Value = undefined;
+    for (&large_buf, 0..) |*slot, i| slot.* = .{ .number = @floatFromInt(i) };
+    var counter = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const prev_gpa = machine.gpa;
+    machine.gpa = counter.allocator();
+    defer machine.gpa = prev_gpa;
+    try validation.checkFiniteExternal(&machine, types.listView(&small_buf));
+    const small_allocs = counter.allocations;
+    try std.testing.expect(small_allocs > 0);
+    try validation.checkFiniteExternal(&machine, types.listView(&large_buf));
+    try std.testing.expectEqual(small_allocs * 2, counter.allocations);
 }

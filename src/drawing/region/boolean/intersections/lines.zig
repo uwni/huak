@@ -65,7 +65,7 @@ fn lineIntersection(a: *const Cubic, b: *const Cubic) ?Point {
     const low = -numerical.EPSILON;
     const high = 1 + numerical.EPSILON;
     if (!(low < first_parameter and first_parameter < high and low < second_parameter and second_parameter < high)) return null;
-    first_parameter = numerical.clamp(first_parameter, 0, 1);
+    first_parameter = std.math.clamp(first_parameter, 0, 1);
     return .{ .x = a.p0.x + first_parameter * vx1, .y = a.p0.y + first_parameter * vy1 };
 }
 

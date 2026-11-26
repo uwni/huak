@@ -34,7 +34,7 @@ pub fn write(
     allocator: std.mem.Allocator,
     batch: *OutputBatch,
     requested: []const Output,
-    jobs: ?usize,
+    workers: huak.Workers,
     script_path: []const u8,
     publication: Publication,
     report: *Report,
@@ -56,8 +56,15 @@ pub fn write(
         .failed => |*failure| failure.deinit(),
         else => {},
     };
-    var shared: Shared = .{ .io = io, .batch = batch, .requested = requested, .results = results, .publication = publication };
-    try huak.worker.run(io, requested.len, jobs, &shared, Shared.one);
+    var shared: Shared = .{
+        .io = io,
+        .batch = batch,
+        .requested = requested,
+        .results = results,
+        .publication = publication,
+        .render_workers = workers.nested(workers.limit(requested.len)),
+    };
+    try workers.run(requested.len, &shared, Shared.one);
     var failed = false;
     // Reporting stays deterministic even though completion order is arbitrary.
     for (requested, results) |output, result| switch (result) {
@@ -80,6 +87,7 @@ const Shared = struct {
     requested: []const Output,
     results: []Result,
     publication: Publication,
+    render_workers: huak.Workers,
     fn one(self: *Shared, index: usize) bool {
         // A failed result already owns its diagnostic independently. Clear the
         // completed task's convenience slot before this I/O thread is reused.
@@ -91,7 +99,7 @@ const Shared = struct {
         defer scratch.deinit();
         const output = self.requested[index];
         var diagnostic: ?typst.Buffer = null;
-        var rendered = self.batch.render(scratch.allocator(), index, format(output.path), &diagnostic) catch |err| {
+        var rendered = self.batch.render(scratch.allocator(), index, format(output.path), self.render_workers, &diagnostic) catch |err| {
             self.results[index] = .{ .failed = .{ .stage = .render, .cause = err, .diagnostic = diagnostic } };
             return false;
         };

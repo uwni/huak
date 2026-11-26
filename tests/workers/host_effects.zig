@@ -24,11 +24,11 @@ test "builders mutating shared pictures and printing remain ordered serial barri
     , true);
     defer program.deinit();
     for ([_]usize{ 1, 4 }) |jobs| {
-        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = &library, .workers = .init(t.io, jobs) }, .{});
         defer runtime.deinit();
         var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
         defer machine.deinit();
-        var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+        var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
         executor.attach(&machine);
         _ = try machine.execute(&.{});
         try t.expectEqual(@as(usize, 0), executor.stats.tasks);
@@ -75,7 +75,7 @@ test "custom host callbacks retain their behavior when construction workers are 
     var expected_calls: ?usize = null;
     for ([_]usize{ 1, 4 }) |jobs| {
         Wrapped.calls.store(0, .monotonic);
-        var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = &library, .workers = .init(t.io, jobs) }, .{});
         defer runtime.deinit();
         var host = runtime.host();
         var vtable = host.vtable.*;
@@ -83,7 +83,7 @@ test "custom host callbacks retain their behavior when construction workers are 
         host.vtable = &vtable;
         var machine = try l.Machine.init(t.allocator, &program, host, .{});
         defer machine.deinit();
-        var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = jobs };
+        var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
         executor.attach(&machine);
         _ = try machine.execute(&.{});
         const calls = Wrapped.calls.load(.monotonic);
@@ -102,13 +102,13 @@ test "custom host callbacks retain their behavior when construction workers are 
         }
     };
     var calls: usize = 0;
-    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    var runtime = try l.Runtime.initWithBackends(t.allocator, t.allocator, .{ .typst = &library, .workers = .init(t.io, 4) }, .{});
     defer runtime.deinit();
     var host = runtime.host();
     host.tasks = .{ .ptr = &calls, .vtable = &.{ .dispatch = Existing.task } };
     var machine = try l.Machine.init(t.allocator, &program, host, .{});
     defer machine.deinit();
-    var executor: l.tasks.Executor = .{ .allocator = t.allocator, .io = t.io, .runtime = &runtime, .jobs = 4 };
+    var executor: l.tasks.Executor = .{ .allocator = t.allocator, .runtime = &runtime };
     executor.attach(&machine);
     _ = try machine.execute(&.{});
     try t.expect(calls > 0);

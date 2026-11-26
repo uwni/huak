@@ -140,7 +140,7 @@ pub fn invoke(self: *Runtime, comptime id: builtin.Id, arg: builtin.Arguments(id
         },
         .snapshot => return transforms.transformedObject(self, arg.target, .{}),
         .flatten_transparency => {
-            var options: transparency.Options = .{ .meshes = self.backends.meshes };
+            var options: transparency.Options = .{ .meshes = self.backends.meshes, .workers = self.backends.workers };
             if (arg.paper) |value| options.paper = try conversions.color(self, value);
             if (options.paper.a != 1) {
                 self.native_message = "flatten_transparency needs an opaque paper";

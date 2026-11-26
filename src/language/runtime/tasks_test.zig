@@ -15,15 +15,17 @@ fn invoke(owner: *Runtime, id: @import("../builtin.zig").Id, arguments: []const 
 test "task snapshots isolate metadata and prohibit writes through borrowed owners" {
     const a = std.testing.allocator;
     var unused_library: typst.Library = undefined;
-    var parent = try Runtime.init(a, a, &unused_library, .{ .inputs = &.{.{ .key = "title", .value = "retained" }} });
+    var parent = try Runtime.initWithBackends(a, a, .{ .typst = &unused_library, .workers = .init(std.testing.io, 4) }, .{ .inputs = &.{.{ .key = "title", .value = "retained" }} });
     defer parent.deinit();
     const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const picture = try invoke(&parent, .picture, &.{});
     _ = try invoke(&parent, .append, &.{ picture, try invoke(&parent, .draw, &.{curve}) });
     const solver = try invoke(&parent, .solver, &.{});
     try parent.prepareTasks(false);
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(parent.backends.workers.nested(4));
     defer child.deinit();
+    try std.testing.expectEqual(@as(?std.Io, null), child.backends.workers.io);
+    try std.testing.expect(parent.backends.workers.io != null);
     try std.testing.expect(child.host().vtable.typst_batch == null);
     try std.testing.expect(parent.host().vtable.typst_batch != null);
     try std.testing.expect(child.path_values.items.ptr != parent.path_values.items.ptr);
@@ -50,7 +52,7 @@ test "task picture adoption moves geometry and supports continued drawing" {
     const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const earlier = try invoke(&parent, .picture, &.{});
     _ = try invoke(&parent, .append, &.{ earlier, try invoke(&parent, .draw, &.{curve}) });
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(.serial);
     var child_alive = true;
     defer if (child_alive) child.deinit();
     const result = try invoke(&child, .picture, &.{});
@@ -87,7 +89,7 @@ test "task checkpoint rollback releases unpublished owners without changing seri
     defer parent.deinit();
     const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
     const marker = parent.checkpointTasks();
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(.serial);
     defer child.deinit();
     const result = try invoke(&child, .picture, &.{});
     _ = try invoke(&child, .append, &.{ result, try invoke(&child, .draw, &.{curve}) });
@@ -108,7 +110,7 @@ fn allocationFailureAdoption(allocator: std.mem.Allocator, object_result: bool) 
     var parent = try Runtime.init(allocator, allocator, &unused_library, .{});
     defer parent.deinit();
     const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(.serial);
     defer child.deinit();
     const result = try invoke(&child, .picture, &.{});
     const group = result;
@@ -132,7 +134,7 @@ test "task adoption moves the connected storage graph and preserves foreign hand
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
     const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(.serial);
     var child_alive = true;
     defer if (child_alive) child.deinit();
     const output = try invoke(&child, .picture, &.{});
@@ -171,7 +173,7 @@ test "task adoption rejects animation tracks without moving owners" {
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
     const curve = try invoke(&parent, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 20, .y = 10 } } });
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(.serial);
     defer child.deinit();
     const picture = try invoke(&child, .picture, &.{});
     const token = try invoke(&child, .append, &.{ picture, try invoke(&child, .draw, &.{curve}) });
@@ -196,7 +198,7 @@ test "aggregate runtime task adoption rejects containers wrapping pictures" {
     var unused_library: typst.Library = undefined;
     var parent = try Runtime.init(a, a, &unused_library, .{});
     defer parent.deinit();
-    var child = try parent.forkTask();
+    var child = try parent.forkTask(.serial);
     defer child.deinit();
     const picture = try invoke(&child, .picture, &.{});
     var dict: types.Dict = .{};

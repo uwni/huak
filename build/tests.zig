@@ -56,7 +56,8 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
         .{ .source = "bench/regions_compare.zig", .name = "test-region-benchmark", .imports = &.{libraries.clap}, .native = false },
         .{ .source = "tests/region/regressions.zig", .name = "test-region", .imports = &.{fixtures.regions}, .native = false },
         .{ .source = "tests/region.zig", .name = "test-region-operations", .imports = &.{libraries.drawing}, .native = false },
-        .{ .source = "src/drawing/root.zig", .name = "test-geometry", .imports = &.{}, .native = false, .group = region_tests },
+        .{ .source = "src/drawing/root.zig", .name = "test-geometry", .imports = &.{libraries.workers}, .native = false, .group = region_tests },
+        .{ .source = "src/concurrency/Workers.zig", .name = "test-concurrency", .imports = &.{}, .native = false },
     };
     inline for (suites) |suite| {
         const root = module(b, config.target, config.optimize, suite.source, suite.imports);

@@ -27,7 +27,7 @@ pub const shading_accuracy = 1.0 / 256.0;
 pub fn fieldValue(output: std.mem.Allocator, shaded: *const shading.Output, field: shading.Field, margin: f64, lit: bool, scalar: ?f64) !Value {
     switch (field) {
         .none => return .{ .boolean = false },
-        .constant => |shine| return types.listView(try output.dupe(Value, &.{ .{ .string = "constant" }, .{ .number = shine.diffuse }, .{ .number = shine.glint } })),
+        .constant => |shine| return ownedList(output, try output.dupe(Value, &.{ .{ .string = "constant" }, .{ .number = shine.diffuse }, .{ .number = shine.glint } })),
         .profile => |graded| {
             const samples = shaded.samples.items[graded.samples.start..][0..graded.samples.count];
             const positions = try output.alloc(Value, samples.len);
@@ -38,57 +38,88 @@ pub fn fieldValue(output: std.mem.Allocator, shaded: *const shading.Output, fiel
                 d.* = .{ .number = sample.shine.diffuse };
                 gl.* = .{ .number = sample.shine.glint };
             }
-            return types.listView(try output.dupe(Value, &.{ .{ .string = "profile" }, .{ .vec2 = types.Vec2.fromPoint(graded.start) }, .{ .vec2 = types.Vec2.fromPoint(graded.end) }, types.listView(positions), types.listView(diffuse), types.listView(glint) }));
+            return ownedList(output, try output.dupe(Value, &.{
+                .{ .string = "profile" },
+                .{ .vec2 = types.Vec2.fromPoint(graded.start) },
+                .{ .vec2 = types.Vec2.fromPoint(graded.end) },
+                try ownedList(output, positions),
+                try ownedList(output, diffuse),
+                try ownedList(output, glint),
+            }));
         },
         .fan => |fan| {
             const rays = shaded.rays.items[fan.rays.start..][0..fan.rays.count];
-            const points = try output.alloc(Value, rays.len);
-            const lights = try lightLists(output, rays.len);
             var shows = false;
-            for (rays, points, lights[0], lights[1]) |ray, *at, *d, *gl| {
+            for (rays) |ray| if (ray.shine.glint > 0) {
+                shows = true;
+                break;
+            };
+            const points = try output.alloc(Value, rays.len);
+            const diffuse = try output.alloc(Value, rays.len);
+            const glint: ?[]Value = if (shows) try output.alloc(Value, rays.len) else null;
+            for (rays, points, diffuse, 0..) |ray, *at, *d, index| {
                 at.* = .{ .vec2 = types.Vec2.fromPoint(ray.point) };
                 d.* = .{ .number = ray.shine.diffuse };
-                gl.* = .{ .number = ray.shine.glint };
-                shows = shows or ray.shine.glint > 0;
+                if (glint) |table| table[index] = .{ .number = ray.shine.glint };
             }
-            return types.listView(try output.dupe(Value, &.{ .{ .string = "fan" }, .{ .vec2 = types.Vec2.fromPoint(fan.center) }, types.listView(points), types.listView(lights[0]), glintList(lights[1], shows), .{ .number = fan.tolerance } }));
+            return ownedList(output, try output.dupe(Value, &.{
+                .{ .string = "fan" },
+                .{ .vec2 = types.Vec2.fromPoint(fan.center) },
+                try ownedList(output, points),
+                try ownedList(output, diffuse),
+                try ownedList(output, glint),
+                .{ .number = fan.tolerance },
+            }));
         },
         .patches => |range| {
             const patches = shaded.patches.items[range.start..][0..range.count];
-            const points = try output.alloc(Value, patches.len * 16);
-            const lights = try lightLists(output, patches.len * 16);
-            const values = try output.alloc(Value, patches.len * 16);
+            const count = patches.len * 16;
             var shows = false;
-            for (patches, 0..) |patch, index| for (patch.points, patch.diffuse, patch.glint, patch.values, 0..) |control, d, gl, v, k| {
-                points[index * 16 + k] = .{ .vec2 = types.Vec2.fromPoint(control) };
-                lights[0][index * 16 + k] = .{ .number = d };
-                lights[1][index * 16 + k] = .{ .number = gl };
-                values[index * 16 + k] = .{ .number = v };
-                // A patch's field stays within its coefficients.
-                shows = shows or gl > 0;
-            };
-            return types.listView(try output.dupe(Value, &.{
+            // A patch's field stays within its coefficients.
+            if (lit) {
+                outer: for (patches) |*patch| for (patch.glint) |gl| if (gl > 0) {
+                    shows = true;
+                    break :outer;
+                };
+            }
+            const points = try output.alloc(Value, count);
+            const diffuse: ?[]Value = if (lit) try output.alloc(Value, count) else null;
+            const glint: ?[]Value = if (shows) try output.alloc(Value, count) else null;
+            const values: ?[]Value = if (scalar != null) try output.alloc(Value, count) else null;
+            for (patches, 0..) |*patch, index| {
+                const base = index * 16;
+                for (patch.points, 0..) |control, k| points[base + k] = .{ .vec2 = types.Vec2.fromPoint(control) };
+                if (diffuse) |table| for (patch.diffuse, 0..) |d, k| {
+                    table[base + k] = .{ .number = d };
+                };
+                if (glint) |table| for (patch.glint, 0..) |gl, k| {
+                    table[base + k] = .{ .number = gl };
+                };
+                if (values) |table| for (patch.values, 0..) |v, k| {
+                    table[base + k] = .{ .number = v };
+                };
+            }
+            return ownedList(output, try output.dupe(Value, &.{
                 .{ .string = "patches" },
-                types.listView(points),
-                types.listView(if (lit) lights[0] else lights[0][0..0]),
-                glintList(lights[1], shows),
+                try ownedList(output, points),
+                try ownedList(output, diffuse),
+                try ownedList(output, glint),
                 .{ .number = shading_accuracy },
                 .{ .quantity = units.fromPoints(margin) },
-                types.listView(if (scalar != null) values else values[0..0]),
+                try ownedList(output, values),
                 .{ .number = scalar orelse 0 },
             }));
         },
     }
 }
 
-/// Lists for n·l and the glint.
-fn lightLists(output: std.mem.Allocator, count: usize) ![2][]Value {
-    const diffuse = try output.alloc(Value, count);
-    return .{ diffuse, try output.alloc(Value, count) };
-}
-
-fn glintList(values: []Value, shows: bool) Value {
-    return types.listView(if (shows) values else values[0..0]);
+/// Wraps a freshly allocated `output` slice in an ownerless `List.Owned` so
+/// the VM claims it in place on materialization without copying its buffer.
+fn ownedList(output: std.mem.Allocator, items: ?[]Value) !Value {
+    const list = try output.create(types.List.Owned);
+    list.* = .{};
+    if (items) |slice| list.values = .fromOwnedSlice(slice);
+    return .{ .list = .{ .owned = list } };
 }
 
 /// The script's field: its function called through the VM with a point of

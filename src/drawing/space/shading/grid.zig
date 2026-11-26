@@ -27,11 +27,19 @@ pub fn grid(shading: *const Shading, allocator: std.mem.Allocator, face: Face, i
     const span: [2]f64 = .{ info.u[1] - info.u[0], info.v[1] - info.v[0] };
     // The rate of turn along each parameter, per unit of it, on equal
     // intervals of it.
+    var conical_rate: [1]f64 = undefined;
+    var sampled_rates: [2][rate_intervals]f64 = undefined;
     const profiles: [2][]const f64 = switch (info.kind) {
         .cylindrical => .{ &.{1}, &.{0} },
-        .conical => .{ try allocator.dupe(f64, &.{@cos(info.semi_angle)}), &.{0} },
+        .conical => blk: {
+            conical_rate[0] = @cos(info.semi_angle);
+            break :blk .{ &conical_rate, &.{0} };
+        },
         .spherical, .toroidal => .{ &.{1}, &.{1} },
-        .planar, .freeform => try rates(shading, allocator, face, info),
+        .planar, .freeform => blk: {
+            sampled_rates = try rates(shading, face, info);
+            break :blk .{ &sampled_rates[0], &sampled_rates[1] };
+        },
     };
     var count: [2]usize = undefined;
     var result: Grid = undefined;
@@ -136,22 +144,26 @@ fn rateAt(profile: []const f64, idx: usize, reversed: bool) f64 {
     return if (reversed) profile[profile.len - 1 - idx] else profile[idx];
 }
 
+const rate_intervals = 64;
+
 /// The rate of turn along each parameter on the 64 intervals of a 65 x 65
 /// grid of it: on each interval, the larger of the largest derivatives of
 /// the unit normal at its two ends over all of the other parameter. An
 /// estimate, not a bound.
-fn rates(self: *const Shading, scratch: std.mem.Allocator, face: Face, info: Info) Error![2][]const f64 {
-    const intervals = 64;
-    const side = intervals + 1;
-    const uv = try scratch.alloc(g.Point, side * side);
+fn rates(self: *const Shading, face: Face, info: Info) Error![2][rate_intervals]f64 {
+    const side = rate_intervals + 1;
+    const tmp = self.allocator;
+    const uv = try tmp.alloc(g.Point, side * side);
+    defer tmp.free(uv);
     for (0..side) |j| for (0..side) |i| {
         uv[j * side + i] = .{
-            .x = info.u[0] + (info.u[1] - info.u[0]) * @as(f64, @floatFromInt(i)) / intervals,
-            .y = info.v[0] + (info.v[1] - info.v[0]) * @as(f64, @floatFromInt(j)) / intervals,
+            .x = info.u[0] + (info.u[1] - info.u[0]) * @as(f64, @floatFromInt(i)) / rate_intervals,
+            .y = info.v[0] + (info.v[1] - info.v[0]) * @as(f64, @floatFromInt(j)) / rate_intervals,
         };
     };
-    const found = try scratch.alloc(?Turn, uv.len);
-    try self.surfaces.turns(scratch, face, uv, found);
+    const found = try tmp.alloc(?Turn, uv.len);
+    defer tmp.free(found);
+    try self.surfaces.turns(tmp, face, uv, found);
     // The largest rate along u on each line of constant u, and along v on
     // each line of constant v.
     var lines: [2][side]f64 = .{ @splat(0), @splat(0) };
@@ -159,11 +171,9 @@ fn rates(self: *const Shading, scratch: std.mem.Allocator, face: Face, info: Inf
         lines[0][index % side] = @max(lines[0][index % side], @sqrt(dot(t.du, t.du)));
         lines[1][index / side] = @max(lines[1][index / side], @sqrt(dot(t.dv, t.dv)));
     };
-    var result: [2][]const f64 = undefined;
+    var result: [2][rate_intervals]f64 = undefined;
     for (&result, lines) |*profile, line| {
-        const each = try scratch.alloc(f64, intervals);
-        for (each, line[0..intervals], line[1..]) |*rate, a, b| rate.* = @max(a, b);
-        profile.* = each;
+        for (profile, line[0..rate_intervals], line[1..]) |*rate, a, b| rate.* = @max(a, b);
     }
     return result;
 }

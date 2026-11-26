@@ -33,7 +33,12 @@ double fromBox(const gp_Pnt2d &p, const Bnd_B2<double> &box) {
 // another comes is not the nearest. Unrefined, the clearance is what the
 // bounds allow; refined, OCCT finds how near the parts come, the part
 // bounded nearest first, while a part's bound allows it nearer than found.
-double clearance(const HuakView &view, size_t k, bool refined) {
+struct ClearPart {
+  double bound;
+  size_t arc, segment;
+};
+
+double clearance(const HuakView &view, size_t k, bool refined, std::vector<ClearPart> &parts) {
   const auto &arc = view.arcs[k];
   const gp_Pnt2d middle = arc.curve->Value(arc.middle);
   const size_t last = arc.points.size() - 1;
@@ -42,11 +47,8 @@ double clearance(const HuakView &view, size_t k, bool refined) {
       static_cast<std::ptrdiff_t>(last) - 1));
   const size_t from = holding == 0 ? 0 : holding - 1, to = std::min(last, holding + 2);
   double most = std::min(middle.Distance(arc.points[from]), middle.Distance(arc.points[to])) - arc.blur;
-  struct Part {
-    double bound;
-    size_t arc, segment;
-  };
-  std::vector<Part> parts;
+  double minBound = RealLast();
+  parts.clear();
   for (size_t j = 0; j < view.arcs.size(); ++j) {
     const auto &other = view.arcs[j];
     if (fromBox(middle, other.box) >= most)
@@ -57,13 +59,17 @@ double clearance(const HuakView &view, size_t k, bool refined) {
       const gp_Pnt2d &a = other.points[s], &b = other.points[s + 1];
       most = std::min(most, std::min(middle.Distance(a), middle.Distance(b)) - other.blur);
       const double bound = apart(middle, a, b) - other.offs[s] - other.blur;
-      if (bound < most)
-        parts.push_back({bound, j, s});
+      if (bound < most) {
+        if (!refined)
+          minBound = std::min(minBound, bound);
+        else
+          parts.push_back({bound, j, s});
+      }
     }
   }
-  std::sort(parts.begin(), parts.end(), [](const Part &x, const Part &y) { return x.bound < y.bound; });
   if (!refined)
-    return std::max(0.0, parts.empty() ? most : std::min(most, parts.front().bound));
+    return std::max(0.0, std::min(most, minBound));
+  std::sort(parts.begin(), parts.end(), [](const ClearPart &x, const ClearPart &y) { return x.bound < y.bound; });
   double least = most;
   for (const auto &part : parts) {
     if (part.bound >= least)
@@ -82,12 +88,12 @@ double clearance(const HuakView &view, size_t k, bool refined) {
   return std::max(0.0, least);
 }
 
-// The layers that the line of sight through a point of the plane meets,
-// front to back.
-std::vector<HuakLayer> layersAt(HuakView *view, const gp_Pnt2d &at) {
-  std::vector<huak::space::Sight> met;
+// Appends the layers that the line of sight through a point of the plane
+// meets, front to back.
+void appendLayersAt(HuakView *view, const gp_Pnt2d &at, std::vector<huak::space::Sight> &met,
+                    std::vector<HuakLayer> &layers) {
   view->sights().meet(at, met);
-  std::vector<HuakLayer> layers;
+  const size_t start = layers.size();
   for (const auto &sight : met) {
     const TopoDS_Face &face = faceOf(&view->model, sight.source, sight.face);
     gp_Dir normal;
@@ -96,8 +102,8 @@ std::vector<HuakLayer> layersAt(HuakView *view, const gp_Pnt2d &at) {
     layers.push_back({sight.source, sight.face, gp_Vec(normal).Dot(view->toward(sight.point)) > 0 ? 1 : -1,
                       view->depth(sight.point), sight.u, sight.v});
   }
-  std::sort(layers.begin(), layers.end(), [](const HuakLayer &a, const HuakLayer &b) { return a.depth > b.depth; });
-  return layers;
+  std::sort(layers.begin() + static_cast<std::ptrdiff_t>(start), layers.end(),
+            [](const HuakLayer &a, const HuakLayer &b) { return a.depth > b.depth; });
 }
 } // namespace
 
@@ -141,9 +147,10 @@ int cells(HuakView *view, HuakCells *out, char *error, size_t capacity) {
     }
     // Each cell's arc stands clearest as the polylines bound it; OCCT then
     // finds how clear it stands.
+    std::vector<ClearPart> parts;
     std::vector<double> clear(n);
     for (size_t k = 0; k < n; ++k)
-      clear[k] = clearance(*view, k, false);
+      clear[k] = clearance(*view, k, false, parts);
     std::vector<size_t> clearest(count, none);
     for (size_t h = 0; h < 2 * n; ++h) {
       size_t &best = clearest[cellOf[h]];
@@ -153,12 +160,14 @@ int cells(HuakView *view, HuakCells *out, char *error, size_t capacity) {
     std::vector<bool> refined(n, false);
     for (const size_t h : clearest)
       if (!refined[h / 2]) {
-        clear[h / 2] = clearance(*view, h / 2, true);
+        clear[h / 2] = clearance(*view, h / 2, true, parts);
         refined[h / 2] = true;
       }
     auto &offsets = view->result(view->indices);
     auto &layers = view->result(view->layerItems);
+    offsets.reserve(count + 1);
     offsets.push_back(0);
+    std::vector<huak::space::Sight> met;
     for (size_t cell = 0; cell < count; ++cell) {
       const size_t h = clearest[cell];
       const auto &arc = arcs[h / 2];
@@ -171,12 +180,13 @@ int cells(HuakView *view, HuakCells *out, char *error, size_t capacity) {
       if (h % 2)
         side.Reverse();
       side.Normalize();
-      const auto found = layersAt(view, middle.Translated(side * (clear[h / 2] / 2)));
-      layers.insert(layers.end(), found.begin(), found.end());
+      appendLayersAt(view, middle.Translated(side * (clear[h / 2] / 2)), met, layers);
       offsets.push_back(layers.size());
     }
     auto &left = view->result(view->indices);
     auto &right = view->result(view->indices);
+    left.reserve(n);
+    right.reserve(n);
     for (size_t k = 0; k < n; ++k) {
       left.push_back(cellOf[2 * k]);
       right.push_back(cellOf[2 * k + 1]);

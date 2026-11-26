@@ -19,10 +19,15 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <BVH_BoxSet.hxx>
+#include <GeomAdaptor_Curve.hxx>
+#include <Geom_Line.hxx>
 #include <Geom_Surface.hxx>
 #include <IntCurvesFace_Intersector.hxx>
 #include <gp_Lin.hxx>
+#include <math_Vector.hxx>
 #include <optional>
+
+class math_FunctionSetRoot;
 
 namespace huak::space {
 // Where a line of sight meets a face: the root shape and the face's index,
@@ -87,6 +92,11 @@ private:
   std::vector<size_t> first;
   BVH_BoxSet<double, 2, Entry> boxes;
   std::vector<Entry> held;
+  // Reusable ray solver scratch (single-threaded per HuakView).
+  Handle(Geom_Line) rayLine;
+  Handle(GeomAdaptor_Curve) rayCurve;
+  math_Vector rayTol, rayLower, rayUpper, raySeed, rayVal;
+  std::unique_ptr<math_FunctionSetRoot> raySolver;
 
   // The entries whose boxes hold `at`, of face `only` alone unless it is
   // negative, by face and cell.

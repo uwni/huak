@@ -5,12 +5,18 @@ const patches = @import("../patches.zig");
 const Builder = @This();
 
 allocator: std.mem.Allocator,
-points: []const [16]g.Point,
-values: []const [16]f64,
-options: patches.Options,
+points: []const [16]g.Point = &.{},
+values: []const [16]f64 = &.{},
+options: patches.Options = .{ .tolerance = 1, .max_triangles = 0 },
 sides: std.ArrayList([4]Side) = .empty,
 edges: std.AutoHashMapUnmanaged(EdgeKey, u32) = .empty,
 edge_count: u32 = 0,
+/// Bit `k` (`1 <= k < lattice`) is set when canonical step `k` on `edge` has a node.
+edge_marks: std.ArrayList(u128) = .empty,
+/// Interior marked lattice coordinates per patch column `(patch, i)` -> bit `j`
+/// and per patch row `(patch, j)` -> bit `i`.
+inside_cols: std.AutoHashMapUnmanaged([2]u32, u128) = .empty,
+inside_rows: std.AutoHashMapUnmanaged([2]u32, u128) = .empty,
 /// Canonical geometric points placed on shared edges (keyed by edge id and
 /// canonical lattice step), so neighbouring patches share identical edge
 /// subdivisions even when their field values jump across the edge.
@@ -30,6 +36,9 @@ triangles: std.ArrayList([3]u32) = .empty,
 pub fn deinit(self: *Builder) void {
     self.sides.deinit(self.allocator);
     self.edges.deinit(self.allocator);
+    self.edge_marks.deinit(self.allocator);
+    self.inside_cols.deinit(self.allocator);
+    self.inside_rows.deinit(self.allocator);
     self.edge_points.deinit(self.allocator);
     self.corner.deinit(self.allocator);
     self.along.deinit(self.allocator);
@@ -42,6 +51,28 @@ pub fn deinit(self: *Builder) void {
     self.triangles.deinit(self.allocator);
 }
 
+pub fn reset(self: *Builder, points: []const [16]g.Point, values: []const [16]f64, options: patches.Options) void {
+    self.points = points;
+    self.values = values;
+    self.options = options;
+    self.edge_count = 0;
+    self.sides.clearRetainingCapacity();
+    self.edges.clearRetainingCapacity();
+    self.edge_marks.clearRetainingCapacity();
+    self.inside_cols.clearRetainingCapacity();
+    self.inside_rows.clearRetainingCapacity();
+    self.edge_points.clearRetainingCapacity();
+    self.corner.clearRetainingCapacity();
+    self.along.clearRetainingCapacity();
+    self.inside.clearRetainingCapacity();
+    self.cells.clearRetainingCapacity();
+    self.pending.clearRetainingCapacity();
+    self.ring.clearRetainingCapacity();
+    self.nodes.clearRetainingCapacity();
+    self.fields.clearRetainingCapacity();
+    self.triangles.clearRetainingCapacity();
+}
+
 pub fn finish(self: *Builder) patches.Error!patches.Triangulated {
     const nodes = try self.nodes.toOwnedSlice(self.allocator);
     errdefer self.allocator.free(nodes);
@@ -51,7 +82,12 @@ pub fn finish(self: *Builder) patches.Error!patches.Triangulated {
 }
 
 pub fn identifyEdges(self: *Builder) !void {
-    try self.sides.ensureTotalCapacity(self.allocator, self.points.len);
+    const n = self.points.len;
+    try self.sides.ensureTotalCapacity(self.allocator, n);
+    try self.cells.ensureTotalCapacity(self.allocator, n);
+    try self.nodes.ensureTotalCapacity(self.allocator, n * 4);
+    try self.fields.ensureTotalCapacity(self.allocator, n * 4);
+    try self.triangles.ensureTotalCapacity(self.allocator, n * 2);
     for (self.points) |*patch| {
         var result: [4]Side = undefined;
         for (side_controls, &result) |indices, *side| {
@@ -73,6 +109,8 @@ pub fn identifyEdges(self: *Builder) !void {
         }
         self.sides.appendAssumeCapacity(result);
     }
+    try self.edge_marks.resize(self.allocator, self.edge_count);
+    @memset(self.edge_marks.items, 0);
 }
 
 pub fn split(self: *Builder, patch: u32) !void {
@@ -154,20 +192,30 @@ fn cellError(self: *const Builder, cell: Cell) f64 {
 }
 
 pub fn emit(self: *Builder, cell: Cell) !void {
+    // Fast path when no patch split at all: zero interior or side marks exist.
+    if (self.cells.items.len == self.points.len) {
+        if (self.triangles.items.len + 4 > self.options.max_triangles) return error.GeometryWorkLimit;
+        var quad: [4]u32 = undefined;
+        for (corners(cell), &quad) |c, *out| out.* = try self.node(cell.patch, c[0], c[1]);
+        try self.triangles.appendSlice(self.allocator, &.{ .{ quad[0], quad[1], quad[2] }, .{ quad[0], quad[2], quad[3] } });
+        return;
+    }
     const ring = &self.ring;
     ring.clearRetainingCapacity();
+    const x0 = cell.i;
+    const x1 = cell.i + cell.wide;
+    const y0 = cell.j;
+    const y1 = cell.j + cell.high;
     // Counterclockwise in parameters: each side from its first corner,
     // with the nodes smaller neighbours placed on it.
-    const steps = [4][2]i32{ .{ 1, 0 }, .{ 0, 1 }, .{ -1, 0 }, .{ 0, -1 } };
-    const lengths = [4]u32{ cell.wide, cell.high, cell.wide, cell.high };
-    for (corners(cell), steps, lengths) |corner, direction, length| {
-        try ring.append(self.allocator, try self.node(cell.patch, corner[0], corner[1]));
-        for (1..length) |k| {
-            const i: u32 = @intCast(@as(i64, corner[0]) + direction[0] * @as(i64, @intCast(k)));
-            const j: u32 = @intCast(@as(i64, corner[1]) + direction[1] * @as(i64, @intCast(k)));
-            if (self.isMarked(cell.patch, i, j)) try ring.append(self.allocator, try self.node(cell.patch, i, j));
-        }
-    }
+    try ring.append(self.allocator, try self.node(cell.patch, x0, y0));
+    try self.appendMarks(cell.patch, true, y0, x0, x1, true);
+    try ring.append(self.allocator, try self.node(cell.patch, x1, y0));
+    try self.appendMarks(cell.patch, false, x1, y0, y1, true);
+    try ring.append(self.allocator, try self.node(cell.patch, x1, y1));
+    try self.appendMarks(cell.patch, true, y1, x0, x1, false);
+    try ring.append(self.allocator, try self.node(cell.patch, x0, y1));
+    try self.appendMarks(cell.patch, false, x0, y0, y1, false);
     const count = ring.items.len;
     if (self.triangles.items.len + count > self.options.max_triangles) return error.GeometryWorkLimit;
     if (count == 4) {
@@ -176,6 +224,39 @@ pub fn emit(self: *Builder, cell: Cell) !void {
     }
     const hub = try self.node(cell.patch, cell.i + cell.wide / 2, cell.j + cell.high / 2);
     for (0..count) |k| try self.triangles.append(self.allocator, .{ hub, ring.items[k], ring.items[(k + 1) % count] });
+}
+
+fn appendMarks(self: *Builder, patch: u32, horizontal: bool, fixed: u32, lo: u32, hi: u32, increasing: bool) !void {
+    if (fixed == 0 or fixed == lattice) {
+        const side_index: usize = (if (horizontal) @as(usize, 2) else 0) + @intFromBool(fixed == lattice);
+        const side = self.sides.items[patch][side_index];
+        const mask = self.edge_marks.items[side.edge];
+        if (mask == 0) return;
+        const bits = mask & (if (side.reversed) rangeMask(lattice - hi, lattice - lo) else rangeMask(lo, hi));
+        try self.appendBits(patch, bits, fixed, horizontal, if (side.reversed) !increasing else increasing, side.reversed);
+        return;
+    }
+    const table = if (horizontal) &self.inside_rows else &self.inside_cols;
+    const bits = (table.get(.{ patch, fixed }) orelse return) & rangeMask(lo, hi);
+    try self.appendBits(patch, bits, fixed, horizontal, increasing, false);
+}
+
+fn appendBits(self: *Builder, patch: u32, initial: u128, fixed: u32, horizontal: bool, ascending: bool, reversed: bool) !void {
+    var bits = initial;
+    while (bits != 0) {
+        const bit: u32 = if (ascending) @ctz(bits) else 127 - @clz(bits);
+        bits &= ~(@as(u128, 1) << @intCast(bit));
+        const coord = if (reversed) lattice - bit else bit;
+        try self.ring.append(self.allocator, try self.node(patch, if (horizontal) coord else fixed, if (horizontal) fixed else coord));
+    }
+}
+
+/// Bitmask for open lattice interval `(lo, hi)`, where `0 <= lo < hi <= lattice`.
+fn rangeMask(lo: u32, hi: u32) u128 {
+    if (lo + 1 >= hi) return 0;
+    const high_mask: u128 = if (hi == lattice) std.math.maxInt(u128) else (@as(u128, 1) << @intCast(hi)) - 1;
+    const low_mask: u128 = (@as(u128, 1) << @intCast(lo + 1)) - 1;
+    return high_mask & ~low_mask;
 }
 
 fn node(self: *Builder, patch: u32, i: u32, j: u32) !u32 {
@@ -200,9 +281,15 @@ fn node(self: *Builder, patch: u32, i: u32, j: u32) !u32 {
             const id: u32 = @intCast(self.nodes.items.len);
             result.value_ptr.* = id;
             errdefer _ = self.inside.remove(key);
+            const col = try self.inside_cols.getOrPut(self.allocator, .{ patch, i });
+            if (!col.found_existing) col.value_ptr.* = 0;
+            const row = try self.inside_rows.getOrPut(self.allocator, .{ patch, j });
+            if (!row.found_existing) row.value_ptr.* = 0;
             try self.nodes.append(self.allocator, sample.point);
             errdefer _ = self.nodes.pop();
             try self.fields.append(self.allocator, sample.value);
+            col.value_ptr.* |= @as(u128, 1) << @intCast(j);
+            row.value_ptr.* |= @as(u128, 1) << @intCast(i);
             return id;
         },
         .along => |geo_key| {
@@ -223,17 +310,10 @@ fn node(self: *Builder, patch: u32, i: u32, j: u32) !u32 {
             try self.nodes.append(self.allocator, canonical_point);
             errdefer _ = self.nodes.pop();
             try self.fields.append(self.allocator, sample.value);
+            if (new_ep) self.edge_marks.items[@intCast(geo_key >> 32)] |= @as(u128, 1) << @intCast(geo_key & 0x7f);
             return id;
         },
     }
-}
-
-fn isMarked(self: *const Builder, patch: u32, i: u32, j: u32) bool {
-    return switch (self.place(patch, i, j)) {
-        .corner => |key| self.corner.contains(key),
-        .along => |geo_key| self.edge_points.contains(geo_key),
-        .inside => |key| self.inside.contains(key),
-    };
 }
 
 const Place = union(enum) { corner: [3]u64, along: u64, inside: u64 };
