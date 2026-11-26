@@ -199,6 +199,15 @@ export fn shaded(faces:list, inks:list, behind:any = false, paper:color = rgb(1,
     return composed(behind, solids(faces, inks, "light"), paper, translucent)
 end
 
+fn uniform_alpha(colors:list) -> float
+    if len(colors) == 0 then return -1.0 end
+    alpha:float := colors[0].a
+    for c in colors do
+        if c.a != alpha then return -1.0 end
+    end
+    return alpha
+end
+
 // Colors faces by the field projected with `field` (see `project`): its
 // value through `colors` at `levels`, as `gradient.patches` maps them. With
 // `light`, the projection's smooth light shades the colors as `shaded`
@@ -206,6 +215,25 @@ end
 // `translucent` work as in `toned`.
 export fn colored(faces:list, colors:list, levels:list, light:bool = false, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
     drawn := picture()
+    alpha := uniform_alpha(colors)
+    if alpha >= 0 then
+        opaque := []
+        for c in colors do opaque += [rgb(c.r, c.g, c.b)] end
+        for face in faces do
+            assert(face.field != false and len(face.field.values) > 0, "colored needs a projection with a field")
+            field:SmoothField := face.field
+            if light then
+                piece := picture()
+                append(piece, fill(face.region, gradient.patches(field.points, field.values, opaque, levels, field.tolerance, field.margin)))
+                append(piece, light_over(face))
+                append(drawn, flatten_transparency(piece, paper))
+            else
+                append(drawn, fill(face.region, gradient.patches(field.points, field.values, opaque, levels, field.tolerance, field.margin)))
+            end
+        end
+        if alpha < 1 and len(drawn.children) > 0 then opacity(drawn, alpha) end
+        return composed(behind, [drawn], paper, translucent)
+    end
     for face in faces do
         assert(face.field != false and len(face.field.values) > 0, "colored needs a projection with a field")
         field:SmoothField := face.field

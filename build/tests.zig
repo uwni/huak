@@ -142,6 +142,27 @@ pub fn addSpaceTests(b: *std.Build, config: Configuration, libraries: Libraries,
         projection.has_side_effects = true;
         space.dependOn(&projection.step);
     }
+    const painter_check = b.addRunArtifact(b.addExecutable(.{ .name = "space-painter-pdf", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/space_shading/painter_pdf.zig", &.{}) }));
+    for ([_]struct { name: []const u8, colored: []const u8, translucent: []const u8 }{
+        .{ .name = "painter-shaded-flat.pdf", .colored = "false", .translucent = "false" },
+        .{ .name = "painter-shaded-trans.pdf", .colored = "false", .translucent = "true" },
+        .{ .name = "painter-colored-flat.pdf", .colored = "true", .translucent = "false" },
+        .{ .name = "painter-colored-trans.pdf", .colored = "true", .translucent = "true" },
+    }) |case| {
+        const run = std.Build.Step.Run.create(b, b.fmt("run {s}", .{cli.name}));
+        run.addFileArg2(huak, .{});
+        run.addArg("run");
+        run.addFileArg(b.path("tests/space_shading/painter.huak"));
+        run.addArgs(&.{ "--param", b.fmt("colored={s}", .{case.colored}), "--param", b.fmt("translucent={s}", .{case.translucent}) });
+        run.addArg("--libtypst");
+        run.addFileArg(config.typst.library);
+        config.typst.loadIn(run);
+        run.addArg("--output");
+        const pdf = run.addOutputFileArg2(case.name, .{});
+        run.has_side_effects = true;
+        painter_check.addFileArg2(pdf, .{});
+    }
+    space.dependOn(&painter_check.step);
 }
 
 fn fixture(b: *std.Build, config: Configuration, name: []const u8, incompatible: bool) *std.Build.Step.Compile {

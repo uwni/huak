@@ -363,7 +363,7 @@ pub const Shading = struct {
     /// each region the cells of both that nothing of the face lies in front
     /// of: where a sheet folds away at its outline, the side beyond is
     /// behind the side before.
-    pub fn fields(self: *Shading, out: *Output, whole: Face, sides: Sides, regions: []const g.BBox, result: []Field) Error!void {
+    pub fn fields(self: *Shading, out: *Output, whole: Face, sides: Sides, regions: []const g.BBox, single_layer: bool, result: []Field) Error!void {
         std.debug.assert(regions.len == result.len);
         @memset(result, .none);
         if (regions.len == 0) return;
@@ -397,15 +397,7 @@ pub const Shading = struct {
             sheet.* = try .init(self, scratch, if (both) .{ .source = face.source, .index = face.index, .back = k == 1 } else face, info);
             try sheet.build();
         }
-        // A face that can cover itself, or shows both its sides, keeps the
-        // cells of each sheet that nothing of it lies in front of, judged at
-        // their centers.
-        const covers = both or switch (info.kind) {
-            .planar, .cylindrical, .conical, .spherical => false,
-            else => true,
-        };
-        if (covers) for (sheets[0..count]) |*sheet| try sheet.cull();
-        try regionFields(self, sheets[0..count], scratch, out, regions, result, covers);
+        try regionFields(self, sheets[0..count], scratch, out, regions, result, single_layer and !both);
     }
 };
 
@@ -415,4 +407,6 @@ pub const Sides = struct { front: bool = false, back: bool = false };
 
 test {
     _ = @import("shading/patches.zig");
+    _ = @import("shading/grid.zig");
+    _ = @import("shading/depth_order.zig");
 }

@@ -155,7 +155,7 @@ pub fn composite(self: anytype, value: *const Expr, paints: Varying, where: Wher
         // One field keeps its own, with stops recolored.
         .patches => |patches| if (ids.len == 1) one: {
             var colorings = [_]color_patches.Coloring{.{ .field = .{ .values = patches.values, .stops = patches.stops } }};
-            const nets = try showingPatches(self, patches.points, &colorings, where, true) orelse return null;
+            const nets = try showingPatches(self, patches.points, &colorings, where, !isOpaque(self, ids[0])) orelse return null;
             break :one .{ .patches = .{
                 .points = nets,
                 .values = colorings[0].field.values,
@@ -311,7 +311,12 @@ fn compositeMesh(self: anytype, value: *const Expr, ids: []const u32, where: Whe
             return composed(context.flattener, T, context.value, context.ids, colors);
         }
     };
-    const shown = try showingPatches(self, nets, colorings[0..ids.len], where, !lowered) orelse return null;
+    var has_opaque = false;
+    for (ids) |id| if (isOpaque(self, id)) {
+        has_opaque = true;
+        break;
+    };
+    const shown = try showingPatches(self, nets, colorings[0..ids.len], where, !lowered and !has_opaque) orelse return null;
     const owned = try color_patches.compose(self.arena, shown, colorings[0..ids.len], Combine{ .flattener = self, .value = value, .ids = ids }, Color.tolerance, outline.max_items);
     return .{ .color_patches = owned.view() };
 }

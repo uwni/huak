@@ -94,3 +94,86 @@ test "a layer is one group with an opacity in SVG and one transparency group in 
     defer output.deinit();
     try t.expect(std.mem.indexOf(u8, output.bytes(), "{opacity:0.5}") != null);
 }
+
+test "opaque patches with translucent overlay fold into one opaque type 7 PDF mesh with no SMask" {
+    const core = @import("huak").core;
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var boundary = try demo.rectangle(t.allocator, .zero, 60, 60);
+    defer boundary.deinit();
+    // Far red patch covers the whole square; near blue patch covers the right
+    // half where the translucent white overlay has alpha = 0 and must not drop
+    // the near patch.
+    var far_net: [16]core.geometry.Point = undefined;
+    var near_net: [16]core.geometry.Point = undefined;
+    for (0..4) |i| for (0..4) |j| {
+        const u = @as(f64, @floatFromInt(i)) / 3.0;
+        const v = @as(f64, @floatFromInt(j)) / 3.0;
+        far_net[i * 4 + j] = .{ .x = 60.0 * u, .y = 60.0 * v };
+        near_net[i * 4 + j] = .{ .x = 30.0 + 30.0 * u, .y = 60.0 * v };
+    };
+    const nets = [_][16]core.geometry.Point{ far_net, near_net };
+    const base_values = [_][16]f64{ @splat(0.0), @splat(1.0) };
+    const overlay_values = [_][16]f64{ @splat(1.0), @splat(0.0) };
+
+    var piece = DisplayList.init(t.allocator);
+    defer piece.deinit();
+    try piece.addPath(boundary, .{ .fill = .{ .gradient = &.{ .patches = .{
+        .points = &nets,
+        .values = &base_values,
+        .stops = .{ .levels = &.{ 0, 1 }, .colors = &.{ .{ .r = 1 }, .{ .b = 1 } } },
+        .tolerance = 1.0 / 256.0,
+    } } } }, .{});
+    try piece.addPath(boundary, .{ .fill = .{ .gradient = &.{ .patches = .{
+        .points = &nets,
+        .values = &overlay_values,
+        .stops = .{ .levels = &.{ 0, 1 }, .colors = &.{ .{ .r = 1, .g = 1, .b = 1, .a = 0 }, .{ .r = 1, .g = 1, .b = 1, .a = 0.5 } } },
+        .tolerance = 1.0 / 256.0,
+    } } } }, .{});
+
+    var composed = try core.transparency.flatten(t.allocator, &piece, .{}, null);
+    defer composed.deinit();
+    // Single opaque color_patches fill, no /SMask in flat PDF.
+    var path_count: usize = 0;
+    for (composed.commands.items) |cmd| if (cmd == .path) {
+        path_count += 1;
+        try t.expect(cmd.path.style.fill.?.isOpaque());
+    };
+    try t.expectEqual(@as(usize, 1), path_count);
+
+    {
+        const scene: @import("huak").render.Scene = .{ .picture = &composed, .size = .{ .x = 60, .y = 60 } };
+        var diagnostic: ?typst.Buffer = null;
+        var output = try scene.render(t.allocator, &library, .pdf, &diagnostic);
+        defer output.deinit();
+        try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "/ShadingType 7"));
+        try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), "/SMask"));
+        const image = try @import("../support/pdf.zig").raster(output.bytes(), .{});
+        defer t.allocator.free(image);
+        const header = "P6\n60 60\n255\n";
+        try t.expect(std.mem.startsWith(u8, image, header));
+        const pixels = image[header.len..];
+        // Left half: red with 0.5 white overlay -> (255, 128, 128).
+        // Right half: near blue patch must overwrite far red patch -> (0, 0, 255).
+        const left_px = pixels[3 * (30 * 60 + 15) ..][0..3];
+        for (left_px, [3]f64{ 255, 127.5, 127.5 }) |ch, want| try t.expect(@abs(@as(f64, @floatFromInt(ch)) - want) <= 3);
+        const right_px = pixels[3 * (30 * 60 + 45) ..][0..3];
+        for (right_px, [3]f64{ 0, 0, 255 }) |ch, want| try t.expect(@abs(@as(f64, @floatFromInt(ch)) - want) <= 3);
+    }
+
+    // Group opacity 0.6 wrapping the single opaque mesh: still 1 Type 7 mesh, 0 /SMask, /ca 0.6.
+    var grouped = DisplayList.init(t.allocator);
+    defer grouped.deinit();
+    try grouped.beginLayer(.{}, null, 0.6);
+    try grouped.append(&composed, .{});
+    try grouped.endScope();
+    {
+        const scene: @import("huak").render.Scene = .{ .picture = &grouped, .size = .{ .x = 60, .y = 60 } };
+        var diagnostic: ?typst.Buffer = null;
+        var output = try scene.render(t.allocator, &library, .pdf, &diagnostic);
+        defer output.deinit();
+        try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "/ShadingType 7"));
+        try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), "/SMask"));
+        try t.expect(std.mem.indexOf(u8, output.bytes(), "/ca 0.6") != null);
+    }
+}

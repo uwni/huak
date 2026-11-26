@@ -5,7 +5,6 @@ const space_shading = @import("../shading.zig");
 const Sheet = @import("Sheet.zig");
 const Error = space_shading.Error;
 const Look = space_shading.Look;
-const dot = space_shading.dot;
 const Corner = Sheet.Corner;
 const Piece = Sheet.Piece;
 
@@ -20,10 +19,9 @@ pub fn request(self: *Sheet, uv: g.Point, place: u8) !u32 {
     return id;
 }
 
-/// Evaluates the requested nodes, with the script's field. Where the normal
-/// is undefined, such as at a cone's apex, the facing that decides which
-/// side of the contour a node lies on is the mean over points a little way
-/// into the face in each parameter direction.
+/// Evaluates the requested nodes, with the script's field. OCCT's
+/// `CSLib::Normal` resolves singular poles and cone apices directly; if a
+/// normal is still undefined, returns `UndefinedNormal`.
 pub fn flush(self: *Sheet) Error!void {
     const a = self.allocator;
     const fresh = self.nodes.items[self.pending..];
@@ -33,37 +31,9 @@ pub fn flush(self: *Sheet) Error!void {
     for (uv, fresh) |*position, n| position.* = n.uv;
     const points = try a.alloc(Look, fresh.len);
     try self.shading.surfaces.look(a, self.face, uv, points);
-    var probes: std.ArrayList(g.Point) = .empty;
-    var owners: std.ArrayList(usize) = .empty;
-    const du = (self.u[1] - self.u[0]) / @as(f64, @floatFromInt(self.nu)) * 1e-3;
-    const dv = (self.v[1] - self.v[0]) / @as(f64, @floatFromInt(self.nv)) * 1e-3;
-    for (fresh, points, 0..) |*n, point, index| {
+    for (fresh, points) |*n, point| {
         n.* = self.shading.node(n.uv, point, n.place);
-        if (!n.singular) continue;
-        const before = probes.items.len;
-        for ([_]g.Point{ .{ .x = du, .y = 0 }, .{ .x = -du, .y = 0 }, .{ .x = 0, .y = dv }, .{ .x = 0, .y = -dv } }) |step| {
-            const probe = n.uv.add(step);
-            if ((self.period[0] == 0 and (probe.x < self.u[0] or probe.x > self.u[1])) or
-                (self.period[1] == 0 and (probe.y < self.v[0] or probe.y > self.v[1]))) continue;
-            try probes.append(a, probe);
-            try owners.append(a, index);
-        }
-        if (probes.items.len == before) return error.UndefinedNormal;
-    }
-    const nearby = try a.alloc(Look, probes.items.len);
-    try self.shading.surfaces.look(a, self.face, probes.items, nearby);
-    var k: usize = 0;
-    while (k < owners.items.len) {
-        const owner = owners.items[k];
-        var facing: f64 = 0;
-        var count: f64 = 0;
-        while (k < owners.items.len and owners.items[k] == owner) : (k += 1) {
-            const normal = nearby[k].normal orelse continue;
-            facing += dot(normal, self.shading.eye);
-            count += 1;
-        }
-        if (count == 0) return error.UndefinedNormal;
-        fresh[owner].facing = facing / count;
+        if (n.singular) return error.UndefinedNormal;
     }
     try self.shading.sample(a, fresh);
 }
@@ -90,8 +60,8 @@ pub fn at(self: *Sheet, i: i64, j: i64) !Corner {
         if (self.period[0] == 0) place |= @as(u8, if (wi == 0) 2 else 0) | @as(u8, if (wi == self.nu) 4 else 0);
         if (self.period[1] == 0) place |= @as(u8, if (wj == 0) 8 else 0) | @as(u8, if (wj == self.nv) 16 else 0);
         entry.value_ptr.* = try request(self, .{
-            .x = self.u[0] + (self.u[1] - self.u[0]) * @as(f64, @floatFromInt(wi)) / @as(f64, @floatFromInt(self.nu)),
-            .y = self.v[0] + (self.v[1] - self.v[0]) * @as(f64, @floatFromInt(wj)) / @as(f64, @floatFromInt(self.nv)),
+            .x = self.parameter(0, wi),
+            .y = self.parameter(1, wj),
         }, place);
     }
     return .{ .node = entry.value_ptr.*, .i = i, .j = j, .lattice = true };

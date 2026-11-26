@@ -24,6 +24,7 @@ pub const Face = struct {
     source: usize,
     face: usize,
     sides: shading.Sides,
+    single_layer: bool = false,
     start: usize,
     count: usize,
     covering: usize,
@@ -128,7 +129,7 @@ pub fn smoothFields(work: *const Linework, lighting: *shading.Shading, out: *sha
             const bounds = try lighting.allocator.alloc(g.BBox, end - start);
             defer lighting.allocator.free(bounds);
             for (work.bounds.items[start..end], bounds) |found, *box| box.* = found orelse .{ .min = .{ .x = inf, .y = inf }, .max = .{ .x = -inf, .y = -inf } };
-            try lighting.fields(out, .{ .source = first.source, .index = first.face }, first.sides, bounds, fields[start..end]);
+            try lighting.fields(out, .{ .source = first.source, .index = first.face }, first.sides, bounds, first.single_layer, fields[start..end]);
         }
         start = end;
     }

@@ -1,7 +1,7 @@
 // A face in its light: the palette over n·l, gradient stops, and the highlight.
 import geometry.circle
 import transform.matrix
-import object.{fill, append}
+import object.{fill, append, flatten_transparency}
 import paint.clipped
 import color.rgb
 import assertions.assert
@@ -136,6 +136,12 @@ fn smooth_light(face:VisibleFace, ink:color) -> picture
     assert(len(field.diffuse) > 0, "shaded needs a projection with a directional light")
     colors := shade_stops(ink)
     if field.kind == "patches" then
+        if len(field.glint) > 0 and ink.a == 1 then
+            piece := picture()
+            append(piece, fill(face.region, gradient.patches(field.points, field.diffuse, colors, SHADE_LEVELS, field.accuracy, field.margin)))
+            append(piece, fill(face.region, gradient.patches(field.points, field.glint, GLOW_STOPS[0], GLOW_STOPS[1], field.accuracy, field.margin)))
+            return flatten_transparency(piece)
+        end
         append(result, fill(face.region, gradient.patches(field.points, field.diffuse, colors, SHADE_LEVELS, field.accuracy, field.margin)))
         if len(field.glint) > 0 then
             append(result, fill(face.region, gradient.patches(field.points, field.glint, GLOW_STOPS[0], GLOW_STOPS[1], field.accuracy, field.margin)))

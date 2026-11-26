@@ -137,13 +137,32 @@ pub fn fillParts(self: *Work, drawn: Drawn) Model.Error!void {
     const parts = try self.view.regionsOf(found.sets.offsets.items, found.sets.arcs.items, self.tolerance, false);
     const out = self.out;
     for (found.keys, 0..) |key, set| {
+        const sides = found.shown.of(key);
+        const single = if (key.covering == 0) isSingleLayer(drawn, key, sides) else false;
         for (parts.sets[set]..parts.sets[set + 1]) |region| {
             const start = out.commands.items.len;
             try out.commands.appendSlice(self.allocator, parts.outlines.row(region));
-            try out.faces.append(self.allocator, .{ .source = key.source, .face = key.face, .sides = found.shown.of(key), .start = start, .count = out.commands.items.len - start, .covering = key.covering, .spot_start = start, .spot_count = 0, .lobe_start = 0, .lobe_count = 0, .shade_start = out.shades.items.len, .shade_count = 0 });
+            try out.faces.append(self.allocator, .{ .source = key.source, .face = key.face, .sides = sides, .single_layer = single, .start = start, .count = out.commands.items.len - start, .covering = key.covering, .spot_start = start, .spot_count = 0, .lobe_start = 0, .lobe_count = 0, .shade_start = out.shades.items.len, .shade_count = 0 });
             try out.bounds.append(self.allocator, parts.bound(region));
         }
     }
+}
+
+/// Whether `key`'s face shows only one side and never has two layers of
+/// that side stacked over any cell of the arrangement.
+fn isSingleLayer(drawn: Drawn, key: regions.Key, sides: @import("../shading.zig").Sides) bool {
+    if (sides.front and sides.back) return false;
+    const cell_count = if (drawn.cells.layers.offsets.len > 0) drawn.cells.layers.offsets.len - 1 else 0;
+    for (0..cell_count) |ci| {
+        var count: usize = 0;
+        for (drawn.cells.layers.row(ci)) |layer| {
+            if (layer.source != key.source or layer.face != key.face) continue;
+            const shown = if (layer.facing < 0) sides.back else sides.front;
+            if (shown) count += 1;
+            if (count > 1) return false;
+        }
+    }
+    return true;
 }
 
 /// A curve whose image divides the plane: an edge of a shape, a face's

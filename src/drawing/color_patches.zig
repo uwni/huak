@@ -232,10 +232,15 @@ pub fn compose(allocator: std.mem.Allocator, nets: []const [16]g.Point, coloring
     return builder.finish();
 }
 
+fn bilinearChannel(corners: [4]f64) Enclosure {
+    if (corners[0] == corners[1] and corners[0] == corners[2] and corners[0] == corners[3]) return Enclosure.constant(corners[0]);
+    return Enclosure.bilinear(corners);
+}
+
 fn bilinearEnclosure(corners: [4]Color) Rgba(Enclosure) {
     var result: Rgba(Enclosure) = undefined;
     inline for (.{ "r", "g", "b", "a" }) |channel| {
-        @field(result, channel) = .bilinear(.{ @field(corners[0], channel), @field(corners[1], channel), @field(corners[2], channel), @field(corners[3], channel) });
+        @field(result, channel) = bilinearChannel(.{ @field(corners[0], channel), @field(corners[1], channel), @field(corners[2], channel), @field(corners[3], channel) });
     }
     return result;
 }
@@ -262,7 +267,8 @@ fn enclose(stops: Gradient.Stops, values: [4]f64, index: usize) Rgba(Enclosure) 
             below = @min(below, off);
             above = @max(above, off);
         }
-        @field(result, channel) = Enclosure.bilinear(corners).uncertain(4 * index + offset, below, above);
+        const base = bilinearChannel(corners);
+        @field(result, channel) = if (below != 0 or above != 0) base.uncertain(4 * index + offset, below, above) else base;
     }
     return result;
 }

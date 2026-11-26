@@ -1,0 +1,24 @@
+import space as s
+import paint.*
+
+param colored:bool = false
+param translucent:bool = false
+
+fn height(p:vec3, n:vec3) -> float
+    return p.z/1pt
+end
+
+body := s.torus(21pt, 8pt)
+view := s.orthographic(-70deg, 28deg)
+sun := (-1, -2, 3)
+
+result := picture()
+if colored then
+    proj := s.project([body], view, light: sun, spot: 24deg, smooth: true, field: height, field_tolerance: 0.5)
+    ramp := [rgb(0.20, 0.45, 0.75, 0.6), rgb(0.92, 0.40, 0.19, 0.6)]
+    result = s.colored(proj.visible_faces, ramp, [-8, 8], light: true, translucent: translucent)
+else
+    proj := s.project([body], view, light: sun, spot: 24deg, smooth: true)
+    result = s.shaded(proj.visible_faces, [rgb(0.25, 0.55, 0.78, 0.6)], translucent: translucent)
+end
+default result

@@ -27,7 +27,15 @@ pub fn level(self: anytype, items: []const Item, units: *std.ArrayList(Unit), no
         .leaf => |id| {
             const leaf = self.leaves.items[id];
             if (leaf.component == .text and backdrop == .empty) return error.TranslucentText;
-            try units.append(self.arena, newUnit(self, .{ .serial = 0, .geometry = id, .clips = &.{}, .expr = try compositing.expr(self, .{ .leaf = id }), .opaque_ = compositing.isOpaque(self, id), .under = units.items.len, .bounds = leaf.bounds }));
+            const unit_opaque = compositing.isOpaque(self, id);
+            if (!unit_opaque and units.items.len > first) {
+                const prev = &units.items[units.items.len - 1];
+                if (prev.opaque_ and try foldsIntoOpaquePatches(self, prev.*, id)) {
+                    prev.expr = try compositing.expr(self, .{ .over = .{ .top = try compositing.expr(self, .{ .leaf = id }), .bottom = prev.expr } });
+                    continue;
+                }
+            }
+            try units.append(self.arena, newUnit(self, .{ .serial = 0, .geometry = id, .clips = &.{}, .expr = try compositing.expr(self, .{ .leaf = id }), .opaque_ = unit_opaque, .under = units.items.len, .bounds = leaf.bounds }));
         },
         .layer => |layer| {
             var inner_units: std.ArrayList(Unit) = .empty;
@@ -242,20 +250,42 @@ fn below(self: anytype, owner: Unit, under: []const Unit, region: *const Path) !
     return result;
 }
 
-/// Whether an opaque unit paints all that a translucent one can: a
-/// fill on the same curves in the same place, with a paint that
-/// fills them, or on the same patches or rays as each paint of the
-/// translucent one that varies.
-fn covers(self: anytype, opaque_unit: Unit, unit: Unit) !bool {
-    if (opaque_unit.clips.len != 0 or unit.clips.len != 0) return false;
-    const a = self.leaves.items[opaque_unit.geometry];
-    const b = self.leaves.items[unit.geometry];
+/// Whether two fill leaves share the same clip, transform, fill rule and curves.
+fn sameFillCurves(self: anytype, first_id: u32, second_id: u32) !bool {
+    const a = self.leaves.items[first_id];
+    const b = self.leaves.items[second_id];
     if (a.component != .fill or b.component != .fill or a.clip != b.clip or !std.meta.eql(a.transform, b.transform)) return false;
     if (a.draw().style.fill_rule != b.draw().style.fill_rule) return false;
     const curves = try a.picture.range(a.draw().path);
     const others = try b.picture.range(b.draw().path);
     if (curves.len != others.len) return false;
     for (curves, others) |x, y| if (!std.meta.eql(x, y)) return false;
+    return true;
+}
+
+/// Whether translucent patch fill `id` lies on the exact same curves and
+/// patch nets as the immediately preceding opaque patch unit `prev`, so
+/// folding it into `prev.expr` composites every patch once in order without
+/// emitting a separate translucent overlay mesh.
+fn foldsIntoOpaquePatches(self: anytype, prev: Unit, id: u32) !bool {
+    if (prev.clips.len != 0) return false;
+    if (!try sameFillCurves(self, prev.geometry, id)) return false;
+    const a = compositing.paintOf(self, prev.geometry);
+    const b = compositing.paintOf(self, id);
+    if (a != .gradient or b != .gradient) return false;
+    if (transparency.netsOf(a.gradient) == null or transparency.netsOf(b.gradient) == null) return false;
+    if (!compositing.shares(self, prev.geometry, id)) return false;
+    const paints = try compositing.varying(self, prev.expr);
+    return paints.occurrences + 1 <= transparency.max_varying;
+}
+
+/// Whether an opaque unit paints all that a translucent one can: a
+/// fill on the same curves in the same place, with a paint that
+/// fills them, or on the same patches or rays as each paint of the
+/// translucent one that varies.
+fn covers(self: anytype, opaque_unit: Unit, unit: Unit) !bool {
+    if (opaque_unit.clips.len != 0 or unit.clips.len != 0) return false;
+    if (!try sameFillCurves(self, opaque_unit.geometry, unit.geometry)) return false;
     switch (compositing.paintOf(self, opaque_unit.geometry)) {
         .color => return true,
         .gradient => |gradient| if (!gradient.isMesh()) return true,

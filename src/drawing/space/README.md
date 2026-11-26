@@ -71,9 +71,9 @@ clips it to the visible highlight boundary. See the [highlight example](../../..
 
 With `smooth:true` the light is continuous instead of banded, and each front
 region becomes its own face carrying a field of n·l and of the gleam
-(`shading.zig`). Huak computes the fields; OCCT evaluates the surfaces, their
-normals and normal derivatives, finds where the contour crosses each cell side
-and where lines of sight meet a face, all in batches. A plane's field is constant; a cylinder seen across its axis
+(`shading.zig`). Huak computes the fields; OCCT evaluates surfaces, their
+normals (with `CSLib::Normal` at singularities) and normal derivatives, and
+finds where the contour crosses each cell side, all in batches. A plane's field is constant; a cylinder seen across its axis
 varies along one direction, as a profile of samples. A cone's rulings meet
 at its apex, which OCCT names, and each carries constant light, so its field
 is a fan around the apex's projection: constant along each ray, and between
@@ -82,25 +82,26 @@ rulings halve until a closed bound keeps the fan within `e / 8` of the light;
 outputs draw it within the rest, as one patch per pair of rulings in a PDF
 patch mesh and as triangles from the apex in SVG (`src/drawing/conic.zig`).
 A cone seen along one of its rulings has no fan. It and other faces get
-tensor-product Bézier patches over a grid of their parameters, each
-interpolating the projected surface and the light at sixteen samples. Cells
-turn the normal by at most `sqrt(4e)` for an accuracy `e` of 1/256, so that
-bilinear interpolation of each patch's corner values, which a PDF patch mesh
-paints, stays within `e`; where the gleam can be positive, finer patches carry
-it, and elsewhere it is 0. Both lights thus lie on the same patches, as a
-cone's lie on the same rays, so flattening the gleam over n·l combines them
-patch by patch. Cells crossing the contour keep their front part, cut where n·v
-vanishes, and skirts carry the light of contour and face-boundary sides past
-the outline's tolerance. SVG output subdivides the patches into triangles
-(`src/drawing/patches.zig`).
+tensor-product Bézier patches over a curvature-graded grid (`shading/grid.zig`)
+stepping symmetrically from both ends to the midpoint so every cell `[a, b]`
+keeps `(b - a) max r <= sqrt(4e)` (`e = 1/256`) and stays invariant under
+parameter reversal. Each patch interpolates screen coordinates, camera depth
+and light at sixteen samples; finer patches carry the gleam where it can be
+positive, and 0 elsewhere. Because base color and lighting share the same
+patches, `s.shaded` and `s.colored(light: true)` flatten them into one opaque
+RGB `color_patches` mesh per face (`ShadingType 7`, no `/SMask`) before group
+opacity (`object.opacity`) or scene flattening. Cells crossing the contour keep
+their front part cut along `n·v = 0` with contour thirds projected onto
+`n·v = 0`; skirts extend contour and boundary sides past the outline tolerance.
+SVG subdivides patches into triangles (`src/drawing/patches.zig`).
 
-An open sheet may show its back, the side its normal points away from;
-which side a line of sight meets is the arrangement's to tell. A face that
-shows one side is shaded with that side's normal. A face that shows both
-gets a sheet of cells for each side, and each region takes the cells of
-both that nothing of the face lies in front of, judged at their centers as
-for a face that covers itself: where a sheet folds away at its outline, the
-side beyond lies behind the side before.
+An open sheet may show its back, the side its normal points away from; which
+side a line of sight meets is the arrangement's to tell. A single-sided face
+with at most one layer over any arrangement cell emits its patches directly.
+Self-occluding or two-sided faces sort skirts beneath real patches and order
+all patches far-to-near in camera `(x, y, z)` via Newell, Newell & Sancha
+(1972) (`shading/depth_patch.zig`, `shading/depth_order.zig`), halving
+straddling pairs or cycles via de Casteljau subdivision.
 
 The script may give a field of its own, `f(point, normal)`, with the point
 in world coordinates and the normal of the side that shows. The engine
@@ -139,8 +140,8 @@ and the output holds nothing translucent. With `translucent: true` the layers
 stay: SVG gives each group an `opacity`, and PDF makes each one a
 transparency group (see `src/render/pdf/README.md`). Over white paper the two
 look the same. See the [textbook example](../../../examples/space/textbook.huak).
-`s.shaded` builds its solids the same way, with the gleam as translucent white
-over opaque shading.
+`s.shaded` and `s.colored` compose each face's lighting into one opaque mesh
+inside its opacity layer.
 
 Contours, the outlines where lines of sight graze a face, its isophotes and
 the boundaries of its highlights, are marched on a grid of the face's
@@ -179,7 +180,7 @@ turn silhouettes into interior cut edges.
 
 A view asks where its lines of sight meet the faces through one index of
 their images (`sights.cpp`), built on its first such question: the middles
-of arcs, the points of cells and the light's culling all ask it. A plane,
+of arcs and the points of cells ask it. A plane,
 quadric or torus face is asked of OCCT's line and face intersector only
 where its box holds the point. Any other face keeps a grid of its
 parameters (`sights_grid.cpp`), halved where its cells bend, each cell's
