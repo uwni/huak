@@ -91,7 +91,7 @@ std::vector<HuakLayer> layersAt(HuakView *view, const gp_Pnt2d &at) {
   for (const auto &sight : met) {
     const TopoDS_Face &face = faceOf(&view->model, sight.source, sight.face);
     gp_Dir normal;
-    if (!normalOf(BRep_Tool::Surface(face), face.Orientation() == TopAbs_REVERSED, gp_Pnt2d(sight.u, sight.v), normal))
+    if (!normalOf(BRep_Tool::Surface(face), face, gp_Pnt2d(sight.u, sight.v), normal))
       throw std::runtime_error("undefined surface normal inside a cell");
     layers.push_back({sight.source, sight.face, gp_Vec(normal).Dot(view->toward(sight.point)) > 0 ? 1 : -1,
                       view->depth(sight.point), sight.u, sight.v});

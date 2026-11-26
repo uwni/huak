@@ -238,7 +238,7 @@ zig build test-space -Docct="$OCCT_PREFIX"
 
 CMake can also discover a system SDK when the prefix is omitted. The native
 C++ toolchain uses the SDK's imported libraries. The versioned C entry point
-`huak_space_api_v6` returns the function table. The adapter only runs OCCT:
+`huak_space_api_v7` returns the function table. The adapter only runs OCCT:
 it builds a model and opens views of it, and each query is one OCCT operation
 over a batch, such as hidden-line removal of a shape, the image of curves,
 their crossings, where lines of sight meet the shapes, the partition of the

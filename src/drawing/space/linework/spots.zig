@@ -21,7 +21,7 @@ pub fn fitSpots(self: *Bands, work: *Work, lit: *const Bounding([2]usize)) Model
         try owners.append(s, paint);
     };
     if (owners.items.len == 0) return;
-    const found = try work.view.regionsOf(sets.offsets.items, sets.arcs.items, work.tolerance);
+    const found = try work.view.regionsOf(sets.offsets.items, sets.arcs.items, work.tolerance, true);
     for (owners.items, 0..) |paint, set| {
         paint.start = work.out.lobes.items.len;
         for (found.moments[found.sets[set]..found.sets[set + 1]]) |m| {

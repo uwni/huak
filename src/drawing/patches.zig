@@ -9,10 +9,11 @@
 //! changes like the square root of the distance across it, and the cells
 //! there become strips along the contour.
 //!
-//! Patches with a common edge (the same control points and field
-//! coefficients along it, in either direction) share every node on it, and a
-//! cell with smaller neighbours is fanned from its center through the nodes
-//! on its sides, so the triangles meet without gaps.
+//! Patches with a common non-degenerate edge (the same control points along
+//! it, in either direction) share the geometric positions placed along it even
+//! when their field values jump across the edge, and a cell with smaller
+//! neighbours is fanned from its center through the nodes on its sides, so the
+//! triangles meet without gaps while keeping each patch's own field values.
 const std = @import("std");
 const g = @import("geometry.zig");
 const Path = @import("path/Path.zig");

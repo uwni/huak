@@ -9,30 +9,19 @@ Arranging::Run Arranging::runsAlong(size_t k, double t, int way, double room, si
   const double from = nearest(start, other, along.lo, along.hi, &seed).second;
   if (start.Distance(at(other, from)) > allowed)
     return {0.0, from, from, 0.0};
-  // A part of an image as a band about its chord: its ends, how far it
-  // may stand from the chord, and whether every step between its control
-  // points heads within a right angle of the chord, so that it heads so
-  // all along.
+  // A part of an image as a band about its chord: its ends and how far it
+  // may stand from the chord.
   struct Band {
     gp_Pnt2d from, to;
     double off;
-    bool headed;
   };
   const auto bandOf = [&](size_t n, double a, double b) {
     if (a > b)
       std::swap(a, b);
-    Band band{at(n, a), at(n, b), 0, false};
-    const gp_Vec2d chord(band.from, band.to);
-    band.headed = chord.SquareMagnitude() > 0;
+    Band band{at(n, a), at(n, b), 0};
     hullOver(n, a, b, [&](const NCollection_Array1<gp_Pnt2d> &poles) {
-      for (int j = poles.Lower(); j <= poles.Upper(); ++j) {
+      for (int j = poles.Lower(); j <= poles.Upper(); ++j)
         band.off = std::max(band.off, apart(poles(j), band.from, band.to));
-        if (j == poles.Lower())
-          continue;
-        const gp_Vec2d step(poles(j - 1), poles(j));
-        if (step.SquareMagnitude() > 0 && !(step.Dot(chord) > 0))
-          band.headed = false;
-      }
     });
     return band;
   };
@@ -47,7 +36,8 @@ Arranging::Run Arranging::runsAlong(size_t k, double t, int way, double room, si
   // to stand within the tolerance of each other, or proven apart.
   const auto together = [&](double s, double u, double v, double w) {
     const Band mine = bandOf(k, t + way * s, t + way * u), theirs = bandOf(other, v, w);
-    return mine.headed && theirs.headed && std::max(reaches(mine, theirs), reaches(theirs, mine)) <= allowed;
+    return mine.from.SquareDistance(mine.to) > 0 && theirs.from.SquareDistance(theirs.to) > 0 &&
+           std::max(reaches(mine, theirs), reaches(theirs, mine)) <= allowed;
   };
   const auto parted = [&](double s, double u, double v, double w) {
     const Band mine = bandOf(k, t + way * s, t + way * u), theirs = bandOf(other, v, w);

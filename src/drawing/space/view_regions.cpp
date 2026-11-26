@@ -169,7 +169,7 @@ int fill(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, size_
 }
 
 int regions(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, size_t count, double tolerance,
-            HuakRegions *out, char *error, size_t capacity) {
+            int compute_moments, HuakRegions *out, char *error, size_t capacity) {
   return guarded(error, capacity, [&] {
     require(view, "view");
     require(offsets, "offsets");
@@ -179,7 +179,7 @@ int regions(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, si
     auto &starts = view->result(view->indices);
     auto &commands = view->result(view->paths);
     auto &boxes = view->result(view->regionBoxes);
-    auto &measures = view->result(view->regionMoments);
+    std::vector<HuakMoments> *measures = compute_moments ? &view->result(view->regionMoments) : nullptr;
     sets.push_back(0);
     starts.push_back(0);
     const gp_Pln plane(gp::XOY());
@@ -254,21 +254,23 @@ int regions(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, si
         Bnd_Box box;
         BRepBndLib::Add(region, box);
         boxes.push_back(boxOf(box));
-        GProp_GProps props;
-        BRepGProp::SurfaceProperties(region, props, 1e-7);
-        HuakMoments result{};
-        result.area = props.Mass();
-        copy(props.CentreOfMass().XYZ(), result.center);
-        const GProp_PrincipalProps principal = props.PrincipalProperties();
-        principal.Moments(result.moments[0], result.moments[1], result.moments[2]);
-        copy(principal.FirstAxisOfInertia().XYZ(), result.axes[0]);
-        copy(principal.SecondAxisOfInertia().XYZ(), result.axes[1]);
-        copy(principal.ThirdAxisOfInertia().XYZ(), result.axes[2]);
-        measures.push_back(result);
+        if (measures) {
+          GProp_GProps props;
+          BRepGProp::SurfaceProperties(region, props, 1e-7);
+          HuakMoments result{};
+          result.area = props.Mass();
+          copy(props.CentreOfMass().XYZ(), result.center);
+          const GProp_PrincipalProps principal = props.PrincipalProperties();
+          principal.Moments(result.moments[0], result.moments[1], result.moments[2]);
+          copy(principal.FirstAxisOfInertia().XYZ(), result.axes[0]);
+          copy(principal.SecondAxisOfInertia().XYZ(), result.axes[1]);
+          copy(principal.ThirdAxisOfInertia().XYZ(), result.axes[2]);
+          measures->push_back(result);
+        }
       }
       sets.push_back(boxes.size());
     }
-    *out = {sets.data(), starts.data(), commands.data(), boxes.data(), measures.data(), count};
+    *out = {sets.data(), starts.data(), commands.data(), boxes.data(), measures ? measures->data() : nullptr, count};
   });
 }
 } // namespace huak::space::entry

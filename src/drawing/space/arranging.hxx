@@ -281,12 +281,13 @@ private:
   // stand farther apart at the point.
   //
   // A piece of the image and the other's piece between the points nearest
-  // its ends lie within their hulls' `off` of their chords; where each
-  // heads within a right angle of its chord, every point of the chord also
-  // lies within that of the piece. So any point of one piece stands from the
-  // other piece no farther than the farther end of its chord stands from the
-  // other's chord, with both offs; and no nearer than the chords stand
-  // apart, less both offs. The run is proven piece by piece from the point,
+  // its ends lie within their hulls' `off` of their chords; by the
+  // intermediate value theorem along any non-degenerate chord, every point of
+  // the chord is the orthogonal projection of some point of the piece, so it
+  // also lies within `off` of the piece. So any point of one piece stands
+  // from the other piece no farther than the farther end of its chord stands
+  // from the other's chord, with both offs (the Hausdorff bound); and no
+  // nearer than the chords stand apart, less both offs. The run is proven piece by piece from the point,
   // each piece twice as long as the last; a piece not proven is halved, and
   // where the second half of it is proven to stand apart, the run ends
   // before that. Their directions and bending at the point tell about where

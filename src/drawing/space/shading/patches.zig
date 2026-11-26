@@ -11,7 +11,6 @@ const Error = space_shading.Error;
 const Piece = Sheet.Piece;
 const Corner = Sheet.Corner;
 const ordered = lattice_nodes.ordered;
-const Shine = space_shading.Shine;
 
 /// Control indices of each side in increasing parameter, and the piece
 /// corners at its ends: v = 0 (corners 0 -> 1), u = 1 (1 -> 2), v = 1
@@ -140,51 +139,28 @@ pub fn thirdsOf(self: *Sheet, a: Corner, b: Corner) ![2]u32 {
 
 /// Patches over pieces carrying n·l, the script's field, and the glint on
 /// the `fine` pieces of cells the highlight can reach; the glint of other
-/// patches is 0, since they are too coarse for it. The light and field at a
-/// node without a normal come from a point a little way toward the patch's
-/// center. `strays` gets how far each patch strays from the field.
+/// patches is 0, since they are too coarse for it. `strays` gets how far
+/// each patch strays from the field.
 pub fn patches(self: *Sheet, placed: []const Placed, fine: bool, out: []Patch, strays: []f64) Error!void {
     const a = self.allocator;
     const ids = try a.alloc([16]u32, placed.len);
     for (placed, ids) |p, *id| id.* = try self.samples(p.piece);
     try lattice_nodes.flush(self);
-    const lights = try a.alloc([16]Shine, placed.len);
-    const fields = try a.alloc([16]f64, placed.len);
-    var probes: std.ArrayList(g.Point) = .empty;
-    var owners: std.ArrayList(usize) = .empty;
-    for (placed, ids, lights, fields, 0..) |p, id, *light, *field, index| {
-        const center = bilinear(corners(self, p.piece), 0.5, 0.5);
-        for (id, light, field, 0..) |node_id, *shine, *value, k| {
-            const n = self.nodes.items[node_id];
-            if (!n.singular) {
-                shine.* = n.shine;
-                value.* = n.value;
-                continue;
-            }
-            const from = lattice_nodes.near(self, center, n.uv);
-            try probes.append(a, from.add(center.sub(from).scale(1e-3)));
-            try owners.append(a, index * 16 + k);
-        }
-    }
-    const nearby = try a.alloc(Node, probes.items.len);
-    try self.shading.evaluate(a, self.face, probes.items, nearby);
-    for (nearby) |n| if (n.singular) return error.UndefinedNormal;
-    try self.shading.sample(a, nearby);
-    for (nearby, owners.items) |n, owner| {
-        lights[owner / 16][owner % 16] = n.shine;
-        fields[owner / 16][owner % 16] = n.value;
-    }
-    for (placed, ids, lights, fields, out, strays) |p, id, light, field, *patch, *stray| {
+    for (placed, ids, out, strays) |p, id, *patch, *stray| {
         const highlight = fine and self.cells[p.cell].gleams;
         var xs: [16]f64 = undefined;
         var ys: [16]f64 = undefined;
         var diffuse: [16]f64 = undefined;
         var glint: [16]f64 = @splat(0);
-        for (id, light, &xs, &ys, &diffuse, &glint) |node_id, shine, *x, *y, *d, *h| {
-            x.* = self.nodes.items[node_id].x;
-            y.* = self.nodes.items[node_id].y;
-            d.* = shine.diffuse;
-            if (highlight) h.* = shine.glint;
+        var field: [16]f64 = undefined;
+        for (id, &xs, &ys, &diffuse, &glint, &field) |node_id, *x, *y, *d, *h, *v| {
+            const n = self.nodes.items[node_id];
+            if (n.singular) return error.UndefinedNormal;
+            x.* = n.x;
+            y.* = n.y;
+            d.* = n.shine.diffuse;
+            if (highlight) h.* = n.shine.glint;
+            v.* = n.value;
         }
         const px = coefficients(xs);
         const py = coefficients(ys);

@@ -75,7 +75,7 @@ std::vector<int> loopsPerRegion(HuakView &view, const std::vector<HuakTurnedArc>
   const size_t offsets[] = {0, arcs.size()};
   HuakRegions out{};
   char message[512] = {};
-  if (regions(&view, offsets, arcs.data(), 1, 0.01, &out, message, sizeof message) != HUAK_SPACE_OK) {
+  if (regions(&view, offsets, arcs.data(), 1, 0.01, 1, &out, message, sizeof message) != HUAK_SPACE_OK) {
     error = message;
     return {};
   }
@@ -157,6 +157,165 @@ int nestedRings() {
   std::printf("nested rings: two rings, each bound by its own two loops\n");
   return 0;
 }
+
+// `compute_moments = 0` skips BRepGProp and returns null `moments` while
+// matching loops and bounds identically; `compute_moments = 1` populates them.
+int momentsOption() {
+  HuakModel model;
+  HuakView view(model, gp_Ax2(), 0);
+  const auto arcs = square(view, {0, 0}, 3, true, 0, 1e-6);
+  const size_t offsets[] = {0, arcs.size()};
+  HuakRegions without{}, with{};
+  char message[512] = {};
+  if (regions(&view, offsets, arcs.data(), 1, 0.01, 0, &without, message, sizeof message) != HUAK_SPACE_OK) {
+    std::fprintf(stderr, "moments option (off): %s\n", message);
+    return 1;
+  }
+  if (regions(&view, offsets, arcs.data(), 1, 0.01, 1, &with, message, sizeof message) != HUAK_SPACE_OK) {
+    std::fprintf(stderr, "moments option (on): %s\n", message);
+    return 1;
+  }
+  if (without.moments != nullptr || with.moments == nullptr) {
+    std::fprintf(stderr, "moments option: unexpected moments pointer (off=%p, on=%p)\n",
+                 static_cast<const void *>(without.moments), static_cast<const void *>(with.moments));
+    return 1;
+  }
+  if (without.count != 1 || with.count != 1 || without.sets[0] != 0 || without.sets[1] != 1 || with.sets[0] != 0 ||
+      with.sets[1] != 1) {
+    std::fprintf(stderr, "moments option: unexpected region counts\n");
+    return 1;
+  }
+  const size_t n = without.offsets[1];
+  if (n != with.offsets[1] || without.bounds[0].empty != with.bounds[0].empty ||
+      without.bounds[0].x0 != with.bounds[0].x0 || without.bounds[0].y0 != with.bounds[0].y0 ||
+      without.bounds[0].x1 != with.bounds[0].x1 || without.bounds[0].y1 != with.bounds[0].y1) {
+    std::fprintf(stderr, "moments option: loops or bounds differ\n");
+    return 1;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    const auto &a = without.commands[i], &b = with.commands[i];
+    if (a.op != b.op || a.p[0].x != b.p[0].x || a.p[0].y != b.p[0].y || a.p[1].x != b.p[1].x ||
+        a.p[1].y != b.p[1].y || a.p[2].x != b.p[2].x || a.p[2].y != b.p[2].y) {
+      std::fprintf(stderr, "moments option: path command %zu differs\n", i);
+      return 1;
+    }
+  }
+  if (std::abs(with.moments[0].area - 36.0) > 1e-5 || std::abs(with.moments[0].center[0]) > 1e-5 ||
+      std::abs(with.moments[0].center[1]) > 1e-5) {
+    std::fprintf(stderr, "moments option: unexpected moments area=%g center=(%g,%g)\n", with.moments[0].area,
+                 with.moments[0].center[0], with.moments[0].center[1]);
+    return 1;
+  }
+  std::printf("moments option: skipped when off, populated when on\n");
+  return 0;
+}
+
+// A revolved vase seen from elevation 50 deg, azimuth 20 deg: its apparent
+// contour folds smoothly into Whitney cusps. Each visible face's boundary loop
+// turns once (+1) with no self-crossing error in `regions()`.
+int whitneyCusp() {
+  const HuakProjectionV7 *api = huak_space_api_v7();
+  // Exact cubic Bézier meridian of the revolved vase in XZ:
+  // (0,0)--(9,0)~~(14,11)~~(5.5,27)~~(9,38)--(0,38)--cycle.
+  const HuakPathCommand profile[] = {
+      {HUAK_MOVE, {{0, 0}}},
+      {HUAK_LINE, {{9, 0}}},
+      {HUAK_BEZIER, {{12.767287704, 2.292111212}, {14.750187577, 6.654490933}, {14, 11}}},
+      {HUAK_BEZIER, {{12.948511322, 17.090814785}, {6.88595894, 21.001771112}, {5.5, 27}}},
+      {HUAK_BEZIER, {{4.568645734, 31.030765922}, {5.910666023, 35.248543973}, {9, 38}}},
+      {HUAK_LINE, {{0, 38}}},
+      {HUAK_CLOSE, {}},
+  };
+  HuakModelShape shape{};
+  shape.kind = HUAK_REVOLVE;
+  shape.args[5] = 1.0;
+  shape.args[6] = 2.0 * M_PI;
+  shape.u[0] = 1.0;
+  shape.v[2] = 1.0;
+  shape.profile = profile;
+  shape.count = sizeof(profile) / sizeof(profile[0]);
+  const size_t root = 0;
+  HuakModel *model = nullptr;
+  char message[512] = {};
+  if (api->build(&shape, 1, &root, 1, 0.01, &model, message, sizeof message) != HUAK_SPACE_OK) {
+    std::fprintf(stderr, "whitney cusp build: %s\n", message);
+    return 1;
+  }
+  const double az = 20.0 * M_PI / 180.0, el = 50.0 * M_PI / 180.0;
+  const double eye[3] = {std::cos(el) * std::cos(az), std::cos(el) * std::sin(az), std::sin(el)};
+  const double x[3] = {-std::sin(az), std::cos(az), 0.0};
+  HuakView *view = nullptr;
+  HuakFrame frame{};
+  int status = 1;
+  do {
+    if (api->view(model, eye, x, 0.0, &view, &frame, message, sizeof message) != HUAK_SPACE_OK)
+      break;
+    HuakEdges edges{};
+    HuakRims rims{};
+    if (api->edges(view, 0, &edges, message, sizeof message) != HUAK_SPACE_OK ||
+        api->rims(view, 0, &rims, message, sizeof message) != HUAK_SPACE_OK)
+      break;
+    std::vector<size_t> curves;
+    for (size_t i = 0; i < edges.count; ++i)
+      if (!(edges.items[i].faces == 1 && edges.items[i].closed != 0))
+        curves.push_back(edges.items[i].curve);
+    for (size_t i = 0; i < rims.count; ++i)
+      if (std::find(curves.begin(), curves.end(), rims.items[i].curve) == curves.end())
+        curves.push_back(rims.items[i].curve);
+    std::vector<ptrdiff_t> projected(curves.size(), -1);
+    if (api->project(view, curves.data(), curves.size(), 0, 0.01, projected.data(), message, sizeof message) !=
+        HUAK_SPACE_OK)
+      break;
+    std::vector<size_t> images;
+    for (const ptrdiff_t img : projected)
+      if (img >= 0)
+        images.push_back(static_cast<size_t>(img));
+    HuakArcs arcs{};
+    HuakCells cells{};
+    if (api->arrange(view, images.data(), images.size(), nullptr, 0, &arcs, message, sizeof message) != HUAK_SPACE_OK ||
+        api->cells(view, &cells, message, sizeof message) != HUAK_SPACE_OK)
+      break;
+    std::map<std::pair<size_t, size_t>, std::vector<HuakTurnedArc>> byLayer;
+    for (size_t k = 0; k < cells.arcs; ++k) {
+      const size_t la = cells.offsets[cells.left[k]], lb = cells.offsets[cells.left[k] + 1];
+      const size_t ra = cells.offsets[cells.right[k]], rb = cells.offsets[cells.right[k] + 1];
+      const size_t depth = std::max(lb - la, rb - ra);
+      for (size_t c = 0; c < depth; ++c) {
+        const ptrdiff_t l = c < lb - la ? static_cast<ptrdiff_t>(cells.layers[la + c].face) : -1;
+        const ptrdiff_t r = c < rb - ra ? static_cast<ptrdiff_t>(cells.layers[ra + c].face) : -1;
+        if (l == r)
+          continue;
+        if (l >= 0)
+          byLayer[{c, static_cast<size_t>(l)}].push_back({k, 0});
+        if (r >= 0)
+          byLayer[{c, static_cast<size_t>(r)}].push_back({k, 1});
+      }
+    }
+    std::vector<size_t> offsets{0};
+    std::vector<HuakTurnedArc> turned;
+    for (const auto &[key, list] : byLayer) {
+      turned.insert(turned.end(), list.begin(), list.end());
+      offsets.push_back(turned.size());
+    }
+    HuakRegions out{};
+    if (api->regions(view, offsets.data(), turned.data(), byLayer.size(), 0.01, 0, &out, message, sizeof message) !=
+        HUAK_SPACE_OK)
+      break;
+    if (out.count == 0 || out.sets[out.count] == 0) {
+      std::snprintf(message, sizeof message, "expected visible regions");
+      break;
+    }
+    status = 0;
+  } while (false);
+  if (status != 0)
+    std::fprintf(stderr, "whitney cusp: %s\n", message);
+  else
+    std::printf("whitney cusp: all visible face regions turn once\n");
+  if (view)
+    api->release_view(view);
+  api->release_model(model);
+  return status;
+}
 } // namespace
 
-int main() { return apexCell() + nestedRings() == 0 ? 0 : 1; }
+int main() { return apexCell() + nestedRings() + momentsOption() + whitneyCusp() == 0 ? 0 : 1; }

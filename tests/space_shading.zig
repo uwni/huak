@@ -80,10 +80,10 @@ pub fn main(init: std.process.Init) !void {
         const errors = try scenes.check("cone against the light", nodes.items, &roots, -70, 28, .{ 0.163, 0.925, -0.342 }, 30, null);
         if (errors.fans == 0 or !(errors.cut > 0.5)) return fail("cone against the light: {d} fans, glint {d} where the highlight ends", .{ errors.fans, errors.cut });
     }
-    // Seen along one of its rulings a cone has no fan and gets patches. Its
-    // apex has no normal: light near it comes from points beside it, and the
-    // glint patches there cross the terminator, where the glint of lit
-    // points far from the highlight is well below that of unlit ones.
+    // Seen along one of its rulings a cone has no fan and gets patches. At its
+    // apex OCCT supplies each ruling's limit normal via CSLib, and the glint
+    // patches there cross the terminator, where the glint of lit points far
+    // from the highlight is well below that of unlit ones.
     {
         var nodes: std.ArrayList(c.HuakModelShape) = .empty;
         const roots = [_]usize{try add(a, &nodes, shape(c.HUAK_CONE, &.{ 14, 0, 38 }))};

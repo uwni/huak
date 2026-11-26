@@ -10,11 +10,15 @@ values: []const [16]f64,
 options: patches.Options,
 sides: std.ArrayList([4]Side) = .empty,
 edges: std.AutoHashMapUnmanaged(EdgeKey, u32) = .empty,
+edge_count: u32 = 0,
+/// Canonical geometric points placed on shared edges (keyed by edge id and
+/// canonical lattice step), so neighbouring patches share identical edge
+/// subdivisions even when their field values jump across the edge.
+edge_points: std.AutoHashMapUnmanaged(u64, g.Point) = .empty,
 /// Nodes by place: patch corners by position and value, points on a
-/// side by edge and canonical lattice position, others by patch and
-/// lattice point.
+/// side by (edge_step, value), others by patch and lattice point.
 corner: std.AutoHashMapUnmanaged([3]u64, u32) = .empty,
-along: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+along: std.AutoHashMapUnmanaged([2]u64, u32) = .empty,
 inside: std.AutoHashMapUnmanaged(u64, u32) = .empty,
 cells: std.ArrayList(Cell) = .empty,
 pending: std.ArrayList(Pending) = .empty,
@@ -26,6 +30,7 @@ triangles: std.ArrayList([3]u32) = .empty,
 pub fn deinit(self: *Builder) void {
     self.sides.deinit(self.allocator);
     self.edges.deinit(self.allocator);
+    self.edge_points.deinit(self.allocator);
     self.corner.deinit(self.allocator);
     self.along.deinit(self.allocator);
     self.inside.deinit(self.allocator);
@@ -47,14 +52,23 @@ pub fn finish(self: *Builder) patches.Error!patches.Triangulated {
 
 pub fn identifyEdges(self: *Builder) !void {
     try self.sides.ensureTotalCapacity(self.allocator, self.points.len);
-    for (self.points, self.values) |*patch, *field| {
+    for (self.points) |*patch| {
         var result: [4]Side = undefined;
         for (side_controls, &result) |indices, *side| {
-            const forward = edgeKey(patch, field, indices, false);
-            const backward = edgeKey(patch, field, indices, true);
+            const p0 = patch[indices[0]];
+            if (p0.eql(patch[indices[1]]) and p0.eql(patch[indices[2]]) and p0.eql(patch[indices[3]])) {
+                side.* = .{ .edge = self.edge_count, .reversed = false };
+                self.edge_count += 1;
+                continue;
+            }
+            const forward = edgeKey(patch, indices, false);
+            const backward = edgeKey(patch, indices, true);
             const reversed = std.mem.order(u8, &backward, &forward) == .lt;
             const entry = try self.edges.getOrPut(self.allocator, if (reversed) backward else forward);
-            if (!entry.found_existing) entry.value_ptr.* = self.edges.count() - 1;
+            if (!entry.found_existing) {
+                entry.value_ptr.* = self.edge_count;
+                self.edge_count += 1;
+            }
             side.* = .{ .edge = entry.value_ptr.*, .reversed = reversed };
         }
         self.sides.appendAssumeCapacity(result);
@@ -151,7 +165,7 @@ pub fn emit(self: *Builder, cell: Cell) !void {
         for (1..length) |k| {
             const i: u32 = @intCast(@as(i64, corner[0]) + direction[0] * @as(i64, @intCast(k)));
             const j: u32 = @intCast(@as(i64, corner[1]) + direction[1] * @as(i64, @intCast(k)));
-            if (self.existing(cell.patch, i, j)) |found| try ring.append(self.allocator, found);
+            if (self.isMarked(cell.patch, i, j)) try ring.append(self.allocator, try self.node(cell.patch, i, j));
         }
     }
     const count = ring.items.len;
@@ -165,34 +179,60 @@ pub fn emit(self: *Builder, cell: Cell) !void {
 }
 
 fn node(self: *Builder, patch: u32, i: u32, j: u32) !u32 {
-    const slot = switch (self.place(patch, i, j)) {
-        inline else => |key, kind| entry: {
-            const result = try @field(self, @tagName(kind)).getOrPut(self.allocator, key);
-            if (result.found_existing) return result.value_ptr.*;
-            break :entry result.value_ptr;
-        },
-    };
     const scale = 1.0 / @as(f64, @floatFromInt(lattice));
-    const sample = patches.evaluate(&self.points[patch], &self.values[patch], @as(f64, @floatFromInt(i)) * scale, @as(f64, @floatFromInt(j)) * scale);
-    const id: u32 = @intCast(self.nodes.items.len);
-    // The slot stays valid until the map changes; fill it first.
-    slot.* = id;
-    errdefer self.forget(patch, i, j);
-    try self.nodes.append(self.allocator, sample.point);
-    errdefer _ = self.nodes.pop();
-    try self.fields.append(self.allocator, sample.value);
-    return id;
-}
-
-fn forget(self: *Builder, patch: u32, i: u32, j: u32) void {
     switch (self.place(patch, i, j)) {
-        inline else => |key, kind| _ = @field(self, @tagName(kind)).remove(key),
+        .corner => |key| {
+            const result = try self.corner.getOrPut(self.allocator, key);
+            if (result.found_existing) return result.value_ptr.*;
+            const sample = patches.evaluate(&self.points[patch], &self.values[patch], @as(f64, @floatFromInt(i)) * scale, @as(f64, @floatFromInt(j)) * scale);
+            const id: u32 = @intCast(self.nodes.items.len);
+            result.value_ptr.* = id;
+            errdefer _ = self.corner.remove(key);
+            try self.nodes.append(self.allocator, sample.point);
+            errdefer _ = self.nodes.pop();
+            try self.fields.append(self.allocator, sample.value);
+            return id;
+        },
+        .inside => |key| {
+            const result = try self.inside.getOrPut(self.allocator, key);
+            if (result.found_existing) return result.value_ptr.*;
+            const sample = patches.evaluate(&self.points[patch], &self.values[patch], @as(f64, @floatFromInt(i)) * scale, @as(f64, @floatFromInt(j)) * scale);
+            const id: u32 = @intCast(self.nodes.items.len);
+            result.value_ptr.* = id;
+            errdefer _ = self.inside.remove(key);
+            try self.nodes.append(self.allocator, sample.point);
+            errdefer _ = self.nodes.pop();
+            try self.fields.append(self.allocator, sample.value);
+            return id;
+        },
+        .along => |geo_key| {
+            const sample = patches.evaluate(&self.points[patch], &self.values[patch], @as(f64, @floatFromInt(i)) * scale, @as(f64, @floatFromInt(j)) * scale);
+            const ep = try self.edge_points.getOrPut(self.allocator, geo_key);
+            const new_ep = !ep.found_existing;
+            if (new_ep) ep.value_ptr.* = sample.point;
+            const canonical_point = ep.value_ptr.*;
+            errdefer if (new_ep) {
+                _ = self.edge_points.remove(geo_key);
+            };
+            const full_key = [2]u64{ geo_key, @bitCast(sample.value) };
+            const result = try self.along.getOrPut(self.allocator, full_key);
+            if (result.found_existing) return result.value_ptr.*;
+            const id: u32 = @intCast(self.nodes.items.len);
+            result.value_ptr.* = id;
+            errdefer _ = self.along.remove(full_key);
+            try self.nodes.append(self.allocator, canonical_point);
+            errdefer _ = self.nodes.pop();
+            try self.fields.append(self.allocator, sample.value);
+            return id;
+        },
     }
 }
 
-fn existing(self: *const Builder, patch: u32, i: u32, j: u32) ?u32 {
+fn isMarked(self: *const Builder, patch: u32, i: u32, j: u32) bool {
     return switch (self.place(patch, i, j)) {
-        inline else => |key, kind| @field(self, @tagName(kind)).get(key),
+        .corner => |key| self.corner.contains(key),
+        .along => |geo_key| self.edge_points.contains(geo_key),
+        .inside => |key| self.inside.contains(key),
     };
 }
 
@@ -228,18 +268,18 @@ const Side = struct { edge: u32, reversed: bool };
 /// v = 0 and v = 1. Index i * 4 + j weighs B_i(u) B_j(v).
 const side_controls = [4][4]u8{ .{ 0, 1, 2, 3 }, .{ 12, 13, 14, 15 }, .{ 0, 4, 8, 12 }, .{ 3, 7, 11, 15 } };
 
-const EdgeKey = [4 * 24]u8;
+const EdgeKey = [4 * 16]u8;
 
 fn corners(cell: Cell) [4][2]u32 {
     return .{ .{ cell.i, cell.j }, .{ cell.i + cell.wide, cell.j }, .{ cell.i + cell.wide, cell.j + cell.high }, .{ cell.i, cell.j + cell.high } };
 }
 
-fn edgeKey(patch: *const [16]g.Point, field: *const [16]f64, indices: [4]u8, reversed: bool) EdgeKey {
+fn edgeKey(patch: *const [16]g.Point, indices: [4]u8, reversed: bool) EdgeKey {
     var key: EdgeKey = undefined;
     for (0..4) |k| {
         const index = indices[if (reversed) 3 - k else k];
-        const words = [3]u64{ @bitCast(patch[index].x), @bitCast(patch[index].y), @bitCast(field[index]) };
-        @memcpy(key[k * 24 ..][0..24], std.mem.asBytes(&words));
+        const words = [2]u64{ @bitCast(patch[index].x), @bitCast(patch[index].y) };
+        @memcpy(key[k * 16 ..][0..16], std.mem.asBytes(&words));
     }
     return key;
 }

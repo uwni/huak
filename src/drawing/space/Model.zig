@@ -141,13 +141,6 @@ pub const View = struct {
         return .{ self.model.vtable, self.handle, self.model.message, self.model.message.len };
     }
 
-    /// Where the camera puts points.
-    pub fn look(self: *const View, points: []const c.HuakXYZ, out: []c.HuakLook) Error!void {
-        std.debug.assert(points.len == out.len);
-        const t, const h, const m, const n = self.call();
-        try status(t.look.?(h, points.ptr, points.len, out.ptr, m, n));
-    }
-
     /// Where the lines of sight through screen points meet the root shapes.
     pub fn rays(self: *const View, points: []const c.HuakXY) Error!Rows(c.HuakShapeHit) {
         var found: c.HuakShapeHits = undefined;
@@ -288,22 +281,23 @@ pub const View = struct {
 
     /// The connected regions of each set of arcs, arcs[offsets[k]..offsets[k +
     /// 1]], which bound a region lying to their left as they are turned.
-    pub fn regionsOf(self: *const View, offsets: []const usize, arcs: []const c.HuakTurnedArc, tolerance: f64) Error!Regions {
+    /// `moments` is populated only when `compute_moments` is true.
+    pub fn regionsOf(self: *const View, offsets: []const usize, arcs: []const c.HuakTurnedArc, tolerance: f64, compute_moments: bool) Error!Regions {
         std.debug.assert(offsets.len > 0 and offsets[offsets.len - 1] == arcs.len);
         var found: c.HuakRegions = undefined;
         const t, const h, const m, const n = self.call();
-        try status(t.regions.?(h, offsets.ptr, arcs.ptr, offsets.len - 1, tolerance, &found, m, n));
+        try status(t.regions.?(h, offsets.ptr, arcs.ptr, offsets.len - 1, tolerance, @intFromBool(compute_moments), &found, m, n));
         if (found.count != offsets.len - 1 or found.sets == null) return self.model.rejected();
         const sets = found.sets[0..offsets.len];
         if (sets[0] != 0) return self.model.rejected();
         for (sets[0 .. sets.len - 1], sets[1..]) |start, end| if (start > end) return self.model.rejected();
         const total = sets[sets.len - 1];
-        if (total != 0 and (found.bounds == null or found.moments == null)) return self.model.rejected();
+        if (total != 0 and (found.bounds == null or (compute_moments and found.moments == null))) return self.model.rejected();
         return .{
             .sets = sets,
             .outlines = try results.commands(self, total, .{ .offsets = found.offsets, .commands = found.commands, .count = total }),
             .bounds = items(c.HuakBox, found.bounds, total),
-            .moments = items(c.HuakMoments, found.moments, total),
+            .moments = if (compute_moments) items(c.HuakMoments, found.moments, total) else &.{},
         };
     }
 

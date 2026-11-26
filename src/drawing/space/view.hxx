@@ -325,7 +325,7 @@ namespace huak::space::entry {
 void copy(const gp_XYZ &from, double *to);
 const TopoDS_Shape &shapeOf(const HuakModel *model, size_t source);
 const TopoDS_Face &faceOf(const HuakModel *model, size_t source, size_t face);
-bool normalOf(const Handle(Geom_Surface) & surface, bool reversed,
+bool normalOf(const Handle(Geom_Surface) & surface, const TopoDS_Face &face,
               const gp_Pnt2d &uv, gp_Dir &normal);
 
 // The entries in view_curves.cpp, view_arrange.cpp, view_cells.cpp and
@@ -353,7 +353,7 @@ int cells(HuakView *view, HuakCells *out, char *error, size_t capacity);
 int fill(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, size_t count, double tolerance,
          HuakPaths *out, char *error, size_t capacity);
 int regions(HuakView *view, const size_t *offsets, const HuakTurnedArc *arcs, size_t count, double tolerance,
-            HuakRegions *out, char *error, size_t capacity);
+            int compute_moments, HuakRegions *out, char *error, size_t capacity);
 // The parameter at which an arc leaves the vertex at `centre` that reaches
 // `reach`, from its tail or from its head: where it first stands that far
 // from the centre, or where it stands nowhere so far, where it stands

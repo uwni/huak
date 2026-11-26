@@ -145,7 +145,7 @@ void Sights::Face::layOut(const HLRAlgo_Projector &projector) {
   for (size_t i = 0; i < nu; ++i)
     for (size_t j = 0; j < nv; ++j) {
       gp_Dir normal;
-      if (normalOf(geometry, false, gp_Pnt2d(us[i], vs[j]), normal))
+      if (normalOf(geometry, face, gp_Pnt2d(us[i], vs[j]), normal))
         normals[at(i, j)] = normal;
     }
 }

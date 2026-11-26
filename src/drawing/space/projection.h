@@ -125,8 +125,8 @@ typedef struct {
   double x, y, depth;
 } HuakLook;
 /* A face's point as the camera sees it, and the face's unit normal there as
-   oriented in its shape; `defined` is zero where the normal is not, as at a
-   cone's apex. */
+   oriented in its shape (or its limit from inside the face at a singularity);
+   `defined` is zero where neither is defined. */
 typedef struct {
   HuakLook look;
   double normal[3];
@@ -295,8 +295,9 @@ typedef struct {
 } HuakMoments;
 /* The regions that sets of arcs bound: the regions of set k are regions
    sets[k] .. sets[k + 1], each a connected region with its outline, the
-   closed paths commands[offsets[r] .. offsets[r + 1]], its bounds, and its
-   area, centroid and principal moments with their axes. */
+   closed paths commands[offsets[r] .. offsets[r + 1]], its bounds, and (when
+   requested) its area, centroid and principal moments with their axes
+   (`moments` is null when not requested). */
 typedef struct {
   const size_t *sets;
   const size_t *offsets;
@@ -318,7 +319,7 @@ typedef struct {
 
 /* The major version, in the high 16 bits, matches the entry point; the minor
    version counts entries appended to the table since. */
-#define HUAK_SPACE_ABI_VERSION 0x00060000u
+#define HUAK_SPACE_ABI_VERSION 0x00070000u
 
 /* Contract for every entry.
 
@@ -372,8 +373,6 @@ typedef struct {
               double focus, HuakView **, HuakFrame *, char *error,
               size_t capacity);
   void (*release_view)(HuakView *);
-  int (*look)(HuakView *, const HuakXYZ *, size_t count, HuakLook *,
-              char *error, size_t capacity);
   int (*samples)(HuakView *, size_t source, size_t face, const HuakUV *,
                  size_t count, HuakSample *, char *error, size_t capacity);
   /* All points where the lines of sight through screen points meet a face,
@@ -446,15 +445,16 @@ typedef struct {
               size_t capacity);
   /* As `fill`, with each set's region apart from the others it does not
      touch: each connected region with its own outline, holes included, its
-     bounds and its moments. */
+     bounds and, when `compute_moments` is nonzero, its moments (`moments`
+     is null otherwise). */
   int (*regions)(HuakView *, const size_t *offsets, const HuakTurnedArc *arcs,
-                 size_t count, double tolerance, HuakRegions *, char *error,
-                 size_t capacity);
-} HuakProjectionV6;
+                 size_t count, double tolerance, int compute_moments,
+                 HuakRegions *, char *error, size_t capacity);
+} HuakProjectionV7;
 
 /* The table is immutable and valid until the library is unloaded. Incompatible
    changes to the table or any input/output structure require a new entry point. */
-const HuakProjectionV6 *huak_space_api_v6(void);
+const HuakProjectionV7 *huak_space_api_v7(void);
 #ifdef __cplusplus
 }
 #endif

@@ -53,7 +53,7 @@ pub const Cells = struct {
 };
 
 /// The connected regions of sets of arcs: set k's are regions sets[k] ..
-/// sets[k + 1], each with its outline, bounds and moments.
+/// sets[k + 1], each with its outline, bounds and (when requested) moments.
 pub const Regions = struct {
     sets: []const usize,
     outlines: Rows(c.HuakPathCommand),

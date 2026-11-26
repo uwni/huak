@@ -134,7 +134,7 @@ pub fn fillFaces(self: *Work, drawn: Drawn) Model.Error!void {
 pub fn fillParts(self: *Work, drawn: Drawn) Model.Error!void {
     const found = try regions.bodies(self, drawn);
     if (found.keys.len == 0) return;
-    const parts = try self.view.regionsOf(found.sets.offsets.items, found.sets.arcs.items, self.tolerance);
+    const parts = try self.view.regionsOf(found.sets.offsets.items, found.sets.arcs.items, self.tolerance, false);
     const out = self.out;
     for (found.keys, 0..) |key, set| {
         for (parts.sets[set]..parts.sets[set + 1]) |region| {

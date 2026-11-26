@@ -23,12 +23,67 @@ const TopoDS_Face &faceOf(const HuakModel *model, size_t source, size_t face) {
   return TopoDS::Face(faces(static_cast<int>(face) + 1));
 }
 
-// The unit normal of a face as oriented in its shape; false where undefined.
-bool normalOf(const Handle(Geom_Surface) & surface, bool reversed,
-              const gp_Pnt2d &uv, gp_Dir &normal) {
-  if (GeomLib::NormEstim(surface, uv, Precision::Confusion(), normal) >= 2)
+namespace {
+// Wraps a periodic parameter into [lo, hi] when a whole-period shift lands
+// there, leaving values already in [lo, hi] (or genuinely outside a partial
+// periodic face) untouched.
+double wrapPeriodic(double value, double lo, double hi, double period) {
+  if (!(period > 0))
+    return value;
+  if (value < lo) {
+    const double shifted = value + std::ceil((lo - value) / period) * period;
+    if (shifted <= hi + Precision::PConfusion())
+      return std::min(shifted, hi);
+  } else if (value > hi) {
+    const double shifted = value - std::ceil((value - hi) / period) * period;
+    if (shifted >= lo - Precision::PConfusion())
+      return std::max(shifted, lo);
+  }
+  return value;
+}
+
+// Where d/du x d/dv vanishes, as at a cone's apex or a sphere's pole, the
+// limit of the normal coming from inside the face's parameters, as OCCT's
+// CSLib finds it from the first derivatives of d/du x d/dv that do not
+// vanish, up to the third; false where they give none.
+bool limitNormal(const Handle(Geom_Surface) & surface, const TopoDS_Face &face,
+                 const gp_Pnt2d &uv, gp_Dir &normal) {
+  constexpr int order = 3;
+  try {
+    double u0, u1, v0, v1;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    const double u = surface->IsUPeriodic() ? wrapPeriodic(uv.X(), u0, u1, surface->UPeriod()) : uv.X();
+    const double v = surface->IsVPeriodic() ? wrapPeriodic(uv.Y(), v0, v1, surface->VPeriod()) : uv.Y();
+    NCollection_Array2<gp_Vec> derivatives(0, order + 1, 0, order + 1);
+    derivatives.Init(gp_Vec());
+    for (int i = 0; i <= order + 1; ++i)
+      for (int j = 0; i + j <= order + 1; ++j)
+        if (i + j > 0)
+          derivatives(i, j) = surface->DN(u, v, i, j);
+    NCollection_Array2<gp_Vec> normals(0, order, 0, order);
+    normals.Init(gp_Vec());
+    for (int i = 0; i <= order; ++i)
+      for (int j = 0; i + j <= order; ++j)
+        normals(i, j) = CSLib::DNNUV(i, j, derivatives);
+    CSLib_NormalStatus status;
+    int orderU = 0, orderV = 0;
+    CSLib::Normal(order, normals, Precision::Confusion(), u, v, u0, u1, v0, v1, status, normal, orderU, orderV);
+    return status == CSLib_Defined;
+  } catch (const Standard_Failure &) {
     return false;
-  if (reversed)
+  }
+}
+} // namespace
+
+// The unit normal of a face, whose surface is given, as oriented in its
+// shape: from the first and second derivatives, or where those give none,
+// their limit (`limitNormal`); false where neither does.
+bool normalOf(const Handle(Geom_Surface) & surface, const TopoDS_Face &face,
+              const gp_Pnt2d &uv, gp_Dir &normal) {
+  if (GeomLib::NormEstim(surface, uv, Precision::Confusion(), normal) >= 2 &&
+      !limitNormal(surface, face, uv, normal))
+    return false;
+  if (face.Orientation() == TopAbs_REVERSED)
     normal.Reverse();
   return true;
 }
@@ -172,14 +227,13 @@ int normalTurns(const HuakModel *model, size_t source, size_t index,
 // n(uv(s)) . direction - value along a segment of a face's parameters.
 class Facing : public math_Function {
 public:
-  Facing(const Handle(Geom_Surface) & surface, bool reversed, gp_XY from,
-         gp_XY to, gp_Dir direction, double value)
-      : surface_(surface), reversed_(reversed), from_(from), to_(to),
+  Facing(const Handle(Geom_Surface) & surface, const TopoDS_Face &face,
+         gp_XY from, gp_XY to, gp_Dir direction, double value)
+      : surface_(surface), face_(face), from_(from), to_(to),
         direction_(direction), value_(value) {}
   bool Value(const double s, double &f) override {
     gp_Dir normal;
-    if (!normalOf(surface_, reversed_, gp_Pnt2d(from_ + (to_ - from_) * s),
-                  normal))
+    if (!normalOf(surface_, face_, gp_Pnt2d(from_ + (to_ - from_) * s), normal))
       return false;
     f = normal.Dot(direction_) - value_;
     return true;
@@ -187,7 +241,7 @@ public:
 
 private:
   Handle(Geom_Surface) surface_;
-  bool reversed_;
+  TopoDS_Face face_;
   gp_XY from_, to_;
   gp_Dir direction_;
   double value_;
@@ -203,11 +257,9 @@ int roots(const HuakModel *model, size_t source, size_t index,
     requireArray(out, count, "out");
     const auto &f = faceOf(model, source, index);
     const Handle(Geom_Surface) surface = BRep_Tool::Surface(f);
-    const bool reversed = f.Orientation() == TopAbs_REVERSED;
     const gp_Dir along(direction[0], direction[1], direction[2]);
     for (size_t k = 0; k < count; ++k) {
-      Facing facing(surface, reversed,
-                    gp_XY(segments[k].from.u, segments[k].from.v),
+      Facing facing(surface, f, gp_XY(segments[k].from.u, segments[k].from.v),
                     gp_XY(segments[k].to.u, segments[k].to.v), along, value);
       double low, high;
       out[k] = std::numeric_limits<double>::quiet_NaN();
@@ -244,18 +296,6 @@ int view(HuakModel *model, const double eye[3], const double x[3], double focus,
 
 void releaseView(HuakView *view) { delete view; }
 
-int look(HuakView *view, const HuakXYZ *points, size_t count, HuakLook *out,
-         char *error, size_t capacity) {
-  return guarded(error, capacity, [&] {
-    require(view, "view");
-    requireArray(points, count, "points");
-    requireArray(out, count, "out");
-    for (size_t k = 0; k < count; ++k)
-      out[k] = view->look(
-          gp_Pnt(points[k].xyz[0], points[k].xyz[1], points[k].xyz[2]));
-  });
-}
-
 int samples(HuakView *view, size_t source, size_t index, const HuakUV *uv,
             size_t count, HuakSample *out, char *error, size_t capacity) {
   return guarded(error, capacity, [&] {
@@ -264,13 +304,12 @@ int samples(HuakView *view, size_t source, size_t index, const HuakUV *uv,
     requireArray(out, count, "out");
     const auto &f = faceOf(&view->model, source, index);
     const Handle(Geom_Surface) surface = BRep_Tool::Surface(f);
-    const bool reversed = f.Orientation() == TopAbs_REVERSED;
     for (size_t k = 0; k < count; ++k) {
       const gp_Pnt2d at(uv[k].u, uv[k].v);
       HuakSample result{};
       result.look = view->look(surface->Value(at.X(), at.Y()));
       gp_Dir normal;
-      if (normalOf(surface, reversed, at, normal)) {
+      if (normalOf(surface, f, at, normal)) {
         copy(normal.XYZ(), result.normal);
         result.defined = 1;
       }
@@ -325,13 +364,13 @@ int rays(HuakView *view, const HuakXY *points, size_t count, HuakShapeHits *out,
 } // namespace
 
 extern "C" __attribute__((visibility("default")))
-const HuakProjectionV6 *huak_space_api_v6() {
-  static const HuakProjectionV6 api{
-      HUAK_SPACE_ABI_VERSION, sizeof(HuakProjectionV6),
+const HuakProjectionV7 *huak_space_api_v7() {
+  static const HuakProjectionV7 api{
+      HUAK_SPACE_ABI_VERSION, sizeof(HuakProjectionV7),
       build,       releaseModel, shape,     same,        face,
-      normalTurns, roots,        view,      releaseView, look,
-      samples,     sightings,    rays,      curves,      edges,
-      rims,        sections,     project,   pierce,      approximate,
-      contours,    arrange,      cells,     fill,        regions};
+      normalTurns, roots,        view,      releaseView, samples,
+      sightings,   rays,         curves,    edges,       rims,
+      sections,    project,      pierce,    approximate, contours,
+      arrange,     cells,        fill,      regions};
   return &api;
 }
