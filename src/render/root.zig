@@ -4,6 +4,7 @@ const std = @import("std");
 const typst = @import("libtypst");
 const g = @import("../drawing/geometry.zig");
 const DisplayList = @import("../drawing/DisplayList.zig");
+const DrawingScene = @import("../drawing/Scene.zig");
 const animation = @import("../animation/root.zig");
 const Workers = @import("workers");
 const backend = @import("typst/scene.zig");
@@ -63,6 +64,8 @@ pub const Output = union(enum) {
     }
 };
 
+pub const SvgMesh = DrawingScene.SvgMesh;
+
 /// Borrowed read-only inputs. Retained layouts and the library must remain alive
 /// until render returns. Concurrent calls use independent scratch allocators.
 pub const Scene = struct {
@@ -73,9 +76,11 @@ pub const Scene = struct {
     frames: []const typst.FrameRef = &.{},
     object_ids: ?[]const u64 = null,
     tracks: ?animation.Animation = null,
+    svg_mesh: SvgMesh = .default,
     workers: Workers = .serial,
 
     pub fn validate(self: Scene, format: Format) !void {
+        try self.svg_mesh.validate();
         return format.validate(self.tracks != null);
     }
 
@@ -89,6 +94,7 @@ pub const Scene = struct {
             .frames = self.frames,
             .object_ids = self.object_ids,
             .pdf = format == .pdf,
+            .svg_mesh = self.svg_mesh,
             .workers = self.workers,
         }) catch |err| {
             diagnostic.* = library.lastError() catch null;
@@ -112,7 +118,7 @@ pub const Scene = struct {
                 .push => |scope| if (scope.opacity < 1) try svg_styles.layerRule(&rules, allocator, scope.opacity),
                 else => {},
             };
-            if (meshes) try rules.appendSlice(allocator, svg_mesh.rule);
+            if (meshes and self.svg_mesh == .triangles) try rules.appendSlice(allocator, svg_mesh.rule);
         }
         if (self.tracks == null and rules.items.len == 0) return .{ .native = buffer };
         defer buffer.deinit();

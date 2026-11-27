@@ -263,6 +263,7 @@ pub fn render(self: *Runtime, value: Value, format: Format) !Output {
         .frames = self.frames.items,
         .object_ids = if (selected.tracks.items.len != 0) selected.snapshot.ids.items else null,
         .tracks = tracks,
+        .svg_mesh = selected.settings.svg_mesh,
         .workers = self.backends.workers,
     };
     var diagnostic_buffer: ?typst.Buffer = null;

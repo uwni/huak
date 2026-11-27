@@ -63,11 +63,29 @@ const Link = struct {
     children: Index = none,
     visible: bool = true,
 };
+/// How SVG export represents mesh fills (which SVG has no native mesh gradient for).
+/// PDF export always uses native Type 7 shading and ignores this setting.
+pub const SvgMesh = union(enum) {
+    raster: f64,
+    triangles,
+
+    pub const default_dpi: f64 = 300;
+    pub const default: SvgMesh = .{ .raster = default_dpi };
+
+    pub fn validate(self: SvgMesh) error{InvalidStyle}!void {
+        switch (self) {
+            .raster => |dpi| if (!std.math.isFinite(dpi) or !(dpi > 0)) return error.InvalidStyle,
+            .triangles => {},
+        }
+    }
+};
+
 /// Export properties belong to each composite, independently of storage ownership.
 pub const Settings = struct {
     size: ?g.Point = null,
     duration: ?f64 = null,
     repeat: bool = true,
+    svg_mesh: SvgMesh = .default,
 };
 
 const Container = struct {

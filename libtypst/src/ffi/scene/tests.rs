@@ -262,3 +262,176 @@ fn gradient_stops_follow_their_offsets() {
     }
     assert_eq!(render(2, &[0.0, 0.5, 1.0]), Err(TYPST_UNSUPPORTED));
 }
+
+#[test]
+fn pixel_scene_owns_data_exports_svg_and_pdf_and_validates_inputs() {
+    unsafe {
+        let (scene, before_svg) = {
+            let mut rgb = vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0];
+            let mut scene = ptr::null_mut();
+            assert_eq!(
+                typst_scene_from_pixels(
+                    TypstBytes {
+                        data: rgb.as_ptr(),
+                        len: rgb.len(),
+                    },
+                    2,
+                    2,
+                    TYPST_PIXEL_RGB8,
+                    40.0,
+                    20.0,
+                    &mut scene,
+                    ptr::null_mut(),
+                ),
+                TYPST_OK
+            );
+            let mut before = ptr::null_mut();
+            assert_eq!(
+                typst_scene_export_svg(scene, &mut before, ptr::null_mut()),
+                TYPST_OK
+            );
+            rgb.fill(0);
+            (scene, before)
+        };
+        let mut metrics = TypstMetrics::default();
+        assert_eq!(typst_scene_metrics(scene, &mut metrics), TYPST_OK);
+        assert_eq!(metrics.width_pt, 40.0);
+        assert_eq!(metrics.height_pt, 20.0);
+
+        let mut after_svg = ptr::null_mut();
+        assert_eq!(
+            typst_scene_export_svg(scene, &mut after_svg, ptr::null_mut()),
+            TYPST_OK
+        );
+        assert_eq!((*before_svg).inner, (*after_svg).inner);
+        let svg_text = String::from_utf8((*after_svg).inner.to_vec()).unwrap();
+        assert!(svg_text.contains("<image"), "{svg_text}");
+        assert!(svg_text.contains("data:image/png;base64,"), "{svg_text}");
+        assert!(svg_text.contains(r#"preserveAspectRatio="none""#), "{svg_text}");
+
+        let mut pdf = ptr::null_mut();
+        assert_eq!(
+            typst_scene_export_pdf(scene, ptr::null(), &mut pdf, ptr::null_mut()),
+            TYPST_OK
+        );
+        assert!((*pdf).inner.starts_with(b"%PDF-"));
+
+        typst_buffer_release(before_svg);
+        typst_buffer_release(after_svg);
+        typst_buffer_release(pdf);
+        typst_scene_release(scene);
+
+        // RGBA8 round-trip
+        let rgba = [10u8, 20, 30, 128, 40, 50, 60, 255];
+        let mut rgba_scene = ptr::null_mut();
+        assert_eq!(
+            typst_scene_from_pixels(
+                TypstBytes {
+                    data: rgba.as_ptr(),
+                    len: rgba.len(),
+                },
+                2,
+                1,
+                TYPST_PIXEL_RGBA8,
+                12.0,
+                6.0,
+                &mut rgba_scene,
+                ptr::null_mut(),
+            ),
+            TYPST_OK
+        );
+        let mut rgba_svg = ptr::null_mut();
+        assert_eq!(
+            typst_scene_export_svg(rgba_scene, &mut rgba_svg, ptr::null_mut()),
+            TYPST_OK
+        );
+        let rgba_text = String::from_utf8((*rgba_svg).inner.to_vec()).unwrap();
+        assert!(rgba_text.contains("data:image/png;base64,"), "{rgba_text}");
+        typst_buffer_release(rgba_svg);
+        typst_scene_release(rgba_scene);
+
+        // Invalid arguments & unsupported encoding
+        let mut invalid = ptr::null_mut();
+        assert_eq!(
+            typst_scene_from_pixels(
+                TypstBytes {
+                    data: rgba.as_ptr(),
+                    len: 0,
+                },
+                0,
+                1,
+                TYPST_PIXEL_RGB8,
+                10.0,
+                10.0,
+                &mut invalid,
+                ptr::null_mut(),
+            ),
+            TYPST_INVALID_ARGUMENT
+        );
+        assert!(invalid.is_null());
+        assert_eq!(
+            typst_scene_from_pixels(
+                TypstBytes {
+                    data: rgba.as_ptr(),
+                    len: 5,
+                },
+                2,
+                1,
+                TYPST_PIXEL_RGB8,
+                10.0,
+                10.0,
+                &mut invalid,
+                ptr::null_mut(),
+            ),
+            TYPST_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            typst_scene_from_pixels(
+                TypstBytes {
+                    data: rgba.as_ptr(),
+                    len: 6,
+                },
+                2,
+                1,
+                TYPST_PIXEL_RGB8,
+                f64::NAN,
+                10.0,
+                &mut invalid,
+                ptr::null_mut(),
+            ),
+            TYPST_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            typst_scene_from_pixels(
+                TypstBytes {
+                    data: rgba.as_ptr(),
+                    len: 6,
+                },
+                2,
+                1,
+                99,
+                10.0,
+                10.0,
+                &mut invalid,
+                ptr::null_mut(),
+            ),
+            TYPST_UNSUPPORTED
+        );
+        assert_eq!(
+            typst_scene_from_pixels(
+                TypstBytes {
+                    data: rgba.as_ptr(),
+                    len: 4,
+                },
+                u32::MAX,
+                u32::MAX,
+                TYPST_PIXEL_RGBA8,
+                10.0,
+                10.0,
+                &mut invalid,
+                ptr::null_mut(),
+            ),
+            TYPST_OUT_OF_RANGE
+        );
+    }
+}

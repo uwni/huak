@@ -148,8 +148,8 @@ end
 
 // What lies under, then `drawn` in order. Unless `translucent`, transparency
 // is flattened onto `paper`.
-fn composed(behind:any, drawn:list, paper:color, translucent:bool) -> picture
-    result := picture()
+fn composed(behind:any, drawn:list, paper:color, translucent:bool, mesh_rasterize:bool = true, mesh_dpi:float = 300) -> picture
+    result := picture(mesh_rasterize: mesh_rasterize, mesh_dpi: mesh_dpi)
     if behind != false then append(result, copy(behind)) end
     for item in drawn do append(result, item) end
     if translucent then return result end
@@ -181,9 +181,10 @@ end
 // Shades faces in their light: continuously when projected with `smooth`,
 // otherwise in the isophote bands, with the highlight of `spot` in white over
 // them. Project with a light. `inks`, `behind`, `paper` and `translucent`
-// work as in `toned`.
-export fn shaded(faces:list, inks:list, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
-    return composed(behind, solids(faces, inks, "light"), paper, translucent)
+// work as in `toned`. `mesh_rasterize` and `mesh_dpi` configure SVG mesh fills
+// on the returned picture; PDF export always uses native patch shading.
+export fn shaded(faces:list, inks:list, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false, mesh_rasterize:bool = true, mesh_dpi:float = 300) -> picture
+    return composed(behind, solids(faces, inks, "light"), paper, translucent, mesh_rasterize, mesh_dpi)
 end
 
 fn uniform_alpha(colors:list) -> float
@@ -199,8 +200,9 @@ end
 // value through `colors` at `levels`, as `gradient.patches` maps them. With
 // `light`, the projection's smooth light shades the colors as `shaded`
 // tones an ink, with the highlight over them. `behind`, `paper` and
-// `translucent` work as in `toned`.
-export fn colored(faces:list, colors:list, levels:list, light:bool = false, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false) -> picture
+// `translucent` work as in `toned`; `mesh_rasterize` and `mesh_dpi` work as
+// in `shaded`.
+export fn colored(faces:list, colors:list, levels:list, light:bool = false, behind:any = false, paper:color = rgb(1, 1, 1), translucent:bool = false, mesh_rasterize:bool = true, mesh_dpi:float = 300) -> picture
     drawn := picture()
     alpha := uniform_alpha(colors)
     if alpha >= 0 then
@@ -219,7 +221,7 @@ export fn colored(faces:list, colors:list, levels:list, light:bool = false, behi
             end
         end
         if alpha < 1 and len(drawn.children) > 0 then opacity(drawn, alpha) end
-        return composed(behind, [drawn], paper, translucent)
+        return composed(behind, [drawn], paper, translucent, mesh_rasterize, mesh_dpi)
     end
     for face in faces do
         assert(face.field != false and len(face.field.values) > 0, "colored needs a projection with a field")
@@ -227,5 +229,5 @@ export fn colored(faces:list, colors:list, levels:list, light:bool = false, behi
         append(drawn, fill(face.region, gradient.patches(field.points, field.values, colors, levels, field.tolerance, field.margin)))
         if light then append(drawn, light_over(face)) end
     end
-    return composed(behind, [drawn], paper, translucent)
+    return composed(behind, [drawn], paper, translucent, mesh_rasterize, mesh_dpi)
 end

@@ -188,7 +188,7 @@ pub const View = struct {
         errdefer scene.deinit();
         // A root wrapper, when added, precedes every converted command.
         const wrap = @as(Scene.Index, @intCast(scene.nodes.items.len)) - count;
-        (try scene.settings(0)).* = .{ .size = self.settings.size };
+        (try scene.settings(0)).* = .{ .size = self.settings.size, .svg_mesh = self.settings.svg_mesh };
         const timing = (try self.animation()) orelse return scene;
         try timing.validate();
         // Selection IDs are command positions plus one.

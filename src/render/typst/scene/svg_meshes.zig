@@ -1,4 +1,7 @@
-//! Mesh paints as SVG triangles with linear gradients, in one labeled group clipped to the path.
+//! Mesh paints for SVG: either rasterized into a clipped bitmap (default, for
+//! compact SVG size and fast browser rendering) or triangulated into vector
+//! paths with linear gradients. In both modes the mesh boundary stays an exact
+//! vector Bézier <clipPath>, and only mesh fills enter this module.
 const std = @import("std");
 const typst = @import("libtypst");
 const c = typst.c;
@@ -8,6 +11,7 @@ const DisplayList = @import("../../../drawing/DisplayList.zig");
 const Gradient = @import("../../../drawing/style.zig").Gradient;
 const Path = @import("../../../drawing/path/Path.zig");
 const svg_mesh = @import("../../svg/mesh.zig");
+const svg_raster = @import("../../svg/raster.zig");
 const patch_mesh = @import("../../../drawing/patches.zig");
 const fan_mesh = @import("../../../drawing/conic.zig");
 const field = @import("../../../drawing/field.zig");
@@ -26,10 +30,9 @@ const controlBounds = paint_routes.controlBounds;
 const pathSegment = native_records.pathSegment;
 const nativeTransform = native_records.nativeTransform;
 
-fn buildOutline(scratch: std.mem.Allocator, path_: *const c.TypstPath, margin: f64) !?patch_mesh.Outline {
-    if (!(margin > 0)) return null;
+fn decodeSegments(scratch: std.mem.Allocator, path_: *const c.TypstPath) ![]Path.Segment {
     const segments = try scratch.alloc(Path.Segment, path_.segment_count);
-    defer scratch.free(segments);
+    errdefer scratch.free(segments);
     for (path_.segments[0..path_.segment_count], segments) |segment, *out| out.* = switch (segment.kind) {
         c.TYPST_SEGMENT_MOVE => .{ .move = pointOf(segment.p1) },
         c.TYPST_SEGMENT_LINE => .{ .line = pointOf(segment.p1) },
@@ -37,17 +40,94 @@ fn buildOutline(scratch: std.mem.Allocator, path_: *const c.TypstPath, margin: f
         c.TYPST_SEGMENT_CLOSE => .close,
         else => return error.InvalidPath,
     };
+    return segments;
+}
+
+fn currentPlacement(self: *const Builder, transform: g.Transform) g.Transform {
+    var placement = transform;
+    var level = self.levels.items.len;
+    while (level > 0) {
+        level -= 1;
+        placement = placement.then(self.levels.items[level].transform);
+    }
+    return placement;
+}
+
+fn buildOutline(scratch: std.mem.Allocator, path_: *const c.TypstPath, margin: f64) !?patch_mesh.Outline {
+    if (!(margin > 0)) return null;
+    const segments = try decodeSegments(scratch, path_);
+    defer scratch.free(segments);
     return try patch_mesh.Outline.init(scratch, segments, margin);
 }
 
-/// SVG has no patch shading: the field is triangulated within the paint's
-/// tolerance, outside the margin along the filled outline, and each
-/// triangle cut along the stop levels so that its colors stay linear.
+/// Rasterizes one SVG mesh fill at `dpi` and submits it as a Typst raster
+/// image clipped by the exact vector path.
+fn svgRaster(self: *Builder, path_: *const c.TypstPath, evenodd: bool, mesh: svg_raster.Mesh, dpi: f64, transform: g.Transform, id: u64) !void {
+    if (!try self.library.supports(c.TYPST_CAP_RASTER_IMAGE)) return error.Unsupported;
+    const scratch = self.arena.child_allocator;
+    const clip_box = try controlBounds(path_);
+    const clip_segments = try decodeSegments(scratch, path_);
+    defer scratch.free(clip_segments);
+
+    const image = try svg_raster.rasterize(scratch, mesh, clip_segments, clip_box, .{
+        .dpi = dpi,
+        .placement = currentPlacement(self, transform),
+        .evenodd = evenodd,
+        .workers = self.workers,
+    }) orelse return;
+    defer image.deinit(scratch);
+
+    const encoding: u32 = switch (image.encoding) {
+        .rgb8 => c.TYPST_PIXEL_RGB8,
+        .rgba8 => c.TYPST_PIXEL_RGBA8,
+    };
+    var raster_scene: ?*c.TypstScene = null;
+    var diagnostics: ?*c.TypstDiagnostics = null;
+    defer self.library.functions.diagnostics_release(diagnostics);
+    try self.library.check(
+        self.library.functions.scene_from_pixels(
+            .{ .data = image.pixels.ptr, .len = image.pixels.len },
+            image.width,
+            image.height,
+            encoding,
+            image.bounds.width(),
+            image.bounds.height(),
+            &raster_scene,
+            &diagnostics,
+        ),
+        diagnostics,
+    );
+    const owned_scene = raster_scene orelse return error.InvalidResult;
+    self.children.append(self.arena.allocator(), owned_scene) catch |err| {
+        self.library.functions.scene_release(owned_scene);
+        return err;
+    };
+
+    // Typst images use downward y; map row 0 to bounds.max.y and the bottom row
+    // to bounds.min.y in the path's local coordinates.
+    var img_item = std.mem.zeroes(c.TypstSceneItem);
+    img_item.kind = c.TYPST_ITEM_SCENE;
+    img_item.scene = owned_scene;
+    img_item.transform = nativeTransform(.{ .a = 1, .d = -1, .e = image.bounds.min.x, .f = image.bounds.max.y });
+
+    var clipped = try native_records.item(self, transform, null, id, null);
+    clipped.kind = c.TYPST_ITEM_SCENE;
+    clipped.scene = try native_records.childScene(self, &.{img_item});
+    clipped.clip = if (evenodd) try nonzeroClip(self, path_) else path_;
+    try self.append(clipped);
+}
+
+/// SVG has no patch shading: rasterized into a clipped bitmap by default, or
+/// triangulated within the paint's tolerance when `svg_mesh == .triangles`.
 pub fn svgPatches(self: *Builder, path_: *const c.TypstPath, evenodd: bool, all: Gradient.Patches, transform: g.Transform, id: u64) !void {
     const scratch = self.arena.child_allocator;
     var shown = try Painted.of(scratch, all) orelse return;
     defer shown.deinit(scratch);
     const patches = shown.patches;
+    switch (self.svg_mesh) {
+        .raster => |dpi| return svgRaster(self, path_, evenodd, .{ .patches = patches }, dpi, transform, id),
+        .triangles => {},
+    }
     var band = try buildOutline(scratch, path_, patches.margin);
     defer if (band) |*outline| outline.deinit(scratch);
     const triangulated = try patch_mesh.triangulate(scratch, patches.points, patches.values, .{
@@ -61,10 +141,17 @@ pub fn svgPatches(self: *Builder, path_: *const c.TypstPath, evenodd: bool, all:
     try svgTriangles(self, path_, evenodd, colored, transform, id);
 }
 
-/// SVG has no conic shading: the fan becomes triangles within the
-/// paint's tolerance, each cut along the stop levels like a patch's.
+/// SVG has no conic shading: analytically rasterized into a clipped bitmap by
+/// default, or triangulated within the paint's tolerance for `.triangles`.
 pub fn svgFan(self: *Builder, path_: *const c.TypstPath, evenodd: bool, conic: Gradient.Conic, transform: g.Transform, id: u64) !void {
     const scratch = self.arena.child_allocator;
+    switch (self.svg_mesh) {
+        .raster => |dpi| {
+            try conic.validate();
+            return svgRaster(self, path_, evenodd, .{ .conic = conic }, dpi, transform, id);
+        },
+        .triangles => {},
+    }
     const triangulated = try fan_mesh.triangulate(scratch, conic, try controlBounds(path_), geometry_limit);
     defer triangulated.deinit(scratch);
     const colored = try field.colorMesh(scratch, triangulated.points, triangulated.values, triangulated.triangles, conic.stops, geometry_limit);
@@ -104,10 +191,13 @@ fn triangulateColorPieces(
     }
 }
 
-/// SVG has no mesh shading: the patches split into pieces whose colors
-/// lie along lines (color_patches/scalar.zig), each piece is triangulated as a
-/// field along its line, and the triangles take the line's colors.
+/// SVG has no mesh shading: rasterized into a clipped bitmap by default, or
+/// split into scalar-line pieces and triangulated when `svg_mesh == .triangles`.
 pub fn svgColors(self: *Builder, path_: *const c.TypstPath, evenodd: bool, patches: Gradient.ColorPatches, transform: g.Transform, id: u64) !void {
+    switch (self.svg_mesh) {
+        .raster => |dpi| return svgRaster(self, path_, evenodd, .{ .color_patches = patches }, dpi, transform, id),
+        .triangles => {},
+    }
     const scratch = self.arena.child_allocator;
     const pieces = try color_patches.scalar.lines(scratch, patches, DisplayList.Color.tolerance, geometry_limit);
     defer scratch.free(pieces);
@@ -191,12 +281,7 @@ pub fn svgTriangles(self: *Builder, path_: *const c.TypstPath, evenodd: bool, me
     const opaque_mesh = for (mesh.vertices) |vertex| {
         if (vertex.color.a != 1) break false;
     } else true;
-    var placement = transform;
-    var level = self.levels.items.len;
-    while (level > 0) {
-        level -= 1;
-        placement = placement.then(self.levels.items[level].transform);
-    }
+    const placement = currentPlacement(self, transform);
     const scale = @sqrt(@abs(placement.a * placement.d - placement.b * placement.c));
     const distance = if (opaque_mesh and scale > 0) svg_mesh.overlap * @max(self.size.x, self.size.y) / scale else 0;
     var count: usize = 0;

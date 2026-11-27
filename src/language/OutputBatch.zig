@@ -44,6 +44,7 @@ const Target = struct {
             .frames = self.frames,
             .tracks = try self.view.animation(),
             .object_ids = if (self.view.tracks.items.len != 0) self.view.snapshot.ids.items else null,
+            .svg_mesh = self.view.settings.svg_mesh,
         };
     }
 

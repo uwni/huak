@@ -146,9 +146,14 @@ pub fn invoke(self: *Runtime, comptime id: builtin.Id, arg: builtin.Arguments(id
                 self.native_message = "flatten_transparency needs an opaque paper";
                 return error.InvalidColor;
             }
+            const source = try object_handles.objectValue(self, arg.target, false);
+            const preserved_svg_mesh = if ((try source.owner.scene.getNode(source.index)).* == .picture)
+                (try source.owner.scene.settings(source.index)).svg_mesh
+            else
+                Scene.SvgMesh.default;
             var selected = try object_handles.objectSnapshot(self, arg.target, true);
             defer selected.deinit();
-            const flattened = transparency.flatten(self.scene_allocator, &selected.picture, options, self) catch |err| {
+            var flattened = transparency.flatten(self.scene_allocator, &selected.picture, options, self) catch |err| {
                 switch (err) {
                     error.TranslucentText => self.native_message = "flatten_transparency cannot change the color of a native text; convert it with outlines first",
                     error.OverlappingVaryingPaints => self.native_message = "flatten_transparency combines at most four overlapping gradients, and only on one geometry: ramps between the same points, or fields on the same patches or rays",
@@ -156,7 +161,12 @@ pub fn invoke(self: *Runtime, comptime id: builtin.Id, arg: builtin.Arguments(id
                 }
                 return err;
             };
-            return object_handles.objectResult(self, flattened);
+            var scene = Scene.ownership.fromDisplayList(&flattened) catch |err| {
+                flattened.deinit();
+                return err;
+            };
+            (scene.settings(0) catch unreachable).svg_mesh = preserved_svg_mesh;
+            return object_handles.sceneResult(self, scene, 0);
         },
         .canvas => {
             const target = try object_handles.objectValue(self, arg.target, true);
@@ -213,12 +223,21 @@ pub fn invoke(self: *Runtime, comptime id: builtin.Id, arg: builtin.Arguments(id
             if ((arg.width == null) != (arg.height == null)) return error.InvalidCanvas;
             const size: ?g.Point = if (arg.width) |width| .{ .x = try lengthPoints(width), .y = try lengthPoints(arg.height.?) } else null;
             if (size) |value| try validateCanvas(value.x, value.y);
+            const rasterize = if (arg.mesh_rasterize) |value| try boolean(value) else true;
+            const dpi = if (arg.mesh_dpi) |value| try numeric(value) else Scene.SvgMesh.default_dpi;
+            (Scene.SvgMesh{ .raster = dpi }).validate() catch |err| {
+                if (err == error.InvalidStyle) self.native_message = "picture mesh_dpi must be finite and positive";
+                return err;
+            };
+            const svg_mesh: Scene.SvgMesh = if (rasterize) .{ .raster = dpi } else .triangles;
             const owner = try self.gpa.create(SceneOwner);
             errdefer self.gpa.destroy(owner);
             owner.* = .{ .scene = .{ .storage = .initWithMeshes(self.scene_allocator, self.backends.meshes) }, .owner_index = try object_handles.nextOwnerIndex(self), .animation_state = .init(self.gpa) };
             errdefer owner.scene.deinit();
             const index = try owner.scene.addPicture(null, .{}, null);
-            (try owner.scene.settings(index)).size = size;
+            const settings = try owner.scene.settings(index);
+            settings.size = size;
+            settings.svg_mesh = svg_mesh;
             try self.scene_values.append(self.gpa, owner);
             return objectHandle(owner.scene.object(index));
         },

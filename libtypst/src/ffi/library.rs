@@ -133,6 +133,7 @@ pub unsafe extern "C" fn typst_version_info(out: *mut TypstVersionInfo) -> Typst
             | TYPST_CAP_PDF_CREATOR
             | TYPST_CAP_GRADIENT_STOPS
             | TYPST_CAP_PDF_PAGE_OPACITY
+            | TYPST_CAP_RASTER_IMAGE
             | crate::context::FONT_DISCOVERY,
         library_version: TypstStr::view(env!("CARGO_PKG_VERSION")),
         typst_version: TypstStr::view(typst_core::utils::version().raw()),

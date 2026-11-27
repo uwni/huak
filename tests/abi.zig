@@ -222,3 +222,28 @@ test "host engine inputs are copied and available to native code evaluation" {
     defer layout.deinit();
     try t.expect(measured[0].width > 0 and measured[0].height > 0);
 }
+
+test "native pixel scene copies caller buffer and exports PNG raster image in SVG" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    try t.expect(try library.supports(c.TYPST_CAP_RASTER_IMAGE));
+    var report: ?*c.TypstDiagnostics = null;
+    var raster: ?*c.TypstScene = null;
+    defer library.functions.scene_release(raster);
+    {
+        var rgb = [_]u8{ 255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0 };
+        try check(&library, library.functions.scene_from_pixels(binding.binary(&rgb), 2, 2, c.TYPST_PIXEL_RGB8, 24, 12, &raster, &report), &report);
+        @memset(&rgb, 0);
+    }
+    var metrics: c.TypstMetrics = undefined;
+    try check(&library, library.functions.scene_metrics(raster, &metrics), &report);
+    try t.expectEqual(@as(f64, 24), metrics.width_pt);
+    try t.expectEqual(@as(f64, 12), metrics.height_pt);
+    var svg: ?*c.TypstBuffer = null;
+    defer library.functions.buffer_release(svg);
+    try check(&library, library.functions.scene_export_svg(raster, &svg, &report), &report);
+    const text = binding.bytes(library.functions.buffer_data(svg));
+    try t.expect(std.mem.indexOf(u8, text, "<image") != null);
+    try t.expect(std.mem.indexOf(u8, text, "data:image/png;base64,") != null);
+    try t.expect(std.mem.indexOf(u8, text, "preserveAspectRatio=\"none\"") != null);
+}

@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TYPST_ABI_VERSION 65547
+#define TYPST_ABI_VERSION 65548
 
 #define TYPST_CAP_PDF 1
 
@@ -81,6 +81,21 @@
  * `typst_pdf_page_with_opacity`.
  */
 #define TYPST_CAP_PDF_PAGE_OPACITY 32768
+
+/**
+ * `typst_scene_from_pixels`.
+ */
+#define TYPST_CAP_RASTER_IMAGE 65536
+
+/**
+ * Row-major packed 8-bit RGB pixels, three bytes per pixel, top-to-bottom.
+ */
+#define TYPST_PIXEL_RGB8 0
+
+/**
+ * Row-major packed 8-bit straight-alpha RGBA pixels, four bytes per pixel, top-to-bottom.
+ */
+#define TYPST_PIXEL_RGBA8 1
 
 #define TYPST_VALUE_NONE 0
 
@@ -1201,6 +1216,25 @@ TypstStatus typst_scene_from_pdf(const struct TypstContext *context,
                                  size_t page,
                                  struct TypstScene **out,
                                  struct TypstDiagnostics **diagnostics);
+
+/**
+ * Creates a reusable native scene containing one raster image from raw
+ * row-major pixel data, sized to `width_pt` by `height_pt` in points. Copies
+ * the input bytes; the scene can outlive them. `encoding` is a TYPST_PIXEL_*
+ * constant. Available since ABI 1.12 with TYPST_CAP_RASTER_IMAGE.
+ *
+ * # Safety
+ * `pixels` follows the module pointer contract. `out` must be a writable scene
+ * slot; `diagnostics` is optional. Release the scene and diagnostics separately.
+ */
+TypstStatus typst_scene_from_pixels(struct TypstBytes pixels,
+                                    uint32_t width_px,
+                                    uint32_t height_px,
+                                    uint32_t encoding,
+                                    double width_pt,
+                                    double height_pt,
+                                    struct TypstScene **out,
+                                    struct TypstDiagnostics **diagnostics);
 
 /**
  * Copies native scene commands and retains referenced layouts/nested scenes.

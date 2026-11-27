@@ -5,6 +5,7 @@ const typst = @import("libtypst");
 const c = typst.c;
 const g = @import("../../drawing/geometry.zig");
 const DisplayList = @import("../../drawing/DisplayList.zig");
+const DrawingScene = @import("../../drawing/Scene.zig");
 const Path = @import("../../drawing/path/Path.zig");
 const pens = @import("../../drawing/pen/root.zig");
 const Workers = @import("workers");
@@ -28,7 +29,9 @@ pub const SubmitOptions = struct {
     /// scene cannot hold, become PDF graphics that Typst imports. Otherwise
     /// they take the forms SVG has for them.
     pdf: bool = false,
-    /// Bounded worker budget for data-parallel SVG mesh triangulation.
+    /// How SVG mesh fills are represented (bitmap rasterization at DPI, or vector triangles).
+    svg_mesh: DrawingScene.SvgMesh = .default,
+    /// Bounded worker budget for data-parallel SVG mesh rasterization/triangulation.
     workers: Workers = .serial,
 };
 
@@ -57,6 +60,7 @@ pub fn submit(allocator: std.mem.Allocator, library: *typst.Library, picture: *c
 
 pub fn submitPicture(allocator: std.mem.Allocator, library: *typst.Library, picture: *const DisplayList, size: ?g.Point, options: SubmitOptions) !typst.Document {
     library.clearError();
+    try options.svg_mesh.validate();
     if (size) |p| if (!p.isFinite() or p.x <= 0 or p.y <= 0) return error.InvalidCanvas;
     if (options.object_ids) |ids| {
         if (ids.len != picture.commands.items.len) return error.InvalidObjectIds;
@@ -81,6 +85,7 @@ fn document(allocator: std.mem.Allocator, library: *typst.Library, picture: *con
         .pen_options = options.pen_geometry,
         .size = undefined,
         .pdf = options.pdf,
+        .svg_mesh = options.svg_mesh,
         .workers = options.workers,
     };
     defer builder.deinit();
@@ -148,6 +153,7 @@ pub const Builder = struct {
     children: std.ArrayList(*c.TypstScene) = .empty,
     levels: std.ArrayList(Level) = .empty,
     pdf: bool = false,
+    svg_mesh: DrawingScene.SvgMesh = .default,
     workers: Workers = .serial,
     image_context: ?typst.Engine = null,
     /// Created on the first PDF graphic; every mesh and layer of the

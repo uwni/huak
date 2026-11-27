@@ -168,3 +168,85 @@ test "one picture container supports automatic extent nested export copies and i
     defer cropped.deinit();
     try t.expect(std.mem.indexOf(u8, cropped.bytes(), "viewBox=\"0 0 30 15\"") != null);
 }
+
+test "picture mesh_rasterize and mesh_dpi control SVG mesh fills only and survive flatten_transparency" {
+    var library = try typst.Library.open(options.library_path);
+    defer library.deinit();
+    var program = try compile(&library,
+        \\import paint.{rgb, rectangle, fill, draw, pen, picture, append}
+        \\import gradient.{patches, linear}
+        \\import object.flatten_transparency
+        \\pts := []
+        \\vals := []
+        \\for i in 0:3 do
+        \\    for j in 0:3 do
+        \\        pts += [(i*20pt, j*20pt)]
+        \\        vals += [i/3.0]
+        \\    end
+        \\end
+        \\mesh := patches(pts, vals, [rgb(0,0,0), rgb(1,0,0)], [0, 1], 0.01)
+        \\box := rectangle((0pt, 0pt), 60pt, 60pt)
+        \\ramp := linear((0pt, 0pt), (60pt, 0pt), [rgb(0,0,1), rgb(0,1,0)])
+        \\
+        \\low := picture(mesh_dpi: 72)
+        \\append(low, fill(box, mesh))
+        \\append(low, draw(rectangle((5pt, 5pt), 50pt, 50pt), pen(rgb(0,0,0), 1pt)))
+        \\append(low, fill(rectangle((10pt, 10pt), 10pt, 10pt), ramp))
+        \\
+        \\high := picture(mesh_dpi: 300)
+        \\append(high, fill(box, mesh))
+        \\
+        \\vec := picture(mesh_rasterize: false)
+        \\append(vec, fill(box, mesh))
+        \\vec_flat := flatten_transparency(vec, rgb(1,1,1))
+        \\
+        \\plain := picture()
+        \\append(plain, fill(box, ramp))
+    );
+    defer program.deinit();
+    var runtime = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+    defer runtime.deinit();
+    var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
+    defer machine.deinit();
+    try execute(&machine);
+
+    var low = try runtime.render(machine.getGlobal("low").?, .svg);
+    defer low.deinit();
+    var high = try runtime.render(machine.getGlobal("high").?, .svg);
+    defer high.deinit();
+    var vec = try runtime.render(machine.getGlobal("vec_flat").?, .svg);
+    defer vec.deinit();
+    var plain = try runtime.render(machine.getGlobal("plain").?, .svg);
+    defer plain.deinit();
+
+    // Only the mesh fill becomes an image; strokes and linear gradients stay vector.
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, low.bytes(), "<image"));
+    try t.expect(std.mem.indexOf(u8, low.bytes(), "data:image/png;base64,") != null);
+    try t.expect(std.mem.indexOf(u8, low.bytes(), "<linearGradient") != null);
+    try t.expect(std.mem.indexOf(u8, low.bytes(), "stroke-width=\"1\"") != null);
+    try t.expect(std.mem.indexOf(u8, low.bytes(), "shape-rendering:crispEdges") == null);
+
+    // Higher DPI produces a larger embedded PNG.
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, high.bytes(), "<image"));
+    try t.expect(high.bytes().len > low.bytes().len);
+
+    // mesh_rasterize: false survives flatten_transparency and emits vector triangles.
+    try t.expect(std.mem.indexOf(u8, vec.bytes(), "<image") == null);
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, vec.bytes(), " data-typst-label=\"huak-mesh\""));
+    try t.expect(std.mem.indexOf(u8, vec.bytes(), "shape-rendering:crispEdges") != null);
+
+    // Pictures without meshes never emit <image>.
+    try t.expect(std.mem.indexOf(u8, plain.bytes(), "<image") == null);
+    try t.expect(std.mem.indexOf(u8, plain.bytes(), "<linearGradient") != null);
+
+    // Non-positive mesh_dpi is rejected at runtime.
+    for ([_][]const u8{ "picture(mesh_dpi: 0)", "picture(mesh_dpi: -72)" }) |bad| {
+        var bad_prog = try compile(&library, bad);
+        defer bad_prog.deinit();
+        var bad_rt = try l.Runtime.init(t.allocator, t.allocator, &library, .{});
+        defer bad_rt.deinit();
+        var bad_vm = try l.Machine.init(t.allocator, &bad_prog, bad_rt.host(), .{});
+        defer bad_vm.deinit();
+        try t.expectError(error.RuntimeFailed, bad_vm.execute(&.{}));
+    }
+}

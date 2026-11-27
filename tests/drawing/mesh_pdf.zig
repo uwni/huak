@@ -62,14 +62,35 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     const scene: @import("huak").render.Scene = .{ .picture = &picture, .size = .{ .x = 100, .y = 100 }, .frames = &frames };
     try scene.validate(.pdf);
     {
-        // One color: SVG draws the mesh as a labeled group of triangle paths,
-        // clipped to the even-odd boundary normalized for Typst's nonzero
-        // clips, with the stylesheet that stops antialiasing between them.
+        // Default SVG rasterizes only the mesh fill into a clipped PNG image;
+        // foreground paths and Typst text remain pure vectors.
         var diagnostic: ?typst.Buffer = null;
         var output = try scene.render(t.allocator, &library, .svg, &diagnostic);
         defer output.deinit();
+        try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "<image"));
+        try t.expect(std.mem.indexOf(u8, output.bytes(), "data:image/png;base64,") != null);
+        try t.expect(std.mem.indexOf(u8, output.bytes(), "clip-path=") != null);
+        try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), " data-typst-label=\"huak-mesh\""));
+        try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), "shape-rendering:crispEdges"));
+        try t.expect(std.mem.indexOf(u8, output.bytes(), "<use") != null);
+    }
+    {
+        const capabilities = library.capabilities.?;
+        defer library.capabilities = capabilities;
+        library.capabilities = capabilities & ~@as(u64, typst.c.TYPST_CAP_RASTER_IMAGE);
+        try t.expectError(error.Unsupported, backend.submit(t.allocator, &library, &picture, 100, 100, .{ .frames = &frames }));
+    }
+    {
+        // Explicit triangle mode: SVG draws the mesh as a labeled group of
+        // triangle paths, clipped to the normalized even-odd boundary, with crispEdges.
+        var tri_scene = scene;
+        tri_scene.svg_mesh = .triangles;
+        var diagnostic: ?typst.Buffer = null;
+        var output = try tri_scene.render(t.allocator, &library, .svg, &diagnostic);
+        defer output.deinit();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), " data-typst-label=\"huak-mesh\""));
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "shape-rendering:crispEdges"));
+        try t.expect(std.mem.indexOf(u8, output.bytes(), "<image") == null);
     }
     {
         const capabilities = library.capabilities.?;

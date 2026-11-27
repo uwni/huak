@@ -25,7 +25,7 @@ pub const gradient = .{
 
 pub const picture = .{
     .canvas = .{ .args = .{ .target = .picture, .width = .length, .height = .length }, .minimum = 3, .result = .unit },
-    .picture = .{ .implicit = true, .args = .{ .width = .length, .height = .length }, .minimum = 0, .result = .picture },
+    .picture = .{ .implicit = true, .args = .{ .width = .length, .height = .length, .mesh_rasterize = .boolean, .mesh_dpi = .number }, .minimum = 0, .result = .picture },
 };
 
 pub const object = .{

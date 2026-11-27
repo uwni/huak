@@ -13,9 +13,10 @@ use typst_core::{
     syntax::{Span, Spanned},
     utils::{PicoStr, Protected},
     visualize::{
-        Color, Curve, CurveItem, DashPattern, FillRule, FixedStroke, Geometry, Gradient, ImageElem,
-        ImageFormat, ImageKind, LineCap, LineJoin, LinearGradient, Paint, ProcessColorSpace,
-        RadialGradient, RelativeTo, Rgb, Shape, VectorFormat,
+        Color, Curve, CurveItem, DashPattern, FillRule, FixedStroke, Geometry, Gradient, Image,
+        ImageElem, ImageFormat, ImageKind, LineCap, LineJoin, LinearGradient, Paint, PixelEncoding,
+        PixelFormat, ProcessColorSpace, RadialGradient, RasterFormat, RasterImage, RelativeTo, Rgb,
+        Shape, VectorFormat,
     },
     World,
 };
@@ -112,6 +113,57 @@ impl Scene {
             Self { frame },
             crate::diagnostics::Report::from_native(&world, &sink.warnings(), 0),
         ))
+    }
+
+    /// Create a reusable native scene containing one raster image from raw
+    /// row-major pixel data, sized to `width_pt` by `height_pt` in points.
+    pub(crate) fn from_pixels(
+        pixels: &[u8],
+        width_px: u32,
+        height_px: u32,
+        encoding: u32,
+        width_pt: f64,
+        height_pt: f64,
+    ) -> Result<Self, Error> {
+        if !width_pt.is_finite() || !height_pt.is_finite() || width_pt <= 0.0 || height_pt <= 0.0 {
+            return Err(Error::invalid(
+                "image dimensions must be finite positive point values",
+            ));
+        }
+        if width_px == 0 || height_px == 0 {
+            return Err(Error::invalid("pixel dimensions must be positive"));
+        }
+        let (pixel_encoding, channels): (PixelEncoding, u32) = match encoding {
+            TYPST_PIXEL_RGB8 => (PixelEncoding::Rgb8, 3),
+            TYPST_PIXEL_RGBA8 => (PixelEncoding::Rgba8, 4),
+            _ => return Err(Error::unsupported("unknown pixel encoding")),
+        };
+        let expected = width_px
+            .checked_mul(height_px)
+            .and_then(|count| count.checked_mul(channels))
+            .ok_or_else(|| Error::range("pixel dimensions overflow byte length"))?;
+        if pixels.len() != expected as usize {
+            return Err(Error::invalid(
+                "pixel byte length does not match dimensions and encoding",
+            ));
+        }
+        let raster = RasterImage::plain(
+            Bytes::new(pixels.to_vec()),
+            RasterFormat::Pixel(PixelFormat {
+                encoding: pixel_encoding,
+                width: width_px,
+                height: height_px,
+            }),
+        )
+        .map_err(|message| Error::invalid(message.as_str()))?;
+        let image = Image::plain(ImageKind::Raster(raster));
+        let size = Size::new(Abs::pt(width_pt), Abs::pt(height_pt));
+        let mut frame = Frame::soft(size);
+        frame.push(
+            Point::zero(),
+            FrameItem::Image(image, size, Span::detached()),
+        );
+        Ok(Self { frame })
     }
 
     pub fn new<'a>(

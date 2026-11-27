@@ -15,7 +15,7 @@ pub const TYPST_COMPILE_FAILED: TypstStatus = 3;
 pub const TYPST_UNSUPPORTED: TypstStatus = 4;
 pub const TYPST_PANIC: TypstStatus = 5;
 pub const TYPST_OUT_OF_RANGE: TypstStatus = 6;
-pub const TYPST_ABI_VERSION: u32 = 0x0001_000B;
+pub const TYPST_ABI_VERSION: u32 = 0x0001_000C;
 pub const TYPST_CAP_PDF: u64 = 1;
 pub const TYPST_CAP_BATCH_LAYOUT: u64 = 2;
 pub const TYPST_CAP_NATIVE_SCENE: u64 = 4;
@@ -47,6 +47,12 @@ pub const TYPST_CAP_PDF_CREATOR: u64 = 8192;
 pub const TYPST_CAP_GRADIENT_STOPS: u64 = 16384;
 /// `typst_pdf_page_with_opacity`.
 pub const TYPST_CAP_PDF_PAGE_OPACITY: u64 = 32768;
+/// `typst_scene_from_pixels`.
+pub const TYPST_CAP_RASTER_IMAGE: u64 = 65536;
+/// Row-major packed 8-bit RGB pixels, three bytes per pixel, top-to-bottom.
+pub const TYPST_PIXEL_RGB8: u32 = 0;
+/// Row-major packed 8-bit straight-alpha RGBA pixels, four bytes per pixel, top-to-bottom.
+pub const TYPST_PIXEL_RGBA8: u32 = 1;
 pub const TYPST_VALUE_NONE: u32 = 0;
 pub const TYPST_VALUE_BOOL: u32 = 1;
 pub const TYPST_VALUE_INT: u32 = 2;

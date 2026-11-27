@@ -24,6 +24,7 @@ test {
     _ = @import("render/typst/pen.zig");
     _ = @import("render/pdf/mesh.zig");
     _ = @import("render/svg/mesh.zig");
+    _ = @import("render/svg/raster.zig");
     _ = @import("render/svg/styles.zig");
     _ = render;
     _ = language;

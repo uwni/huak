@@ -81,7 +81,7 @@ test "explicit nib animations preserve transform tracks and reject unnormalized 
     try std.testing.expectEqual(@as(usize, 0), target.animation_state.tracks.len());
     _ = try builtin_calls.invoke(&runtime, a, .animate, &.{ id, .{ .string = "opacity" }, scalar_keys });
     try std.testing.expectEqual(@as(usize, 1), target.animation_state.tracks.len());
-    const group = try builtin_calls.invoke(&runtime, a, .append, &.{ picture, try builtin_calls.invoke(&runtime, a, .picture, &.{ .omitted, .omitted, try builtin_calls.invoke(&runtime, a, .scale, &.{.{ .int = 1 }}) }) });
+    const group = try builtin_calls.invoke(&runtime, a, .append, &.{ picture, try builtin_calls.invoke(&runtime, a, .picture, &.{}), try builtin_calls.invoke(&runtime, a, .scale, &.{.{ .int = 1 }}) });
     _ = try builtin_calls.invoke(&runtime, a, .append, &.{ group, try builtin_calls.invoke(&runtime, a, .draw, &.{ path_value, nib }) });
 
     try std.testing.expectError(error.UnsupportedResolvedStrokeAnimation, builtin_calls.invoke(&runtime, a, .animate, &.{ group, .{ .string = "stroke_width" }, scalar_keys }));
@@ -94,7 +94,7 @@ test "animated ancestors constrain placed subtrees and style changes without rej
     defer runtime.deinit();
     const picture = try builtin_calls.invoke(&runtime, a, .picture, &.{});
     const transform = try builtin_calls.invoke(&runtime, a, .scale, &.{.{ .int = 1 }});
-    const group = try builtin_calls.invoke(&runtime, a, .append, &.{ picture, try builtin_calls.invoke(&runtime, a, .picture, &.{ .omitted, .omitted, transform }) });
+    const group = try builtin_calls.invoke(&runtime, a, .append, &.{ picture, try builtin_calls.invoke(&runtime, a, .picture, &.{}), transform });
     const keys = types.listView(&.{ types.listView(&.{ .{ .int = 0 }, .{ .int = 1 } }), types.listView(&.{ .{ .int = 1 }, .{ .int = 2 } }) });
     _ = try builtin_calls.invoke(&runtime, a, .animate, &.{ group, .{ .string = "stroke_width" }, keys });
     const path_value = try builtin_calls.invoke(&runtime, a, .path, &.{ .{ .vec2 = .zero }, .{ .vec2 = .{ .x = 10, .y = 10 } } });

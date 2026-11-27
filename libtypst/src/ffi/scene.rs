@@ -99,6 +99,42 @@ pub unsafe extern "C" fn typst_scene_from_pdf(
     }
 }
 
+/// Creates a reusable native scene containing one raster image from raw
+/// row-major pixel data, sized to `width_pt` by `height_pt` in points. Copies
+/// the input bytes; the scene can outlive them. `encoding` is a TYPST_PIXEL_*
+/// constant. Available since ABI 1.12 with TYPST_CAP_RASTER_IMAGE.
+///
+/// # Safety
+/// `pixels` follows the module pointer contract. `out` must be a writable scene
+/// slot; `diagnostics` is optional. Release the scene and diagnostics separately.
+#[no_mangle]
+pub unsafe extern "C" fn typst_scene_from_pixels(
+    pixels: TypstBytes,
+    width_px: u32,
+    height_px: u32,
+    encoding: u32,
+    width_pt: f64,
+    height_pt: f64,
+    out: *mut *mut TypstScene,
+    diagnostics: *mut *mut TypstDiagnostics,
+) -> TypstStatus {
+    unsafe {
+        call(diagnostics, || {
+            output(out)?;
+            let inner = crate::scene::Scene::from_pixels(
+                values(pixels.data, pixels.len, "pixel data")?,
+                width_px,
+                height_px,
+                encoding,
+                width_pt,
+                height_pt,
+            )?;
+            out.write(owned(TypstScene { inner }));
+            Ok(Report::default())
+        })
+    }
+}
+
 /// Copies native scene commands and retains referenced layouts/nested scenes.
 ///
 /// # Safety
