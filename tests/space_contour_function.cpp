@@ -145,7 +145,7 @@ std::vector<Case> cases() {
   knots(2) = 1;
   NCollection_Array1<int> mults(1, 2);
   mults.Init(4);
-  const Handle(Geom_BSplineSurface) spline = new Geom_BSplineSurface(net, knots, knots, mults, mults, 3, 3);
+  const Handle(Geom_Surface) spline = new Geom_BSplineSurface(net, knots, knots, mults, mults, 3, 3);
   const Handle(Geom_Curve) profile = GC_MakeSegment(gp_Pnt(12, 0, -5), gp_Pnt(18, 0, 9)).Value();
   return {
       {"plane", new Geom_Plane(frame), -10, 10, -10, 10},

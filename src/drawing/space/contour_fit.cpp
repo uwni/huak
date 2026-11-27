@@ -408,12 +408,12 @@ std::optional<Through> throughPoints(const std::vector<Sample> &points,
   };
   double first = ElCLib::Parameter(circle->Circ(), a);
   if (round)
-    return Through{Exact{circle, first, first + 2 * M_PI, 0}, off, toCircle};
+    return Through{Exact{circle.get(), first, first + 2 * M_PI, 0}, off, toCircle};
   if (from(points[n / 2].p, first) > from(b, first)) {
     circle->Reverse();
     first = ElCLib::Parameter(circle->Circ(), a);
   }
-  return Through{Exact{circle, first, from(b, first), 0}, off, toCircle};
+  return Through{Exact{circle.get(), first, from(b, first), 0}, off, toCircle};
 }
 } // namespace
 
