@@ -43,7 +43,7 @@ test "motion expressions retain units and composition order through painted and 
         inline for (.{ "a", "b", "c", "d" }) |field| try t.expectApproxEqAbs(@field(expected, field), @field(halfway, field), 1e-14);
         var svg = try runtime.render(machine.getGlobal("page").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<clipPath") != null);
     }
 }
 
@@ -73,7 +73,7 @@ test "standard library normal motion composes with scale in SVG and PDF" {
     try t.expectApproxEqAbs(@as(f64, 18), box.height(), 1e-10);
     var svg = try runtime.render(machine.getGlobal("curved").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     var pdf = try runtime.render(machine.getGlobal("curved").?, .pdf);
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
@@ -111,7 +111,7 @@ test "normal nib corner choices share one guide but yield distinct painted regio
     try execute(&machine);
     var svg = try runtime.render(machine.getGlobal("page").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     var pdf = try runtime.render(machine.getGlobal("page").?, .pdf);
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
@@ -138,7 +138,7 @@ test "Hobby knot directions survive picture storage, region extraction and both 
     const page = machine.getGlobal("page").?;
     var svg = try runtime.render(page, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     var pdf = try runtime.render(page, .pdf);
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));

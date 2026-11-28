@@ -22,12 +22,12 @@ pub fn square(points: [4][2]f64) [5]Segment {
 /// The object's stream data, found by its /Length.
 pub fn streamOf(pdf: []const u8, id: u8) ![]const u8 {
     var header: [16]u8 = undefined;
-    const start = std.mem.indexOf(u8, pdf, try std.fmt.bufPrint(&header, "\n{d} 0 obj\n", .{id})) orelse return error.MissingObject;
+    const start = std.mem.find(u8, pdf, try std.mem.print(&header, "\n{d} 0 obj\n", .{id})) orelse return error.MissingObject;
     const object = pdf[start..];
-    const length_at = (std.mem.indexOf(u8, object, "/Length ") orelse return error.MissingLength) + "/Length ".len;
-    const length_end = std.mem.indexOfScalarPos(u8, object, length_at, '>') orelse return error.MissingLength;
+    const length_at = (std.mem.find(u8, object, "/Length ") orelse return error.MissingLength) + "/Length ".len;
+    const length_end = std.mem.findScalarPos(u8, object, length_at, '>') orelse return error.MissingLength;
     const length = try std.fmt.parseInt(usize, std.mem.trimEnd(u8, object[length_at..length_end], " "), 10);
-    const data = (std.mem.indexOf(u8, object, ">>\nstream\n") orelse return error.MissingStream) + ">>\nstream\n".len;
+    const data = (std.mem.find(u8, object, ">>\nstream\n") orelse return error.MissingStream) + ">>\nstream\n".len;
     try testing.expectEqualStrings("\nendstream", object[data + length ..][0.."\nendstream".len]);
     return object[data..][0..length];
 }

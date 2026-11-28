@@ -69,7 +69,7 @@ fn parseScript(self: *ModuleGraph, unit: *ModuleGraph.Unit, depth: usize) anyerr
     for (headers.imports) |header| {
         const statement = header.statement;
         const imported = statement.value.imported;
-        if (imported.path.len == 0 or std.mem.indexOfScalar(u8, imported.path, 0) != null)
+        if (imported.path.len == 0 or std.mem.findScalar(u8, imported.path, 0) != null)
             return self.fail(unit, statement.span, "import path must be nonempty and contain no NUL bytes", .{});
         const imported_native = if (imported.bare) Namespace.parse(imported.path) else null;
         const bundled = if (imported.bare or std.mem.startsWith(u8, imported.path, "std/")) @import("huak_std").resolve(imported.path) else null;
@@ -83,7 +83,7 @@ fn parseScript(self: *ModuleGraph, unit: *ModuleGraph.Unit, depth: usize) anyerr
             if (std.mem.startsWith(u8, imported.path, "std/"))
                 return self.fail(unit, statement.span, "unknown standard library module '{s}'", .{imported.path});
             const resolver = self.resolver orelse return self.fail(unit, statement.span, "import requires a source resolver", .{});
-            const path = if (imported.bare) try std.fmt.allocPrint(self.syntax, "{s}.huak", .{imported.path}) else imported.path;
+            const path = if (imported.bare) try self.syntax.print("{s}.huak", .{imported.path}) else imported.path;
             break :local resolver.resolve(self.syntax, name, path) catch |err| {
                 if (err == error.OutOfMemory) return err;
                 const failure = self.fail(unit, statement.span, "cannot import '{s}': {s}", .{ imported.path, @errorName(err) });
@@ -93,7 +93,7 @@ fn parseScript(self: *ModuleGraph, unit: *ModuleGraph.Unit, depth: usize) anyerr
         };
         var target = load(self, child_source, depth + 1, imported_native) catch |err| {
             if (err == error.ReservedModuleIdentity) return self.fail(unit, statement.span, "source resolver cannot use reserved native module identity", .{});
-            if (err == error.CyclicImport) return self.fail(unit, statement.span, "cyclic import: '{s}' -> '{s}'", .{ std.fs.path.basename(name), std.fs.path.basename(child_source.name) });
+            if (err == error.CyclicImport) return self.fail(unit, statement.span, "cyclic import: '{s}' -> '{s}'", .{ std.Io.Dir.path.basename(name), std.Io.Dir.path.basename(child_source.name) });
             if (err == error.ImportDepthExceeded or err == error.TooManyModules) return self.fail(unit, statement.span, "import graph exceeds limits: {s}", .{@errorName(err)});
             return err;
         };
@@ -175,7 +175,7 @@ fn nativeSource(self: *ModuleGraph, namespace: Namespace) ![]const u8 {
     }
     for (builtins.constantNames(namespace)) |name| {
         const constant = builtins.namespaceConstant(namespace, name).?.number;
-        const declaration = try std.fmt.allocPrint(self.syntax, "export {s}:={d}\n", .{ name, constant });
+        const declaration = try self.syntax.print("export {s}:={d}\n", .{ name, constant });
         defer self.syntax.free(declaration);
         try text.appendSlice(self.syntax, declaration);
     }
@@ -200,7 +200,7 @@ test "nested imports preserve binding initializer provenance through canonical d
         var diagnostic: ?source.Diagnostic = null;
         const first = if (reversed) "second" else "first";
         const second = if (reversed) "first" else "second";
-        const input = try std.fmt.allocPrint(arena.allocator(),
+        const input = try arena.allocator().print(
             \\import "leaf" as ready
             \\import "{s}".leaf as tools
             \\import "{s}".leaf as tools

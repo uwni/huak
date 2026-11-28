@@ -106,7 +106,7 @@ test "single envelopes compare scales translations aspect ratios and cusps with 
             try t.expectEqual(@as(usize, 0), input_check.mismatches);
         } else {
             try t.expect(!expected.ok);
-            try t.expect(std.mem.indexOf(u8, expected.diagnostic, "Enormous number") != null);
+            try t.expect(std.mem.find(u8, expected.diagnostic, "Enormous number") != null);
         }
         var shape: ?Shape = null;
         for (source.value.paths) |candidate| if (std.mem.eql(u8, candidate.name, case.path)) {

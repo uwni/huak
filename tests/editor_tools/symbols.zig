@@ -11,8 +11,8 @@ test "envelope tooling uses builtin metadata for signatures and preserves import
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     const formatted = try tooling.format.format(&frontend, source, "/tmp/envelope-editor.huak", &diagnostic);
     defer t.allocator.free(formatted);
-    try t.expect(std.mem.indexOf(u8, formatted, "edge := envelope of curve with brush") != null);
-    try t.expect(std.mem.indexOf(u8, formatted, "plain := envelope(curve, brush, 0.01pt)") != null);
+    try t.expect(std.mem.find(u8, formatted, "edge := envelope of curve with brush") != null);
+    try t.expect(std.mem.find(u8, formatted, "plain := envelope(curve, brush, 0.01pt)") != null);
     const again = try tooling.format.format(&frontend, formatted, "/tmp/envelope-editor.huak", &diagnostic);
     defer t.allocator.free(again);
     try t.expectEqualStrings(formatted, again);
@@ -60,19 +60,19 @@ test "record editor services share fields named arguments formatting and nominal
     defer output.deinit();
     const writer = &output.writer;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = input } } }, .{}), writer);
-    const field_offset = std.mem.indexOf(u8, input, "width:3").?;
+    const field_offset = std.mem.find(u8, input, "width:3").?;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 1, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, field_offset) } }, .{}), writer);
-    const label_offset = std.mem.lastIndexOf(u8, input, "target:item").?;
+    const label_offset = std.mem.findLast(u8, input, "target:item").?;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/definition", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, label_offset) } }, .{}), writer);
-    const member_offset = std.mem.indexOf(u8, input, "value:=item.width").? + "value:=item.width".len;
+    const member_offset = std.mem.find(u8, input, "value:=item.width").? + "value:=item.width".len;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 3, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, member_offset) } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 4, .method = "huak/outputs", .params = .{ .textDocument = .{ .uri = uri } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 5, .method = "textDocument/inlayHint", .params = .{ .textDocument = .{ .uri = uri }, .range = tooling.position.Range{ .start = .{ .line = 0, .character = 0 }, .end = tooling.position.at(input, input.len) } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 6, .method = "textDocument/formatting", .params = .{ .textDocument = .{ .uri = uri }, .options = .{ .tabSize = 4, .insertSpaces = true } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 7, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = .{ .line = 0, .character = 0 } } }, .{}), writer);
-    const math_offset = std.mem.indexOf(u8, input, "sin(0)").?;
+    const math_offset = std.mem.find(u8, input, "sin(0)").?;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 8, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, math_offset) } }, .{}), writer);
-    const math_member = std.mem.indexOf(u8, input, "math.PI").? + "math.PI".len;
+    const math_member = std.mem.find(u8, input, "math.PI").? + "math.PI".len;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 9, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, math_member) } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 10, .method = "textDocument/definition", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, math_offset) } }, .{}), writer);
     var reader = std.Io.Reader.fixed(output.written());
@@ -87,7 +87,7 @@ test "record editor services share fields named arguments formatting and nominal
         switch (index) {
             1 => try t.expectEqualStrings("Widget.width: int", result.object.get("contents").?.object.get("value").?.string),
             2 => {
-                const destination = std.mem.indexOf(u8, input, "target:Widget").?;
+                const destination = std.mem.find(u8, input, "target:Widget").?;
                 const position = tooling.position.at(input, destination);
                 const start = result.object.get("range").?.object.get("start").?.object;
                 try t.expectEqualStrings(uri, result.object.get("uri").?.string);
@@ -108,9 +108,9 @@ test "record editor services share fields named arguments formatting and nominal
             5 => try harness.expectHintLabels(.{ .object = response }, &.{ "struct Widget", "fn read" }),
             6 => {
                 const formatted = result.array.items[0].object.get("newText").?.string;
-                try t.expect(std.mem.indexOf(u8, formatted, "    width:int = 2") != null);
-                try t.expect(std.mem.indexOf(u8, formatted, "Widget(width: 3)") != null);
-                try t.expect(std.mem.indexOf(u8, formatted, "{\"title\": \"Ω\"}") != null);
+                try t.expect(std.mem.find(u8, formatted, "    width:int = 2") != null);
+                try t.expect(std.mem.find(u8, formatted, "Widget(width: 3)") != null);
+                try t.expect(std.mem.find(u8, formatted, "{\"title\": \"Ω\"}") != null);
             },
             7 => {
                 var copy = false;
@@ -156,12 +156,12 @@ test "native domain editor services expose coherent members without duplicate co
     const writer = &output.writer;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = input } } }, .{}), writer);
     const requests = [_]struct { method: []const u8, offset: usize }{
-        .{ .method = "textDocument/hover", .offset = std.mem.indexOf(u8, input, "circle((").? },
+        .{ .method = "textDocument/hover", .offset = std.mem.find(u8, input, "circle((").? },
         .{ .method = "textDocument/completion", .offset = "curve:=geometry.circle".len },
-        .{ .method = "textDocument/definition", .offset = std.mem.indexOf(u8, input, "circle((").? },
+        .{ .method = "textDocument/definition", .offset = std.mem.find(u8, input, "circle((").? },
         .{ .method = "textDocument/completion", .offset = 0 },
-        .{ .method = "textDocument/hover", .offset = std.mem.indexOf(u8, input, "pencircle(3)").? },
-        .{ .method = "textDocument/hover", .offset = std.mem.indexOf(u8, input, "rgb(1,").? },
+        .{ .method = "textDocument/hover", .offset = std.mem.find(u8, input, "pencircle(3)").? },
+        .{ .method = "textDocument/hover", .offset = std.mem.find(u8, input, "rgb(1,").? },
     };
     for (requests, 1..) |request, id| try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = id, .method = request.method, .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, request.offset) } }, .{}), writer);
     var reader = std.Io.Reader.fixed(output.written());

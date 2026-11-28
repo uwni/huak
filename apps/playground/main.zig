@@ -32,7 +32,7 @@ export fn huak_set_files() bool {
 
 fn resolveFile(context: *anyopaque, arena: std.mem.Allocator, importer: []const u8, path: []const u8) !lang.compiler.ResolvedSource {
     const catalog: *const Files = @ptrCast(@alignCast(context));
-    const name = try std.fs.path.resolveAllocPosix(arena, &.{ std.fs.path.dirnamePosix(importer) orelse ".", path });
+    const name = try std.Io.Dir.path.resolveAllocPosix(arena, &.{ std.Io.Dir.path.dirnamePosix(importer) orelse ".", path });
     return .{ .name = name, .source = catalog.map.get(name) orelse return error.FileNotFound };
 }
 
@@ -117,13 +117,13 @@ test "formula preview survives a Typst diagnostic and renders again in the same 
     try std.testing.expect(huak_render(0));
     const svg = try std.testing.allocator.dupe(u8, huak_result()[0..huak_result_len()]);
     defer std.testing.allocator.free(svg);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<svg") != null);
-    try std.testing.expect(std.mem.indexOf(u8, svg, "<use") != null);
+    try std.testing.expect(std.mem.find(u8, svg, "<svg") != null);
+    try std.testing.expect(std.mem.find(u8, svg, "<use") != null);
 
     const invalid = "value := typ[#missing_playground_variable]\ndefault picture(30, 20)";
     @memcpy(huak_input(invalid.len).?[0..invalid.len], invalid);
     try std.testing.expect(!huak_render(0));
-    try std.testing.expect(std.mem.indexOf(u8, huak_result()[0..huak_result_len()], "missing_playground_variable") != null);
+    try std.testing.expect(std.mem.find(u8, huak_result()[0..huak_result_len()], "missing_playground_variable") != null);
 
     @memcpy(huak_input(example.len).?[0..example.len], example);
     try std.testing.expect(huak_render(0));
@@ -161,6 +161,6 @@ test "all published examples render through the worker interface" {
             std.debug.print("{s}: {s}\n", .{ path, result() });
             return error.ExampleRenderFailed;
         }
-        try std.testing.expect(std.mem.indexOf(u8, result(), "<svg") != null);
+        try std.testing.expect(std.mem.find(u8, result(), "<svg") != null);
     }
 }

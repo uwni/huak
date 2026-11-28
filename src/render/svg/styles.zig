@@ -16,7 +16,7 @@ fn rounded(opacity: f64) f64 {
 /// it as `data-typst-label`. The name states the rule, so equal names in
 /// documents inlined into one page mean equal rules.
 pub fn layerLabel(buffer: *[32]u8, opacity: f64) []const u8 {
-    return std.fmt.bufPrint(buffer, "huak-opacity-{d}", .{rounded(opacity)}) catch unreachable;
+    return std.mem.print(buffer, "huak-opacity-{d}", .{rounded(opacity)}) catch unreachable;
 }
 
 /// The rule that blends groups labeled for `opacity` as one layer each: the
@@ -24,16 +24,16 @@ pub fn layerLabel(buffer: *[32]u8, opacity: f64) []const u8 {
 pub fn layerRule(rules: *std.ArrayList(u8), allocator: std.mem.Allocator, opacity: f64) !void {
     var buffer: [32]u8 = undefined;
     var selector: [64]u8 = undefined;
-    const target = std.fmt.bufPrint(&selector, "[data-typst-label=\"{s}\"]", .{layerLabel(&buffer, opacity)}) catch unreachable;
+    const target = std.mem.print(&selector, "[data-typst-label=\"{s}\"]", .{layerLabel(&buffer, opacity)}) catch unreachable;
     // One rule for each label, however many layers share it.
-    if (std.mem.indexOf(u8, rules.items, target) != null) return;
+    if (std.mem.find(u8, rules.items, target) != null) return;
     try rules.print(allocator, "{s}{{opacity:{d}}}", .{ target, rounded(opacity) });
 }
 
 /// Appends `rules` as one stylesheet before the root element's closing tag.
 /// The caller owns the result.
 pub fn add(allocator: std.mem.Allocator, svg: []const u8, rules: []const u8) ![]u8 {
-    const close = std.mem.lastIndexOf(u8, svg, "</svg>") orelse return error.UnsupportedSvg;
+    const close = std.mem.findLast(u8, svg, "</svg>") orelse return error.UnsupportedSvg;
     return std.mem.concat(allocator, u8, &.{ svg[0..close], "<style>", rules, "</style>", svg[close..] });
 }
 

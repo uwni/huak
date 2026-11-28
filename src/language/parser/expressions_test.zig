@@ -63,7 +63,7 @@ test "native unit syntax accepts horizontal spacing and preserves identifier bou
     for ([_][]const u8{ "angle:=2pirad", "length:=2unknown" }) |input| {
         parser = try Parser.init(arena.allocator(), input, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "identifiers are not split") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "identifiers are not split") != null);
     }
 }
 
@@ -194,6 +194,6 @@ test "aggregate syntax rejects malformed fields dictionaries calls and lvalues" 
         var diagnostic: ?source.Diagnostic = null;
         var frontend = try Parser.init(arena.allocator(), case.code, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, frontend.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
     }
 }

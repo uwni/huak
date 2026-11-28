@@ -13,7 +13,7 @@ const encodeSmil = testing.encodeSmil;
 /// Whether `svg` contains the text that `format` makes of `args`.
 fn contains(svg: []const u8, comptime format: []const u8, args: anytype) !bool {
     var buffer: [512]u8 = undefined;
-    return std.mem.indexOf(u8, svg, try std.fmt.bufPrint(&buffer, format, args)) != null;
+    return std.mem.find(u8, svg, try std.mem.print(&buffer, format, args)) != null;
 }
 
 test "CSS shares keyframes, writes phases as delays and keeps start states for reduced motion" {
@@ -28,14 +28,14 @@ test "CSS shares keyframes, writes phases as delays and keeps start states for r
     const body = "0%{opacity:0.2}50%{opacity:1}100%{opacity:0.2}";
     const keyframes: CssEncoder.Name = .of(.keyframes, body);
     var rule: [128]u8 = undefined;
-    const rule_text = try std.fmt.bufPrint(&rule, "animation:{f} 4s linear infinite", .{keyframes});
+    const rule_text = try std.mem.print(&rule, "animation:{f} 4s linear infinite", .{keyframes});
     const class: CssEncoder.Name = .of(.class, rule_text);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, result, "@keyframes"));
     try t.expect(try contains(result, "<g opacity=\"0.2\" class=\"{f}\">", .{class}));
     // A quarter cycle in, the pulse is halfway up: its start state is 0.6.
     try t.expect(try contains(result, "<g opacity=\"0.6\" class=\"{f}\" style=\"animation-delay:-1s\">", .{class}));
     try t.expect(try contains(result, "<style>@keyframes {f}{{{s}}}@media (prefers-reduced-motion:no-preference){{.{f}{{{s}}}}}</style></svg>", .{ keyframes, body, class, rule_text }));
-    try t.expect(std.mem.indexOf(u8, result, "<animate") == null);
+    try t.expect(std.mem.find(u8, result, "<animate") == null);
 }
 
 test "CSS paints and motion use classes while tracks marked smil keep SMIL" {
@@ -52,7 +52,7 @@ test "CSS paints and motion use classes while tracks marked smil keep SMIL" {
     const fill_body = "0%{fill:rgb(0,0,255);fill-opacity:0.4}100%{fill:rgb(255,0,0);fill-opacity:1}";
     const fill_keyframes: CssEncoder.Name = .of(.keyframes, fill_body);
     var fill_rule: [128]u8 = undefined;
-    const fill_text = try std.fmt.bufPrint(&fill_rule, "animation:{f} 3s cubic-bezier(0.3,0,0.7,1) both", .{fill_keyframes});
+    const fill_text = try std.mem.print(&fill_rule, "animation:{f} 3s cubic-bezier(0.3,0,0.7,1) both", .{fill_keyframes});
     const fill_class: CssEncoder.Name = .of(.class, fill_text);
     try t.expect(try contains(result, "fill=\"rgb(0,0,255)\" fill-opacity=\"0.4\" d=\"M 0 0 L 10 10 Z \" class=\"{f}\"><animate attributeName=\"d\"", .{fill_class}));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, result, "<animate"));
@@ -62,7 +62,7 @@ test "CSS paints and motion use classes while tracks marked smil keep SMIL" {
     const motion_body = "0%{offset-distance:0%}100%{offset-distance:100%}";
     const motion_keyframes: CssEncoder.Name = .of(.keyframes, motion_body);
     var motion_rule: [160]u8 = undefined;
-    const motion_text = try std.fmt.bufPrint(&motion_rule, "transform:none;offset-path:path(\"M 20 30 L 100 30 \");offset-rotate:auto;animation:{f} 3s linear both", .{motion_keyframes});
+    const motion_text = try std.mem.print(&motion_rule, "transform:none;offset-path:path(\"M 20 30 L 100 30 \");offset-rotate:auto;animation:{f} 3s linear both", .{motion_keyframes});
     const motion_class: CssEncoder.Name = .of(.class, motion_text);
     try t.expect(try contains(result, "<g transform=\"translate(20 30) rotate(0)\" class=\"{f}\">", .{motion_class}));
     try t.expect(try contains(result, "@keyframes {f}{{{s}}}", .{ motion_keyframes, motion_body }));

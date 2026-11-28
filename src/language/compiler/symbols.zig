@@ -36,9 +36,9 @@ pub fn declareGlobal(self: *Compiler, name: []const u8, kind: Type, readonly: bo
     if (self.environment.globals.contains(name)) return self.fail(span, "duplicate declaration '{s}'", .{name});
     const index = try self.narrow(self.global_names.items.len + self.global_base, span);
     try self.environment.globals.put(self.allocator, name, .{ .index = index, .kind = kind, .readonly = readonly, .inferable = inferable });
-    try self.global_names.append(name);
-    try self.global_types.append(kind);
-    try self.readonly_globals.append(readonly);
+    try self.global_names.append(self.allocator, name);
+    try self.global_types.append(self.allocator, kind);
+    try self.readonly_globals.append(self.allocator, readonly);
 }
 
 pub fn collectGlobals(self: *Compiler, statements: []const *ast.Stmt) !void {
@@ -99,7 +99,7 @@ pub fn declareRecords(self: *Compiler) !void {
             return self.fail(statement.span, "duplicate or builtin type '{s}'", .{structure.name});
         const index = try self.narrow(self.build.records.items.len, statement.span);
         try self.environment.records.put(self.allocator, structure.name, index);
-        try self.build.records.append(.{ .name = structure.name, .module = self.environment.module_index, .fields = &.{} });
+        try self.build.records.append(self.allocator, .{ .name = structure.name, .module = self.environment.module_index, .fields = &.{} });
     }
     for (self.environment.unit.script.statements) |statement| {
         if (statement.value != .structure) continue;
@@ -124,9 +124,9 @@ pub fn declareExpressionDefaults(self: *Compiler) !void {
             const function = try self.narrow(self.output.items.len + self.function_base, field.span);
             const kind = self.build.records.items[record_index].fields[index].kind;
             @constCast(self.build.records.items[record_index].fields)[index].default_function = function;
-            try self.output.append(.{
+            try self.output.append(self.allocator, .{
                 .module = self.environment.module_index,
-                .name = try std.fmt.allocPrint(self.allocator, "<{s}.{s} default>", .{ structure.name, field.name }),
+                .name = try self.allocator.print("<{s}.{s} default>", .{ structure.name, field.name }),
                 .code = &.{},
                 .parameters = &.{},
                 .result = kind,
@@ -151,7 +151,7 @@ pub fn declareExpressionDefaults(self: *Compiler) !void {
             const index: u32 = @intCast(self.output.items.len + self.function_base);
             const kind = self.output.items[function_index].parameters[parameter_index];
             @constCast(self.output.items[function_index].default_functions)[parameter_index] = index;
-            try self.output.append(.{ .module = self.environment.module_index, .name = try std.fmt.allocPrint(self.allocator, "<{s}.{s} default>", .{ function.name, param.name }), .code = &.{}, .parameters = &.{}, .result = kind, .local_types = &.{}, .span = param.span });
+            try self.output.append(self.allocator, .{ .module = self.environment.module_index, .name = try self.allocator.print("<{s}.{s} default>", .{ function.name, param.name }), .code = &.{}, .parameters = &.{}, .result = kind, .local_types = &.{}, .span = param.span });
             try self.expression_defaults.append(self.allocator, .{ .expression = expression, .function = index, .kind = kind, .span = param.span });
         }
     }

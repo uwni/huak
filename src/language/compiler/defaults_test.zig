@@ -191,7 +191,7 @@ test "function defaults cannot implicitly capture parameters" {
     for ([_]bool{ false, true }) |optimize| for (cases) |input| {
         var diagnostic: ?Diagnostic = null;
         try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, input, "shadowed-function-default.huak", .{ .optimize = optimize }, &diagnostic));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "function default cannot reference") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "function default cannot reference") != null);
     };
 }
 
@@ -289,5 +289,5 @@ test "nested native constants work in defaults without bypassing parameter shado
         \\    return value
         \\end
     , "shadowed-namespace-default.huak", .{}, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "cannot reference parameter 'std'") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "cannot reference parameter 'std'") != null);
 }

@@ -51,9 +51,9 @@ test "font directories and system fonts are discovered by libtypst" {
     defer temporary.cleanup();
     try temporary.dir.createDirPath(testing.io, "fonts/nested");
     try temporary.dir.writeFile(testing.io, .{ .sub_path = "fonts/nested/serif.otf", .data = font_fixture });
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const length = try temporary.dir.realPath(testing.io, &buffer);
-    const directory = try std.fs.path.join(testing.allocator, &.{ buffer[0..length], "fonts" });
+    const directory = try std.Io.Dir.path.join(testing.allocator, &.{ buffer[0..length], "fonts" });
     defer testing.allocator.free(directory);
     // Without bundled fonts the scanned directory supplies the only face.
     var scanned = try library.createEngineWithOptions(&.{ .font_dirs = &.{directory}, .use_bundled_fonts = false });
@@ -90,7 +90,7 @@ test "Huak context disables plugins and has no implicit filesystem or clock" {
         try testing.expectError(error.CompileFailed, engine.compile(case.source));
         var message = try library.lastError();
         defer message.deinit();
-        try testing.expect(std.mem.indexOf(u8, message.bytes(), case.marker) != null);
+        try testing.expect(std.mem.find(u8, message.bytes(), case.marker) != null);
     }
 }
 
@@ -111,7 +111,7 @@ test "custom TTC sources reject a malformed face after an otherwise valid face" 
     try testing.expectError(error.InvalidArgument, library.createEngineWithOptions(&.{ .font_sources = &.{.{ .data = invalid }}, .use_bundled_fonts = false }));
     var detail = try library.lastError();
     defer detail.deinit();
-    try testing.expect(std.mem.indexOf(u8, detail.bytes(), "face 1") != null);
+    try testing.expect(std.mem.find(u8, detail.bytes(), "face 1") != null);
 }
 
 /// Test data only: relocate one bundled SFNT into a two-face TTC container.

@@ -67,8 +67,8 @@ test "constant folding keeps exact integers floats booleans and error behavior" 
     for (cases) |case| {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         defer arena.deinit();
-        var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-        try pool.appendSlice(&.{ case.left, case.right });
+        var pool: std.ArrayList(Value) = .empty;
+        try pool.appendSlice(arena.allocator(), &.{ case.left, case.right });
         const code = [_]Instruction{
             .{ .op = .constant, .a = 0, .span = .{ .start = 1, .end = 2 } },
             .{ .op = .constant, .a = 1, .span = .{ .start = 3, .end = 4 } },
@@ -99,8 +99,8 @@ test "quantity folding preserves dimensions errors and constant identities" {
     for (cases) |case| {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         defer arena.deinit();
-        var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-        try pool.appendSlice(&.{ case.left, case.right });
+        var pool: std.ArrayList(Value) = .empty;
+        try pool.appendSlice(arena.allocator(), &.{ case.left, case.right });
         const code = [_]Instruction{
             .{ .op = .constant, .a = 0 },                          .{ .op = .constant, .a = 1 },
             .{ .op = case.op, .span = .{ .start = 3, .end = 7 } }, .{ .op = .store_global },
@@ -130,8 +130,8 @@ test "static branch pruning retains host effects only on reachable paths" {
     };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-    try pool.appendSlice(&.{ .{ .boolean = false }, .{ .int = 10 }, .{ .int = 32 } });
+    var pool: std.ArrayList(Value) = .empty;
+    try pool.appendSlice(arena.allocator(), &.{ .{ .boolean = false }, .{ .int = 10 }, .{ .int = 32 } });
     const code = [_]Instruction{
         .{ .op = .constant, .a = 0 },
         .{ .op = .jump_if_false, .a = 5 },
@@ -161,8 +161,8 @@ test "static branch pruning retains host effects only on reachable paths" {
 test "jump targets form barriers and optimized back edges retain instruction limits" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-    try pool.append(.{ .int = 1 });
+    var pool: std.ArrayList(Value) = .empty;
+    try pool.append(arena.allocator(), .{ .int = 1 });
     // The jump enters at the second constant. Folding across that entry would
     // turn a runtime stack error into a successful computation.
     const incoming = [_]Instruction{
@@ -178,14 +178,14 @@ test "jump targets form barriers and optimized back edges retain instruction lim
     try std.testing.expectEqual(bc.Op.jump, optimized[0].op);
     const stopped = try runTest(optimized, pool.items, .{ .instructions = 10 }, .{});
     try std.testing.expect(stopped == .failure);
-    try std.testing.expect(std.mem.indexOf(u8, stopped.failure.text(), "instruction limit") != null);
+    try std.testing.expect(std.mem.find(u8, stopped.failure.text(), "instruction limit") != null);
 }
 
 test "unary errors and invalid constants remain runtime checks" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-    try pool.appendSlice(&.{ .{ .int = std.math.minInt(i64) }, .{ .number = std.math.inf(f64) }, .{ .boolean = false } });
+    var pool: std.ArrayList(Value) = .empty;
+    try pool.appendSlice(arena.allocator(), &.{ .{ .int = std.math.minInt(i64) }, .{ .number = std.math.inf(f64) }, .{ .boolean = false } });
     const overflow = [_]Instruction{ .{ .op = .constant }, .{ .op = .negate }, .{ .op = .store_global }, .{ .op = .halt } };
     try expectSame(&overflow, try optimizer.optimize(arena.allocator(), &overflow, &pool, .{}), pool.items);
     const nonfinite = [_]Instruction{ .{ .op = .constant, .a = 1 }, .{ .op = .pop }, .{ .op = .halt } };
@@ -199,19 +199,20 @@ test "short circuit branch patterns and forward jump chains preserve boolean val
         for ([_]bool{ false, true }) |is_or| {
             var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
             defer arena.deinit();
-            var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-            try pool.appendSlice(&.{ .{ .boolean = initial }, .{ .boolean = true } });
-            var code: std.array_list.Managed(Instruction) = .init(arena.allocator());
-            try code.appendSlice(&.{ .{ .op = .constant }, .{ .op = .duplicate } });
-            if (is_or) try code.append(.{ .op = .logical_not });
+            const a = arena.allocator();
+            var pool: std.ArrayList(Value) = .empty;
+            try pool.appendSlice(a, &.{ .{ .boolean = initial }, .{ .boolean = true } });
+            var code: std.ArrayList(Instruction) = .empty;
+            try code.appendSlice(a, &.{ .{ .op = .constant }, .{ .op = .duplicate } });
+            if (is_or) try code.append(a, .{ .op = .logical_not });
             const branch = code.items.len;
-            try code.appendSlice(&.{ .{ .op = .jump_if_false }, .{ .op = .pop }, .{ .op = .constant, .a = 1 } });
+            try code.appendSlice(a, &.{ .{ .op = .jump_if_false }, .{ .op = .pop }, .{ .op = .constant, .a = 1 } });
             code.items[branch].a = @intCast(code.items.len);
             const jump = code.items.len;
-            try code.append(.{ .op = .jump, .a = @intCast(jump + 1) });
-            try code.append(.{ .op = .jump, .a = @intCast(jump + 2) });
-            try code.appendSlice(&.{ .{ .op = .store_global }, .{ .op = .halt } });
-            try expectSame(code.items, try optimizer.optimize(arena.allocator(), code.items, &pool, .{}), pool.items);
+            try code.append(a, .{ .op = .jump, .a = @intCast(jump + 1) });
+            try code.append(a, .{ .op = .jump, .a = @intCast(jump + 2) });
+            try code.appendSlice(a, &.{ .{ .op = .store_global }, .{ .op = .halt } });
+            try expectSame(code.items, try optimizer.optimize(a, code.items, &pool, .{}), pool.items);
         }
     }
 }
@@ -222,8 +223,8 @@ test "deterministic finite expression samples execute identically after folding"
     for (0..64) |_| {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         defer arena.deinit();
-        var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-        for (0..3) |_| try pool.append(.{ .int = random.intRangeAtMost(i64, -100, 100) });
+        var pool: std.ArrayList(Value) = .empty;
+        for (0..3) |_| try pool.append(arena.allocator(), .{ .int = random.intRangeAtMost(i64, -100, 100) });
         const code = [_]Instruction{
             .{ .op = .constant },         .{ .op = .constant, .a = 1 }, .{ .op = .subtract },
             .{ .op = .constant, .a = 2 }, .{ .op = .multiply },         .{ .op = .negate },
@@ -238,8 +239,8 @@ test "deterministic finite expression samples execute identically after folding"
 test "pruning exposes another folding round before pipeline convergence" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    var pool: std.array_list.Managed(Value) = .init(arena.allocator());
-    try pool.appendSlice(&.{ .{ .int = 2 }, .{ .int = 3 }, .{ .int = 999 } });
+    var pool: std.ArrayList(Value) = .empty;
+    try pool.appendSlice(arena.allocator(), &.{ .{ .int = 2 }, .{ .int = 3 }, .{ .int = 999 } });
     const input = [_]Instruction{
         .{ .op = .constant, .a = 0 },
         .{ .op = .jump, .a = 3 },

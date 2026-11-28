@@ -56,8 +56,8 @@ test "mapped callbacks are reentrant snapshot source pictures and preserve diagn
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         const diagnostic = machine.failure.?;
-        try t.expect(std.mem.indexOf(u8, diagnostic.text(), failure.message) != null or
-            std.mem.indexOf(u8, diagnostic.native_message, failure.message) != null);
+        try t.expect(std.mem.find(u8, diagnostic.text(), failure.message) != null or
+            std.mem.find(u8, diagnostic.native_message, failure.message) != null);
     }
 }
 
@@ -99,9 +99,9 @@ test "affine mapping and transformation preserve nested clips native text and so
             defer second.deinit();
             try t.expectEqualSlices(u8, first.bytes(), second.bytes());
             if (format == .svg) {
-                try t.expect(std.mem.indexOf(u8, first.bytes(), "clipPath") != null);
+                try t.expect(std.mem.find(u8, first.bytes(), "clipPath") != null);
             } else {
-                try t.expect(std.mem.indexOf(u8, first.bytes(), "/ToUnicode") != null);
+                try t.expect(std.mem.find(u8, first.bytes(), "/ToUnicode") != null);
             }
         };
     }

@@ -28,7 +28,7 @@ pub fn link(b: *std.Build, kernel: *std.Build.Module, root: std.Build.LazyPath) 
         "contour_grid.cpp",
         "contour_pieces.cpp",
     }) |file| {
-        const part = std.fs.path.stem(file);
+        const part = std.Io.Dir.path.stem(file);
         const cc = std.Build.Step.Run.create(b, b.fmt("compile OCCT WASI {s}", .{part}));
         cc.addFileArg(sdk.path(b, "bin/clang++"));
         cc.addArgs(&.{ "--target=wasm32-wasip1", "-std=c++17", "-Os", "-Wno-deprecated-declarations", "-fwasm-exceptions", "-mllvm", "-wasm-use-legacy-eh=false", "-mllvm", "-wasm-enable-sjlj" });

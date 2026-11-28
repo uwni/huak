@@ -97,7 +97,7 @@ pub fn run(ctx: *h.Harness) !void {
     try ctx.temporary.dir.symLink(t.io, "batch-link-target.svg", "batch-link.svg", .{});
     _ = try ctx.command("run", script, &.{ "--jobs=2", "--output=a=batch-link.svg", "--output=b=batch-link-b.svg" }, true);
     try t.expectEqualStrings(try ctx.read("batch-parallel-a.svg"), try ctx.read("batch-link-target.svg"));
-    var link_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var link_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const link_length = try ctx.temporary.dir.readLink(t.io, "batch-link.svg", &link_buffer);
     try t.expectEqualStrings("batch-link-target.svg", link_buffer[0..link_length]);
 }

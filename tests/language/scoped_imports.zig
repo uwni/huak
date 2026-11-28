@@ -93,7 +93,7 @@ test "lexical imports restore namespaces and members across executable blocks" {
             defer runtime.deinit();
             var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
             defer machine.deinit();
-            const value = try std.fmt.allocPrint(t.allocator, "{d}", .{mode});
+            const value = try t.allocator.print("{d}", .{mode});
             defer t.allocator.free(value);
             _ = try machine.execute(&.{.{ .name = "mode", .value = value }});
             try t.expectEqual(expected, machine.getGlobal("branch_result").?.int);
@@ -101,8 +101,8 @@ test "lexical imports restore namespaces and members across executable blocks" {
             if (mode == 0) {
                 var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
                 defer svg.deinit();
-                try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 80 40\"") != null);
-                try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+                try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 80 40\"") != null);
+                try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
             }
         }
     }
@@ -209,7 +209,7 @@ test "scoped bindings cannot escape siblings or bypass privacy conflicts and exp
         try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, case.source, "/native/main.huak", .{ .import_resolver = .{ .ptr = &resolver, .vtable = &.{ .resolve = ModuleResolver.resolve } }, .optimize = optimize }, &diagnostic));
         try t.expect(diagnostic != null);
         if (case.message) |message| {
-            if (std.mem.indexOf(u8, diagnostic.?.text(), message) == null) {
+            if (std.mem.find(u8, diagnostic.?.text(), message) == null) {
                 std.debug.print("scope diagnostic for:\n{s}\nexpected '{s}', got '{s}'\n", .{ case.source, message, diagnostic.?.text() });
                 return error.UnexpectedScopeDiagnostic;
             }
@@ -232,7 +232,7 @@ test "scoped imports must be declared before a function uses their members" {
         var diagnostic: ?l.compiler.Diagnostic = null;
         try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, source, "/native/main.huak", .{ .import_resolver = .{ .ptr = &resolver, .vtable = &.{ .resolve = ModuleResolver.resolve } }, .optimize = optimize }, &diagnostic));
         try t.expect(diagnostic != null);
-        try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), "helper") != null);
+        try t.expect(std.mem.find(u8, diagnostic.?.text(), "helper") != null);
     }
 }
 
@@ -251,8 +251,8 @@ test "data parameters and loop bindings prevent fallback to shadowed callables" 
         var diagnostic: ?l.compiler.Diagnostic = null;
         try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, case.source, "/native/main.huak", .{ .import_resolver = .{ .ptr = &resolver, .vtable = &.{ .resolve = ModuleResolver.resolve } }, .optimize = optimize }, &diagnostic));
         try t.expect(diagnostic != null);
-        try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.name) != null);
-        try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), "not callable") != null);
+        try t.expect(std.mem.find(u8, diagnostic.?.text(), case.name) != null);
+        try t.expect(std.mem.find(u8, diagnostic.?.text(), "not callable") != null);
     };
 }
 

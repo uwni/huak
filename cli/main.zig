@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init.Minimal) void {
 fn run(arguments: std.process.Args, io: std.Io, allocator: std.mem.Allocator) !void {
     const args = try arguments.toSlice(allocator);
     var option_error: ?[]const u8 = null;
-    const engine: flags.Engine = .{ .default_output = huak.language.bytecode.Output.default_name, .formats = std.meta.fieldNames(huak.render.Format) };
+    const engine: flags.Engine = .{ .default_output = huak.language.bytecode.Output.default_name, .formats = @typeInfo(huak.render.Format).@"enum".field_names };
     const options = flags.parse(allocator, args[1..], engine, &option_error) catch |err| {
         if (option_error) |message| {
             std.debug.print("huak: {s}\n\n", .{message});

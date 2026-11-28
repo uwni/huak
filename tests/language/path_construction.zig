@@ -83,7 +83,7 @@ test "list append assignment preserves aliases snapshots and runtime path constr
             };
             var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
             defer svg.deinit();
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         }
     }
 }
@@ -143,10 +143,10 @@ test "path literals lower once preserve point evaluation and reach native vector
         }
         var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
     }
 }
 
@@ -200,7 +200,7 @@ test "arc and profile builtins preserve physical units and runtime validation" {
             "profile_outline(p,[0,1],[1mm,-1mm])",
             "profile_outline(p,[0,1],[1deg,1deg])",
         }) |expression| {
-            const source = try std.fmt.allocPrint(t.allocator, "import math.{{abs, norm}};import paint.{{path, bezier, bounds}};import geometry.{{arclength, sample_path}};import pen.profile_outline;p:=path((0,0),(10,0)); result:={s}", .{expression});
+            const source = try t.allocator.print("import math.{{abs, norm}};import paint.{{path, bezier, bounds}};import geometry.{{arclength, sample_path}};import pen.profile_outline;p:=path((0,0),(10,0)); result:={s}", .{expression});
             defer t.allocator.free(source);
             var invalid_program = try compileModulesOptimized(&library, source, &.{}, optimize);
             defer invalid_program.deinit();
@@ -227,7 +227,7 @@ test "polygon builtins preserve units modules host calls and native vector expor
             var found = false;
             for (program.functions) |function| {
                 for (function.code) |instruction| {
-                    if (instruction.op == .call_builtin and std.mem.indexOf(u8, program.modules[function.module].source_text[instruction.span.start..instruction.span.end], name) != null) found = true;
+                    if (instruction.op == .call_builtin and std.mem.find(u8, program.modules[function.module].source_text[instruction.span.start..instruction.span.end], name) != null) found = true;
                 }
             }
             try t.expect(found);
@@ -251,11 +251,11 @@ test "polygon builtins preserve units modules host calls and native vector expor
         try t.expect(exact_curve);
         var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
         defer pdf.deinit();
         try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
     }
 }
 
@@ -270,7 +270,7 @@ test "polygon argument and topology errors stay checked with bytecode optimizati
             .{ .expression = "region_xor(a,a,0.001mm,\"unknown\")", .message = "InvalidFillRule" },
             .{ .expression = "clip_region(a,(1deg,1deg),(2deg,2deg))", .message = "DimensionMismatch" },
         }) |case| {
-            const source = try std.fmt.allocPrint(t.allocator, "import paint.{{rectangle, path}};import geometry.{{region_union, region_xor, offset, clip_region}};import pen.stroke_path;a:=rectangle((0,0),10mm,10mm)\nresult:={s}\n", .{case.expression});
+            const source = try t.allocator.print("import paint.{{rectangle, path}};import geometry.{{region_union, region_xor, offset, clip_region}};import pen.stroke_path;a:=rectangle((0,0),10mm,10mm)\nresult:={s}\n", .{case.expression});
             defer t.allocator.free(source);
             var program = try compileModulesOptimized(&library, source, &.{}, optimize);
             defer program.deinit();
@@ -279,7 +279,7 @@ test "polygon argument and topology errors stay checked with bytecode optimizati
             var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
             defer machine.deinit();
             try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-            try t.expect(std.mem.indexOf(u8, machine.failure.?.text(), case.message) != null);
+            try t.expect(std.mem.find(u8, machine.failure.?.text(), case.message) != null);
             try t.expect(machine.getGlobal("result") == null);
         }
     }

@@ -16,13 +16,13 @@ test "formatter preserves Typst bytes comments and semantics and is idempotent" 
     var diagnostic: ?tooling.compiler.Diagnostic = null;
     const formatted = try tooling.format.format(&frontend, input, "/tmp/format.huak", &diagnostic);
     defer t.allocator.free(formatted);
-    try t.expect(std.mem.indexOf(u8, formatted, "    // retained comment\n    return typ" ++ native) != null);
+    try t.expect(std.mem.find(u8, formatted, "    // retained comment\n    return typ" ++ native) != null);
     const again = try tooling.format.format(&frontend, formatted, "/tmp/format.huak", &diagnostic);
     defer t.allocator.free(again);
     try t.expectEqualStrings(formatted, again);
     var program = try frontend.compile(formatted, "/tmp/format.huak", &diagnostic);
     defer program.deinit();
-    const offset = std.mem.indexOf(u8, program.source_text, native).?;
+    const offset = std.mem.find(u8, program.source_text, native).?;
     for (program.constants) |constant| {
         if (constant == .string and std.mem.eql(u8, constant.string, native)) {
             try t.expect(constant.string.ptr == program.source_text[offset..].ptr);
@@ -171,9 +171,9 @@ test "standalone formatter check stdin and invalid-file protection use the actua
     const a = arena.allocator();
     var temporary = t.tmpDir(.{});
     defer temporary.cleanup();
-    var directory_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var directory_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const n = try temporary.dir.realPath(t.io, &directory_buffer);
-    const path = try std.fs.path.join(a, &.{ directory_buffer[0..n], "script.huak" });
+    const path = try std.Io.Dir.path.join(a, &.{ directory_buffer[0..n], "script.huak" });
     const executable = try std.Io.Dir.cwd().realPathFileAlloc(t.io, options.formatter_path, a);
     const input = "fn foo()->list\nvalues:=[1,2]\nvalues+=3\nreturn values\nend\n";
     const expected = "fn foo()->list\n    values := [1, 2]\n    values += 3\n    return values\nend\n";

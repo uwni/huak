@@ -9,7 +9,7 @@ const Binding = binder.Binding;
 
 pub const Id = u32;
 pub const max_groups = 512;
-const Row = std.StaticBitSet(max_groups);
+const Row = std.bit_set.Static(max_groups);
 pub const Error = Allocator.Error || error{ TooManyGroups, InvalidGroup, CyclicPrecedence };
 pub const Comparison = enum { higher, lower, same, unrelated };
 pub const Group = struct {

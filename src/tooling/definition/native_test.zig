@@ -17,9 +17,9 @@ test "default math completion and hover use native metadata without source navig
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const function = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "sin(0)").?)).?;
+    const function = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.find(u8, input, "sin(0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, function, "fn math.sin("));
-    const constant = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "PI\n").?)).?;
+    const constant = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.find(u8, input, "PI\n").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, constant, "math.PI: number = 3.14"));
     const unfinished = "value:=math.";
     const members = try complete(&frontend, arena.allocator(), unfinished, fixture.name, unfinished.len);
@@ -47,7 +47,7 @@ test "data and imported namespace bindings shadow default math tooling" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.lastIndexOf(u8, input, "PI\n").?)).?;
+    const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.findLast(u8, input, "PI\n").?)).?;
     try std.testing.expectEqualStrings("Settings.PI: int", detail);
     const unfinished = "struct Settings\nPI:int\nend\nmath:=Settings(PI:2)\nvalue:=math.";
     const members = try complete(&frontend, arena.allocator(), unfinished, fixture.name, unfinished.len);
@@ -67,11 +67,11 @@ test "explicit math imports retain native hover and never invent a source docume
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const function = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "sine(0)").?)).?;
+    const function = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.find(u8, input, "sine(0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, function, "fn math.sin("));
-    const constant = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.lastIndexOf(u8, input, "pi\n").?)).?;
+    const constant = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.findLast(u8, input, "pi\n").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, constant, "math.PI: number"));
-    const cosine = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "cos(0)").?)).?;
+    const cosine = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.find(u8, input, "cos(0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, cosine, "fn math.cos("));
 }
 
@@ -81,7 +81,7 @@ test "default native domains expose only their owned members and canonical hover
     const a = arena.allocator();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     for (std.enums.values(builtins.Namespace)) |namespace| {
-        const input = try std.fmt.allocPrint(a, "value:={s}.", .{namespace.name()});
+        const input = try a.print("value:={s}.", .{namespace.name()});
         const members = try complete(&frontend, a, input, "/tmp/domains.huak", input.len);
         var expected: usize = 0;
         for (builtins.signatures) |signature| if (signature.namespace == namespace) {
@@ -89,14 +89,14 @@ test "default native domains expose only their owned members and canonical hover
             var found = false;
             for (members) |member| if (std.mem.eql(u8, member.label, signature.name)) {
                 found = true;
-                const prefix = try std.fmt.allocPrint(a, "fn {s}.{s}(", .{ namespace.name(), signature.name });
+                const prefix = try a.print("fn {s}.{s}(", .{ namespace.name(), signature.name });
                 try std.testing.expect(std.mem.startsWith(u8, member.detail, prefix));
             };
             try std.testing.expect(found);
         };
         expected += builtins.constantNames(namespace).len;
         try std.testing.expectEqual(expected, members.len);
-        const namespace_source = try std.fmt.allocPrint(a, "value:={s}", .{namespace.name()});
+        const namespace_source = try a.print("value:={s}", .{namespace.name()});
         const namespace_hover = (try describe(&frontend, a, namespace_source, "/tmp/domains.huak", "value:=".len)).?;
         try std.testing.expect(std.mem.startsWith(u8, namespace_hover, namespace.name()));
     }
@@ -108,11 +108,11 @@ test "native domain data shadowing and imported aliases preserve their distinct 
     const a = arena.allocator();
     var frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     for (std.enums.values(builtins.Namespace)) |namespace| {
-        const prefix = try std.fmt.allocPrint(a, "struct Settings value:int end\n{s}:=Settings(value:2)\nanswer:={s}.", .{ namespace.name(), namespace.name() });
+        const prefix = try a.print("struct Settings value:int end\n{s}:=Settings(value:2)\nanswer:={s}.", .{ namespace.name(), namespace.name() });
         const members = try complete(&frontend, a, prefix, "/tmp/shadow.huak", prefix.len);
         try std.testing.expectEqual(@as(usize, 1), members.len);
         try std.testing.expectEqualStrings("value", members[0].label);
-        const input = try std.fmt.allocPrint(a, "{s}value\n", .{prefix});
+        const input = try a.print("{s}value\n", .{prefix});
         const detail = (try describe(&frontend, a, input, "/tmp/shadow.huak", prefix.len)).?;
         try std.testing.expectEqualStrings("Settings.value: int", detail);
     }
@@ -121,7 +121,7 @@ test "native domain data shadowing and imported aliases preserve their distinct 
     const fixture: Fixture = .{ .source = input, .files = &.{.{ .name = "/tmp/domain-facade.huak", .source = facade }} };
     try fixture.expectNone("ring((");
     frontend.overlay = .{ .ptr = @constCast(&fixture), .vtable = &.{ .resolve = Fixture.resolve } };
-    const detail = (try describe(&frontend, a, input, fixture.name, std.mem.indexOf(u8, input, "ring((").?)).?;
+    const detail = (try describe(&frontend, a, input, fixture.name, std.mem.find(u8, input, "ring((").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, detail, "fn geometry.circle("));
 }
 
@@ -130,9 +130,9 @@ test "primary native constructors remain callable through their normal namespace
     defer arena.deinit();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     const input = "import std.pen\nnib:=pen(color.rgb(0,0,0))\n";
-    const detail = (try describe(&frontend, arena.allocator(), input, "/tmp/constructors.huak", std.mem.indexOf(u8, input, "pen(color").?)).?;
+    const detail = (try describe(&frontend, arena.allocator(), input, "/tmp/constructors.huak", std.mem.find(u8, input, "pen(color").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, detail, "fn pen.pen("));
-    const members = try complete(&frontend, arena.allocator(), input, "/tmp/constructors.huak", std.mem.indexOf(u8, input, "nib:=").?);
+    const members = try complete(&frontend, arena.allocator(), input, "/tmp/constructors.huak", std.mem.find(u8, input, "nib:=").?);
     var found = false;
     for (members) |member| if (std.mem.eql(u8, member.label, "pen")) {
         try std.testing.expectEqual(@as(u8, 4), member.kind);
@@ -141,6 +141,6 @@ test "primary native constructors remain callable through their normal namespace
     };
     try std.testing.expect(found);
     const alias = "import std.math as pen\nnib:=pen(1)\n";
-    const invalid = (try describe(&frontend, arena.allocator(), alias, "/tmp/constructors.huak", std.mem.indexOf(u8, alias, "pen(1)").?)).?;
+    const invalid = (try describe(&frontend, arena.allocator(), alias, "/tmp/constructors.huak", std.mem.find(u8, alias, "pen(1)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, invalid, "math —"));
 }

@@ -35,8 +35,8 @@ pub fn main(init: std.process.Init) !void {
     // root, its "../nodegraph.huak" import resolves as the README describes.
     const readme = try check.read("README.md");
     const fence = "```huak\n";
-    const quick_start = (std.mem.indexOf(u8, readme, fence) orelse return error.MissingReadmeExample) + fence.len;
-    const quick_end = quick_start + (std.mem.indexOf(u8, readme[quick_start..], "```") orelse return error.MissingReadmeExample);
+    const quick_start = (std.mem.find(u8, readme, fence) orelse return error.MissingReadmeExample) + fence.len;
+    const quick_end = quick_start + (std.mem.find(u8, readme[quick_start..], "```") orelse return error.MissingReadmeExample);
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "target/readme-quick-start.huak", .data = readme[quick_start..quick_end] });
     _ = try check.huak(&.{ "run", "target/readme-quick-start.huak", "--output=target/nodegraph/acceptance/readme-quick-start.svg" }, true);
 
@@ -68,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
                     _ = widths.next();
                     var count: usize = 0;
                     while (widths.next()) |width| {
-                        try number(width[0 .. std.mem.indexOfScalar(u8, width, '"') orelse return error.InvalidSvg], 1.2);
+                        try number(width[0 .. std.mem.findScalar(u8, width, '"') orelse return error.InvalidSvg], 1.2);
                         count += 1;
                     }
                     if (count != 26) return error.ChangedArrowStrokes;
@@ -164,7 +164,7 @@ const Check = struct {
     exports: usize = 0,
 
     fn fmt(self: Check, comptime format: []const u8, args: anytype) ![]const u8 {
-        return std.fmt.allocPrint(self.a, format, args);
+        return self.a.print(format, args);
     }
     fn path(self: Check, file: []const u8) ![]const u8 {
         return self.fmt("target/nodegraph/acceptance/{s}", .{file});
@@ -202,7 +202,7 @@ const Check = struct {
         return result;
     }
     fn compareBaseline(self: Check, name: []const u8, bytes: []const u8) !void {
-        if (self.baseline) |base| try equal(bytes, try self.read(try std.fs.path.join(self.a, &.{ base, name })));
+        if (self.baseline) |base| try equal(bytes, try self.read(try std.Io.Dir.path.join(self.a, &.{ base, name })));
     }
     fn alpha(self: Check, file: []const u8, x: usize, y: usize, expected: f64) !void {
         try number(try self.tool(&.{ "magick", try self.path(file), "-format", try self.fmt("%[fx:p{{{d},{d}}}.a]", .{ x, y }), "info:" }), expected);
@@ -210,7 +210,7 @@ const Check = struct {
 };
 
 fn contains(bytes: []const u8, expected: []const u8) !void {
-    if (std.mem.indexOf(u8, bytes, expected) == null) {
+    if (std.mem.find(u8, bytes, expected) == null) {
         std.debug.print("Expected '{s}' in:\n{s}\n", .{ expected, bytes });
         return error.MissingExpectedText;
     }

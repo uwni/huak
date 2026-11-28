@@ -54,7 +54,7 @@ test "list append checks dynamic targets before mutating a collection" {
         var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "expected a list") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "expected a list") != null);
         try std.testing.expectEqual(@as(i64, 42), machine.getGlobal("values").?.int);
     }
 }
@@ -177,6 +177,6 @@ test "list append resolves handles after RHS growth and preserves preceding RHS 
         const remaining = try lists.mutableList(&failing, failing.getGlobal("values").?);
         try std.testing.expectEqual(@as(usize, 2), remaining.items.len);
         try std.testing.expectEqual(@as(i64, 2), remaining.items[1].int);
-        try std.testing.expect(std.mem.indexOf(u8, failing.failure.?.text(), "division by zero") != null);
+        try std.testing.expect(std.mem.find(u8, failing.failure.?.text(), "division by zero") != null);
     }
 }

@@ -38,8 +38,8 @@ test "explicit pictures preserve independent bounds aliases and copied compositi
     defer one.deinit();
     var two = try runtime.render(machine.getGlobal("second").?, .svg);
     defer two.deinit();
-    try t.expect(std.mem.indexOf(u8, one.bytes(), "viewBox=\"0 0 90 45\"") != null);
-    try t.expect(std.mem.indexOf(u8, two.bytes(), "viewBox=\"0 0 120 70\"") != null);
+    try t.expect(std.mem.find(u8, one.bytes(), "viewBox=\"0 0 90 45\"") != null);
+    try t.expect(std.mem.find(u8, two.bytes(), "viewBox=\"0 0 120 70\"") != null);
     try t.expect(!std.mem.eql(u8, one.bytes(), two.bytes()));
 }
 
@@ -154,19 +154,19 @@ test "one picture container supports automatic extent nested export copies and i
     var nested = try batch.render(t.allocator, 1, .svg, .serial, &diagnostic);
     defer nested.deinit();
     try t.expectEqualSlices(u8, direct.bytes(), nested.bytes());
-    try t.expect(std.mem.indexOf(u8, whole.bytes(), "viewBox=\"0 0 30 15\"") != null);
-    try t.expect(std.mem.indexOf(u8, whole.bytes(), " 3s ") != null);
-    try t.expect(std.mem.indexOf(u8, nested.bytes(), " 2s ") != null);
-    try t.expect(std.mem.indexOf(u8, nested.bytes(), " infinite") == null);
+    try t.expect(std.mem.find(u8, whole.bytes(), "viewBox=\"0 0 30 15\"") != null);
+    try t.expect(std.mem.find(u8, whole.bytes(), " 3s ") != null);
+    try t.expect(std.mem.find(u8, nested.bytes(), " 2s ") != null);
+    try t.expect(std.mem.find(u8, nested.bytes(), " infinite") == null);
     var plain = try batch.render(t.allocator, 3, .svg, .serial, &diagnostic);
     defer plain.deinit();
     var duplicate = try batch.render(t.allocator, 4, .svg, .serial, &diagnostic);
     defer duplicate.deinit();
     try t.expectEqualSlices(u8, plain.bytes(), duplicate.bytes());
-    try t.expect(std.mem.indexOf(u8, plain.bytes(), "viewBox=\"0 0 100 80\"") != null);
+    try t.expect(std.mem.find(u8, plain.bytes(), "viewBox=\"0 0 100 80\"") != null);
     var cropped = try batch.render(t.allocator, 5, .svg, .serial, &diagnostic);
     defer cropped.deinit();
-    try t.expect(std.mem.indexOf(u8, cropped.bytes(), "viewBox=\"0 0 30 15\"") != null);
+    try t.expect(std.mem.find(u8, cropped.bytes(), "viewBox=\"0 0 30 15\"") != null);
 }
 
 test "picture mesh_rasterize and mesh_dpi control SVG mesh fills only and survive flatten_transparency" {
@@ -221,23 +221,23 @@ test "picture mesh_rasterize and mesh_dpi control SVG mesh fills only and surviv
 
     // Only the mesh fill becomes an image; strokes and linear gradients stay vector.
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, low.bytes(), "<image"));
-    try t.expect(std.mem.indexOf(u8, low.bytes(), "data:image/png;base64,") != null);
-    try t.expect(std.mem.indexOf(u8, low.bytes(), "<linearGradient") != null);
-    try t.expect(std.mem.indexOf(u8, low.bytes(), "stroke-width=\"1\"") != null);
-    try t.expect(std.mem.indexOf(u8, low.bytes(), "shape-rendering:crispEdges") == null);
+    try t.expect(std.mem.find(u8, low.bytes(), "data:image/png;base64,") != null);
+    try t.expect(std.mem.find(u8, low.bytes(), "<linearGradient") != null);
+    try t.expect(std.mem.find(u8, low.bytes(), "stroke-width=\"1\"") != null);
+    try t.expect(std.mem.find(u8, low.bytes(), "shape-rendering:crispEdges") == null);
 
     // Higher DPI produces a larger embedded PNG.
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, high.bytes(), "<image"));
     try t.expect(high.bytes().len > low.bytes().len);
 
     // mesh_rasterize: false survives flatten_transparency and emits vector triangles.
-    try t.expect(std.mem.indexOf(u8, vec.bytes(), "<image") == null);
+    try t.expect(std.mem.find(u8, vec.bytes(), "<image") == null);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, vec.bytes(), " data-typst-label=\"huak-mesh\""));
-    try t.expect(std.mem.indexOf(u8, vec.bytes(), "shape-rendering:crispEdges") != null);
+    try t.expect(std.mem.find(u8, vec.bytes(), "shape-rendering:crispEdges") != null);
 
     // Pictures without meshes never emit <image>.
-    try t.expect(std.mem.indexOf(u8, plain.bytes(), "<image") == null);
-    try t.expect(std.mem.indexOf(u8, plain.bytes(), "<linearGradient") != null);
+    try t.expect(std.mem.find(u8, plain.bytes(), "<image") == null);
+    try t.expect(std.mem.find(u8, plain.bytes(), "<linearGradient") != null);
 
     // Non-positive mesh_dpi is rejected at runtime.
     for ([_][]const u8{ "picture(mesh_dpi: 0)", "picture(mesh_dpi: -72)" }) |bad| {

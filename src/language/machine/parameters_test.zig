@@ -39,7 +39,7 @@ test "dimensional bytecode parameters vectors and ratios retain native values" {
     var wrong = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer wrong.deinit();
     try std.testing.expectError(error.RuntimeFailed, wrong.execute(&.{.{ .name = "spin", .value = "1cm" }}));
-    try std.testing.expect(std.mem.indexOf(u8, wrong.failure.?.diagnostic.text(), "angle") != null);
+    try std.testing.expect(std.mem.find(u8, wrong.failure.?.diagnostic.text(), "angle") != null);
 }
 
 test "named exports read final bindings while ordinary assignments keep their values" {
@@ -158,7 +158,7 @@ test "parameters reject unknown duplicate missing and invalid values before exec
     var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{.{ .name = "count", .value = "1" }}));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "read-only") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "read-only") != null);
 }
 
 const ParallelRun = struct {
@@ -217,7 +217,7 @@ test "string parameters validate UTF-8 before native host initialization" {
     var invalid = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer invalid.deinit();
     try std.testing.expectError(error.RuntimeFailed, invalid.prepareParameters(&.{.{ .name = "title", .value = "\xff" }}));
-    try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "UTF-8") != null);
+    try std.testing.expect(std.mem.find(u8, invalid.failure.?.text(), "UTF-8") != null);
     try std.testing.expectEqual(@as(u64, 0), invalid.steps);
     var valid = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer valid.deinit();

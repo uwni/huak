@@ -146,7 +146,7 @@ pub fn compileDeclaration(self: *Compiler, context: *Context, statement_: *ast.S
             const default = if (parameter.default) |expression| try evaluation.constantValue(self, expression, null) else null;
             if (default) |value| try self.require(binding.kind, value.valueType(), parameter.default.?.span);
             if (self.environment.module_index != 0 and default == null) return self.fail(span, "imported module parameter '{s}' requires a default", .{parameter.name});
-            try self.parameters.append(.{ .name = parameter.name, .kind = binding.kind, .default = default, .global = binding.index, .span = span, .module = self.environment.module_index });
+            try self.parameters.append(self.allocator, .{ .name = parameter.name, .kind = binding.kind, .default = default, .global = binding.index, .span = span, .module = self.environment.module_index });
         },
         .function => |function| {
             if (!context.entry or context.block_depth != 1) return self.fail(span, "functions must be declared at script top level", .{});

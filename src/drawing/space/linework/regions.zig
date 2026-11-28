@@ -51,7 +51,7 @@ pub const Shown = struct {
 /// to keep the region on its left.
 pub fn Bounding(comptime Region: type) type {
     return struct {
-        arcs: std.AutoArrayHashMapUnmanaged(Region, std.ArrayList(c.HuakTurnedArc)) = .empty,
+        arcs: std.array_hash_map.Auto(Region, std.ArrayList(c.HuakTurnedArc)) = .empty,
 
         /// An arc with `here` on its left and `there` on its right bounds
         /// both where they differ.

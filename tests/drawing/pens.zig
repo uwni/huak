@@ -40,12 +40,12 @@ test "independent elliptical polygonal and singular pens render through the nati
     defer svg.deinit();
     for (ids) |id| {
         var storage: [96]u8 = undefined;
-        const marker = try std.fmt.bufPrint(&storage, "data-typst-label=\"libtypst-object-{d}\"", .{id});
+        const marker = try std.mem.print(&storage, "data-typst-label=\"libtypst-object-{d}\"", .{id});
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), marker));
     }
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "stroke-width=\"1\"") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#0000ff\"") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#ff0000\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "stroke-width=\"1\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "fill=\"#0000ff\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "fill=\"#ff0000\"") != null);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "fill=\"#00ff00\""));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "fill=\"url("));
     var pdf = try document.exportPdf();
@@ -79,8 +79,8 @@ test "polygon pen envelopes and dashed envelopes reach SVG as curves with one tr
         _ = attributes.next();
         var found_curve = false;
         while (attributes.next()) |attribute| {
-            const end = std.mem.indexOfScalar(u8, attribute, '"') orelse return error.InvalidSvg;
-            found_curve = found_curve or std.mem.indexOfAny(u8, attribute[0..end], "cCsS") != null;
+            const end = std.mem.findScalar(u8, attribute, '"') orelse return error.InvalidSvg;
+            found_curve = found_curve or std.mem.findAny(u8, attribute[0..end], "cCsS") != null;
         }
         try t.expect(found_curve);
         var pdf = try document.exportPdf();

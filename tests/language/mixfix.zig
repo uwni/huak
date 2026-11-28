@@ -38,10 +38,10 @@ test "formatting preserves prefix binding and native SVG PDF output" {
     var diagnostic: ?l.compiler.Diagnostic = null;
     const formatted = try huak.tooling.format.format(&frontend, source, "format-preservation.huak", &diagnostic);
     defer t.allocator.free(formatted);
-    try t.expect(std.mem.indexOf(u8, formatted, "prefixed := twice (2)+3") != null);
-    try t.expect(std.mem.indexOf(u8, formatted, "ordinary := twice(2)+3") != null);
-    try t.expect(std.mem.indexOf(u8, formatted, "literal := \"x=1,y=2\"") != null);
-    try t.expect(std.mem.indexOf(u8, formatted, "typ[Formatting a=b,c]") != null);
+    try t.expect(std.mem.find(u8, formatted, "prefixed := twice (2)+3") != null);
+    try t.expect(std.mem.find(u8, formatted, "ordinary := twice(2)+3") != null);
+    try t.expect(std.mem.find(u8, formatted, "literal := \"x=1,y=2\"") != null);
+    try t.expect(std.mem.find(u8, formatted, "typ[Formatting a=b,c]") != null);
     var original_svg: ?[]u8 = null;
     defer if (original_svg) |bytes| t.allocator.free(bytes);
     var original_pdf: ?[]u8 = null;
@@ -68,7 +68,7 @@ test "formatting preserves prefix binding and native SVG PDF output" {
             original_pdf = try t.allocator.dupe(u8, pdf.bytes());
             const text = try @import("../support/pdf.zig").text(pdf.bytes(), .{});
             defer t.allocator.free(text);
-            try t.expect(std.mem.indexOf(u8, text, "Formatting a=b,c") != null);
+            try t.expect(std.mem.find(u8, text, "Formatting a=b,c") != null);
         }
     }
 }
@@ -151,8 +151,8 @@ test "selected and reexported function aliases retain native operators and prece
         try execute(&machine);
         var svg = try runtime.render(machine.getGlobal("preview").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 120 80\"") != null);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 120 80\"") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     }
 }
 
@@ -214,10 +214,10 @@ test "exported infix geometry uses the normal function bytecode and native frame
         defer svg.deinit();
         var pdf = try runtime.render(pic, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 120 80\"") != null);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/FontFile") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 120 80\"") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/FontFile") != null);
     }
 }
 

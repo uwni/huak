@@ -123,7 +123,7 @@ links: std.ArrayList(Link) = .empty,
 containers: std.ArrayList(Container) = .empty,
 
 /// Identity registry only; entries do not grant mutation or transfer rights.
-pub const Owners = std.AutoArrayHashMapUnmanaged(*const Scene, void);
+pub const Owners = std.array_hash_map.Auto(*const Scene, void);
 
 pub fn allocatedBytes(self: *const Scene) usize {
     return self.nodes.capacity * @sizeOf(Node) +

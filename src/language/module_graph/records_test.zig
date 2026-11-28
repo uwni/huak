@@ -94,7 +94,7 @@ test "different modules keep same-named records nominally distinct and reject co
     try std.testing.expectEqualStrings(first.name, second.name);
     var conflicting = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } }, &diagnostic);
     try std.testing.expectError(error.LanguageError, conflicting.root("conflict.huak", "import \"first\".Style;import \"second\".Style"));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "conflicting imported name") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "conflicting imported name") != null);
 }
 
 test "record import type and callable channels follow lexical shadowing" {
@@ -149,6 +149,6 @@ test "private records and duplicate local or imported record declarations are re
         var diagnostic: ?source.Diagnostic = null;
         var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } }, &diagnostic);
         try std.testing.expectError(error.LanguageError, graph.root("root.huak", case.input));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
     }
 }

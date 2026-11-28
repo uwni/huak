@@ -12,14 +12,14 @@ const MixfixLookup = Parser.MixfixLookup;
 const Options = Parser.Options;
 
 pub fn parseCall(self: *Parser, left: *ast.Expr) anyerror!*ast.Expr {
-    var args: std.array_list.Managed(*ast.Expr) = .init(self.allocator);
-    var argument_names: std.array_list.Managed(?[]const u8) = .init(self.allocator);
+    var args: std.ArrayList(*ast.Expr) = .empty;
+    var argument_names: std.ArrayList(?[]const u8) = .empty;
     var named = false;
     const callee = ungroup(left);
     const name = switch (callee.value) {
         .name => |name| name,
         .member => |member| call_name: {
-            try args.append(member.object);
+            try args.append(self.allocator, member.object);
             break :call_name member.name;
         },
         else => return self.fail(left.span, "only named functions can be called", .{}),
@@ -35,7 +35,7 @@ pub fn parseCall(self: *Parser, left: *ast.Expr) anyerror!*ast.Expr {
                     if (std.mem.eql(u8, name_, argument_name.?)) return self.fail(token.span, "duplicate named argument '{s}'", .{name_});
                 };
                 if (!named) {
-                    for (0..args.items.len) |_| try argument_names.append(null);
+                    for (0..args.items.len) |_| try argument_names.append(self.allocator, null);
                     named = true;
                 }
                 try self.advance();
@@ -43,14 +43,14 @@ pub fn parseCall(self: *Parser, left: *ast.Expr) anyerror!*ast.Expr {
             }
         }
         if (argument_name == null and named) return self.fail(self.current.span, "positional arguments cannot follow named arguments", .{});
-        try args.append(try expressions.expression(self, 0));
-        if (named) try argument_names.append(argument_name);
+        try args.append(self.allocator, try expressions.expression(self, 0));
+        if (named) try argument_names.append(self.allocator, argument_name);
         if (self.current.kind == .ellipsis) return self.fail(self.current.span, "call argument spreading is not supported", .{});
         if (!try self.accept(.comma)) break;
         if (self.current.kind == .rparen) break;
     };
     const finish = try self.expect(.rparen, "expected ')' after arguments");
-    return self.createExpr(.join(left.span, finish.span), .{ .call = .{ .name = name, .args = try args.toOwnedSlice(), .argument_names = if (named) try argument_names.toOwnedSlice() else &.{}, .dot = callee.value == .member } });
+    return self.createExpr(.join(left.span, finish.span), .{ .call = .{ .name = name, .args = try args.toOwnedSlice(self.allocator), .argument_names = if (named) try argument_names.toOwnedSlice(self.allocator) else &.{}, .dot = callee.value == .member } });
 }
 
 /// Consume a possible callable head using only its lexical cursor. A member such as
@@ -65,7 +65,7 @@ pub fn callHead(allocator: std.mem.Allocator, lexer: *Lexer, current: *Lexer.Tok
         if (current.kind != .identifier) return null;
         const word = lexer.source[name.span.start..name.span.end];
         namespace = if (namespace) |parent|
-            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ parent, word })
+            try allocator.print("{s}.{s}", .{ parent, word })
         else
             word;
         name = current.*;
@@ -123,7 +123,7 @@ test "call spread is rejected explicitly rather than treated as a member or path
         var diagnostic: ?source.Diagnostic = null;
         var parser = try Parser.init(arena.allocator(), input, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "spread") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "spread") != null);
         try std.testing.expectEqualStrings("...", input[diagnostic.?.span.start..diagnostic.?.span.end]);
     }
 }

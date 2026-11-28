@@ -9,10 +9,10 @@ pub fn ins(op: bc.Op, a: u32) bc.Instruction {
     return .{ .op = op, .a = a };
 }
 
-pub fn pool(a: Allocator, items: []const Value) !std.array_list.Managed(Value) {
-    var result = std.array_list.Managed(Value).init(a);
-    errdefer result.deinit();
-    try result.appendSlice(items);
+pub fn pool(a: Allocator, items: []const Value) !std.ArrayList(Value) {
+    var result: std.ArrayList(Value) = .empty;
+    errdefer result.deinit(a);
+    try result.appendSlice(a, items);
     return result;
 }
 

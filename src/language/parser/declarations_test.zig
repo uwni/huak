@@ -119,7 +119,7 @@ test "rest parameter declarations reject missing names types and following param
         var diagnostic: ?source.Diagnostic = null;
         var parser = try Parser.init(arena.allocator(), case.input, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
     }
 }
 

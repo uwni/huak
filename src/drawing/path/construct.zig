@@ -218,11 +218,10 @@ test "Hobby construction and cloning fit the exact result budget" {
     const bytes = @sizeOf(Path.Segment) * (n + 1) + @sizeOf(Path.KnotTable) + @sizeOf(Path.KnotTable.Knot) * (n - 1);
     // The working arrays share the allocator and are released before the
     // path returns, which then holds exactly its own storage.
-    var counting: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
-    defer t.expect(counting.deinit() == .ok) catch @panic("leak");
+    var counting = t.FailingAllocator.init(t.allocator, .{});
     var path = try construct(counting.allocator(), &points, &joins, .{});
     defer path.deinit();
-    try t.expectEqual(bytes, counting.total_requested_bytes);
+    try t.expectEqual(bytes, counting.allocated_bytes - counting.freed_bytes);
     try t.expectEqual(n - 1, path.knotRecords().len);
     var clone_buffer: [bytes]u8 align(@alignOf(Path.KnotTable)) = undefined;
     var clone_storage = std.heap.FixedBufferAllocator.init(&clone_buffer);

@@ -78,7 +78,7 @@ pub const Engine = struct { default_output: []const u8, formats: []const []const
 
 /// The format of `formats` an output file is written in, by its extension.
 pub fn formatOf(formats: []const []const u8, path: []const u8) ?usize {
-    const extension = std.fs.path.extension(path);
+    const extension = std.Io.Dir.path.extension(path);
     if (extension.len < 2) return null;
     for (formats, 0..) |format, index| if (std.mem.eql(u8, extension[1..], format)) return index;
     return null;
@@ -119,14 +119,14 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, engine: Eng
         return .{ .command = .help };
     }
     var result: Options = .{ .command = command };
-    var parameters: std.array_list.Managed(Parameter) = .init(allocator);
-    errdefer parameters.deinit();
-    var fonts: std.array_list.Managed([]const u8) = .init(allocator);
-    errdefer fonts.deinit();
-    var font_dirs: std.array_list.Managed([]const u8) = .init(allocator);
-    errdefer font_dirs.deinit();
-    var outputs: std.array_list.Managed(Output) = .init(allocator);
-    errdefer outputs.deinit();
+    var parameters: std.ArrayList(Parameter) = .empty;
+    errdefer parameters.deinit(allocator);
+    var fonts: std.ArrayList([]const u8) = .empty;
+    errdefer fonts.deinit(allocator);
+    var font_dirs: std.ArrayList([]const u8) = .empty;
+    errdefer font_dirs.deinit(allocator);
+    var outputs: std.ArrayList(Output) = .empty;
+    errdefer outputs.deinit(allocator);
     var parser: clap.streaming.Clap(Option, clap.args.SliceIterator) = .{ .params = &option_params, .iter = &iterator, .diagnostic = &detail };
     while (true) {
         const before = iterator.index;
@@ -161,16 +161,16 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, engine: Eng
                 result.system_fonts = true;
             },
             .param => {
-                const at = std.mem.indexOfScalar(u8, value, '=') orelse return fail(allocator, diagnostic, "parameter must use NAME=VALUE: '{s}'", .{value});
+                const at = std.mem.findScalar(u8, value, '=') orelse return fail(allocator, diagnostic, "parameter must use NAME=VALUE: '{s}'", .{value});
                 if (at == 0) return fail(allocator, diagnostic, "parameter name must not be empty", .{});
                 const parameter: Parameter = .{ .name = value[0..at], .value = value[at + 1 ..] };
                 for (parameters.items) |previous| if (std.mem.eql(u8, previous.name, parameter.name))
                     return fail(allocator, diagnostic, "duplicate parameter '{s}'", .{parameter.name});
-                try parameters.append(parameter);
+                try parameters.append(allocator, parameter);
             },
             .output => {
                 if (value.len == 0) return fail(allocator, diagnostic, "empty value for '--output'", .{});
-                const output: Output = if (std.mem.indexOfScalar(u8, value, '=')) |at|
+                const output: Output = if (std.mem.findScalar(u8, value, '=')) |at|
                     .{ .name = value[0..at], .path = value[at + 1 ..] }
                 else
                     .{ .name = engine.default_output, .path = value };
@@ -180,7 +180,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, engine: Eng
                     return fail(allocator, diagnostic, "output must end in {f}: '{s}'", .{ Extensions{ .formats = engine.formats }, output.path });
                 for (outputs.items) |previous| if (std.mem.eql(u8, previous.path, output.path))
                     return fail(allocator, diagnostic, "duplicate output path '{s}'", .{output.path});
-                try outputs.append(output);
+                try outputs.append(allocator, output);
             },
             .jobs => {
                 if (result.jobs != null) return fail(allocator, diagnostic, "duplicate option '--{s}'", .{name});
@@ -196,22 +196,22 @@ pub fn parse(allocator: std.mem.Allocator, args: []const []const u8, engine: Eng
             },
             .font => {
                 if (value.len == 0) return fail(allocator, diagnostic, "empty value for '--{s}'", .{name});
-                try fonts.append(value);
+                try fonts.append(allocator, value);
             },
             .@"font-path" => {
                 if (value.len == 0) return fail(allocator, diagnostic, "empty value for '--{s}'", .{name});
-                try font_dirs.append(value);
+                try font_dirs.append(allocator, value);
             },
         }
     }
     if (result.script == null) return fail(allocator, diagnostic, "missing script path", .{});
-    result.parameters = try parameters.toOwnedSlice();
+    result.parameters = try parameters.toOwnedSlice(allocator);
     errdefer allocator.free(result.parameters);
-    result.fonts = try fonts.toOwnedSlice();
+    result.fonts = try fonts.toOwnedSlice(allocator);
     errdefer allocator.free(result.fonts);
-    result.font_dirs = try font_dirs.toOwnedSlice();
+    result.font_dirs = try font_dirs.toOwnedSlice(allocator);
     errdefer allocator.free(result.font_dirs);
-    result.outputs = try outputs.toOwnedSlice();
+    result.outputs = try outputs.toOwnedSlice(allocator);
     return result;
 }
 
@@ -233,7 +233,7 @@ fn clapFailure(allocator: std.mem.Allocator, diagnostic: *?[]const u8, detail: c
 }
 
 fn fail(allocator: std.mem.Allocator, diagnostic: *?[]const u8, comptime format: []const u8, args: anytype) error{ OutOfMemory, InvalidArguments } {
-    diagnostic.* = try std.fmt.allocPrint(allocator, format, args);
+    diagnostic.* = try allocator.print(format, args);
     return error.InvalidArguments;
 }
 

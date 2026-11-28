@@ -201,11 +201,11 @@ test "drawing word notation composes the same pictures as ordinary calls" {
         try t.expectEqual(@as(usize, 0), words.picture.scope_depth);
         var svg = try runtime.render(words_value, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         var pdf = try runtime.render(words_value, .pdf);
         defer pdf.deinit();
         try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
     }
 }
 

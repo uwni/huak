@@ -122,7 +122,7 @@ test "picture metadata and compound subpaths remain read-only worker inputs" {
         }
         var invalid: ?Diagnostic = null;
         try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, "p:=picture(640, 480); x:=p.baseline; ", "picture-metadata-invalid.huak", .{ .optimize = optimize }, &invalid));
-        try std.testing.expect(std.mem.indexOf(u8, invalid.?.text(), "picture has no member 'baseline'") != null);
+        try std.testing.expect(std.mem.find(u8, invalid.?.text(), "picture has no member 'baseline'") != null);
     }
 }
 
@@ -132,7 +132,7 @@ test "outline effects distinguish geometry from possibly typeset pictures and dy
         .{ .kind = "object", .value = "picture()", .safe = true, .uses_typst = true },
         .{ .kind = "any", .value = "picture()", .safe = false, .uses_typst = false },
     }) |fixture| for ([_]bool{ false, true }) |optimize| {
-        const input = try std.fmt.allocPrint(std.testing.allocator,
+        const input = try std.testing.allocator.print(
             \\import geometry.{{rectangle}}; import object.{{outlines}}; import object.append
             \\source:={s}
             \\first:=copy(source)
@@ -169,7 +169,7 @@ test "task planning rejects alias returns external mutations and observable effe
         "aliases:=[source];return aliases[0]",
     };
     for (bodies) |body| for ([_]bool{ false, true }) |optimize| {
-        const input = try std.fmt.allocPrint(std.testing.allocator, "import object.draw; import solver.solver\ncaptured:=picture(640, 480)\na:=build(captured,true)\nb:=build(captured,false)\nfn build(source:picture,flag:bool)->picture\n{s}\nend", .{body});
+        const input = try std.testing.allocator.print("import object.draw; import solver.solver\ncaptured:=picture(640, 480)\na:=build(captured,true)\nb:=build(captured,false)\nfn build(source:picture,flag:bool)->picture\n{s}\nend", .{body});
         defer std.testing.allocator.free(input);
         var diagnostic: ?Diagnostic = null;
         var program = try compile(std.testing.allocator, input, "task-effects.huak", .{ .optimize = optimize }, &diagnostic);
@@ -227,12 +227,12 @@ test "task planning distinguishes stable object display from allocation identity
         "s:=str(path((0,0),(1,1)))",
     };
     for (suffixes) |suffix| for ([_]bool{ false, true }) |optimize| {
-        const input = try std.fmt.allocPrint(std.testing.allocator, "a:=figure()\nb:=figure()\nfn figure()->picture\ntemporary:=picture(640, 480)\nreturn picture(640, 480)\nend\n{s}", .{suffix});
+        const input = try std.testing.allocator.print("a:=figure()\nb:=figure()\nfn figure()->picture\ntemporary:=picture(640, 480)\nreturn picture(640, 480)\nend\n{s}", .{suffix});
         defer std.testing.allocator.free(input);
         var diagnostic: ?Diagnostic = null;
         var program = try compile(std.testing.allocator, input, "task-identity.huak", .{ .optimize = optimize }, &diagnostic);
         defer program.deinit();
-        const observes_allocation = std.mem.indexOf(u8, suffix, "[a]") != null or std.mem.indexOf(u8, suffix, "path(") != null;
+        const observes_allocation = std.mem.find(u8, suffix, "[a]") != null or std.mem.find(u8, suffix, "path(") != null;
         try std.testing.expectEqual(@as(usize, if (observes_allocation) 0 else 1), program.task_regions.len);
     };
     var diagnostic: ?Diagnostic = null;
@@ -260,9 +260,9 @@ test "task planning skips ordinary scripts without allocating and bounds helper 
     try source_text.appendSlice(std.testing.allocator, "a:=f0()\nb:=f0()\n");
     for (0..count) |index| {
         const declaration = if (index + 1 == count)
-            try std.fmt.allocPrint(std.testing.allocator, "fn f{d}()->picture;return picture(640, 480);end\n", .{index})
+            try std.testing.allocator.print("fn f{d}()->picture;return picture(640, 480);end\n", .{index})
         else
-            try std.fmt.allocPrint(std.testing.allocator, "fn f{d}()->picture;return f{d}();end\n", .{ index, index + 1 });
+            try std.testing.allocator.print("fn f{d}()->picture;return f{d}();end\n", .{ index, index + 1 });
         defer std.testing.allocator.free(declaration);
         try source_text.appendSlice(std.testing.allocator, declaration);
     }

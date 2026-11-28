@@ -251,7 +251,7 @@ test "only a double slash starts a line comment" {
     var lexer: Lexer = .{ .source = "// a\n#b", .diagnostic = &diagnostic };
     try std.testing.expectEqual(Kind.newline, (try lexer.next()).kind);
     try std.testing.expectError(error.LanguageError, lexer.next());
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unexpected character") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "unexpected character") != null);
 }
 
 test "typ is the content keyword while typst remains an identifier" {
@@ -314,7 +314,7 @@ test "a smooth path connection requires a complete double tilde token" {
     var diagnostic: ?source_info.Diagnostic = null;
     var lexer: Lexer = .{ .source = "~", .diagnostic = &diagnostic };
     try std.testing.expectError(error.LanguageError, lexer.next());
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "~~") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "~~") != null);
     diagnostic = null;
     lexer = .{ .source = "~~~", .diagnostic = &diagnostic };
     try std.testing.expectEqual(Kind.smooth_join, (try lexer.next()).kind);

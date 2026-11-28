@@ -102,7 +102,7 @@ test "panic is a host-independent failure with source and script call stack" {
     try std.testing.expectEqualStrings("几何失败 Ω", detail.native_message);
     try std.testing.expectEqualStrings("panic.huak", detail.diagnostic.fileName().?);
     try std.testing.expectEqual(@as(usize, 1), detail.diagnostic.position(script).line);
-    try std.testing.expectEqual(std.mem.indexOf(u8, script, "panic(message)").?, detail.diagnostic.span.start);
+    try std.testing.expectEqual(std.mem.find(u8, script, "panic(message)").?, detail.diagnostic.span.start);
     try std.testing.expectEqual(@as(usize, 3), detail.trace.len);
     try std.testing.expectEqualStrings("stop", detail.trace[0].function);
     try std.testing.expectEqualStrings("caller", detail.trace[1].function);
@@ -120,8 +120,7 @@ test "standard assert uses ordinary calls defaults and panic without a host" {
         .{ .call = "assert(false,\"自定义失败 Ω\")", .message = "自定义失败 Ω" },
     };
     for ([_]bool{ false, true }) |optimize| for (cases) |case| {
-        const script = try std.fmt.allocPrint(
-            std.testing.allocator,
+        const script = try std.testing.allocator.print(
             "import \"std/assertions.huak\".assert\nassert(true)\nassert(true,\"must not fail\")\n{s}\nafter:=42",
             .{case.call},
         );
@@ -138,7 +137,7 @@ test "standard assert uses ordinary calls defaults and panic without a host" {
         try std.testing.expectEqualStrings("std/assertions.huak", detail.diagnostic.fileName().?);
         try std.testing.expectEqualStrings("assert", detail.trace[0].function);
         try std.testing.expectEqual(@as(usize, 2), detail.trace.len);
-        try std.testing.expectEqual(std.mem.indexOf(u8, script, case.call).?, detail.trace[1].span.start);
+        try std.testing.expectEqual(std.mem.find(u8, script, case.call).?, detail.trace[1].span.start);
         try std.testing.expect(machine.getGlobal("after") == null);
     };
 }

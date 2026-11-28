@@ -76,10 +76,10 @@ test "drawing snapshots its target and reuses imported prefix functions and nati
         defer svg.deinit();
         var pdf = try runtime.render(machine.getGlobal("first").?, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 120 80\"") != null);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/FontFile") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 120 80\"") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/FontFile") != null);
     }
 }
 
@@ -203,8 +203,8 @@ test "drawing inserts only explicit plus expressions and retains object handles"
         defer svg.deinit();
         var pdf = try runtime.render(machine.getGlobal("plate").?, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<svg") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<svg") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
     }
 }
 
@@ -278,6 +278,6 @@ test "anonymous drawing expressions return targets and unwind unfinished operand
         try t.expectEqual(@as(usize, 1), try scene.childCount(default));
         var svg = try runtime.render(default, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 80 40\"") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 80 40\"") != null);
     }
 }

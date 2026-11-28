@@ -12,7 +12,7 @@ const Target = definition.Target;
 const RecordTarget = struct { unit: *const ModuleGraph.Unit, statement: *const ast.Stmt };
 
 pub fn recordNamed(self: Query, name: []const u8, offset: usize) ?RecordTarget {
-    const target = if (std.mem.lastIndexOfScalar(u8, name, '.')) |dot| blk: {
+    const target = if (std.mem.findScalarLast(u8, name, '.')) |dot| blk: {
         const id = self.graph.resolveNamespaceAt(self.unit, self.unit.scopeAt(offset), name[0..dot], offset) orelse return null;
         break :blk self.public(id, name[dot + 1 ..]) orelse return null;
     } else self.named(name, offset, .type_symbol) orelse return null;

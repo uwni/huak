@@ -13,7 +13,7 @@ fn rejected(args: []const []const u8, expected: []const u8) !void {
     defer arena.deinit();
     var diagnostic: ?[]const u8 = null;
     try std.testing.expectError(error.InvalidArguments, parse(arena.allocator(), args, test_engine, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?, expected) != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?, expected) != null);
 }
 
 test "run flags preserve literal strings and repeated font paths" {

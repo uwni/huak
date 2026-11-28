@@ -13,7 +13,7 @@ test "native domain modules export only their signatures and retain aliases" {
         const memory = arena.allocator();
         var diagnostic: ?source.Diagnostic = null;
         var graph = ModuleGraph.init(memory, memory, .{}, null, &diagnostic);
-        const input = try std.fmt.allocPrint(memory, "import {s}\nimport {s} as native\nimport {s}.*\n", .{ namespace.name(), namespace.name(), namespace.name() });
+        const input = try memory.print("import {s}\nimport {s} as native\nimport {s}.*\n", .{ namespace.name(), namespace.name(), namespace.name() });
         try graph.root("root.huak", input);
         const root_source = graph.units.items[0];
         const native = graph.units.items[root_source.resolver().namespace(0, "native").?];
@@ -89,7 +89,7 @@ test "external resolvers cannot forge a native domain identity before or after i
         var context: u8 = 0;
         var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } }, &diagnostic);
         try std.testing.expectError(error.LanguageError, graph.root("root.huak", input));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "reserved native module identity") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "reserved native module identity") != null);
     }
 }
 
@@ -120,7 +120,7 @@ test "standard namespaces retain canonical native constructor call forms" {
         var diagnostic: ?source.Diagnostic = null;
         var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, null, &diagnostic);
         const imports = if (reversed) "import paint.*;import std.*\n" else "import std.*;import paint.*\n";
-        const input = try std.fmt.allocPrint(arena.allocator(), "{s}image:=picture with width 10mm height 20mm\nink:=pen with color color.rgb(0,0,0) width 1mm", .{imports});
+        const input = try arena.allocator().print("{s}image:=picture with width 10mm height 20mm\nink:=pen with color color.rgb(0,0,0) width 1mm", .{imports});
         try graph.root("constructors.huak", input);
         const unit = graph.units.items[0];
         try std.testing.expect(unit.script.statements[2].value.assignment.value.value == .mixfix_call);
@@ -140,6 +140,6 @@ test "standard namespaces retain canonical native constructor call forms" {
         var diagnostic: ?source.Diagnostic = null;
         var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, null, &diagnostic);
         try std.testing.expectError(error.LanguageError, graph.root("conflict.huak", input));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "conflicts with callable") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "conflicts with callable") != null);
     }
 }

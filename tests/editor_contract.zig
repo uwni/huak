@@ -30,7 +30,7 @@ test "the extension runs the command line as it defines its commands and options
                 try expectNamed(cli.Option, literal.text[2..]);
             } else if (std.mem.endsWith(u8, std.mem.trimEnd(u8, js[0..literal.start], " \t\n"), "[")) {
                 // An array of arguments with options in it starts with the command.
-                const end = std.mem.indexOfScalarPos(u8, js, literal.start, ']') orelse continue;
+                const end = std.mem.findScalarPos(u8, js, literal.start, ']') orelse continue;
                 var rest: Literals = .{ .js = js[0..end], .at = literal.end };
                 while (rest.next()) |argument| if (std.mem.startsWith(u8, argument.text, "--")) {
                     try expectNamed(cli.Command, literal.text);
@@ -43,15 +43,15 @@ test "the extension runs the command line as it defines its commands and options
 
 test "the extension reads the watch events the command line writes" {
     const watch = @embedFile("extension_watch");
-    const list = std.mem.indexOf(u8, watch, "].includes(value.event)") orelse return error.ContractNotFound;
-    const start = std.mem.lastIndexOfScalar(u8, watch[0..list], '[') orelse return error.ContractNotFound;
+    const list = std.mem.find(u8, watch, "].includes(value.event)") orelse return error.ContractNotFound;
+    const start = std.mem.findScalarLast(u8, watch[0..list], '[') orelse return error.ContractNotFound;
     var listed: Literals = .{ .js = watch[0..list], .at = start };
     var count: usize = 0;
     while (listed.next()) |literal| : (count += 1) try expectNamed(cli.WatchEvent, literal.text);
     try t.expectEqual(@typeInfo(cli.WatchEvent).@"enum".field_names.len, count);
     for ([_][]const u8{ watch, @embedFile("extension_preview") }) |js| {
         var compared: usize = 0;
-        while (std.mem.indexOfPos(u8, js, compared, "event === ")) |at| : (compared = at + 1) {
+        while (std.mem.findPos(u8, js, compared, "event === ")) |at| : (compared = at + 1) {
             var literals: Literals = .{ .js = js, .at = at };
             try expectNamed(cli.WatchEvent, (literals.next() orelse return error.ContractNotFound).text);
         }
@@ -71,17 +71,17 @@ test "the extension asks the language server what it answers" {
             }
         };
     }
-    try t.expect(std.mem.indexOf(u8, @embedFile("extension_main"), "'" ++ tooling.lsp.standard_scheme ++ "'") != null);
+    try t.expect(std.mem.find(u8, @embedFile("extension_main"), "'" ++ tooling.lsp.standard_scheme ++ "'") != null);
 }
 
 test "the extension names the default picture and the formats as the language and renderer do" {
     const outputs = @embedFile("extension_outputs");
-    const compared = std.mem.indexOf(u8, outputs, "name === ") orelse return error.ContractNotFound;
+    const compared = std.mem.find(u8, outputs, "name === ") orelse return error.ContractNotFound;
     var literals: Literals = .{ .js = outputs, .at = compared };
     try t.expectEqualStrings(huak.language.bytecode.Output.default_name, (literals.next() orelse return error.ContractNotFound).text);
     const render = @embedFile("extension_render");
-    const offered = std.mem.indexOf(u8, render, "].map(format =>") orelse return error.ContractNotFound;
-    const start = std.mem.lastIndexOfScalar(u8, render[0..offered], '[') orelse return error.ContractNotFound;
+    const offered = std.mem.find(u8, render, "].map(format =>") orelse return error.ContractNotFound;
+    const start = std.mem.findScalarLast(u8, render[0..offered], '[') orelse return error.ContractNotFound;
     var formats: Literals = .{ .js = render[0..offered], .at = start };
     var count: usize = 0;
     while (formats.next()) |format| : (count += 1) try expectNamed(huak.render.Format, format.text);
@@ -109,9 +109,9 @@ const Literals = struct {
         while (self.at < js.len) {
             const character = js[self.at];
             if (std.mem.startsWith(u8, js[self.at..], "//")) {
-                self.at = std.mem.indexOfScalarPos(u8, js, self.at, '\n') orelse js.len;
+                self.at = std.mem.findScalarPos(u8, js, self.at, '\n') orelse js.len;
             } else if (std.mem.startsWith(u8, js[self.at..], "/*")) {
-                self.at = if (std.mem.indexOfPos(u8, js, self.at + 2, "*/")) |close| close + 2 else js.len;
+                self.at = if (std.mem.findPos(u8, js, self.at + 2, "*/")) |close| close + 2 else js.len;
             } else if (character == '"' or character == '`' or character == '\'') {
                 const start = self.at;
                 self.at += 1;

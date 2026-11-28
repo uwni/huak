@@ -53,12 +53,12 @@ test "standard brushes and engraving compose with user profiles retained text an
             try execute(&machine);
             var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
             defer svg.deinit();
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), "<clipPath") != null);
             var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
             defer pdf.deinit();
             try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
-            try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+            try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
         }
     }
 }
@@ -97,7 +97,7 @@ test "standard drawing recipes return whole-object handles including empty strok
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), ".huak-a"));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "@keyframes "));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg.bytes(), "stroke=\"url(#"));
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<linearGradient") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<linearGradient") != null);
 }
 
 test "standard brushes avoid pen-up bridges and zero-width PDF hairlines" {
@@ -151,7 +151,7 @@ test "standard brush policies validate their own style parameters" {
             .{ .call = "object.append(pic, engraving.sphere((0,0),1mm,ink,2))", .message = "at least four" },
             .{ .call = "object.append(pic, engraving.tube(curve,1mm,ink,2,12))", .message = "at least three" },
         }) |case| {
-            const source = try std.fmt.allocPrint(t.allocator,
+            const source = try t.allocator.print(
                 \\import paint.{{rgb, rectangle, path, picture}};import brush
                 \\import engraving
                 \\pic:=picture(640, 480); ink:=rgb(0,0,0)
@@ -166,7 +166,7 @@ test "standard brush policies validate their own style parameters" {
             var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
             defer machine.deinit();
             try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-            try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, case.message) != null);
+            try t.expect(std.mem.find(u8, machine.failure.?.native_message, case.message) != null);
         }
     }
 }

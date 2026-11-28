@@ -10,7 +10,7 @@ const geometry_outline = @import("huak").core.outline;
 fn fixtureLayout(engine: *typst.Engine, baseline: f64, visible: bool, measured: *[1]typst.Metrics) !typst.Layout {
     // Use public Typst content to construct both contours and an out-of-box
     // baseline. The C boundary no longer exposes mutable native Frames.
-    const source = try std.fmt.allocPrint(t.allocator, "#v({d}pt,weak:false)#box(width:16pt,height:25pt,baseline:top)[" ++
+    const source = try t.allocator.print("#v({d}pt,weak:false)#box(width:16pt,height:25pt,baseline:top)[" ++
         "#place(top+left,dx:3pt,dy:{d}pt,curve(fill:{s},stroke:{s}," ++
         "curve.move((0pt,0pt)),curve.line((10pt,0pt)),curve.line((10pt,10pt)),curve.line((0pt,10pt)),curve.close()," ++
         "curve.move((3pt,3pt)),curve.line((3pt,7pt)),curve.line((7pt,7pt)),curve.line((7pt,3pt)),curve.close()))]#v({d}pt,weak:false)", .{ baseline, 4 - baseline, if (visible) "rgb(20,30,40)" else "none", if (visible) "(paint:rgb(20,30,40),thickness:2pt,cap:\"round\",join:\"miter\",miter-limit:7,dash:(array:(3pt,0pt,2pt),phase:-1pt))" else "none", -baseline });
@@ -116,7 +116,7 @@ test "unsupported content rejects the whole editable batch with a retained diagn
         try t.expectError(error.Unsupported, outline.extract(t.allocator, &layout));
         var diagnostic = try library.lastError();
         defer diagnostic.deinit();
-        try t.expect(std.mem.indexOf(u8, diagnostic.bytes(), "do not support") != null);
+        try t.expect(std.mem.find(u8, diagnostic.bytes(), "do not support") != null);
     }
     var measured: [1]typst.Metrics = undefined;
     var good = try engine.layoutContent(&.{.{ .source = "Still works" }}, &measured, null);

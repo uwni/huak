@@ -20,7 +20,7 @@ pub fn mixfixBinding(self: *Parser) !*ast.Stmt {
     if (leading) try self.advance();
     const head = try templateToken(self);
     if (std.mem.eql(u8, self.text(head), "_")) return self.fail(head.span, "expected a mixfix word or symbol before the next argument", .{});
-    var parts: std.array_list.Managed(?[]const u8) = .init(self.allocator);
+    var parts: std.ArrayList(?[]const u8) = .empty;
     while (self.current.kind != .kw_in) {
         while (self.current.kind == .newline) try self.advance();
         if (self.current.kind == .kw_in) break;
@@ -30,9 +30,9 @@ pub fn mixfixBinding(self: *Parser) !*ast.Stmt {
         if (std.mem.eql(u8, word, "_")) {
             if (parts.items.len != 0 and parts.items[parts.items.len - 1] == null)
                 return self.fail(token.span, "mixfix arguments must be preceded by a word", .{});
-            try parts.append(null);
+            try parts.append(self.allocator, null);
         } else {
-            try parts.append(word);
+            try parts.append(self.allocator, word);
         }
     }
     if (parts.items.len == 0 or parts.items[parts.items.len - 1] != null)
@@ -40,7 +40,7 @@ pub fn mixfixBinding(self: *Parser) !*ast.Stmt {
     try self.advance();
     while (self.current.kind == .newline) try self.advance();
     const group = try operatorName(self);
-    return self.createStmt(.join(start, group.span), .{ .mixfix_binding = .{ .target = target, .form = .{ .head = self.text(head), .parts = try parts.toOwnedSlice(), .group = group, .leading = leading } } });
+    return self.createStmt(.join(start, group.span), .{ .mixfix_binding = .{ .target = target, .form = .{ .head = self.text(head), .parts = try parts.toOwnedSlice(self.allocator), .group = group, .leading = leading } } });
 }
 
 fn templateToken(self: *Parser) !Lexer.Token {
@@ -95,8 +95,8 @@ pub fn mixfixCall(self: *Parser, head: ast.OperatorName, binding: MixfixLookup.B
     }));
     if (form.parts.len > 1 and self.mixfix_argument_nesting == nesting)
         return self.fail(name.span, "nested mixfix arguments require parentheses", .{});
-    var arguments: std.array_list.Managed(*ast.Expr) = .init(self.allocator);
-    if (left) |operand| try arguments.append(operand);
+    var arguments: std.ArrayList(*ast.Expr) = .empty;
+    if (left) |operand| try arguments.append(self.allocator, operand);
     for (form.parts, 0..) |part, index| {
         if (part != null and arguments.items.len != 0) {
             // Trailing clauses can be omitted at a statement boundary;
@@ -126,10 +126,10 @@ pub fn mixfixCall(self: *Parser, head: ast.OperatorName, binding: MixfixLookup.B
                 .{ .word = form.parts[index + 1].?, .nesting = nesting }
             else
                 previous_boundary;
-            try arguments.append(try expressions.expression(self, if (index + 1 == form.parts.len) 1 else 0));
+            try arguments.append(self.allocator, try expressions.expression(self, if (index + 1 == form.parts.len) 1 else 0));
         }
     }
-    return self.createExpr(.join(if (left) |operand| operand.span else name.span, arguments.items[arguments.items.len - 1].span), .{ .mixfix_call = .{ .operator = name, .args = try arguments.toOwnedSlice(), .leading = form.leading, .qualified = binding.qualified } });
+    return self.createExpr(.join(if (left) |operand| operand.span else name.span, arguments.items[arguments.items.len - 1].span), .{ .mixfix_call = .{ .operator = name, .args = try arguments.toOwnedSlice(self.allocator), .leading = form.leading, .qualified = binding.qualified } });
 }
 
 pub fn precedenceGroup(self: *Parser) !*ast.Stmt {
@@ -137,7 +137,7 @@ pub fn precedenceGroup(self: *Parser) !*ast.Stmt {
     try self.advance();
     const name = try self.expect(.identifier, "expected a precedence group name");
     try self.separators();
-    var relations: std.array_list.Managed(ast.Relation) = .init(self.allocator);
+    var relations: std.ArrayList(ast.Relation) = .empty;
     var associativity: ast.Associativity = .none;
     var association_seen = false;
     while (self.current.kind != .kw_end) {
@@ -157,14 +157,14 @@ pub fn precedenceGroup(self: *Parser) !*ast.Stmt {
                 if (earlier.direction == direction and sameOperatorName(earlier.target, target))
                     return self.fail(attribute.span, "duplicate '{s}' relation for precedence group '{s}'", .{ word, target.name });
             }
-            try relations.append(.{ .direction = direction, .target = target, .span = .join(attribute.span, target.span) });
+            try relations.append(self.allocator, .{ .direction = direction, .target = target, .span = .join(attribute.span, target.span) });
         } else return self.fail(attribute.span, "unknown precedence attribute '{s}'", .{word});
         if (self.current.kind != .newline and self.current.kind != .semicolon and self.current.kind != .kw_end)
             return self.fail(self.current.span, "expected a newline or ';' between precedence attributes", .{});
         try self.separators();
     }
     const finish = try self.expect(.kw_end, "expected 'end' for precedence group");
-    return self.createStmt(.join(start, finish.span), .{ .precedence_group = .{ .name = self.text(name), .relations = try relations.toOwnedSlice(), .associativity = associativity } });
+    return self.createStmt(.join(start, finish.span), .{ .precedence_group = .{ .name = self.text(name), .relations = try relations.toOwnedSlice(self.allocator), .associativity = associativity } });
 }
 
 pub fn operatorName(self: *Parser) !ast.OperatorName {

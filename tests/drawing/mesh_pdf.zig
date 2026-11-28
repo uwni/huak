@@ -68,11 +68,11 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
         var output = try scene.render(t.allocator, &library, .svg, &diagnostic);
         defer output.deinit();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "<image"));
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "data:image/png;base64,") != null);
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "clip-path=") != null);
+        try t.expect(std.mem.find(u8, output.bytes(), "data:image/png;base64,") != null);
+        try t.expect(std.mem.find(u8, output.bytes(), "clip-path=") != null);
         try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), " data-typst-label=\"huak-mesh\""));
         try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), "shape-rendering:crispEdges"));
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "<use") != null);
+        try t.expect(std.mem.find(u8, output.bytes(), "<use") != null);
     }
     {
         const capabilities = library.capabilities.?;
@@ -90,7 +90,7 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
         defer output.deinit();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), " data-typst-label=\"huak-mesh\""));
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "shape-rendering:crispEdges"));
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "<image") == null);
+        try t.expect(std.mem.find(u8, output.bytes(), "<image") == null);
     }
     {
         const capabilities = library.capabilities.?;
@@ -106,13 +106,13 @@ test "mesh PDFs keep curved clips holes alpha order and live text without changi
     defer pdf.deinit();
     // One color at one opacity: the mesh page fills its clip with that
     // color at that opacity, through the coverage of the patch mesh.
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 7") != null);
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/Subtype /Image") == null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ShadingType 7") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/Subtype /Image") == null);
     const words = try @import("../support/pdf.zig").text(pdf.bytes(), .{});
     defer t.allocator.free(words);
-    try t.expect(std.mem.indexOf(u8, words, "Native mesh") != null);
-    try t.expect(std.mem.indexOf(u8, words, "𝑥") != null);
-    try t.expect(std.mem.indexOf(u8, words, "2") != null);
+    try t.expect(std.mem.find(u8, words, "Native mesh") != null);
+    try t.expect(std.mem.find(u8, words, "𝑥") != null);
+    try t.expect(std.mem.find(u8, words, "2") != null);
     const image = try @import("../support/pdf.zig").raster(pdf.bytes(), .{});
     defer t.allocator.free(image);
     const header = "P6\n100 100\n255\n";
@@ -152,7 +152,7 @@ test "mesh import borrows the configured typesetting context instead of replacin
     defer document.deinit();
     var pdf = try document.exportPdf();
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ShadingType 7") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ShadingType 7") != null);
     try t.expectEqual(context, library.shared_context);
     try t.expectEqual(configuration, library.shared_options);
 }

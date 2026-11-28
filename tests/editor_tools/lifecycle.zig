@@ -15,7 +15,7 @@ test "standalone language server implements lifecycle diagnostics UTF16 edits co
     const help = try harness.runWithInput(a, &.{ executable, "--help" }, null);
     try t.expectEqual(std.process.Child.Term{ .exited = 0 }, help.term);
     try t.expectEqualStrings("", help.stdout);
-    try t.expect(std.mem.indexOf(u8, help.stderr, "usage: huak-lsp") != null);
+    try t.expect(std.mem.find(u8, help.stderr, "usage: huak-lsp") != null);
     const invalid = try harness.runWithInput(a, &.{ executable, "--help", "--unknown" }, null);
     try t.expectEqual(std.process.Child.Term{ .exited = 1 }, invalid.term);
     try t.expectEqualStrings("", invalid.stdout);
@@ -60,7 +60,7 @@ test "standalone language server implements lifecycle diagnostics UTF16 edits co
                 for (kinds, tooling.semantic_tokens.legend.tokenTypes) |kind, name| try t.expectEqualStrings(name, kind.string);
             },
             2 => try t.expectEqualStrings("fn f()->void\n    value := \"🙂\"; print(1)\nend\n", response.get("result").?.array.items[0].object.get("newText").?.string),
-            3 => try t.expect(std.mem.indexOf(u8, response.get("result").?.object.get("contents").?.object.get("value").?.string, "fn print(") != null),
+            3 => try t.expect(std.mem.find(u8, response.get("result").?.object.get("contents").?.object.get("value").?.string, "fn print(") != null),
             4 => {
                 const items = response.get("result").?.object.get("items").?.array.items;
                 try t.expect(items.len > 30);

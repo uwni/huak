@@ -21,7 +21,7 @@ test "aggregate diagnostics reject bad keys fields named arguments and native at
         for (invalid) |case| {
             var diagnostic: ?l.compiler.Diagnostic = null;
             try t.expectError(error.LanguageError, harness.compile(t.allocator, &library, case.text, &.{}, optimize, &diagnostic));
-            try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.expected) != null);
+            try t.expect(std.mem.find(u8, diagnostic.?.text(), case.expected) != null);
         }
         const failures = [_]struct { text: []const u8, expected: []const u8 }{
             .{ .text = "data:={}\nvalue:=data[\"absent\"]\nafter:=1", .expected = "has no key 'absent'" },
@@ -39,7 +39,7 @@ test "aggregate diagnostics reject bad keys fields named arguments and native at
             defer machine.deinit();
             try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
             const failure = machine.failure.?;
-            try t.expect(std.mem.indexOf(u8, failure.text(), case.expected) != null);
+            try t.expect(std.mem.find(u8, failure.text(), case.expected) != null);
             try t.expect(machine.getGlobal("after") == null);
             try t.expect(failure.diagnostic.span.end > failure.diagnostic.span.start);
         }

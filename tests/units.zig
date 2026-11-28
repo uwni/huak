@@ -69,9 +69,9 @@ test "unit syntax and dimensions reach native geometry and typography with ident
         defer svg.deinit();
         var pdf = try runtime.render(target, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/FontFile") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/FontFile") != null);
     }
 }
 

@@ -37,7 +37,7 @@ pub fn moduleExpression(self: *const Compiler, expression: *ast.Expr) ?u32 {
 pub fn moduleInitializer(self: *const Compiler, expression: *ast.Expr) ?u32 {
     const inner = ungroup(expression);
     return switch (inner.value) {
-        .name => |name| self.environment.unit.resolverAt(inner.span.start).namespaceInitializer(self.environment.unit.scopeAt(inner.span.start), name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len]),
+        .name => |name| self.environment.unit.resolverAt(inner.span.start).namespaceInitializer(self.environment.unit.scopeAt(inner.span.start), name[0 .. std.mem.findScalar(u8, name, '.') orelse name.len]),
         .member => |member| moduleInitializer(self, member.object),
         else => null,
     };
@@ -158,7 +158,7 @@ pub fn exportName(self: *Compiler, name: []const u8, span: Span, name_span: Span
         forms[index] = if (call.mixfix[index]) |form| try copyMixfix(self, form.*) else if (imported_function) |item| item.mixfix[index] else null;
     };
     try self.export_names.put(self.allocator, name, {});
-    try self.exports.append(.{ .name = name, .target = target, .span = span, .mixfix = forms });
+    try self.exports.append(self.allocator, .{ .name = name, .target = target, .span = span, .mixfix = forms });
 }
 
 pub fn copyMixfix(self: *Compiler, form: ast.MixfixForm) !bc.MixfixForm {
@@ -177,7 +177,7 @@ pub fn qualifiedTarget(self: *Compiler, name: ast.OperatorName) !CallableTarget 
     const scope = unit.scopeAt(name.span.start);
     if (imported(self, namespace, name.span)) |module| {
         const exposed = try importedExport(self, module, name.name, name.span);
-        const root = namespace[0 .. std.mem.indexOfScalar(u8, namespace, '.') orelse namespace.len];
+        const root = namespace[0 .. std.mem.findScalar(u8, namespace, '.') orelse namespace.len];
         return .{ .target = exposed.target, .module = module, .initializer = resolver.namespaceInitializer(scope, root) };
     }
     if (resolver.readable(scope, namespace) == null) if (builtin.Namespace.parse(namespace)) |native| {

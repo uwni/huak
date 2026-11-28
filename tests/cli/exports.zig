@@ -146,7 +146,7 @@ pub fn run(ctx: *h.Harness) !void {
     try h.contains(dangling_collision.stderr, "duplicate output path");
     try h.output(dangling_collision, "");
     try ctx.absent("new-output.svg");
-    var link_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var link_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const link_length = try ctx.temporary.dir.readLink(t.io, "dangling-output.svg", &link_buffer);
     try t.expectEqualStrings("new-output.svg", link_buffer[0..link_length]);
     try ctx.write("case-probe", "filesystem case probe");

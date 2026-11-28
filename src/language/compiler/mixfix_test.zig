@@ -24,8 +24,7 @@ test "reexported native templates retain their own group in nested blocks" {
     var context: u8 = 0;
     for ([_][]const u8{ "paint", "brush.paint" }) |head| {
         for ([_]bool{ false, true }) |grouped| {
-            const input = try std.fmt.allocPrint(
-                std.testing.allocator,
+            const input = try std.testing.allocator.print(
                 "import \"brush\".paint;import \"brush\" as brush\nimport geometry.joined as join\nmixfix(join) _ join _ in addition\np:=path((0,0),(1,1));q:=path((1,1),(2,2))\nblock\n{s} {s}\nend",
                 .{ head, if (grouped) "(p join q)" else "p join q" },
             );
@@ -37,7 +36,7 @@ test "reexported native templates retain their own group in nested blocks" {
                 defer program.deinit();
             } else {
                 try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, input, "native-group.huak", options, &diagnostic));
-                try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "path") != null);
+                try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "path") != null);
             }
         }
     }
@@ -51,9 +50,9 @@ test "mixfix uses ordinary bytecode and evaluates argument slots once in order" 
         \\fn record(value:int)->int calls+=value; return value end
         \\
     ;
-    const mixed_source = try std.fmt.allocPrint(std.testing.allocator, "{s}answer:=combine from record(1) with record(2)+3", .{declarations});
+    const mixed_source = try std.testing.allocator.print("{s}answer:=combine from record(1) with record(2)+3", .{declarations});
     defer std.testing.allocator.free(mixed_source);
-    const ordinary_source = try std.fmt.allocPrint(std.testing.allocator, "{s}answer:=combine(record(1),record(2))+3", .{declarations});
+    const ordinary_source = try std.testing.allocator.print("{s}answer:=combine(record(1),record(2))+3", .{declarations});
     defer std.testing.allocator.free(ordinary_source);
     for ([_]bool{ false, true }) |optimize| {
         var diagnostic: ?Diagnostic = null;
@@ -156,7 +155,7 @@ test "mixfix imported native calls check module initialization before argument e
     var machine = try @import("../Machine.zig").init(std.testing.allocator, &program, .{}, .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "not initialized") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "not initialized") != null);
     try std.testing.expectEqual(@as(usize, 0), @import("../types.zig").sequence(machine.getGlobal("calls").?).?.len);
 }
 

@@ -86,7 +86,7 @@ fn quantized(patch: *const [16]g.Point, field: *const [16]f64, unit: Unit, range
 
 /// The corner slot of a corner's point index.
 fn slot(index: u8) usize {
-    return std.mem.indexOfScalar(u8, &corner_order, index).?;
+    return std.mem.findScalar(u8, &corner_order, index).?;
 }
 
 /// `next` laid out to begin with an edge it shares with `last`, and the
@@ -171,10 +171,10 @@ test "colors at patch corners make one RGB mesh without a function or a soft mas
     try testing.expect(std.mem.startsWith(u8, pdf, "%PDF-1.3\n"));
     try testing.expectEqualDeep(g.BBox{ .min = .{ .x = 10, .y = 20 }, .max = .{ .x = 30, .y = 60 } }, encoded.bounds);
     try testing.expectEqualStrings("0 0 m\n1 0 l\n1 1 l\n0 1 l\nh\nW*\nn\n/Mesh sh", try streamOf(pdf, 4));
-    try testing.expect(std.mem.indexOf(u8, pdf, "5 0 obj\n<</ShadingType 7/ColorSpace/DeviceRGB/BitsPerCoordinate 24/BitsPerComponent 16/BitsPerFlag 8/Decode[0 1 0 1 0 1 0 1 0 1]/Filter/FlateDecode/Length ") != null);
-    try testing.expect(std.mem.indexOf(u8, pdf, "/SMask") == null);
-    try testing.expect(std.mem.indexOf(u8, pdf, "/Function") == null);
-    try testing.expect(std.mem.indexOf(u8, pdf, "xref\n0 6\n") != null);
+    try testing.expect(std.mem.find(u8, pdf, "5 0 obj\n<</ShadingType 7/ColorSpace/DeviceRGB/BitsPerCoordinate 24/BitsPerComponent 16/BitsPerFlag 8/Decode[0 1 0 1 0 1 0 1 0 1]/Filter/FlateDecode/Length ") != null);
+    try testing.expect(std.mem.find(u8, pdf, "/SMask") == null);
+    try testing.expect(std.mem.find(u8, pdf, "/Function") == null);
+    try testing.expect(std.mem.find(u8, pdf, "xref\n0 6\n") != null);
     const records = try inflate(try streamOf(pdf, 5));
     defer testing.allocator.free(records);
     try testing.expectEqual(color_record, records.len);

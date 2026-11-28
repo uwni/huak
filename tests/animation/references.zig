@@ -49,7 +49,7 @@ pub fn main(init: std.process.Init) !void {
         for (&marked_tracks) |*track| track.smil = smil;
         const output = try native_svg.encodeAnimatedSvg(init.gpa, static_svg.bytes(), &.{ .duration_seconds = scene.duration, .tracks = &marked_tracks });
         defer init.gpa.free(output);
-        const path = if (smil) try std.fmt.allocPrint(init.arena.allocator(), "{s}-smil.svg", .{output_path[0 .. output_path.len - ".svg".len]}) else output_path;
+        const path = if (smil) try init.arena.allocator().print("{s}-smil.svg", .{output_path[0 .. output_path.len - ".svg".len]}) else output_path;
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = path, .data = output });
     }
     try writeReferences(init, &library, &references, &measured, &prepared, ids);
@@ -82,7 +82,7 @@ fn writeReferences(init: std.process.Init, library: *typst.Library, references: 
         var svg = try document.exportSvg(0);
         defer svg.deinit();
         var scratch: [96]u8 = undefined;
-        const filename = try std.fmt.bufPrint(&scratch, "target/animation-reference-{d}.svg", .{index});
+        const filename = try std.mem.print(&scratch, "target/animation-reference-{d}.svg", .{index});
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = filename, .data = svg.bytes() });
     }
     const metadata = try std.json.Stringify.valueAlloc(init.gpa, .{ .duration = duration, .times = verification_times }, .{});

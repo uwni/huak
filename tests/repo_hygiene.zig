@@ -35,8 +35,8 @@ fn readAsSource(path: []const u8) bool {
         if (std.mem.endsWith(u8, path, ext)) return false;
     }
     if (std.mem.eql(u8, path, "libtypst/include/libtypst.h")) return false;
-    if (std.mem.indexOf(u8, path, "LICENSE") != null) return false;
-    if (std.mem.indexOf(u8, path, "/licenses/") != null) return false;
+    if (std.mem.find(u8, path, "LICENSE") != null) return false;
+    if (std.mem.find(u8, path, "/licenses/") != null) return false;
     return true;
 }
 
@@ -45,13 +45,13 @@ fn checkDirectory(allocator: std.mem.Allocator, dir: std.Io.Dir, prefix: []const
     while (try iterator.next(t.io)) |entry| {
         if (entry.kind == .directory) {
             if (skippedDirectory(entry.name)) continue;
-            const child_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ prefix, entry.name });
+            const child_path = try allocator.print("{s}/{s}", .{ prefix, entry.name });
             defer allocator.free(child_path);
             var child = try dir.openDir(t.io, entry.name, .{ .iterate = true });
             defer child.close(t.io);
             try checkDirectory(allocator, child, child_path, failures);
         } else if (entry.kind == .file) {
-            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ prefix, entry.name });
+            const full_path = try allocator.print("{s}/{s}", .{ prefix, entry.name });
             defer allocator.free(full_path);
             if (!readAsSource(full_path)) continue;
             const stat = try dir.statFile(t.io, entry.name, .{});
@@ -77,20 +77,20 @@ test "space README matches HUAK_SPACE_ABI_VERSION in projection.h" {
     const header = @embedFile("space_projection_h");
     const readme = @embedFile("space_readme");
     const marker = "#define HUAK_SPACE_ABI_VERSION ";
-    const start = (std.mem.indexOf(u8, header, marker) orelse return error.AbiVersionNotFound) + marker.len;
-    const end = std.mem.indexOfScalarPos(u8, header, start, '\n') orelse header.len;
+    const start = (std.mem.find(u8, header, marker) orelse return error.AbiVersionNotFound) + marker.len;
+    const end = std.mem.findScalarPos(u8, header, start, '\n') orelse header.len;
     const raw = std.mem.trimEnd(u8, std.mem.trim(u8, header[start..end], " \t\r"), "uU");
     const version = try std.fmt.parseInt(u32, raw, 0);
     const major = version >> 16;
 
     var expected_buf: [32]u8 = undefined;
-    const expected = try std.fmt.bufPrint(&expected_buf, "huak_space_api_v{d}", .{major});
-    try t.expect(std.mem.indexOf(u8, header, expected) != null);
+    const expected = try std.mem.print(&expected_buf, "huak_space_api_v{d}", .{major});
+    try t.expect(std.mem.find(u8, header, expected) != null);
 
     const prefix = "huak_space_api_v";
     var found: usize = 0;
     var at: usize = 0;
-    while (std.mem.indexOfPos(u8, readme, at, prefix)) |pos| {
+    while (std.mem.findPos(u8, readme, at, prefix)) |pos| {
         var tail = pos + prefix.len;
         while (tail < readme.len and std.ascii.isDigit(readme[tail])) : (tail += 1) {}
         const mentioned = readme[pos..tail];

@@ -22,7 +22,7 @@ test "the maximum supported picture nesting submits through the real native back
     defer document.deinit();
     var svg = try document.exportSvg(0);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#00ff00\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "fill=\"#00ff00\"") != null);
     var nib_picture = DisplayList.init(t.allocator);
     defer nib_picture.deinit();
     for (0..DisplayList.max_scope_depth) |_| try nib_picture.beginScope(.{}, null);
@@ -36,7 +36,7 @@ test "the maximum supported picture nesting submits through the real native back
     defer nib_document.deinit();
     var nib_svg = try nib_document.exportSvg(0);
     defer nib_svg.deinit();
-    try t.expect(std.mem.indexOf(u8, nib_svg.bytes(), "data-typst-label=\"libtypst-object-77\"") != null);
+    try t.expect(std.mem.find(u8, nib_svg.bytes(), "data-typst-label=\"libtypst-object-77\"") != null);
     const ids = try t.allocator.alloc(u64, picture.commands.items.len);
     defer t.allocator.free(ids);
     @memset(ids, 0);
@@ -45,7 +45,7 @@ test "the maximum supported picture nesting submits through the real native back
     defer identified.deinit();
     var identified_svg = try identified.exportSvg(0);
     defer identified_svg.deinit();
-    try t.expect(std.mem.indexOf(u8, identified_svg.bytes(), "libtypst-object-1") != null);
+    try t.expect(std.mem.find(u8, identified_svg.bytes(), "libtypst-object-1") != null);
 }
 
 test "native backend validates frame references and accepts two wrappers for one library instance" {
@@ -74,5 +74,5 @@ test "native backend validates frame references and accepts two wrappers for one
     defer document.deinit();
     var svg = try document.exportSvg(0);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<use ") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<use ") != null);
 }

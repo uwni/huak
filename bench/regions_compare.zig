@@ -64,8 +64,8 @@ fn writeJson(allocator: Allocator, io: std.Io, directory: std.Io.Dir, name: []co
 }
 
 fn process(allocator: Allocator, io: std.Io, directory: std.Io.Dir, executable: []const u8, engine: Engine, order: usize, prefix: []const u8) !Run {
-    const stderr_name = try std.fmt.allocPrint(allocator, "{s}-{s}.stderr.log", .{ prefix, @tagName(engine) });
-    const stdout_name = try std.fmt.allocPrint(allocator, "{s}-{s}.stdout.log", .{ prefix, @tagName(engine) });
+    const stderr_name = try allocator.print("{s}-{s}.stderr.log", .{ prefix, @tagName(engine) });
+    const stdout_name = try allocator.print("{s}-{s}.stdout.log", .{ prefix, @tagName(engine) });
     const stderr = try directory.createFile(io, stderr_name, .{ .exclusive = true });
     defer stderr.close(io);
     const stdout = try directory.createFile(io, stdout_name, .{ .exclusive = true });
@@ -126,7 +126,7 @@ fn writeRoundCsv(allocator: Allocator, io: std.Io, directory: std.Io.Dir, round:
         if (run.process_peak_rss_bytes) |rss| try writer.print("{d}", .{rss});
         try writer.writeByte('\n');
     };
-    const name = try std.fmt.allocPrint(allocator, "round-{d:0>4}.csv", .{round.number});
+    const name = try allocator.print("round-{d:0>4}.csv", .{round.number});
     defer allocator.free(name);
     try directory.writeFile(io, .{ .sub_path = name, .data = output.written(), .flags = .{ .exclusive = true } });
 }
@@ -161,7 +161,7 @@ fn compare(allocator: Allocator, io: std.Io, directory: std.Io.Dir, config: Conf
     const rounds = try allocator.alloc(Round, config.rounds);
     for (rounds, 0..) |*round, index| {
         round.* = .{ .number = index + 1, .order = orders[index % orders.len], .runs = undefined };
-        const prefix = try std.fmt.allocPrint(allocator, "round-{d:0>4}", .{round.number});
+        const prefix = try allocator.print("round-{d:0>4}", .{round.number});
         defer allocator.free(prefix);
         for (round.order, 0..) |engine, position| {
             const engine_index = @backingInt(engine);
@@ -171,7 +171,7 @@ fn compare(allocator: Allocator, io: std.Io, directory: std.Io.Dir, config: Conf
             round.runs[engine_index] = run;
         }
         try writeRoundCsv(allocator, io, directory, round.*);
-        const name = try std.fmt.allocPrint(allocator, "{s}.json", .{prefix});
+        const name = try allocator.print("{s}.json", .{prefix});
         defer allocator.free(name);
         try writeJson(allocator, io, directory, name, round.*);
     }

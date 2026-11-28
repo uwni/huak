@@ -123,7 +123,7 @@ test "detached outputs retain shared native text after VM runtime and engine des
     var first = try render(&batch, 0, .svg);
     defer first.deinit();
     try t.expect(std.mem.startsWith(u8, first.bytes(), "<svg"));
-    try t.expect(std.mem.indexOf(u8, first.bytes(), "<use ") != null);
+    try t.expect(std.mem.find(u8, first.bytes(), "<use ") != null);
     batch.release(0);
     try t.expectError(error.ReleasedOutput, batch.validate(0, .svg));
 
@@ -136,7 +136,7 @@ test "detached outputs retain shared native text after VM runtime and engine des
     var second = try render(&batch, 2, .pdf);
     defer second.deinit();
     try t.expect(std.mem.startsWith(u8, second.bytes(), "%PDF-"));
-    try t.expect(std.mem.indexOf(u8, second.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, second.bytes(), "/ToUnicode") != null);
     batch.release(2);
 }
 
@@ -226,8 +226,7 @@ test "frame compaction preserves paint order across map growth and shared layout
 test "last output alias releases picture geometry before the batch is destroyed" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
-    var tracked: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
-    defer _ = tracked.deinit();
+    var tracked = t.FailingAllocator.init(t.allocator, .{});
     const allocator = tracked.allocator();
     var picture = DisplayList.init(allocator);
     defer picture.deinit();
@@ -251,20 +250,20 @@ test "last output alias releases picture geometry before the batch is destroyed"
     var batch = try OutputBatch.init(allocator, &library, &.{ owner.scene.object(0), owner.scene.object(0) }, &.{});
     var alive = true;
     defer if (alive) batch.deinit();
-    const retained = tracked.total_requested_bytes;
+    const retained = tracked.allocated_bytes - tracked.freed_bytes;
     {
         var svg = try render(&batch, 0, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     }
     batch.release(0);
-    try t.expectEqual(retained, tracked.total_requested_bytes);
+    try t.expectEqual(retained, tracked.allocated_bytes - tracked.freed_bytes);
     batch.release(1);
     // Geometry dwarfs the small entries table which intentionally stays alive.
-    try t.expect(retained - tracked.total_requested_bytes >= 8192 * @sizeOf(huak.core.Path.Segment));
+    try t.expect(retained - (tracked.allocated_bytes - tracked.freed_bytes) >= 8192 * @sizeOf(huak.core.Path.Segment));
     batch.deinit();
     alive = false;
-    try t.expectEqual(@as(usize, 0), tracked.total_requested_bytes);
+    try t.expectEqual(@as(usize, 0), tracked.allocated_bytes - tracked.freed_bytes);
 }
 
 fn allocationHandoff(allocator: std.mem.Allocator, library: *typst.Library) !void {
@@ -293,7 +292,7 @@ fn allocationHandoff(allocator: std.mem.Allocator, library: *typst.Library) !voi
         // Failure must leave the full source graph usable by the native backend.
         var svg = try runtime.render(first_value, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<use ") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<use ") != null);
         return err;
     };
     defer batch.deinit();
@@ -305,7 +304,7 @@ fn allocationHandoff(allocator: std.mem.Allocator, library: *typst.Library) !voi
     batch.release(0);
     var svg = try render(&batch, 1, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<use ") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<use ") != null);
 }
 
 test "batch ownership commit remains transactional at every allocation failure" {
@@ -320,12 +319,11 @@ test "batch ownership commit remains transactional at every allocation failure" 
 test "destroying an unstarted batch releases all selected pictures and text owners" {
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
-    var tracked: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
-    defer _ = tracked.deinit();
+    var tracked = t.FailingAllocator.init(t.allocator, .{});
     var batch = try detachedBatch(tracked.allocator(), &library);
-    try t.expect(tracked.total_requested_bytes > 0);
+    try t.expect(tracked.allocated_bytes - tracked.freed_bytes > 0);
     batch.deinit();
-    try t.expectEqual(@as(usize, 0), tracked.total_requested_bytes);
+    try t.expectEqual(@as(usize, 0), tracked.allocated_bytes - tracked.freed_bytes);
 }
 
 test "cross-storage outputs retain geometry and native text after their original canvas finishes" {
@@ -356,10 +354,10 @@ test "cross-storage outputs retain geometry and native text after their original
     var after = try render(&batch, 1, .svg);
     defer after.deinit();
     try t.expectEqualSlices(u8, original.bytes(), after.bytes());
-    try t.expect(std.mem.indexOf(u8, after.bytes(), "<path") != null);
+    try t.expect(std.mem.find(u8, after.bytes(), "<path") != null);
     var pdf = try render(&batch, 1, .pdf);
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
 }
 
 test "output jobs retain foreign animation keys after runtime and original output release" {
@@ -398,7 +396,7 @@ test "output jobs retain foreign animation keys after runtime and original outpu
     try t.expectEqual(@as(usize, 2), std.mem.count(u8, before.bytes(), "class=\"huak-a"));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, before.bytes(), ".huak-a"));
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, before.bytes(), "@keyframes "));
-    try t.expect(std.mem.indexOf(u8, before.bytes(), "{0%{opacity:0}100%{opacity:1}}") != null);
+    try t.expect(std.mem.find(u8, before.bytes(), "{0%{opacity:0}100%{opacity:1}}") != null);
     batch.release(0);
     var after = try render(&batch, 1, .svg);
     defer after.deinit();

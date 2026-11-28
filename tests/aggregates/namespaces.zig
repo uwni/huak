@@ -46,14 +46,14 @@ test "aggregate constructors run native color defaults and sparse builtin defaul
         try t.expectEqual(@as(f64, 40), machine.getGlobal("canvas_height").?.quantity.value);
         var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<svg") != null);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<svg") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
         defer pdf.deinit();
         try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
         const extracted = try @import("../support/pdf.zig").text(pdf.bytes(), .{});
         defer t.allocator.free(extracted);
-        try t.expect(std.mem.indexOf(u8, extracted, "Aggregates") != null);
+        try t.expect(std.mem.find(u8, extracted, "Aggregates") != null);
     }
 }
 
@@ -123,8 +123,8 @@ test "native drawing domains are available independently of source standard modu
         try t.expect(machine.getGlobal("measured").?.quantity.value > 0);
         var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<svg") != null);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<svg") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     }
 }
 
@@ -162,7 +162,7 @@ test "aggregate struct imports aliases and reexports retain one nominal identity
             \\fn consume(value:First)->int return value.value end
             \\bad:=consume(Second(1))
         , &.{}, optimize, &diagnostic));
-        try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), "First") != null);
-        try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), "Second") != null);
+        try t.expect(std.mem.find(u8, diagnostic.?.text(), "First") != null);
+        try t.expect(std.mem.find(u8, diagnostic.?.text(), "Second") != null);
     }
 }

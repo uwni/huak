@@ -89,7 +89,7 @@ test "aggregate VM shallow list copy validates once and preserves cycles through
     try std.testing.expectEqual(one_validation * 2, counter.allocations);
     child.list.owned.values.items[0] = .{ .number = std.math.nan(f64) };
     try std.testing.expectError(error.RuntimeFailed, aggregates.copyValue(&machine, original));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "non-finite") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "non-finite") != null);
 }
 
 test "aggregate VM dictionary opcodes validate duplicate and missing keys" {
@@ -105,11 +105,11 @@ test "aggregate VM dictionary opcodes validate duplicate and missing keys" {
     _ = try machine.execute(&.{});
     try std.testing.expectEqual(@as(i64, 7), machine.getGlobal("result").?.int);
     try std.testing.expectError(error.RuntimeFailed, aggregates.readIndex(&machine, machine.getGlobal("dict").?, .{ .string = "absent" }));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "has no key 'absent'") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "has no key 'absent'") != null);
     var duplicate = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer duplicate.deinit();
     try std.testing.expectError(error.RuntimeFailed, aggregates.makeDict(&duplicate, &.{ .{ .string = "same" }, .unit, .{ .string = "same" }, .unit }));
-    try std.testing.expect(std.mem.indexOf(u8, duplicate.failure.?.text(), "duplicate dictionary key") != null);
+    try std.testing.expect(std.mem.find(u8, duplicate.failure.?.text(), "duplicate dictionary key") != null);
 }
 
 test "aggregate VM nominal struct field typing and static slots" {
@@ -136,7 +136,7 @@ test "aggregate VM nominal struct field typing and static slots" {
     copy.record.fields[0] = .{ .int = 13 };
     try std.testing.expectEqual(@as(i64, 12), state.record.fields[0].int);
     try std.testing.expectError(error.RuntimeFailed, validation.coerce(&machine, state, Type.record(1)));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "expected Other, received State") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "expected Other, received State") != null);
     var wrong = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer wrong.deinit();
     try std.testing.expectError(error.RuntimeFailed, aggregates.makeRecord(&wrong, 0, &.{.{ .string = "wrong" }}));
@@ -167,7 +167,7 @@ test "aggregate VM owner checks reject foreign dictionaries lists and structs" {
     record_borrower.initialized[0] = true;
     try std.testing.expectError(error.RuntimeFailed, record_borrower.execute(&.{}));
     try std.testing.expectEqual(@as(i64, 0), record_value.record.fields[0].int);
-    try std.testing.expect(std.mem.indexOf(u8, record_borrower.failure.?.text(), "cannot modify a borrowed struct") != null);
+    try std.testing.expect(std.mem.find(u8, record_borrower.failure.?.text(), "cannot modify a borrowed struct") != null);
 }
 
 test "aggregate VM malformed struct fields and bindings fail with diagnostics" {
@@ -187,7 +187,7 @@ test "aggregate VM malformed struct fields and bindings fail with diagnostics" {
         var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), case.message) != null);
     }
 }
 

@@ -125,7 +125,7 @@ test "constant propagation respects typed stores and failed initialization" {
                 try std.testing.expectEqual(@as(i64, 7), machine.getGlobal("after").?.int);
             } else {
                 try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-                try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "before initialization") != null);
+                try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "before initialization") != null);
                 try std.testing.expect(machine.getGlobal("after") == null);
             }
             try std.testing.expectEqual(@as(f64, 9007199254740992), machine.getGlobal("result").?.number);
@@ -207,7 +207,7 @@ test "constant propagation treats dynamic handle arithmetic as an implicit host 
         }
     };
     for ([_]bool{ false, true }) |optimize| for ([_][]const u8{ "object+object", "-object" }) |operation| {
-        const input = try std.fmt.allocPrint(std.testing.allocator, "; object:any:=path((0,0),(1,1)); value:=2; ignored:={s}; result:=value+1", .{operation});
+        const input = try std.testing.allocator.print("; object:any:=path((0,0),(1,1)); value:=2; ignored:={s}; result:=value+1", .{operation});
         defer std.testing.allocator.free(input);
         var diagnostic: ?Diagnostic = null;
         var program = try compile(std.testing.allocator, input, "constant-binary-barrier.huak", .{ .optimize = optimize }, &diagnostic);

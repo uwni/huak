@@ -65,7 +65,7 @@ test "list append assignment checks the target without declaring or rebinding it
         for (invalid) |case| {
             var diagnostic: ?Diagnostic = null;
             try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, case.input, "invalid-list-append.huak", .{ .optimize = optimize }, &diagnostic));
-            try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+            try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
         }
     }
     var diagnostic: ?Diagnostic = null;
@@ -244,7 +244,7 @@ test "an explicit dynamic void slice stop never becomes an open endpoint" {
         var machine = try @import("../Machine.zig").init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "int") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "int") != null);
         try std.testing.expect(machine.getGlobal("selected") == null);
     }
 }

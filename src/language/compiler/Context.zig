@@ -19,10 +19,10 @@ const TypstRead = typst.TypstRead;
 const Binding = symbols.Binding;
 
 compiler: *Compiler,
-code: std.array_list.Managed(bc.Instruction),
+code: std.ArrayList(bc.Instruction) = .empty,
 locals: std.AutoHashMapUnmanaged(usize, Symbol) = .{},
-local_types: std.array_list.Managed(Type),
-loops: std.array_list.Managed(*Loop),
+local_types: std.ArrayList(Type) = .empty,
+loops: std.ArrayList(*Loop) = .empty,
 entry: bool,
 result: Type,
 block_depth: usize = 0,
@@ -35,7 +35,7 @@ insertion: ?*Expansion = null,
 typst_reads: std.ArrayList(TypstRead) = .empty,
 
 pub fn init(compiler: *Compiler, entry: bool, result: Type) Context {
-    return .{ .compiler = compiler, .code = .init(compiler.allocator), .local_types = .init(compiler.allocator), .loops = .init(compiler.allocator), .entry = entry, .result = result };
+    return .{ .compiler = compiler, .entry = entry, .result = result };
 }
 pub fn emit(self: *Context, op: bc.Op, a: u32, b: u32, span: Span) !u32 {
     const index = try self.compiler.narrow(self.code.items.len, span);
@@ -43,7 +43,7 @@ pub fn emit(self: *Context, op: bc.Op, a: u32, b: u32, span: Span) !u32 {
     const effect = instruction.stackEffect();
     std.debug.assert(self.stack_depth >= effect.consumed);
     self.stack_depth = self.stack_depth - effect.consumed + effect.produced;
-    try self.code.append(instruction);
+    try self.code.append(self.compiler.allocator, instruction);
     return index;
 }
 pub fn patch(self: *Context, instruction: u32, destination: usize) !void {
@@ -105,7 +105,7 @@ pub fn resolve(self: *Context, name: []const u8, span: Span) ?Binding {
 }
 pub fn temporary(self: *Context, kind: Type, span: Span) !u32 {
     const index = try self.compiler.narrow(self.local_types.items.len, span);
-    try self.local_types.append(kind);
+    try self.local_types.append(self.compiler.allocator, kind);
     return index;
 }
 pub fn load(self: *Context, binding: anytype, span: Span) !void {

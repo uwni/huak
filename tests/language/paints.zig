@@ -55,7 +55,7 @@ test "one gradient paints a fill and a stroke and reads back from pens and objec
         var svg = try runtime.render(machine.getGlobal("plate").?, .svg);
         defer svg.deinit();
         try t.expect(std.mem.count(u8, svg.bytes(), "<linearGradient") >= 2);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<radialGradient") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<radialGradient") != null);
     }
 }
 
@@ -78,7 +78,7 @@ test "gradients are checked where they are built" {
         var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try t.expect(std.mem.indexOf(u8, machine.failure.?.text(), failure[1]) != null);
+        try t.expect(std.mem.find(u8, machine.failure.?.text(), failure[1]) != null);
     }
 }
 

@@ -9,7 +9,7 @@ const Frontend = @import("Frontend.zig");
 const position = @import("position.zig");
 
 pub const Kind = enum { function, keyword, variable, namespace, operator };
-pub const legend = .{ .tokenTypes = std.meta.fieldNames(Kind), .tokenModifiers = [_][]const u8{} };
+pub const legend = .{ .tokenTypes = @typeInfo(Kind).@"enum".field_names, .tokenModifiers = [_][]const u8{} };
 const Token = struct { span: ast.Span, kind: Kind };
 
 /// The encoded result and syntax snapshot belong to the request arena.

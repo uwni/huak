@@ -19,15 +19,15 @@ const Build = lowering.Build;
 environment: *Environment,
 allocator: std.mem.Allocator,
 diagnostic: *?Diagnostic,
-global_names: std.array_list.Managed([]const u8),
-global_types: std.array_list.Managed(Type),
-readonly_globals: std.array_list.Managed(bool),
-declarations: std.array_list.Managed(?*ast.Stmt),
+global_names: std.ArrayList([]const u8) = .empty,
+global_types: std.ArrayList(Type) = .empty,
+readonly_globals: std.ArrayList(bool) = .empty,
+declarations: std.ArrayList(?*ast.Stmt) = .empty,
 expression_defaults: std.ArrayList(ExpressionDefault) = .empty,
-output: std.array_list.Managed(bc.Function),
-constants: std.array_list.Managed(Value),
-parameters: std.array_list.Managed(bc.Parameter),
-exports: std.array_list.Managed(bc.Export),
+output: std.ArrayList(bc.Function) = .empty,
+constants: std.ArrayList(Value) = .empty,
+parameters: std.ArrayList(bc.Parameter) = .empty,
+exports: std.ArrayList(bc.Export) = .empty,
 export_names: std.StringHashMapUnmanaged(void) = .{},
 default_output: ?bc.Output = null,
 expression_depth: usize = 0,
@@ -40,7 +40,7 @@ pub fn init(allocator: std.mem.Allocator, diagnostic: *?Diagnostic, unit: *Modul
     const environment = try build.syntax_allocator.create(Environment);
     environment.* = .{ .unit = unit, .module_index = module_index };
     build.environments[module_index] = environment;
-    return .{ .environment = environment, .allocator = allocator, .diagnostic = diagnostic, .global_names = .init(allocator), .global_types = .init(allocator), .readonly_globals = .init(allocator), .declarations = .init(build.syntax_allocator), .output = .init(allocator), .constants = .init(allocator), .parameters = .init(allocator), .exports = .init(allocator), .build = build, .global_base = @intCast(build.names.items.len), .function_base = @intCast(build.functions.items.len), .constant_base = @intCast(build.constants.items.len) };
+    return .{ .environment = environment, .allocator = allocator, .diagnostic = diagnostic, .build = build, .global_base = @intCast(build.names.items.len), .function_base = @intCast(build.functions.items.len), .constant_base = @intCast(build.constants.items.len) };
 }
 
 pub fn fail(self: *Compiler, span: Span, comptime format: []const u8, args: anytype) error{LanguageError} {
@@ -53,7 +53,7 @@ pub fn narrow(self: *Compiler, value: usize, span: Span) !u32 {
 }
 pub fn typeOf(self: *Compiler, annotation: ast.Annotation) !Type {
     if (Type.parse(annotation.name)) |kind| return kind;
-    if (std.mem.lastIndexOfScalar(u8, annotation.name, '.')) |dot| {
+    if (std.mem.findScalarLast(u8, annotation.name, '.')) |dot| {
         const owner = modules.imported(self, annotation.name[0..dot], annotation.span) orelse return self.fail(annotation.span, "unknown type namespace '{s}'", .{annotation.name[0..dot]});
         const exposed = try modules.importedExport(self, owner, annotation.name[dot + 1 ..], annotation.span);
         if (exposed.target == .record) return Type.record(exposed.target.record);
@@ -79,7 +79,7 @@ pub fn require(self: *Compiler, expected: Type, actual: Type, span: Span) !void 
 }
 pub fn addConstant(self: *Compiler, value: Value, span: Span) !u32 {
     const index = try self.narrow(self.constants.items.len + self.constant_base, span);
-    try self.constants.append(value);
+    try self.constants.append(self.allocator, value);
     return index;
 }
 

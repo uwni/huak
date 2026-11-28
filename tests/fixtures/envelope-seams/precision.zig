@@ -138,7 +138,7 @@ pub fn main(init: std.process.Init) !void {
         emit(case.name, result, .zero);
         if (unit) |baseline| {
             const difference = try compare(baseline, result);
-            const summary = try std.fmt.allocPrint(init.gpa, "production strokeOutline; tolerance=0.001; origins=(0,0),(1e16,1e16)\n" ++
+            const summary = try init.gpa.print("production strokeOutline; tolerance=0.001; origins=(0,0),(1e16,1e16)\n" ++
                 "max_normalized_control_coordinate_difference={d:.17}\n" ++
                 "max_corresponding_curve_sample_distance={d:.17}; subdivisions_per_cubic=1024\n" ++
                 "The sampled metric is a lower bound on maximum same-parameter displacement, not a visible-boundary Hausdorff proof.\n", .{ difference.max_control_coordinate, difference.max_same_parameter_sample });

@@ -31,7 +31,7 @@ test "record navigation follows type annotations constructors aliases fields and
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const offset = std.mem.indexOf(u8, input, "width:3").?;
+    const offset = std.mem.find(u8, input, "width:3").?;
     const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, offset)).?;
     try std.testing.expectEqualStrings("Widget.width: int", detail);
 }
@@ -63,7 +63,7 @@ test "record completions infer member receivers and offer unsupplied constructor
     try std.testing.expectEqualStrings("height", arguments[0].label);
     try std.testing.expectEqualStrings("height: ", arguments[0].insertText.?);
     const positional = prefix ++ "value:=Widget(math.abs(1),)";
-    const comma = std.mem.lastIndexOfScalar(u8, positional, ',').?;
+    const comma = std.mem.findScalarLast(u8, positional, ',').?;
     for ([_]usize{ comma, comma + 1 }) |offset| {
         const remaining = try complete(&frontend, arena.allocator(), positional, "/tmp/completion.huak", offset);
         try std.testing.expectEqual(@as(usize, 1), remaining.len);

@@ -54,7 +54,7 @@ fn allocatingExecution(allocator: std.mem.Allocator, library: *typst.Library, pr
     try t.expectEqual(@as(usize, 1), runtime.layouts.items.len);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<svg") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<svg") != null);
 }
 
 test "batched layout registration outlines and rendering release every allocation failure" {
@@ -212,8 +212,8 @@ test "native errors retain the first source position successful prefix and stop 
             try t.expectEqual(@as(usize, if (batched) 3 else 2), LayoutCalls.requests);
             const failure = machine.failure orelse return error.MissingDiagnostic;
             try t.expectEqual(@as(usize, 2), failure.diagnostic.position(scenario.source).line);
-            try t.expect(std.mem.indexOf(u8, failure.native_message, scenario.marker) != null);
-            try t.expect(std.mem.indexOf(u8, failure.native_message, "missing_second") == null);
+            try t.expect(std.mem.find(u8, failure.native_message, scenario.marker) != null);
+            try t.expect(std.mem.find(u8, failure.native_message, "missing_second") == null);
             try t.expect(machine.getGlobal("before") != null);
             try t.expect(machine.getGlobal("first") == null);
             try t.expect(machine.getGlobal("second") == null);
@@ -254,7 +254,7 @@ test "batched nonzero text frames use their own outlines and metrics are executi
         try t.expect(runtime.frames.items[2].layout != runtime.frames.items[3].layout);
         var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     }
 }
 
@@ -353,10 +353,10 @@ test "shared native layout batches survive ownership handoff and preserve select
         batch.release(2);
         const text = try pdf_text.text(second.bytes(), .{});
         defer t.allocator.free(text);
-        try t.expect(std.mem.indexOf(u8, text, "Second batched label") != null);
-        try t.expect(std.mem.indexOf(u8, text, "Third shared label") != null);
-        try t.expect(std.mem.indexOf(u8, text, "First batched label") == null);
-        try t.expect(std.mem.indexOf(u8, text, "Unused") == null);
+        try t.expect(std.mem.find(u8, text, "Second batched label") != null);
+        try t.expect(std.mem.find(u8, text, "Third shared label") != null);
+        try t.expect(std.mem.find(u8, text, "First batched label") == null);
+        try t.expect(std.mem.find(u8, text, "Unused") == null);
     };
 }
 
@@ -383,8 +383,8 @@ test "batch diagnostics carry a stable failure index and failed host outputs sta
     try t.expectError(error.CompileFailed, engine.layoutContent(&requests, &measured, &diagnostic));
     for (measured) |value| try t.expectEqualDeep(typst.Metrics{ .width = 0, .height = 0, .baseline = 0 }, value);
     try t.expectEqual(@as(?usize, 0), diagnostic.request_index);
-    try t.expect(std.mem.indexOf(u8, diagnostic.text(), "first_diagnostic") != null);
-    try t.expect(std.mem.indexOf(u8, diagnostic.text(), "second_diagnostic") == null);
+    try t.expect(std.mem.find(u8, diagnostic.text(), "first_diagnostic") != null);
+    try t.expect(std.mem.find(u8, diagnostic.text(), "second_diagnostic") == null);
     const copied = try t.allocator.dupe(u8, diagnostic.text());
     defer t.allocator.free(copied);
     // A later successful operation cannot invalidate this independently owned

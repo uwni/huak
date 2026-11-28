@@ -71,7 +71,7 @@ pub fn build(allocator: Allocator, scratch_allocator: Allocator, program: *const
                         remaining -= summary.reads.len;
                         // This compact contract has no prior-version read slot.
                         // Keep self-rebinding serial rather than creating a cycle.
-                        if (std.mem.indexOfScalar(u32, summary.reads, global) == null) {
+                        if (std.mem.findScalar(u32, summary.reads, global) == null) {
                             if ((tasks.items.len != 0 and tasks.items[tasks.items.len - 1].end + 1 != start) or containsWrite(tasks.items, global))
                                 try flush(scratch, &regions, &tasks);
                             try tasks.append(scratch, .{ .function = @intCast(index), .start = @intCast(start), .end = @intCast(end), .global = global, .reads = summary.reads, .uses_typst = summary.uses_typst });

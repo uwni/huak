@@ -110,11 +110,11 @@ test "stable native scene copies geometry styles and nested owners before caller
         "stroke-width=\"2.5\"",    "stroke-linecap=\"round\"",  "stroke-linejoin=\"bevel\"",
         "stroke-miterlimit=\"7\"", "stroke-dashoffset=\"0.5\"", "stroke-dasharray=\"3 1\"",
     }) |marker| {
-        if (std.mem.indexOf(u8, output, marker) == null)
+        if (std.mem.find(u8, output, marker) == null)
             std.debug.print("missing native SVG marker {s}:\n{s}\n", .{ marker, output });
-        try t.expect(std.mem.indexOf(u8, output, marker) != null);
+        try t.expect(std.mem.find(u8, output, marker) != null);
     }
-    try t.expect(std.mem.indexOf(u8, output, "stroke-dasharray=\"90") == null);
+    try t.expect(std.mem.find(u8, output, "stroke-dasharray=\"90") == null);
 }
 
 test "retained opaque layouts keep Unicode outlines and selectable PDF fonts after context release" {
@@ -146,8 +146,8 @@ test "retained opaque layouts keep Unicode outlines and selectable PDF fonts aft
     defer library.functions.buffer_release(pdf);
     try check(&library, library.functions.layout_export_pdf(retained, null, &pdf, &report), &report);
     const output = binding.bytes(library.functions.buffer_data(pdf));
-    try t.expect(std.mem.indexOf(u8, output, "/FontFile") != null);
-    try t.expect(std.mem.indexOf(u8, output, "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, output, "/FontFile") != null);
+    try t.expect(std.mem.find(u8, output, "/ToUnicode") != null);
 }
 
 test "invalid native path tags produce owned diagnostics and a later scene succeeds" {
@@ -243,7 +243,7 @@ test "native pixel scene copies caller buffer and exports PNG raster image in SV
     defer library.functions.buffer_release(svg);
     try check(&library, library.functions.scene_export_svg(raster, &svg, &report), &report);
     const text = binding.bytes(library.functions.buffer_data(svg));
-    try t.expect(std.mem.indexOf(u8, text, "<image") != null);
-    try t.expect(std.mem.indexOf(u8, text, "data:image/png;base64,") != null);
-    try t.expect(std.mem.indexOf(u8, text, "preserveAspectRatio=\"none\"") != null);
+    try t.expect(std.mem.find(u8, text, "<image") != null);
+    try t.expect(std.mem.find(u8, text, "data:image/png;base64,") != null);
+    try t.expect(std.mem.find(u8, text, "preserveAspectRatio=\"none\"") != null);
 }

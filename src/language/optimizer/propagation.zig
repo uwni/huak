@@ -83,7 +83,7 @@ fn valid(code: []const bc.Instruction, constants: []const Value, bindings: Bindi
             if (binding.slots.len != instruction.b or binding.parameter_count != instruction.b or instruction.b > limits.stack) return false;
             if (binding.slots.len > remaining) return false;
             remaining -= binding.slots.len;
-            var supplied: std.StaticBitSet(limits.stack) = .empty;
+            var supplied: std.bit_set.Static(limits.stack) = .empty;
             for (binding.slots) |slot| {
                 if (slot >= instruction.b or supplied.isSet(slot)) return false;
                 supplied.set(slot);
@@ -125,7 +125,7 @@ fn makeBlocks(allocator: Allocator, code: []const bc.Instruction, owners: []usiz
 /// Returned instructions belong to allocator. A null result leaves input and
 /// constant pool untouched, including malformed or over-budget analysis.
 /// Facts are never seeded from parameter defaults or another function's state.
-pub fn rewrite(allocator: Allocator, code: []const bc.Instruction, constants: *std.array_list.Managed(Value), bindings: Bindings) Error!?[]bc.Instruction {
+pub fn rewrite(allocator: Allocator, code: []const bc.Instruction, pool_allocator: Allocator, constants: *std.ArrayList(Value), bindings: Bindings) Error!?[]bc.Instruction {
     const slots = std.math.add(usize, bindings.global_types.len, bindings.local_types.len) catch return null;
     if (code.len == 0 or code.len > limits.instructions or slots > limits.bindings or !valid(code, constants.items, bindings)) return null;
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -157,7 +157,7 @@ pub fn rewrite(allocator: Allocator, code: []const bc.Instruction, constants: *s
     errdefer constants.items.len = original_constants;
     for (result, replacements) |*instruction, fact| if (fact) |value| {
         const constant = std.math.cast(u32, constants.items.len) orelse return error.BytecodeCapacity;
-        try constants.append(value);
+        try constants.append(pool_allocator, value);
         instruction.* = .{ .op = .constant, .a = constant, .span = instruction.span, .module = instruction.module };
     };
     return result;

@@ -199,7 +199,7 @@ test "runtime checks function arguments and returns even for externally construc
     var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "expected int") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "expected int") != null);
     program.functions = &.{
         .{ .name = "script", .code = &.{ ins(.constant, 0), .{ .op = .call, .a = 1, .b = 1 }, ins(.halt, 0) }, .parameters = &.{}, .result = .unit, .local_types = &.{} },
         .{ .name = "int_argument", .code = function_code, .parameters = &.{.int}, .result = .boolean, .local_types = &.{.int} },
@@ -207,5 +207,5 @@ test "runtime checks function arguments and returns even for externally construc
     var arguments_machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer arguments_machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, arguments_machine.execute(&.{}));
-    try std.testing.expect(std.mem.indexOf(u8, arguments_machine.failure.?.text(), "expected int") != null);
+    try std.testing.expect(std.mem.find(u8, arguments_machine.failure.?.text(), "expected int") != null);
 }

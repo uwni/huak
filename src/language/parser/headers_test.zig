@@ -110,13 +110,13 @@ test "header scopes separate sibling branches and leave control headers in their
         try std.testing.expect(headers.scopes[branch].kind == .branch);
         try std.testing.expectEqual(function, headers.scopes[branch].parent.?);
     }
-    try std.testing.expectEqual(function, headers.scopeAt(std.mem.indexOf(u8, input, "condition").?));
-    try std.testing.expectEqual(function, headers.scopeAt(std.mem.indexOf(u8, input, "alternative").?));
-    try std.testing.expectEqual(function, headers.scopeAt(std.mem.indexOf(u8, input, "lower").?));
-    const loop = headers.scopeAt(std.mem.indexOf(u8, input, "ready").?);
+    try std.testing.expectEqual(function, headers.scopeAt(std.mem.find(u8, input, "condition").?));
+    try std.testing.expectEqual(function, headers.scopeAt(std.mem.find(u8, input, "alternative").?));
+    try std.testing.expectEqual(function, headers.scopeAt(std.mem.find(u8, input, "lower").?));
+    const loop = headers.scopeAt(std.mem.find(u8, input, "ready").?);
     try std.testing.expect(headers.scopes[loop].kind == .loop);
     try std.testing.expectEqual(function, headers.scopes[loop].parent.?);
-    const while_body = headers.scopeAt(std.mem.indexOf(u8, input, "block").?);
+    const while_body = headers.scopeAt(std.mem.find(u8, input, "block").?);
     try std.testing.expect(headers.scopes[while_body].kind == .loop);
     try std.testing.expectEqual(loop, headers.scopes[while_body].parent.?);
     const drawing = headers.imports[4].scope;
@@ -163,7 +163,7 @@ test "header ordinary names belong to their lexical blocks without reading expre
     try std.testing.expectEqual(@as(usize, 2), names.len);
     for (names, [_][]const u8{ "size", "image" }) |name, expected|
         try std.testing.expectEqualStrings(expected, name.name);
-    const function = headers.scopeAt(std.mem.indexOf(u8, input, "return argument").?);
+    const function = headers.scopeAt(std.mem.find(u8, input, "return argument").?);
     try std.testing.expect(headers.scopes[function].kind == .function);
     try std.testing.expectEqual(@as(usize, 2), headers.scopes[function].ordinary_names.len);
     try std.testing.expectEqualStrings("argument", headers.scopes[function].ordinary_names[0].name);

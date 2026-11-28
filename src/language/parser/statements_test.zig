@@ -153,7 +153,7 @@ test "control delimiters are required and do not remove ordinary statement bound
         var diagnostic: ?source.Diagnostic = null;
         var parser = try Parser.init(arena.allocator(), case.code, .{}, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
     }
 }
 

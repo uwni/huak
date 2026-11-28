@@ -40,8 +40,8 @@ pub const Name = struct {
 
 /// Owns the keyframe and rule texts in insertion order, with their names.
 arena: std.heap.ArenaAllocator,
-keyframes: std.StringArrayHashMapUnmanaged(Name) = .empty,
-rules: std.StringArrayHashMapUnmanaged(Name) = .empty,
+keyframes: std.array_hash_map.String(Name) = .empty,
+rules: std.array_hash_map.String(Name) = .empty,
 keyframe: std.Io.Writer.Allocating,
 rule: std.Io.Writer.Allocating,
 delays: std.Io.Writer.Allocating,
@@ -243,10 +243,10 @@ test "identical keys share keyframes and classes while phases stay inline" {
     const body = "0%{opacity:0.2}50%{opacity:1}100%{opacity:0.2}";
     const keyframes: Name = .of(.keyframes, body);
     var rule: [64]u8 = undefined;
-    const rule_text = try std.fmt.bufPrint(&rule, "animation:{f} 4s linear infinite", .{keyframes});
+    const rule_text = try std.mem.print(&rule, "animation:{f} 4s linear infinite", .{keyframes});
     try std.testing.expectEqual(Name.of(.class, rule_text), class);
     var expected: [256]u8 = undefined;
-    try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "@keyframes {f}{{{s}}}@media (prefers-reduced-motion:no-preference){{.{f}{{{s}}}}}", .{ keyframes, body, class, rule_text }), out.written());
+    try std.testing.expectEqualStrings(try std.mem.print(&expected, "@keyframes {f}{{{s}}}@media (prefers-reduced-motion:no-preference){{.{f}{{{s}}}}}", .{ keyframes, body, class, rule_text }), out.written());
 }
 
 test "names follow the rules they name, not the document or its order" {
@@ -269,9 +269,9 @@ test "names follow the rules they name, not the document or its order" {
     try std.testing.expect(up_one.hash != down_one.hash);
     var text: [32]u8 = undefined;
     const small: Name = .{ .kind = .class, .hash = 35 };
-    try std.testing.expectEqualStrings("huak-az", try std.fmt.bufPrint(&text, "{f}", .{small}));
+    try std.testing.expectEqualStrings("huak-az", try std.mem.print(&text, "{f}", .{small}));
     const large: Name = .{ .kind = .keyframes, .hash = std.math.maxInt(u64) };
-    try std.testing.expectEqualStrings("huak-k3w5e11264sgsf", try std.fmt.bufPrint(&text, "{f}", .{large}));
+    try std.testing.expectEqualStrings("huak-k3w5e11264sgsf", try std.mem.print(&text, "{f}", .{large}));
 }
 
 test "a motion keeps its start distance inline for pages that stop the animation" {

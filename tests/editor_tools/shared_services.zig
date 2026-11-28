@@ -24,7 +24,7 @@ test "Typst reads share formatting navigation completion hints and export servic
     const writer = &output.writer;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = input } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 1, .method = "textDocument/formatting", .params = .{ .textDocument = .{ .uri = uri }, .options = .{ .tabSize = 4, .insertSpaces = true } } }, .{}), writer);
-    const offset = std.mem.indexOf(u8, input, "count]").?;
+    const offset = std.mem.find(u8, input, "count]").?;
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/definition", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(input, offset) } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 3, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = .{ .line = 0, .character = 0 } } }, .{}), writer);
     try session.handle(try std.json.Stringify.valueAlloc(a, .{ .jsonrpc = "2.0", .id = 4, .method = "huak/outputs", .params = .{ .textDocument = .{ .uri = uri } } }, .{}), writer);
@@ -88,8 +88,8 @@ test "language server shares mixfix metadata across unsaved imports formatting a
     try directory.dir.writeFile(t.io, .{ .sub_path = "mixfix-editor-library.huak", .data = "export old_disk_value := 0" });
     try directory.dir.symLink(t.io, "mixfix-editor-library.huak", "editor-alias.huak", .{});
     const base = try directory.dir.realPathFileAlloc(t.io, ".", a);
-    const dependency = try tooling.definition.uriForPath(a, try std.fs.path.join(a, &.{ base, "editor-alias.huak" }));
-    const uri = try tooling.definition.uriForPath(a, try std.fs.path.join(a, &.{ base, "mixfix-editor-root.huak" }));
+    const dependency = try tooling.definition.uriForPath(a, try std.Io.Dir.path.join(a, &.{ base, "editor-alias.huak" }));
+    const uri = try tooling.definition.uriForPath(a, try std.Io.Dir.path.join(a, &.{ base, "mixfix-editor-root.huak" }));
     const module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix(combine_digits) digits from _ to _ in unary\n";
     const changed_module = "export fn combine_digits(left:int,right:int)->int return left*10+right end\nmixfix(combine_digits) digits from _ plus _ in unary\n";
     const source = "import paint.*;import \"mixfix-editor-library.huak\".combine_digits as digits\nfn figure()->picture\nvalue:=digits from 2 to 3\nreturn picture(640, 480)\nend\nexport circle\nexport plate:=figure();default plate\n";
@@ -127,7 +127,7 @@ test "language server shares mixfix metadata across unsaved imports formatting a
                     }
                     try t.expect(found);
                 },
-                2 => try t.expect(std.mem.indexOf(u8, response.get("result").?.array.items[0].object.get("newText").?.string, "    value := digits from 2 to 3\n") != null),
+                2 => try t.expect(std.mem.find(u8, response.get("result").?.array.items[0].object.get("newText").?.string, "    value := digits from 2 to 3\n") != null),
                 3, 5 => {
                     const exports = response.get("result").?.object.get("outputs").?.array.items;
                     try t.expectEqual(@as(usize, 1), exports.len);

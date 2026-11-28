@@ -159,5 +159,5 @@ test "mixfix providers support qualified names and reject malformed external tem
     form.parts = &.{ "with", null, null };
     parser = try Parser.init(arena.allocator(), "x:=shapes.make with 1", options, &diagnostic);
     try std.testing.expectError(error.LanguageError, parser.parse());
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "invalid mixfix template") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "invalid mixfix template") != null);
 }

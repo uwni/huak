@@ -64,7 +64,7 @@ test "imported builders share module text while initialization and local setting
     ;
     const Resolver = struct {
         fn resolve(_: *anyopaque, allocator: std.mem.Allocator, importer: []const u8, path: []const u8) !l.compiler.ResolvedSource {
-            const name = try std.fs.path.resolve(allocator, &.{ std.fs.path.dirname(importer).?, path });
+            const name = try std.Io.Dir.path.resolveAlloc(allocator, &.{ std.Io.Dir.path.dirname(importer).?, path });
             if (!std.mem.eql(u8, name, "/workers/figures.huak")) return error.ModuleNotFound;
             return .{ .name = name, .source = try allocator.dupe(u8, module) };
         }
@@ -209,8 +209,8 @@ test "typed Typst reads retain construction workers capture dependencies and gro
         try t.expectEqualSlices(u8, serial_pdf.bytes(), parallel_pdf.bytes());
         const text = try pdf_text.text(parallel_pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(text);
-        try t.expect(std.mem.indexOf(u8, text, "Data workers Ω: 1") != null);
-        try t.expect(std.mem.indexOf(u8, text, "Data workers Ω: 2") != null);
+        try t.expect(std.mem.find(u8, text, "Data workers Ω: 1") != null);
+        try t.expect(std.mem.find(u8, text, "Data workers Ω: 2") != null);
     }
 }
 
@@ -251,10 +251,10 @@ test "typ.module values made before and inside workers keep parallel typography 
             try t.expectEqualSlices(u8, expected.bytes(), actual.bytes());
             const text = try pdf_text.text(actual.bytes(), .{ .raw = true });
             defer t.allocator.free(text);
-            try t.expect(std.mem.indexOf(u8, text, if (index == 0) "WORKER 1" else "WORKER 2") != null);
+            try t.expect(std.mem.find(u8, text, if (index == 0) "WORKER 1" else "WORKER 2") != null);
         }
         var svg = try harness.render(&parallel.outputs, 1, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "#c80000") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "#c80000") != null);
     }
 }

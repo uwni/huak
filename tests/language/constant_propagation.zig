@@ -171,7 +171,7 @@ test "constant propagation produces the same native SVG PDF and mutable path inp
             var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
             defer pdf.deinit();
             try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
-            try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+            try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
             if (expected_svg[index]) |bytes| {
                 try t.expectEqualSlices(u8, bytes, svg.bytes());
                 try t.expectEqualSlices(u8, expected_pdf[index].?, pdf.bytes());
@@ -181,7 +181,7 @@ test "constant propagation produces the same native SVG PDF and mutable path inp
             }
             const text = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
             defer t.allocator.free(text);
-            try t.expect(std.mem.indexOf(u8, text, "Propagation Ω") != null);
+            try t.expect(std.mem.find(u8, text, "Propagation Ω") != null);
         }
     }
 }

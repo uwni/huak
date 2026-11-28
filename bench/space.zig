@@ -41,11 +41,11 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("{s:<20} {s:>9} {s:>10} {s:>10} {s}\n", .{ "case", "med_ms", "rss_mib", "bytes", "sha256" });
     for (cases) |case| {
-        const out_path = try std.fmt.allocPrint(a, "target/bench-space/{s}.{s}", .{ case.name, case.ext });
+        const out_path = try a.print("target/bench-space/{s}.{s}", .{ case.name, case.ext });
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(a, &.{ binary, "run", case.script });
         try argv.appendSlice(a, case.extra_args);
-        try argv.append(a, try std.fmt.allocPrint(a, "--output={s}", .{out_path}));
+        try argv.append(a, try a.print("--output={s}", .{out_path}));
 
         // One untimed warmup, then `rounds` timed samples.
         _ = try runOnce(init.gpa, io, log, argv.items, out_path);

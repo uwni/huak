@@ -16,7 +16,7 @@ pub const Backend = struct {
 pub fn build(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.Optimize,
+    optimize: std.lang.Optimize,
     prefix: ?[]const u8,
 ) Backend {
     const step = b.step("space-backend", "Build and install the optional native OCCT projection library");

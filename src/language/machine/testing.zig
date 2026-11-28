@@ -59,7 +59,7 @@ pub const TypstBatchProbe = struct {
         self.shows[index] = try allocator.dupe(TypstShow, request.shows);
         self.whole[index] = request.whole;
         self.seen_count += 1;
-        if (std.mem.indexOf(u8, text, "FAIL") != null) return error.TypesetFailed;
+        if (std.mem.find(u8, text, "FAIL") != null) return error.TypesetFailed;
         return .{ .handle = .{ .kind = .text, .index = index } };
     }
 

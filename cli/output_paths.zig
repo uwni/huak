@@ -28,9 +28,9 @@ pub fn validate(io: std.Io, allocator: std.mem.Allocator, outputs: []const Outpu
         if (outputs.len < 2) continue;
         const canonical = try destination(io, memory, output.path, 0);
         if ((try paths.getOrPut(memory, canonical)).found_existing) return duplicate(output.path, report);
-        const parent = try memory.dupeSentinel(u8, std.fs.path.dirname(canonical).?, 0);
+        const parent = try memory.dupeSentinel(u8, std.Io.Dir.path.dirname(canonical).?, 0);
         const directory = (try identity(io, parent)) orelse return error.FileNotFound;
-        const basename = std.fs.path.basename(canonical);
+        const basename = std.Io.Dir.path.basename(canonical);
         for (missing.items) |previous| {
             if (!std.meta.eql(directory, previous.parent)) continue;
             if (std.mem.eql(u8, basename, previous.basename)) return duplicate(output.path, report);
@@ -67,7 +67,7 @@ fn filesystemAliases(io: std.Io, parent: []const u8, first: []const u8, second: 
             io.random(&random);
             var encoded: [16]u8 = undefined;
             _ = std.base64.url_safe.Encoder.encode(&encoded, &random);
-            const name = try std.fmt.bufPrint(&name_buffer, ".huak-output-check-{s}", .{encoded});
+            const name = try std.mem.print(&name_buffer, ".huak-output-check-{s}", .{encoded});
             directory.createDir(io, name, .fromMode(0o700)) catch |err| switch (err) {
                 error.PathAlreadyExists => continue,
                 else => return err,
@@ -106,16 +106,16 @@ fn destination(io: std.Io, allocator: std.mem.Allocator, path: []const u8, links
     if (links == 40) return error.SymLinkLoop;
     return std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch |err| switch (err) {
         error.FileNotFound => {
-            var buffer: [std.fs.max_path_bytes]u8 = undefined;
+            var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
             const length = std.Io.Dir.cwd().readLink(io, path, &buffer) catch |link_err| switch (link_err) {
                 error.NotLink, error.FileNotFound => {
-                    const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, std.fs.path.dirname(path) orelse ".", allocator);
-                    return std.fs.path.joinZ(allocator, &.{ parent, std.fs.path.basename(path) });
+                    const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, std.Io.Dir.path.dirname(path) orelse ".", allocator);
+                    return std.Io.Dir.path.joinZ(allocator, &.{ parent, std.Io.Dir.path.basename(path) });
                 },
                 else => return link_err,
             };
             const target = buffer[0..length];
-            const joined = if (std.fs.path.isAbsolute(target)) target else try std.fs.path.join(allocator, &.{ std.fs.path.dirname(path) orelse ".", target });
+            const joined = if (std.Io.Dir.path.isAbsolute(target)) target else try std.Io.Dir.path.join(allocator, &.{ std.Io.Dir.path.dirname(path) orelse ".", target });
             return destination(io, allocator, joined, links + 1);
         },
         else => return err,

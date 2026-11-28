@@ -132,7 +132,7 @@ test "list item opcodes validate standalone inputs and retain construction befor
         @memset(machine.initialized, true);
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
         try std.testing.expectEqual(@as(usize, if (bad_input) 10 else 5), machine.failure.?.diagnostic.span.start);
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), if (bad_input) "non-finite" else "expected a list") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), if (bad_input) "non-finite" else "expected a list") != null);
         try std.testing.expectEqual(@as(i64, 42), machine.globals[0].int);
     };
     const code = [_]I{ ins(.load_global, 0), ins(.load_global, 1), ins(.list_append_items, 1), ins(.halt, 0) };
@@ -192,7 +192,7 @@ test "list item preparation materializes every item before validating an earlier
         machine.globals[2] = types.listView(&.{.omitted});
         @memset(machine.initialized, true);
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "omitted argument marker") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "omitted argument marker") != null);
         try std.testing.expectEqual(@as(usize, 10), machine.failure.?.diagnostic.span.start);
         try std.testing.expectEqual(@as(usize, 0), machine.globals[0].list.items().len);
     }

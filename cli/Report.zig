@@ -13,7 +13,7 @@ io: std.Io,
 message: ?[]const u8 = null,
 
 pub fn remember(self: *Report, comptime format: []const u8, args: anytype) void {
-    self.message = std.fmt.allocPrint(self.allocator, format, args) catch "diagnostic allocation failed";
+    self.message = self.allocator.print(format, args) catch "diagnostic allocation failed";
 }
 
 pub fn fail(self: *Report, comptime format: []const u8, args: anytype) error{Reported} {

@@ -91,14 +91,14 @@ pub fn typstShow(self: *Parser) anyerror!*ast.Stmt {
     const keyword = self.current;
     _ = try acceptTypMember(self, "show") orelse return self.fail(keyword.span, "expected typ.show", .{});
     try self.advance();
-    var path: std.array_list.Managed(ast.ExportName) = .init(self.allocator);
+    var path: std.ArrayList(ast.ExportName) = .empty;
     const first = try self.expect(.identifier, "expected a typ.module value after typ.show");
-    try path.append(.{ .name = self.text(first), .span = first.span });
+    try path.append(self.allocator, .{ .name = self.text(first), .span = first.span });
     while (try self.accept(.dot)) {
         const next = try self.expect(.identifier, "expected a member name after '.' in typ.show");
-        try path.append(.{ .name = self.text(next), .span = next.span });
+        try path.append(self.allocator, .{ .name = self.text(next), .span = next.span });
     }
     if (path.items.len < 2) return self.fail(first.span, "typ.show needs a member of a typ.module value, such as {s}.style", .{self.text(first)});
-    const names = try path.toOwnedSlice();
+    const names = try path.toOwnedSlice(self.allocator);
     return self.createStmt(.join(keyword.span, names[names.len - 1].span), .{ .typst_show = names });
 }

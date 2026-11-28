@@ -173,7 +173,7 @@ pub fn makeTypstModule(ctx: ?*anyopaque, _: std.mem.Allocator, module: Machine.T
     errdefer gpa.free(code);
     // The path is unique per module, so diagnostics find its text, and its
     // file stem names the Typst module.
-    const name = try std.fmt.allocPrint(gpa, "typ-module/{d}/{s}.typ", .{ index, module.name });
+    const name = try gpa.print("typ-module/{d}/{s}.typ", .{ index, module.name });
     errdefer gpa.free(name);
     const origin_name = try gpa.dupe(u8, module.origin.name);
     errdefer gpa.free(origin_name);
@@ -197,7 +197,7 @@ pub fn makeTypstModule(ctx: ?*anyopaque, _: std.mem.Allocator, module: Machine.T
 /// The modules a request names, in ascending order: those its data binds or
 /// it shows. Each module keeps track of the modules it was made with.
 fn requestModules(self: *const Runtime, scratch: std.mem.Allocator, bindings: []const Machine.TypstBinding, shows: []const Machine.TypstShow) ![]const usize {
-    var found: std.AutoArrayHashMapUnmanaged(usize, void) = .empty;
+    var found: std.array_hash_map.Auto(usize, void) = .empty;
     for (shows) |show| {
         if (show.value != .handle or show.value.handle.kind != .typst_module) return error.InvalidArgument;
         try addModule(self, scratch, &found, show.value);
@@ -208,7 +208,7 @@ fn requestModules(self: *const Runtime, scratch: std.mem.Allocator, bindings: []
     return modules;
 }
 
-fn addModule(self: *const Runtime, scratch: std.mem.Allocator, found: *std.AutoArrayHashMapUnmanaged(usize, void), value: Value) !void {
+fn addModule(self: *const Runtime, scratch: std.mem.Allocator, found: *std.array_hash_map.Auto(usize, void), value: Value) !void {
     if (value != .handle or value.handle.kind != .typst_module) return;
     if (value.handle.index >= self.typst_modules.items.len) return error.InvalidTypstBinding;
     try found.put(scratch, value.handle.index, {});

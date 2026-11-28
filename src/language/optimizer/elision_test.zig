@@ -9,15 +9,16 @@ test "literal append elision combines one operation with both spans and nested c
     for ([_]u32{ 0, 1, 3 }) |count| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
-        var pool = std.array_list.Managed(Value).init(arena.allocator());
-        try pool.append(.{ .int = 7 });
-        var code = std.array_list.Managed(Instruction).init(arena.allocator());
-        try code.append(.{ .op = .load_global });
-        for (0..count) |_| try code.append(.{ .op = .constant });
+        const a = arena.allocator();
+        var pool: std.ArrayList(Value) = .empty;
+        try pool.append(a, .{ .int = 7 });
+        var code: std.ArrayList(Instruction) = .empty;
+        try code.append(a, .{ .op = .load_global });
+        for (0..count) |_| try code.append(a, .{ .op = .constant });
         const prepare_span: bc.Span = .{ .start = 5, .end = 10 };
         const append_span: bc.Span = .{ .start = 1, .end = 10 };
-        try code.appendSlice(&.{ .{ .op = .make_list, .a = count, .span = prepare_span }, .{ .op = .list_append, .span = append_span }, .{ .op = .halt } });
-        const result = try optimizer.optimize(arena.allocator(), code.items, &pool, .{ .global_types = &.{.list} });
+        try code.appendSlice(a, &.{ .{ .op = .make_list, .a = count, .span = prepare_span }, .{ .op = .list_append, .span = append_span }, .{ .op = .halt } });
+        const result = try optimizer.optimize(a, code.items, &pool, .{ .global_types = &.{.list} });
         try std.testing.expectEqual(code.items.len - 1, result.len);
         const append = result[result.len - 2];
         try std.testing.expectEqual(bc.Op.list_append_items, append.op);
@@ -28,8 +29,8 @@ test "literal append elision combines one operation with both spans and nested c
     }
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var pool = std.array_list.Managed(Value).init(arena.allocator());
-    try pool.append(.{ .int = 7 });
+    var pool: std.ArrayList(Value) = .empty;
+    try pool.append(arena.allocator(), .{ .int = 7 });
     const nested = [_]Instruction{ .{ .op = .load_global }, .{ .op = .constant }, .{ .op = .make_list, .a = 1 }, .{ .op = .make_list, .a = 1 }, .{ .op = .list_append }, .{ .op = .halt } };
     const result = try optimizer.optimize(arena.allocator(), &nested, &pool, .{ .global_types = &.{.list} });
     try std.testing.expectEqual(bc.Op.make_list, result[2].op);
@@ -41,7 +42,7 @@ test "literal append elision retains original code when both spans cannot be rep
     for ([_]bc.Span{ .{ .start = 5, .end = 9 }, .{ .start = wide, .end = wide + 5 } }) |rhs| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
-        var pool = std.array_list.Managed(Value).init(arena.allocator());
+        var pool: std.ArrayList(Value) = .empty;
         const code = [_]Instruction{
             .{ .op = .load_global },                                                                         .{ .op = .make_list, .span = rhs },
             .{ .op = .list_append, .span = .{ .start = 1, .end = if (rhs.start == wide) rhs.end else 10 } }, .{ .op = .halt },
@@ -53,7 +54,7 @@ test "literal append elision retains original code when both spans cannot be rep
 test "literal append elision remaps forward branches and loop back edges" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var pool = std.array_list.Managed(Value).init(arena.allocator());
+    var pool: std.ArrayList(Value) = .empty;
     const code = [_]Instruction{
         .{ .op = .load_global, .a = 1 }, .{ .op = .jump_if_false, .a = 6 },
         .{ .op = .load_global },         .{ .op = .make_list },
@@ -71,7 +72,7 @@ test "literal append elision remaps forward branches and loop back edges" {
 test "literal append elision does not cross an incoming branch to append" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var pool = std.array_list.Managed(Value).init(arena.allocator());
+    var pool: std.ArrayList(Value) = .empty;
     const code = [_]Instruction{
         .{ .op = .load_global, .a = 0 },   .{ .op = .load_global, .a = 1 }, .{ .op = .load_global, .a = 2 },
         .{ .op = .jump_if_false, .a = 5 }, .{ .op = .make_list, .a = 1 },   .{ .op = .list_append },

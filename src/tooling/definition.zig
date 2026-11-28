@@ -64,9 +64,9 @@ pub fn lookup(frontend: *const Frontend, arena: std.mem.Allocator, text: []const
 pub const standard_scheme = "huak-stdlib";
 
 pub fn uriForPath(arena: std.mem.Allocator, path: []const u8) ![]const u8 {
-    if (standard.source(path) != null) return std.fmt.allocPrint(arena, "{s}:/{s}", .{ standard_scheme, path });
+    if (standard.source(path) != null) return arena.print("{s}:/{s}", .{ standard_scheme, path });
     const address: std.Uri = .{ .scheme = "file", .host = .{ .raw = "" }, .path = .{ .raw = path } };
-    return std.fmt.allocPrint(arena, "{f}", .{address.fmt(.all)});
+    return arena.print("{f}", .{address.fmt(.all)});
 }
 
 test {

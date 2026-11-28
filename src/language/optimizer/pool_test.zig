@@ -14,9 +14,9 @@ test "constant pool compaction merges exact values and preserves signed zero and
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var pool: std.array_list.Managed(Value) = .init(a);
+    var pool: std.ArrayList(Value) = .empty;
     const template = types.listView(&.{.{ .int = 1 }});
-    try pool.appendSlice(&.{ .{ .int = 42 }, .{ .int = 42 }, .{ .number = 0 }, .{ .number = -0.0 }, .{ .string = "field" }, .{ .string = "field" }, template, template, .{ .int = 999 } });
+    try pool.appendSlice(a, &.{ .{ .int = 42 }, .{ .int = 42 }, .{ .number = 0 }, .{ .number = -0.0 }, .{ .string = "field" }, .{ .string = "field" }, template, template, .{ .int = 999 } });
     const code = [_]Instruction{
         .{ .op = .constant, .a = 0 }, .{ .op = .constant, .a = 1 }, .{ .op = .constant, .a = 2 }, .{ .op = .constant, .a = 3 },
         .{ .op = .field, .a = 4 },    .{ .op = .typst, .a = 5 },    .{ .op = .constant, .a = 6 }, .{ .op = .constant, .a = 7 },
@@ -33,9 +33,9 @@ test "constant pool compaction merges exact values and preserves signed zero and
 }
 
 fn allocationCase(allocator: Allocator) !void {
-    var pool: std.array_list.Managed(Value) = .init(allocator);
-    defer pool.deinit();
-    try pool.appendSlice(&.{ .{ .int = 2 }, .{ .int = 3 }, .{ .boolean = true } });
+    var pool: std.ArrayList(Value) = .empty;
+    defer pool.deinit(allocator);
+    try pool.appendSlice(allocator, &.{ .{ .int = 2 }, .{ .int = 3 }, .{ .boolean = true } });
     const input = [_]Instruction{
         .{ .op = .constant, .a = 2 }, .{ .op = .jump_if_false, .a = 7 },
         .{ .op = .constant },         .{ .op = .constant, .a = 1 },
@@ -60,8 +60,8 @@ test "pool compaction remaps field writes and never interns mutable aggregate or
     var dictionary: types.Dict = .{};
     var fields = [_]Value{.{ .int = 1 }};
     var record: types.Record = .{ .kind = bc.Type.record(0), .fields = &fields };
-    var pool: std.array_list.Managed(Value) = .init(a);
-    try pool.appendSlice(&.{
+    var pool: std.ArrayList(Value) = .empty;
+    try pool.appendSlice(a, &.{
         .{ .int = 999 },          .{ .string = "count" },   .{ .string = "count" },
         .{ .dict = &dictionary }, .{ .dict = &dictionary }, .{ .record = &record },
         .{ .record = &record },   .omitted,                 .omitted,
@@ -88,17 +88,17 @@ test "pool compaction remaps field writes and never interns mutable aggregate or
 
 test "shared pool index preserves standalone folding through append growth and propagation" {
     const t = std.testing;
-    var actual = std.array_list.Managed(Value).init(t.allocator);
-    defer actual.deinit();
-    var expected = std.array_list.Managed(Value).init(t.allocator);
-    defer expected.deinit();
+    var actual: std.ArrayList(Value) = .empty;
+    defer actual.deinit(t.allocator);
+    var expected: std.ArrayList(Value) = .empty;
+    defer expected.deinit(t.allocator);
     const template = types.listView(&.{.{ .int = 7 }});
     const initial = [_]Value{
         .{ .int = 2 },      .{ .int = 3 },      .{ .int = 2 }, .{ .number = 0 }, .{ .number = -0.0 },
         .{ .string = "x" }, .{ .string = "x" }, template,      template,         .omitted,
     };
-    try actual.appendSlice(&initial);
-    try expected.appendSlice(&initial);
+    try actual.appendSlice(t.allocator, &initial);
+    try expected.appendSlice(t.allocator, &initial);
     var index = optimizer.PoolIndex.init(t.allocator);
     defer index.deinit();
     const cases = [_][]const Instruction{
@@ -120,8 +120,8 @@ test "shared pool index preserves standalone folding through append growth and p
         // Force append/reallocation independently of the optimizer. Duplicate
         // values must keep their earliest index across function boundaries.
         const extra: Value = .{ .int = @intCast(round) };
-        try actual.appendSlice(&.{ extra, extra });
-        try expected.appendSlice(&.{ extra, extra });
+        try actual.appendSlice(t.allocator, &.{ extra, extra });
+        try expected.appendSlice(t.allocator, &.{ extra, extra });
     }
     try index.sync(actual.items);
     try t.expectEqual(@as(u32, 0), index.map.get(keyOf(.{ .int = 2 }).?).?);
@@ -130,9 +130,9 @@ test "shared pool index preserves standalone folding through append growth and p
 }
 
 fn sharedAllocationCase(allocator: Allocator) !void {
-    var constants = std.array_list.Managed(Value).init(allocator);
-    defer constants.deinit();
-    try constants.appendSlice(&.{ .{ .int = 2 }, .{ .int = 3 } });
+    var constants: std.ArrayList(Value) = .empty;
+    defer constants.deinit(allocator);
+    try constants.appendSlice(allocator, &.{ .{ .int = 2 }, .{ .int = 3 } });
     var index = optimizer.PoolIndex.init(allocator);
     defer index.deinit();
     const code = [_]Instruction{
@@ -144,7 +144,7 @@ fn sharedAllocationCase(allocator: Allocator) !void {
         const output = try optimizer.optimize(allocator, &code, &constants, .{ .global_types = &.{.int}, .pool_index = &index });
         defer allocator.free(output);
         try std.testing.expectEqual(@as(i64, 5), constants.items[output[0].a].int);
-        try constants.append(.{ .int = 5 });
+        try constants.append(allocator, .{ .int = 5 });
     }
 }
 
@@ -161,9 +161,9 @@ test "pool index can retry after partial synchronization or failed insertion" {
     var failing = t.FailingAllocator.init(t.allocator, .{ .fail_index = 1, .resize_fail_index = 0 });
     var index = optimizer.PoolIndex.init(failing.allocator());
     defer index.deinit();
-    var pool = std.array_list.Managed(Value).init(t.allocator);
-    defer pool.deinit();
-    for (0..100) |value| try pool.append(.{ .int = @intCast(value) });
+    var pool: std.ArrayList(Value) = .empty;
+    defer pool.deinit(t.allocator);
+    for (0..100) |value| try pool.append(t.allocator, .{ .int = @intCast(value) });
     try t.expectError(error.OutOfMemory, index.sync(pool.items));
     try t.expect(index.indexed_count > 0 and index.indexed_count < pool.items.len);
     failing.fail_index = std.math.maxInt(usize);
@@ -171,16 +171,16 @@ test "pool index can retry after partial synchronization or failed insertion" {
     try t.expectEqual(pool.items.len, index.indexed_count);
     for (pool.items, 0..) |value, expected| try t.expectEqual(@as(u32, @intCast(expected)), index.map.get(keyOf(value).?).?);
 
-    var failed_pool = std.array_list.Managed(Value).init(failing.allocator());
-    defer failed_pool.deinit();
+    var failed_pool: std.ArrayList(Value) = .empty;
+    defer failed_pool.deinit(failing.allocator());
     var empty_index = optimizer.PoolIndex.init(t.allocator);
     defer empty_index.deinit();
     failing.fail_index = failing.alloc_index;
-    try t.expectError(error.OutOfMemory, empty_index.intern(&failed_pool, .{ .int = 9 }));
+    try t.expectError(error.OutOfMemory, empty_index.intern(failing.allocator(), &failed_pool, .{ .int = 9 }));
     try t.expectEqual(@as(usize, 0), failed_pool.items.len);
     try t.expectEqual(@as(usize, 0), empty_index.indexed_count);
     try t.expectEqual(@as(u32, 0), empty_index.map.count());
     failing.fail_index = std.math.maxInt(usize);
-    try t.expectEqual(@as(u32, 0), try empty_index.intern(&failed_pool, .{ .int = 9 }));
+    try t.expectEqual(@as(u32, 0), try empty_index.intern(failing.allocator(), &failed_pool, .{ .int = 9 }));
     try t.expectEqual(@as(usize, 1), empty_index.indexed_count);
 }

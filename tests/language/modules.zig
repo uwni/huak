@@ -129,7 +129,7 @@ test "namespace wildcard and selected bindings share module initialization and l
             try t.expectEqual(@as(usize, 2), try scene.childCount(preview));
             var svg = try runtime.render(preview, .svg);
             defer svg.deinit();
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 90 45\"") != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 90 45\"") != null);
         }
     }
 }
@@ -174,7 +174,7 @@ test "selection privacy conflicts and invalid exported bodies survive optimizati
             .optimize = optimize,
         }, &diagnostic));
         try t.expect(diagnostic != null);
-        try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.name) != null);
+        try t.expect(std.mem.find(u8, diagnostic.?.text(), case.name) != null);
         if (std.mem.eql(u8, case.name, "unknown_value")) try t.expectEqualStrings("/native/invalid.huak", diagnostic.?.fileName().?);
     };
 }
@@ -218,7 +218,7 @@ test "linked module initialization is shared within a run and reset for a reused
         try t.expectEqual(@as(usize, 1), scene.canvases(&runtime));
         var svg = try runtime.render(machine.getGlobal("scene").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 70 35\"") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 70 35\"") != null);
     }
 }
 

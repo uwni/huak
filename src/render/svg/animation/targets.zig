@@ -131,7 +131,7 @@ pub fn locate(allocator: std.mem.Allocator, cursor: *xml.Cursor, targets: *Targe
             if (stack.items.len == 0) targets.root_close = tag.start;
             continue;
         }
-        const local_name = tag.name[if (std.mem.lastIndexOfScalar(u8, tag.name, ':')) |colon| colon + 1 else 0..];
+        const local_name = tag.name[if (std.mem.findScalarLast(u8, tag.name, ':')) |colon| colon + 1 else 0..];
         const defs = definition(local_name) or (stack.items.len != 0 and stack.items[stack.items.len - 1].defs);
         var target: ?usize = null;
         var object = false;

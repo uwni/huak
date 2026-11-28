@@ -38,19 +38,19 @@ const Collector = struct {
         try ast.walkChildren(self, node);
         const label: []const u8 = switch (node) {
             .statement => |statement| switch (statement.value) {
-                .function => |value| try std.fmt.allocPrint(self.arena, "fn {s}", .{value.name}),
-                .expand_block => |value| try std.fmt.allocPrint(self.arena, "expand_block {s}", .{value.name}),
+                .function => |value| try self.arena.print("fn {s}", .{value.name}),
+                .expand_block => |value| try self.arena.print("expand_block {s}", .{value.name}),
                 .conditional => "if",
-                .for_loop => |value| try std.fmt.allocPrint(self.arena, "for {s}", .{value.name}),
+                .for_loop => |value| try self.arena.print("for {s}", .{value.name}),
                 .while_loop => "while",
-                .precedence_group => |value| try std.fmt.allocPrint(self.arena, "precedence {s}", .{value.name}),
-                .structure => |value| try std.fmt.allocPrint(self.arena, "struct {s}", .{value.name}),
+                .precedence_group => |value| try self.arena.print("precedence {s}", .{value.name}),
+                .structure => |value| try self.arena.print("struct {s}", .{value.name}),
                 else => return false,
             },
             .expression => |expression| switch (expression.value) {
                 .block => "block",
                 .expansion => |value| if (value.args.len == 1 and value.args[0].value == .name)
-                    try std.fmt.allocPrint(self.arena, "{s} {s}", .{ value.name.name, value.args[0].value.name })
+                    try self.arena.print("{s} {s}", .{ value.name.name, value.args[0].value.name })
                 else
                     value.name.name,
                 else => return false,

@@ -59,7 +59,7 @@ fn appendModuleCompletions(arena: std.mem.Allocator, items: *std.ArrayList(Compl
 pub fn complete(frontend: *const Frontend, arena: std.mem.Allocator, text: []const u8, path: []const u8, byte_offset: usize) ![]const Completion {
     var input = text;
     if (byte_offset != 0 and text[byte_offset - 1] == '.')
-        input = try std.fmt.allocPrint(arena, "{s}__huak_completion__{s}", .{ text[0..byte_offset], text[byte_offset..] });
+        input = try arena.print("{s}__huak_completion__{s}", .{ text[0..byte_offset], text[byte_offset..] });
     var diagnostic: ?@import("../../language/source.zig").Diagnostic = null;
     const graph = frontend.graph(arena, input, path, &diagnostic) catch |err| {
         if (err == error.OutOfMemory) return err;
@@ -81,20 +81,20 @@ pub fn complete(frontend: *const Frontend, arena: std.mem.Allocator, text: []con
                 return items.toOwnedSlice(arena);
             }
             if (records.recordForExpression(query, object, 0)) |record| {
-                for (record.statement.value.structure.fields) |field| try appendCompletion(arena, &items, .{ .label = field.name, .kind = 5, .detail = try std.fmt.allocPrint(arena, "{s}: {s}", .{ field.name, field.annotation.name }) });
+                for (record.statement.value.structure.fields) |field| try appendCompletion(arena, &items, .{ .label = field.name, .kind = 5, .detail = try arena.print("{s}: {s}", .{ field.name, field.annotation.name }) });
                 return items.toOwnedSlice(arena);
             }
             return items.toOwnedSlice(arena);
         },
         .call => |call| {
             if (call.dot and call.args.len != 0) if (query.defaultNamespaceReceiver(call.args[0])) |namespace| {
-                if (std.mem.indexOfScalarPos(u8, input, call.args[0].span.end, '(')) |opening| if (byte_offset <= opening) {
+                if (std.mem.findScalarPos(u8, input, call.args[0].span.end, '(')) |opening| if (byte_offset <= opening) {
                     try appendNativeCompletions(arena, &items, namespace);
                     return items.toOwnedSlice(arena);
                 };
             };
             if (call.dot and call.args.len != 0) if (query.namespaceReceiver(call.args[0])) |id| {
-                if (std.mem.indexOfScalarPos(u8, input, call.args[0].span.end, '(')) |opening| if (byte_offset <= opening) {
+                if (std.mem.findScalarPos(u8, input, call.args[0].span.end, '(')) |opening| if (byte_offset <= opening) {
                     try appendModuleCompletions(arena, &items, query, id);
                     return items.toOwnedSlice(arena);
                 };
@@ -105,18 +105,18 @@ pub fn complete(frontend: *const Frontend, arena: std.mem.Allocator, text: []con
                     if (native == .function) {
                         const signature = builtins.signature(native.function);
                         for (signature.parameter_names, signature.args, 0..) |name, kind, index| if (index >= positional and !argumentSupplied(call.argument_names, name))
-                            try appendCompletion(arena, &items, .{ .label = name, .kind = 6, .detail = kind.name(), .insertText = try std.fmt.allocPrint(arena, "{s}: ", .{name}) });
+                            try appendCompletion(arena, &items, .{ .label = name, .kind = 6, .detail = kind.name(), .insertText = try arena.print("{s}: ", .{name}) });
                     }
                 } else if (recordAt(target)) |record| {
                     for (record.statement.value.structure.fields, 0..) |field, index| if (index >= positional and !argumentSupplied(call.argument_names, field.name))
-                        try appendCompletion(arena, &items, .{ .label = field.name, .kind = 5, .detail = try std.fmt.allocPrint(arena, "{s}: {s}", .{ field.name, field.annotation.name }), .insertText = try std.fmt.allocPrint(arena, "{s}: ", .{field.name}) });
+                        try appendCompletion(arena, &items, .{ .label = field.name, .kind = 5, .detail = try arena.print("{s}: {s}", .{ field.name, field.annotation.name }), .insertText = try arena.print("{s}: ", .{field.name}) });
                 } else for (target.unit.script.statements) |statement| if (statement.value == .function and statement.span.start <= target.span.start and target.span.end <= statement.span.end) {
                     for (statement.value.function.params, 0..) |parameter, index| if (index >= positional and !parameter.variadic and !argumentSupplied(call.argument_names, parameter.name))
-                        try appendCompletion(arena, &items, .{ .label = parameter.name, .kind = 6, .detail = try std.fmt.allocPrint(arena, "{s}: {s}", .{ parameter.name, parameter.annotation.name }), .insertText = try std.fmt.allocPrint(arena, "{s}: ", .{parameter.name}) });
+                        try appendCompletion(arena, &items, .{ .label = parameter.name, .kind = 6, .detail = try arena.print("{s}: {s}", .{ parameter.name, parameter.annotation.name }), .insertText = try arena.print("{s}: ", .{parameter.name}) });
                 };
             } else if (builtins.implicit(call.name)) |signature| {
                 for (signature.parameter_names, signature.args, 0..) |name, kind, index| if (index >= positional and !argumentSupplied(call.argument_names, name))
-                    try appendCompletion(arena, &items, .{ .label = name, .kind = 6, .detail = kind.name(), .insertText = try std.fmt.allocPrint(arena, "{s}: ", .{name}) });
+                    try appendCompletion(arena, &items, .{ .label = name, .kind = 6, .detail = kind.name(), .insertText = try arena.print("{s}: ", .{name}) });
             }
             if (items.items.len != 0) return items.toOwnedSlice(arena);
         },
@@ -138,7 +138,7 @@ pub fn complete(frontend: *const Frontend, arena: std.mem.Allocator, text: []con
         scope = unit.headers.scopes[id].parent;
     }
     for (unit.script.statements) |statement| switch (statement.value) {
-        .structure => |structure| try appendCompletion(arena, &items, .{ .label = structure.name, .kind = 22, .detail = try std.fmt.allocPrint(arena, "struct {s}", .{structure.name}) }),
+        .structure => |structure| try appendCompletion(arena, &items, .{ .label = structure.name, .kind = 22, .detail = try arena.print("struct {s}", .{structure.name}) }),
         inline .function, .expand_block => |function| try appendCompletion(arena, &items, .{ .label = function.name, .kind = 3, .detail = try functionText(arena, statement) }),
         else => {},
     };

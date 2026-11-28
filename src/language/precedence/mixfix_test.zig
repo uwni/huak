@@ -102,7 +102,7 @@ test "prefix and infix roles resolve independently and unrelated groups require 
     try std.testing.expectEqual(ast.Binary.multiply, result.value.call.args[1].value.binary.op);
     context.prefix = isolated;
     try std.testing.expectError(error.LanguageError, resolve(a, &table, original, &context, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unrelated") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "unrelated") != null);
     diagnostic = null;
     const safe = try resolve(a, &table, try testExpression(a, "mixfix(wrap) wrap _ in unary\nanswer:=wrap +(2+3)"), &context, &diagnostic);
     try std.testing.expectEqual(ast.Unary.positive, safe.value.call.args[0].value.unary.op);
@@ -215,5 +215,5 @@ test "mixfix binding retains namespace calls and reports unrelated outer groups"
     var unrelated: TestResolver = .{ .id = isolated };
     const expression = try testExpression(a, "mixfix(f) f from _ to _ in isolated;answer:=f from 1 to 2+3");
     try std.testing.expectError(error.LanguageError, resolve(a, &table, expression, &unrelated, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unrelated") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "unrelated") != null);
 }

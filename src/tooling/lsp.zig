@@ -54,7 +54,7 @@ pub fn readMessage(allocator: std.mem.Allocator, reader: *std.Io.Reader) !?[]u8 
         if (header_bytes > 8192 or line.len == 0 or line[line.len - 1] != '\r') return error.InvalidHeader;
         const content = line[0 .. line.len - 1];
         if (content.len == 0) break;
-        const colon = std.mem.indexOfScalar(u8, content, ':') orelse return error.InvalidHeader;
+        const colon = std.mem.findScalar(u8, content, ':') orelse return error.InvalidHeader;
         if (std.ascii.eqlIgnoreCase(content[0..colon], "Content-Length")) {
             if (length != null) return error.InvalidHeader;
             length = std.fmt.parseInt(usize, std.mem.trim(u8, content[colon + 1 ..], " \t"), 10) catch return error.InvalidHeader;
@@ -173,8 +173,8 @@ pub const Session = struct {
 
     pub fn overlay(context: *anyopaque, allocator: std.mem.Allocator, importer: []const u8, path: []const u8) !compiler.ResolvedSource {
         const self: *Session = @ptrCast(@alignCast(context));
-        const joined = if (std.fs.path.isAbsolute(path)) path else try std.fs.path.join(allocator, &.{ std.fs.path.dirname(importer) orelse ".", path });
-        defer if (!std.fs.path.isAbsolute(path)) allocator.free(joined);
+        const joined = if (std.Io.Dir.path.isAbsolute(path)) path else try std.Io.Dir.path.join(allocator, &.{ std.Io.Dir.path.dirname(importer) orelse ".", path });
+        defer if (!std.Io.Dir.path.isAbsolute(path)) allocator.free(joined);
         const key = try SourceLoader.canonicalPath(self.frontend.io, allocator, joined);
         defer allocator.free(key);
         if (self.openDocument(key)) |entry| return .{ .name = entry.value_ptr.path, .source = entry.value_ptr.text };
@@ -235,19 +235,19 @@ pub fn pathFromUri(io: std.Io, allocator: std.mem.Allocator, text: []const u8) !
     if (std.ascii.eqlIgnoreCase(uri.scheme, definitions.standard_scheme)) {
         if (uri.host != null or uri.query != null or uri.fragment != null) return error.InvalidUri;
         const raw = try uri.path.toRawMaybeAlloc(allocator);
-        defer if (uri.path == .percent_encoded and std.mem.indexOfScalar(u8, uri.path.percent_encoded, '%') != null) allocator.free(raw);
+        defer if (uri.path == .percent_encoded and std.mem.findScalar(u8, uri.path.percent_encoded, '%') != null) allocator.free(raw);
         if (raw.len == 0 or raw[0] != '/' or standard.source(raw[1..]) == null) return error.InvalidUri;
         return allocator.dupeSentinel(u8, raw[1..], 0);
     }
     if (!std.ascii.eqlIgnoreCase(uri.scheme, "file") or uri.query != null or uri.fragment != null) return error.InvalidUri;
     if (uri.host) |host| {
         const raw = try host.toRawMaybeAlloc(allocator);
-        defer if (host == .percent_encoded and std.mem.indexOfScalar(u8, host.percent_encoded, '%') != null) allocator.free(raw);
+        defer if (host == .percent_encoded and std.mem.findScalar(u8, host.percent_encoded, '%') != null) allocator.free(raw);
         if (raw.len != 0 and !std.ascii.eqlIgnoreCase(raw, "localhost")) return error.InvalidUri;
     }
     const raw = try uri.path.toRawMaybeAlloc(allocator);
-    defer if (uri.path == .percent_encoded and std.mem.indexOfScalar(u8, uri.path.percent_encoded, '%') != null) allocator.free(raw);
-    if (!std.fs.path.isAbsolute(raw) or std.mem.indexOfScalar(u8, raw, 0) != null) return error.InvalidUri;
+    defer if (uri.path == .percent_encoded and std.mem.findScalar(u8, uri.path.percent_encoded, '%') != null) allocator.free(raw);
+    if (!std.Io.Dir.path.isAbsolute(raw) or std.mem.findScalar(u8, raw, 0) != null) return error.InvalidUri;
     return SourceLoader.canonicalPath(io, allocator, raw);
 }
 

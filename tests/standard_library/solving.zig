@@ -95,7 +95,7 @@ test "solving blocks support early return and diagnose non-solver targets and cr
         var cross_machine = try l.Machine.init(t.allocator, &cross, cross_runtime.host(), .{});
         defer cross_machine.deinit();
         try t.expectError(error.RuntimeFailed, cross_machine.execute(&.{}));
-        try t.expect(std.mem.indexOf(u8, cross_machine.failure.?.text(), "DifferentSolvers") != null or
-            std.mem.indexOf(u8, cross_machine.failure.?.native_message, "solver") != null);
+        try t.expect(std.mem.find(u8, cross_machine.failure.?.text(), "DifferentSolvers") != null or
+            std.mem.find(u8, cross_machine.failure.?.native_message, "solver") != null);
     }
 }

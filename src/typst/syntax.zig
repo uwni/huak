@@ -11,7 +11,7 @@ pub fn sourceBlock(library: *api.Library, source: []const u8) api.Error!usize {
     var start: usize = 0;
     var limit: usize = @min(128, source.len);
     while (true) {
-        const end: ?usize = if (limit == source.len) limit else if (std.mem.lastIndexOfAny(u8, source[start..limit], "]}")) |index| start + index + 1 else null;
+        const end: ?usize = if (limit == source.len) limit else if (std.mem.findLastAny(u8, source[start..limit], "]}")) |index| start + index + 1 else null;
         if (end) |count| {
             var length: usize = 0;
             var report: ?*c.TypstDiagnostics = null;

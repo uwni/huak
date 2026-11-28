@@ -85,7 +85,7 @@ pub const TestSourceParser = struct {
         var from: usize = 0;
         var whole = false;
         const binding = "#let ";
-        while (std.mem.indexOfPos(u8, code, from, name)) |at| {
+        while (std.mem.findPos(u8, code, from, name)) |at| {
             from = at + name.len;
             if ((at > 0 and word(code[at - 1])) or (from < code.len and word(code[from]))) continue;
             var end = from + 1;
@@ -94,7 +94,7 @@ pub const TestSourceParser = struct {
                 try found.append(allocator, .{ .member = code[from + 1 .. end], .start = from + 1, .end = end });
             } else if (!std.mem.endsWith(u8, code[0..at], binding)) whole = true;
         }
-        return .{ .uses = try found.toOwnedSlice(allocator), .rebound = std.mem.indexOf(u8, code, "#let huak") != null, .whole = whole };
+        return .{ .uses = try found.toOwnedSlice(allocator), .rebound = std.mem.find(u8, code, "#let huak") != null, .whole = whole };
     }
 };
 

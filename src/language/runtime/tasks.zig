@@ -128,7 +128,7 @@ pub fn adopt(parent: *Runtime, child: *Runtime, value: types.Value) !types.Value
     defer temporary.deinit();
     const scratch = temporary.allocator();
     var references: std.AutoHashMapUnmanaged(u32, u32) = .empty;
-    var layouts: std.AutoArrayHashMapUnmanaged(*const typst.Layout, ?*typst.Layout) = .empty;
+    var layouts: std.array_hash_map.Auto(*const typst.Layout, ?*typst.Layout) = .empty;
     var frame_count: usize = 0;
 
     // The storage owner moves intact, including detached objects. Parentage

@@ -50,7 +50,7 @@ test "word chains obey left right and none associations" {
         const original = try testExpression(arena.allocator(), "answer:=10 blend 3 blend 1");
         if (association == .none) {
             try std.testing.expectError(error.LanguageError, resolve(arena.allocator(), &table, original, &context, &diagnostic));
-            try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "nonassociative") != null);
+            try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "nonassociative") != null);
             continue;
         }
         const result = try resolve(arena.allocator(), &table, original, &context, &diagnostic);
@@ -108,7 +108,7 @@ test "parentheses and postfix operands are binding barriers and qualified calls 
     try std.testing.expect(hasCustom(outer.value.binary.left.value.call.args[0]));
     const ungrouped = try testExpression(a, "answer:=1+2 blend 3");
     try std.testing.expectError(error.LanguageError, resolve(a, &table, ungrouped, &context, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unrelated") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "unrelated") != null);
 }
 
 fn bindingAllocationExercise(allocator: Allocator) !void {
@@ -149,5 +149,5 @@ test "long unresolved operator chains fail before overflowing the compiler stack
     var diagnostic: ?source.Diagnostic = null;
     try std.testing.expect(hasCustom(expression));
     try std.testing.expectError(error.LanguageError, resolve(a, &table, expression, &context, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "depth") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "depth") != null);
 }

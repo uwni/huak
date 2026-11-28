@@ -82,7 +82,7 @@ test "reused native block ranges still require a provider context and valid clos
         var parser = try Parser.init(arena.allocator(), OpaqueBlockFixture.input, options, &diagnostic);
         parser.headers = headers;
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "requires") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "requires") != null);
     }
     const blocks = try arena.allocator().dupe(source.Span, headers.source_blocks);
     for ([_]usize{ 0, blocks[0].start + 1, blocks[0].start + 2, std.math.maxInt(usize) }) |invalid_end| {

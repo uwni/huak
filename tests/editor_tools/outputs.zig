@@ -49,7 +49,7 @@ test "standalone language server returns end hints and picture export metadata w
             3 => {
                 const failure = response.object.get("error").?.object;
                 try t.expectEqual(@as(i64, -32603), failure.get("code").?.integer);
-                try t.expect(std.mem.indexOf(u8, failure.get("message").?.string, "expected int") != null);
+                try t.expect(std.mem.find(u8, failure.get("message").?.string, "expected int") != null);
             },
             5 => try harness.expectHintLabels(response, &.{"if"}),
             6 => {
@@ -106,8 +106,8 @@ test "standalone language server combines stable default aliases without executi
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .method = "initialized", .params = .{} });
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = "file:///tmp/default-metadata-library.huak", .version = 1, .text = "import paint.*;export chart:=picture(640, 480)" } } });
     for (cases, 0..) |case, index| {
-        const uri = try std.fmt.allocPrint(a, "file:///tmp/default-metadata-{d}.huak", .{index});
-        const source = try std.fmt.allocPrint(a, "{s};unexecuted:=1%0", .{case.source});
+        const uri = try a.print("file:///tmp/default-metadata-{d}.huak", .{index});
+        const source = try a.print("{s};unexecuted:=1%0", .{case.source});
         try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = source } } });
         try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = index + 2, .method = "huak/outputs", .params = .{ .textDocument = .{ .uri = uri } } });
     }

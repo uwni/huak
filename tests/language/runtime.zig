@@ -120,8 +120,8 @@ test "default output retains its picture while named outputs read the final bind
     defer new_svg.deinit();
     var pdf = try runtime.render(alias, .pdf);
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, old_svg.bytes(), "viewBox=\"0 0 90 45\"") != null);
-    try t.expect(std.mem.indexOf(u8, new_svg.bytes(), "viewBox=\"0 0 120 70\"") != null);
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, old_svg.bytes(), "viewBox=\"0 0 90 45\"") != null);
+    try t.expect(std.mem.find(u8, new_svg.bytes(), "viewBox=\"0 0 120 70\"") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
     try t.expectEqual(@as(usize, 1), runtime.frames.items.len);
 }

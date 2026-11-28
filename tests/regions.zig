@@ -72,12 +72,12 @@ test "static polygon operations and retained text produce real native SVG and co
     defer svg.deinit();
     try t.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
     for ([_][]const u8{ "<path", "<use", "fill=\"#3366cc\"", "fill=\"#cc3300\"" }) |expected| {
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), expected) != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), expected) != null);
     }
     var pdf = try document.exportPdf();
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
     const text = try pdf_text.text(pdf.bytes(), .{});
     defer t.allocator.free(text);
-    for ([_][]const u8{ "Polygon operations", "Ω" }) |expected| try t.expect(std.mem.indexOf(u8, text, expected) != null);
+    for ([_][]const u8{ "Polygon operations", "Ω" }) |expected| try t.expect(std.mem.find(u8, text, expected) != null);
 }

@@ -63,13 +63,13 @@ pub fn exportStatement(self: *Parser) anyerror!*ast.Stmt {
         declaration.span.start = start.start;
         return declaration;
     }
-    var names: std.array_list.Managed(ast.ExportName) = .init(self.allocator);
+    var names: std.ArrayList(ast.ExportName) = .empty;
     const name = try self.expect(.identifier, "expected an exported name");
-    try names.append(.{ .name = self.text(name), .span = name.span });
+    try names.append(self.allocator, .{ .name = self.text(name), .span = name.span });
     while (try self.accept(.comma)) {
         while (self.current.kind == .newline) try self.advance();
         const next = try self.expect(.identifier, "expected an exported name after ','");
-        try names.append(.{ .name = self.text(next), .span = next.span });
+        try names.append(self.allocator, .{ .name = self.text(next), .span = next.span });
     }
     var value: ?*ast.Expr = null;
     if (self.current.kind == .declare) {
@@ -78,7 +78,7 @@ pub fn exportStatement(self: *Parser) anyerror!*ast.Stmt {
         value = try statements.initializer(self, name.span);
         if (self.current.kind == .comma) return self.fail(self.current.span, "an initialized export cannot contain multiple names", .{});
     }
-    return self.createStmt(.join(start, if (value) |expression_| expression_.span else names.items[names.items.len - 1].span), .{ .exported = .{ .names = try names.toOwnedSlice(), .value = value } });
+    return self.createStmt(.join(start, if (value) |expression_| expression_.span else names.items[names.items.len - 1].span), .{ .exported = .{ .names = try names.toOwnedSlice(self.allocator), .value = value } });
 }
 
 pub fn functionHeader(self: *Parser, scanner: ?*HeaderScanner) !FunctionHeader {
@@ -86,7 +86,7 @@ pub fn functionHeader(self: *Parser, scanner: ?*HeaderScanner) !FunctionHeader {
     try self.advance();
     const name = try self.expect(.identifier, "expected function name");
     _ = try self.expect(.lparen, "expected '(' after function name");
-    var params: std.array_list.Managed(ast.Parameter) = .init(self.allocator);
+    var params: std.ArrayList(ast.Parameter) = .empty;
     var optional = false;
     if (self.current.kind != .rparen) while (true) {
         const param = try self.expect(.identifier, "expected parameter name");
@@ -112,18 +112,18 @@ pub fn functionHeader(self: *Parser, scanner: ?*HeaderScanner) !FunctionHeader {
             break :value value;
         } else null;
         if (!variadic and optional and default == null) return self.fail(param.span, "required parameters cannot follow parameters with defaults", .{});
-        try params.append(.{ .name = self.text(param), .annotation = annotation, .span = .join(param.span, finish), .variadic = variadic, .default = default });
+        try params.append(self.allocator, .{ .name = self.text(param), .annotation = annotation, .span = .join(param.span, finish), .variadic = variadic, .default = default });
         if (!try self.accept(.comma)) break;
     };
     const closing = try self.expect(.rparen, "expected ')' after parameters");
     const result = if (try self.accept(.arrow)) try parseAnnotation(self) else null;
-    return .{ .name = self.text(name), .params = try params.toOwnedSlice(), .result = result, .span = .join(start, if (result) |annotation| annotation.span else closing.span) };
+    return .{ .name = self.text(name), .params = try params.toOwnedSlice(self.allocator), .result = result, .span = .join(start, if (result) |annotation| annotation.span else closing.span) };
 }
 
 pub fn structure(self: *Parser) !*ast.Stmt {
     const start = (try self.expect(.kw_struct, "expected 'struct'")).span;
     const name = try self.expect(.identifier, "expected struct name");
-    var fields: std.array_list.Managed(ast.RecordField) = .init(self.allocator);
+    var fields: std.ArrayList(ast.RecordField) = .empty;
     try self.separators();
     while (self.current.kind != .kw_end) {
         if (self.current.kind == .eof) return self.fail(self.current.span, "expected 'end' for struct", .{});
@@ -133,13 +133,13 @@ pub fn structure(self: *Parser) !*ast.Stmt {
         _ = try self.expect(.colon, "struct fields need an explicit type annotation");
         const annotation = try parseAnnotation(self);
         const default = if (try self.accept(.assign)) try expressions.expression(self, 0) else null;
-        try fields.append(.{ .name = self.text(field), .annotation = annotation, .default = default, .span = .join(field.span, if (default) |value| value.span else annotation.span) });
+        try fields.append(self.allocator, .{ .name = self.text(field), .annotation = annotation, .default = default, .span = .join(field.span, if (default) |value| value.span else annotation.span) });
         if (self.current.kind != .kw_end and self.current.kind != .newline and self.current.kind != .semicolon)
             return self.fail(self.current.span, "expected a newline or ';' between struct fields", .{});
         try self.separators();
     }
     const finish = try self.expect(.kw_end, "expected 'end' for struct");
-    return self.createStmt(.join(start, finish.span), .{ .structure = .{ .name = self.text(name), .fields = try fields.toOwnedSlice() } });
+    return self.createStmt(.join(start, finish.span), .{ .structure = .{ .name = self.text(name), .fields = try fields.toOwnedSlice(self.allocator) } });
 }
 
 pub fn parseAnnotation(self: *Parser) !ast.Annotation {
@@ -154,7 +154,7 @@ pub fn parseAnnotation(self: *Parser) !ast.Annotation {
     var finish = first.span;
     while (try self.accept(.dot)) {
         const part = try self.expect(.identifier, "expected a type name after '.'");
-        name = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ name, self.text(part) });
+        name = try self.allocator.print("{s}.{s}", .{ name, self.text(part) });
         finish = part.span;
     }
     return .{ .name = name, .span = .join(first.span, finish) };

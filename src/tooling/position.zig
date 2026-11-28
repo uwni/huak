@@ -5,6 +5,16 @@ pub const Range = struct { start: Position, end: Position };
 /// A range in the document a URI names, as the protocol sends it.
 pub const Location = struct { uri: []const u8, range: Range };
 
+fn decodeUtf8(bytes: []const u8) !u21 {
+    return switch (bytes.len) {
+        1 => bytes[0],
+        2 => std.unicode.utf8Decode2(bytes[0..2].*),
+        3 => std.unicode.utf8Decode3(bytes[0..3].*),
+        4 => std.unicode.utf8Decode4(bytes[0..4].*),
+        else => unreachable,
+    };
+}
+
 pub fn at(source: []const u8, byte_offset: usize) Position {
     var position: Position = .{ .line = 0, .character = 0 };
     var i: usize = 0;
@@ -20,7 +30,7 @@ pub fn at(source: []const u8, byte_offset: usize) Position {
         }
         const length = std.unicode.utf8ByteSequenceLength(source[i]) catch 1;
         if (i + length > end) break;
-        const cp = std.unicode.utf8Decode(source[i..][0..length]) catch 0xfffd;
+        const cp = decodeUtf8(source[i..][0..length]) catch 0xfffd;
         position.character += if (cp > 0xffff) @as(usize, 2) else 1;
         i += length;
     }
@@ -42,7 +52,7 @@ pub fn offset(source: []const u8, position: Position) ?usize {
         if (character == position.character) return i;
         const length = std.unicode.utf8ByteSequenceLength(source[i]) catch return null;
         if (length > source.len - i) return null;
-        const cp = std.unicode.utf8Decode(source[i..][0..length]) catch return null;
+        const cp = decodeUtf8(source[i..][0..length]) catch return null;
         character += if (cp > 0xffff) @as(usize, 2) else 1;
         if (character > position.character) return null;
         i += length;

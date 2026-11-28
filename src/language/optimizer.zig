@@ -42,8 +42,8 @@ pub const PoolIndex = struct {
         }
     }
 
-    pub fn intern(self: *PoolIndex, pool: *std.array_list.Managed(Value), value: Value) Error!u32 {
-        const index = try internValue(self.allocator, pool, &self.map, value);
+    pub fn intern(self: *PoolIndex, pool_allocator: Allocator, pool: *std.ArrayList(Value), value: Value) Error!u32 {
+        const index = try internValue(self.allocator, pool_allocator, pool, &self.map, value);
         self.indexed_count = pool.items.len;
         return index;
     }
@@ -62,13 +62,13 @@ pub const limits = struct {
     pub const rounds = 32;
 };
 
-fn internValue(allocator: Allocator, pool: *std.array_list.Managed(Value), map: *Intern, value: Value) Error!u32 {
+fn internValue(map_allocator: Allocator, pool_allocator: Allocator, pool: *std.ArrayList(Value), map: *Intern, value: Value) Error!u32 {
     const key = keyOf(value).?;
     if (map.get(key)) |index| return index;
     const index = std.math.cast(u32, pool.items.len) orelse return error.BytecodeCapacity;
     // Reserve both allocations before changing the pool or its shared index.
-    try map.ensureUnusedCapacity(allocator, 1);
-    try pool.append(value);
+    try map.ensureUnusedCapacity(map_allocator, 1);
+    try pool.append(pool_allocator, value);
     map.putAssumeCapacityNoClobber(key, index);
     return index;
 }
@@ -76,7 +76,7 @@ fn internValue(allocator: Allocator, pool: *std.array_list.Managed(Value), map: 
 /// Propagation exposes constants to folding and reachability; pruning can in
 /// turn remove a conflicting incoming value. Repeat until the code stabilizes,
 /// within a bounded number of rounds. Only the final code belongs to allocator.
-pub fn optimize(allocator: Allocator, code: []const Instruction, constants: *std.array_list.Managed(Value), context: Context) Error![]const Instruction {
+pub fn optimize(allocator: Allocator, code: []const Instruction, constants: *std.ArrayList(Value), context: Context) Error![]const Instruction {
     const backing = context.scratch_allocator orelse allocator;
     var local_index: PoolIndex = .init(backing);
     defer local_index.deinit();
@@ -88,12 +88,12 @@ pub fn optimize(allocator: Allocator, code: []const Instruction, constants: *std
         var temporary: std.heap.ArenaAllocator = .init(backing);
         defer temporary.deinit();
         const scratch = temporary.allocator();
-        const propagated = try propagation.rewrite(scratch, current, constants, .{
+        const propagated = try propagation.rewrite(scratch, current, allocator, constants, .{
             .global_types = context.global_types,
             .local_types = context.local_types,
             .argument_bindings = context.argument_bindings,
         });
-        const rewritten = try folding.fold(scratch, propagated orelse current, constants, pool_index);
+        const rewritten = try folding.fold(scratch, propagated orelse current, allocator, constants, pool_index);
         if (sameCode(current, rewritten)) break;
         const next = try backing.dupe(Instruction, rewritten);
         if (owned) |previous| backing.free(previous);
@@ -119,7 +119,7 @@ fn refersToConstant(op: bc.Op) bool {
 /// Finalize all linked functions together: intern immutable scalar/string
 /// values and remove unused constants. Arrays and native handles retain their
 /// identities; floating keys preserve their exact bits, including signed zero.
-pub fn compactConstants(allocator: Allocator, functions: []bc.Function, constants: *std.array_list.Managed(Value)) Error!void {
+pub fn compactConstants(allocator: Allocator, functions: []bc.Function, constants: *std.ArrayList(Value)) Error!void {
     var temporary: std.heap.ArenaAllocator = .init(allocator);
     defer temporary.deinit();
     const scratch = temporary.allocator();
@@ -129,17 +129,17 @@ pub fn compactConstants(allocator: Allocator, functions: []bc.Function, constant
         if (instruction.a >= constants.items.len) return;
         used[instruction.a] = true;
     };
-    var pool: std.array_list.Managed(Value) = .init(allocator);
-    errdefer pool.deinit();
+    var pool: std.ArrayList(Value) = .empty;
+    errdefer pool.deinit(allocator);
     var map: Intern = .{};
     const indices = try scratch.alloc(u32, constants.items.len);
     for (constants.items, used, 0..) |value, keep, index| {
         if (!keep) continue;
         indices[index] = if (keyOf(value) != null)
-            try internValue(scratch, &pool, &map, value)
+            try internValue(scratch, allocator, &pool, &map, value)
         else blk: {
             const new_index = std.math.cast(u32, pool.items.len) orelse return error.BytecodeCapacity;
-            try pool.append(value);
+            try pool.append(allocator, value);
             break :blk new_index;
         };
     }
@@ -160,7 +160,7 @@ pub fn compactConstants(allocator: Allocator, functions: []bc.Function, constant
     for (functions, replacements) |*function, replacement| if (replacement) |code| {
         function.code = code;
     };
-    constants.deinit();
+    constants.deinit(allocator);
     constants.* = pool;
 }
 

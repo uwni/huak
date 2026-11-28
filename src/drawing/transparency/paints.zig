@@ -77,7 +77,7 @@ fn gather(self: anytype, value: *const Expr, result: *Varying) !void {
             if (self.leaves.items[id].component == .text or paintOf(self, id) == .color) return;
             result.occurrences += 1;
             if (result.occurrences > max_varying) return error.OverlappingVaryingPaints;
-            if (std.mem.indexOfScalar(u32, result.slice(), id) != null) return;
+            if (std.mem.findScalar(u32, result.slice(), id) != null) return;
             if (result.len != 0 and !shares(self, result.ids[0], id)) return error.OverlappingVaryingPaints;
             result.ids[result.len] = id;
             result.len += 1;
@@ -123,7 +123,7 @@ pub fn claims(self: anytype, unit: Unit) !bool {
 pub fn composedInto(self: anytype, comptime T: type, value: *const Expr, ids: []const u32, colors: []const Rgba(T), out: *Rgba(T)) void {
     switch (value.*) {
         .leaf => |id| {
-            if (std.mem.indexOfScalar(u32, ids, id)) |index| {
+            if (std.mem.findScalar(u32, ids, id)) |index| {
                 premultipliedInto(T, &colors[index], out);
             } else {
                 const c = paintOf(self, id).color;
@@ -274,6 +274,6 @@ fn colorAt(self: anytype, value: *const Expr, ids: []const u32, colors: []const 
 /// a varying paint when there is one, within `natural`'s coverage.
 pub fn piece(self: anytype, natural: u32, value: *const Expr) !Piece {
     const paints = try varying(self, value);
-    if (paints.len == 0 or std.mem.indexOfScalar(u32, paints.slice(), natural) != null) return .{ .geometry = natural, .expr = value };
+    if (paints.len == 0 or std.mem.findScalar(u32, paints.slice(), natural) != null) return .{ .geometry = natural, .expr = value };
     return .{ .geometry = paints.ids[0], .expr = value, .within = natural };
 }

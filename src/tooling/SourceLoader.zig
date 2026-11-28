@@ -9,16 +9,16 @@ const SourceLoader = @This();
 pub fn canonicalPath(io: std.Io, allocator: std.mem.Allocator, path: []const u8) ![:0]const u8 {
     return std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => {
-            const lexical = try std.fs.path.resolve(allocator, &.{path});
+            const lexical = try std.Io.Dir.path.resolveAlloc(allocator, &.{path});
             defer allocator.free(lexical);
-            var parent = std.fs.path.dirname(lexical);
-            while (parent) |directory| : (parent = std.fs.path.dirname(directory)) {
+            var parent = std.Io.Dir.path.dirname(lexical);
+            while (parent) |directory| : (parent = std.Io.Dir.path.dirname(directory)) {
                 const actual = std.Io.Dir.cwd().realPathFileAlloc(io, directory, allocator) catch |parent_err| switch (parent_err) {
                     error.FileNotFound, error.NotDir => continue,
                     else => return parent_err,
                 };
                 defer allocator.free(actual);
-                return std.fs.path.joinZ(allocator, &.{ actual, lexical[directory.len..] });
+                return std.Io.Dir.path.joinZ(allocator, &.{ actual, lexical[directory.len..] });
             }
             return allocator.dupeSentinel(u8, lexical, 0);
         },
@@ -69,8 +69,8 @@ pub fn resolve(context: *anyopaque, _: std.mem.Allocator, importer: []const u8, 
             else => return err,
         }
     }
-    const absolute = std.fs.path.isAbsolute(path);
-    const joined = if (absolute) path else try std.fs.path.join(memory, &.{ std.fs.path.dirname(importer) orelse ".", path });
+    const absolute = std.Io.Dir.path.isAbsolute(path);
+    const joined = if (absolute) path else try std.Io.Dir.path.join(memory, &.{ std.Io.Dir.path.dirname(importer) orelse ".", path });
     defer if (!absolute) memory.free(joined);
     if (self.observer) |observer| try observer.observe(joined);
     const canonical = try std.Io.Dir.cwd().realPathFileAlloc(self.io, joined, memory);

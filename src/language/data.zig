@@ -11,7 +11,7 @@ pub const Format = enum {
     csv,
 
     pub fn fromPath(path: []const u8) ?Format {
-        const ext = std.fs.path.extension(path);
+        const ext = std.Io.Dir.path.extension(path);
         return if (ext.len > 1) std.meta.stringToEnum(Format, ext[1..]) else null;
     }
 

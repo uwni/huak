@@ -84,7 +84,7 @@ test "text batch failures preserve successful bindings source positions and effe
         try std.testing.expect(machine.getGlobal("second") == null);
         try std.testing.expect(machine.getGlobal("third") == null);
         try std.testing.expectEqual(@as(usize, 0), probe.effects);
-        try std.testing.expectEqual(std.mem.indexOf(u8, input, "typ[FAIL first").?, machine.failure.?.diagnostic.span.start);
+        try std.testing.expectEqual(std.mem.find(u8, input, "typ[FAIL first").?, machine.failure.?.diagnostic.span.start);
         try std.testing.expectEqualStrings(probe.seen[1], machine.failure.?.native_message);
         @memset(&probe.message_storage, '?');
         try std.testing.expectEqualStrings(probe.seen[1], machine.failure.?.native_message);
@@ -156,8 +156,8 @@ test "fatal text batch failures locate their request without a recoverable prefi
     var machine = try Machine.init(std.testing.allocator, &program, probe.host(true), .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-    try std.testing.expectEqual(std.mem.indexOf(u8, input, "typ[Third]").?, machine.failure.?.diagnostic.span.start);
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "TypstPanic") != null);
+    try std.testing.expectEqual(std.mem.find(u8, input, "typ[Third]").?, machine.failure.?.diagnostic.span.start);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "TypstPanic") != null);
     try std.testing.expectEqual(@as(u64, 5), machine.steps);
     try std.testing.expect(machine.getGlobal("first") == null);
     try std.testing.expectEqual(@as(usize, 0), probe.effects);
@@ -165,7 +165,7 @@ test "fatal text batch failures locate their request without a recoverable prefi
     var invalid = try Machine.init(std.testing.allocator, &program, invalid_probe.host(true), .{});
     defer invalid.deinit();
     try std.testing.expectError(error.RuntimeFailed, invalid.execute(&.{}));
-    try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "invalid Typst batch failure index") != null);
+    try std.testing.expect(std.mem.find(u8, invalid.failure.?.text(), "invalid Typst batch failure index") != null);
 }
 
 test "text batch planning preserves malformed bytecode error order" {

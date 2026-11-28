@@ -181,5 +181,5 @@ test "list iteration and dictionary key snapshots share loop control and evaluat
     }
     var diagnostic: ?source.Diagnostic = null;
     try std.testing.expectError(error.LanguageError, compiler.compile(std.testing.allocator, "for key in {} do end", "dictionary.huak", .{}, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "for requires a list or numeric range") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "for requires a list or numeric range") != null);
 }

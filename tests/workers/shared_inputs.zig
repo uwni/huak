@@ -48,7 +48,7 @@ test "mapping workers share immutable measures and reject callbacks mutating sha
     var library = try typst.Library.open(options.library_path);
     defer library.deinit();
     for ([_]bool{ false, true }) |mutating| {
-        const source = try std.fmt.allocPrint(t.allocator,
+        const source = try t.allocator.print(
             \\import geometry.{{measure,sample_at_fraction}}
             \\import transform.mapped
             \\import object.draw

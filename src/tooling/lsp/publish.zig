@@ -89,7 +89,7 @@ pub fn publishBundle(self: *Session, uri: []const u8, document: *const Document,
 
 pub fn relatedLocation(self: *Session, allocator: std.mem.Allocator, bundle: std.zig.ErrorBundle, loc: std.zig.ErrorBundle.SourceLocation) !?locations.Location {
     const path = bundle.nullTerminatedString(loc.src_path);
-    if (!std.fs.path.isAbsolute(path)) return null;
+    if (!std.Io.Dir.path.isAbsolute(path)) return null;
     var content: ?[]const u8 = null;
     if (self.openDocument(path)) |entry| return .{ .uri = entry.key_ptr.*, .range = locationRange(bundle, loc, entry.value_ptr.text) };
     if (loc.source_line == 0) content = std.Io.Dir.cwd().readFileAlloc(self.frontend.io, path, allocator, .limited(16 * 1024 * 1024)) catch null;
@@ -111,7 +111,7 @@ fn locationRange(bundle: std.zig.ErrorBundle, loc: std.zig.ErrorBundle.SourceLoc
 test "ErrorBundle locations produce UTF-16 ranges and structured related information" {
     const allocator = std.testing.allocator;
     const text = "emoji:=\"🙂\"; missing\n";
-    const start = std.mem.indexOf(u8, text, "missing").?;
+    const start = std.mem.find(u8, text, "missing").?;
     var detail: @import("../../language/Machine.zig").RuntimeDiagnostic = .{
         .diagnostic = @import("../../language/source.zig").Diagnostic.init(.{ .start = start, .end = start + 7 }, "unknown identifier", .{}),
         .native_message = "native detail",
@@ -137,7 +137,7 @@ test "ErrorBundle locations produce UTF-16 ranges and structured related informa
     const diagnostic = errors[0].object;
     const primary = diagnostic.get("range").?.object.get("start").?.object;
     try std.testing.expectEqual(@as(i64, @intCast(locations.at(text, start).character)), primary.get("character").?.integer);
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.get("message").?.string, "native detail") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.get("message").?.string, "native detail") != null);
     const related = diagnostic.get("relatedInformation").?.array.items;
     try std.testing.expectEqual(@as(usize, 1), related.len);
     try std.testing.expectEqualStrings("at caller", related[0].object.get("message").?.string);

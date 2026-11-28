@@ -31,7 +31,7 @@ pub fn layoutCase(init: std.process.Init, engine: *typst.Engine) !void {
     var wrapped_storage: std.heap.ArenaAllocator = .init(init.gpa);
     defer wrapped_storage.deinit();
     for (&prewrapped, requests) |*request, source| {
-        request.* = .{ .source = try std.fmt.allocPrint(wrapped_storage.allocator(), "[{s}]", .{source.source}), .syntax = .code };
+        request.* = .{ .source = try wrapped_storage.allocator().print("[{s}]", .{source.source}), .syntax = .code };
     }
     var legacy_time: i96 = 0;
     var prewrapped_time: i96 = 0;
@@ -44,7 +44,7 @@ pub fn layoutCase(init: std.process.Init, engine: *typst.Engine) !void {
         const memory = scratch.allocator();
         var wrapped: [repetitions]typst.LayoutRequest = undefined;
         for (&wrapped, requests) |*request, source| {
-            request.* = .{ .source = try std.fmt.allocPrint(memory, "[{s}]", .{source.source}), .syntax = .code };
+            request.* = .{ .source = try memory.print("[{s}]", .{source.source}), .syntax = .code };
         }
         var layout = try engine.layoutContent(&wrapped, &legacy_metrics, null);
         const end = std.Io.Clock.awake.now(init.io);
@@ -84,7 +84,7 @@ pub fn layoutCase(init: std.process.Init, engine: *typst.Engine) !void {
         const memory = scratch.allocator();
         var wrapped: [repetitions]typst.LayoutRequest = undefined;
         for (&wrapped, requests) |*request, source| {
-            request.* = .{ .source = try std.fmt.allocPrint(memory, "[{s}]", .{source.source}), .syntax = .code };
+            request.* = .{ .source = try memory.print("[{s}]", .{source.source}), .syntax = .code };
         }
         var legacy_layout = try engine.layoutContent(&wrapped, &legacy_metrics, null);
         const legacy_end = std.Io.Clock.awake.now(init.io);

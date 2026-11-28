@@ -120,7 +120,7 @@ test "aggregate VM optional builtin omissions remain distinct from explicit unit
     var invalid = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer invalid.deinit();
     try std.testing.expectError(error.RuntimeFailed, invalid.execute(&.{}));
-    try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "expected number") != null);
+    try std.testing.expect(std.mem.find(u8, invalid.failure.?.text(), "expected number") != null);
 }
 
 test "host builtin claims fresh ownerless lists in place and checks leaves inline once" {
@@ -163,7 +163,7 @@ test "host builtin claims fresh ownerless lists in place and checks leaves inlin
     var invalid = try Machine.init(std.testing.allocator, &program, .{ .ptr = &bad_probe, .vtable = &.{ .callBuiltin = Probe.call } }, .{});
     defer invalid.deinit();
     try std.testing.expectError(error.RuntimeFailed, invalid.execute(&.{}));
-    try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "non-finite") != null);
+    try std.testing.expect(std.mem.find(u8, invalid.failure.?.text(), "non-finite") != null);
 
     const small_buf = [_]Value{ .{ .number = 1 }, .{ .number = 2 } };
     var large_buf: [512]Value = undefined;

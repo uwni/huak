@@ -46,7 +46,7 @@ fn count(svg: []const u8, comptime kind: []const u8, color: [3]f64) !usize {
     const key = kind ++ "=\"#";
     var found: usize = 0;
     var rest = svg;
-    while (std.mem.indexOf(u8, rest, key)) |at| {
+    while (std.mem.find(u8, rest, key)) |at| {
         rest = rest[at + key.len ..];
         if (rest.len < 7 or rest[6] != '"') continue;
         var close = true;
@@ -94,12 +94,12 @@ pub fn main(init: std.process.Init) !void {
     // Flattened: no fill anywhere is translucent, and the line behind the
     // sphere shows in at least two tones.
     var rest = svg;
-    while (std.mem.indexOf(u8, rest, "fill=\"#")) |at| {
+    while (std.mem.find(u8, rest, "fill=\"#")) |at| {
         rest = rest[at + "fill=\"#".len ..];
         // Typst writes an opacity as a fourth pair of digits.
         if (rest.len > 8 and rest[8] == '"') return error.TranslucentFill;
     }
-    if (std.mem.indexOf(u8, svg, "fill-opacity") != null) return error.TranslucentFill;
+    if (std.mem.find(u8, svg, "fill-opacity") != null) return error.TranslucentFill;
     var pieces: usize = 0;
     for (levels) |level| {
         try once(svg, "tone over paper", halfway(tone(wine, level), 1));
@@ -114,6 +114,6 @@ pub fn main(init: std.process.Init) !void {
     // rule. Both lines are drawn in black under their spheres.
     for (levels) |level| try once(svg, "tone in the layer", tone(plum, level));
     if (std.mem.count(u8, svg, " data-typst-label=\"huak-opacity-0.5\"") != 1) return error.LayerNotGrouped;
-    if (std.mem.indexOf(u8, svg, "[data-typst-label=\"huak-opacity-0.5\"]{opacity:0.5}") == null) return error.LayerRuleMissing;
+    if (std.mem.find(u8, svg, "[data-typst-label=\"huak-opacity-0.5\"]{opacity:0.5}") == null) return error.LayerRuleMissing;
     if (try count(svg, "stroke", .{ 0, 0, 0 }) != 2) return error.LinesNotUnderSpheres;
 }

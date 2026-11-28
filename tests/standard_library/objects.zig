@@ -63,7 +63,7 @@ test "object instances retain native text local copies world snapshots and indep
         const output = machine.getGlobal("plate").?;
         var svg = try runtime.render(output, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         var pdf = try runtime.render(output, .pdf);
         defer pdf.deinit();
         const text = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
@@ -153,15 +153,15 @@ test "erase keeps live siblings in paint order with parent-space dashed strokes"
         const page = machine.getGlobal("page").?;
         var pressure_svg = try runtime.render(machine.getGlobal("profiled").?, .svg);
         defer pressure_svg.deinit();
-        try t.expect(std.mem.indexOf(u8, pressure_svg.bytes(), "<clipPath") != null);
+        try t.expect(std.mem.find(u8, pressure_svg.bytes(), "<clipPath") != null);
         var svg = try runtime.render(page, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<clipPath") != null);
         var pdf = try runtime.render(page, .pdf);
         defer pdf.deinit();
         const words = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(words);
-        try t.expect(std.mem.indexOf(u8, words, "Live label") != null);
+        try t.expect(std.mem.find(u8, words, "Live label") != null);
         // The PDF backend must keep a fully erased node invisible even
         // when its unmasked source path would cover the inspected pixels.
         var covered = try runtime.render(machine.getGlobal("covered").?, .pdf);

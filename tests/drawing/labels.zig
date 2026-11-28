@@ -44,7 +44,7 @@ test "real text metrics drive native mixed SVG and PDF after engine and labels a
     defer svg.deinit();
     try t.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
     for ([_][]const u8{ "<symbol ", "<use ", "<clipPath", "stroke-width=\"2.5\"", "stroke=\"#216bb3\"" }) |expected| {
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), expected) != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), expected) != null);
     }
     var pdf = try document.exportPdf();
     defer pdf.deinit();
@@ -109,7 +109,7 @@ test "repeated label layouts retain identical metrics and independent native sce
 fn expectPdfTextResources(bytes: []const u8) !void {
     try t.expect(std.mem.startsWith(u8, bytes, "%PDF-1.7"));
     for ([_][]const u8{ "/FontFile", "/ToUnicode", "%%EOF" }) |expected| {
-        try t.expect(std.mem.indexOf(u8, bytes, expected) != null);
+        try t.expect(std.mem.find(u8, bytes, expected) != null);
     }
 }
 
@@ -161,8 +161,8 @@ test "independent Typst functions and layout batches from different engines comb
     second_engine.deinit();
     var svg = try document.exportSvg(0);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#c02030\"") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#2040c0\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "fill=\"#c02030\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "fill=\"#2040c0\"") != null);
     try t.expect(std.mem.count(u8, svg.bytes(), "<use ") > 10);
     var pdf = try document.exportPdf();
     defer pdf.deinit();

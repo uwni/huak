@@ -70,14 +70,14 @@ test "string ordering agrees with the VM typed comparison surface" {
 }
 
 test "long left associative trees report a compilation limit instead of exhausting the stack" {
-    var input: std.array_list.Managed(u8) = .init(std.testing.allocator);
-    defer input.deinit();
-    try input.appendSlice("value:=1");
-    for (0..2000) |_| try input.appendSlice("+1");
-    try input.append('\n');
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(std.testing.allocator);
+    try input.appendSlice(std.testing.allocator, "value:=1");
+    for (0..2000) |_| try input.appendSlice(std.testing.allocator, "+1");
+    try input.append(std.testing.allocator, '\n');
     var diagnostic: ?Diagnostic = null;
     try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, input.items, "long.huak", .{}, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "compilation depth") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "compilation depth") != null);
 }
 
 test "drawing instances have a dedicated type and no last-object query" {

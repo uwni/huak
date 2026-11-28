@@ -10,8 +10,8 @@ const harness = @import("harness.zig");
 fn expectSelectableText(bytes: []const u8) !void {
     const text = try pdf_text.text(bytes, .{ .raw = true });
     defer t.allocator.free(text);
-    try t.expect(std.mem.indexOf(u8, text, "Shared worker text") != null);
-    try t.expect(std.mem.indexOf(u8, text, "Ω") != null);
+    try t.expect(std.mem.find(u8, text, "Shared worker text") != null);
+    try t.expect(std.mem.find(u8, text, "Ω") != null);
 }
 
 test "random drawing stays ordered while independent special function pictures use workers" {
@@ -100,7 +100,7 @@ test "automatic workers preserve independent and diamond pictures with shared na
             var pdf = try harness.render(&parallel.outputs, 4, .pdf);
             defer pdf.deinit();
             try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
-            try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+            try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
             if (optimize and jobs == 2) try expectSelectableText(pdf.bytes());
         }
     }
@@ -158,7 +158,7 @@ test "constant propagation keeps worker output and instruction budgets consisten
             try t.expectEqualSlices(u8, serial_pdf.bytes(), parallel_pdf.bytes());
             const text = try pdf_text.text(parallel_pdf.bytes(), .{ .raw = true });
             defer t.allocator.free(text);
-            try t.expect(std.mem.indexOf(u8, text, "Propagation workers Ω") != null);
+            try t.expect(std.mem.find(u8, text, "Propagation workers Ω") != null);
         }
     }
 }
@@ -225,7 +225,7 @@ test "object handles allow independent construction before continuous animation"
         var actual = try harness.render(&parallel.outputs, index, .svg);
         defer actual.deinit();
         try t.expectEqualSlices(u8, expected.bytes(), actual.bytes());
-        if (index != 1) try t.expect(std.mem.indexOf(u8, actual.bytes(), "transform:translate(") != null);
+        if (index != 1) try t.expect(std.mem.find(u8, actual.bytes(), "transform:translate(") != null);
     }
     try t.expectError(error.AnimationRequiresSvg, parallel.outputs.validate(0, .pdf));
 }

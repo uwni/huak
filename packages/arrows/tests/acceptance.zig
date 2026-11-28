@@ -39,7 +39,7 @@ const Check = struct {
     binary: []const u8,
     library: []const u8,
     fn fmt(self: Check, comptime pattern: []const u8, args: anytype) ![]const u8 {
-        return std.fmt.allocPrint(self.a, pattern, args);
+        return self.a.print(pattern, args);
     }
     fn read(self: Check, path: []const u8) ![]const u8 {
         return std.Io.Dir.cwd().readFileAlloc(self.io, path, self.a, .limited(64 * 1024 * 1024));
@@ -63,7 +63,7 @@ const Check = struct {
 };
 
 fn contains(bytes: []const u8, expected: []const u8) !void {
-    if (std.mem.indexOf(u8, bytes, expected) == null) {
+    if (std.mem.find(u8, bytes, expected) == null) {
         std.debug.print("Expected {s}:\n{s}\n", .{ expected, bytes });
         return error.MissingExpectedText;
     }

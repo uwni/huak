@@ -66,7 +66,7 @@ pub fn itemIn(self: *Builder, memory: std.mem.Allocator, transform: g.Transform,
     options.* = std.mem.zeroes(c.TypstSceneItemOptions);
     options.struct_size = @sizeOf(c.TypstSceneItemOptions);
     if (id != 0) {
-        const tag = try std.fmt.allocPrint(memory, svg_animation.object_label ++ "{d}", .{id});
+        const tag = try memory.print(svg_animation.object_label ++ "{d}", .{id});
         options.flags = c.TYPST_SCENE_ITEM_ISOLATE_TRANSFORM;
         options.tag = .{ .data = tag.ptr, .len = tag.len };
     }

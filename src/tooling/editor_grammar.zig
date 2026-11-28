@@ -20,9 +20,9 @@ pub const Entry = struct { path: []const []const u8, value: []const u8 };
 /// and may be followed by `pi`, as the parser reads `2pi`.
 pub fn grammarEntries(allocator: Allocator) ![4]Entry {
     return .{
-        .{ .path = &.{ "repository", "keywords", "patterns", "0", "match" }, .value = try std.fmt.allocPrint(allocator, "\\b(?:{s})\\b", .{try reserved(allocator, false)}) },
-        .{ .path = &.{ "repository", "keywords", "patterns", "1", "match" }, .value = try std.fmt.allocPrint(allocator, "\\b(?:{s})\\b", .{try reserved(allocator, true)}) },
-        .{ .path = &.{ "repository", "numbers", "patterns", "0", "match" }, .value = try std.fmt.allocPrint(allocator, "(?<![\\w.])(?:[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\\s*pi)?(?:\\s*(?:{s})\\b)?", .{try unitNames(allocator)}) },
+        .{ .path = &.{ "repository", "keywords", "patterns", "0", "match" }, .value = try allocator.print("\\b(?:{s})\\b", .{try reserved(allocator, false)}) },
+        .{ .path = &.{ "repository", "keywords", "patterns", "1", "match" }, .value = try allocator.print("\\b(?:{s})\\b", .{try reserved(allocator, true)}) },
+        .{ .path = &.{ "repository", "numbers", "patterns", "0", "match" }, .value = try allocator.print("(?<![\\w.])(?:[0-9]+(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\\s*pi)?(?:\\s*(?:{s})\\b)?", .{try unitNames(allocator)}) },
         .{ .path = &.{ "repository", "operators", "patterns", "0", "match" }, .value = try operators(allocator) },
     };
 }
@@ -35,12 +35,12 @@ pub fn configurationEntries(allocator: Allocator) ![2]Entry {
     var going_on: std.ArrayList(Lexer.Kind) = .empty;
     for (format.leads_out) |kind| if (kind != format.closes_block) try going_on.append(allocator, kind);
     return .{
-        .{ .path = &.{ "indentationRules", "increaseIndentPattern" }, .value = try std.fmt.allocPrint(allocator, "^\\s*(?:(?:{s})\\b|.*\\b(?:{s})\\b)(?!.*\\b{s}\\b).*$", .{
+        .{ .path = &.{ "indentationRules", "increaseIndentPattern" }, .value = try allocator.print("^\\s*(?:(?:{s})\\b|.*\\b(?:{s})\\b)(?!.*\\b{s}\\b).*$", .{
             try words(allocator, going_on.items),
             try words(allocator, &format.opens_block),
             word(format.closes_block),
         }) },
-        .{ .path = &.{ "indentationRules", "decreaseIndentPattern" }, .value = try std.fmt.allocPrint(allocator, "^\\s*(?:{s})\\b", .{try words(allocator, &format.leads_out)}) },
+        .{ .path = &.{ "indentationRules", "decreaseIndentPattern" }, .value = try allocator.print("^\\s*(?:{s})\\b", .{try words(allocator, &format.leads_out)}) },
     };
 }
 
@@ -66,8 +66,8 @@ pub fn apply(allocator: Allocator, json: []const u8, entries: []const Entry) ![]
         const held = stringAt(parsed.value, entry.path) orelse return error.MissingEntry;
         const from = try std.json.Stringify.valueAlloc(allocator, held, .{});
         const to = try std.json.Stringify.valueAlloc(allocator, entry.value, .{});
-        const at = std.mem.indexOf(u8, text, from) orelse return error.EntryNotFound;
-        if (std.mem.indexOfPos(u8, text, at + from.len, from) != null) return error.EntryNotUnique;
+        const at = std.mem.find(u8, text, from) orelse return error.EntryNotFound;
+        if (std.mem.findPos(u8, text, at + from.len, from) != null) return error.EntryNotUnique;
         text = try std.mem.concat(allocator, u8, &.{ text[0..at], to, text[at + from.len ..] });
     }
     return text;
@@ -127,7 +127,7 @@ fn operators(allocator: Allocator) ![]const u8 {
     for (found.items, 0..) |spelling, index| {
         if (index != 0) try pattern.append(allocator, '|');
         for (spelling) |character| {
-            if (std.mem.indexOfScalar(u8, "\\^$.|?*+()[]{}", character) != null) try pattern.append(allocator, '\\');
+            if (std.mem.findScalar(u8, "\\^$.|?*+()[]{}", character) != null) try pattern.append(allocator, '\\');
             try pattern.append(allocator, character);
         }
     }

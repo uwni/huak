@@ -65,7 +65,7 @@ test "host layout accepts native typography styles region and independent conten
     defer detail.deinit();
     try testing.expectError(error.CompileFailed, engine.layoutContent(&isolated, &isolated_metrics, &detail));
     try testing.expectEqual(@as(?usize, 1), detail.request_index);
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "private_name") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "private_name") != null);
     try testing.expect(library.functions.diagnostics_count(detail.native) != 0);
 }
 
@@ -84,26 +84,26 @@ test "host preamble errors preserve separate source positions hints and traces" 
         var detail: typst.Diagnostic = .{};
         defer detail.deinit();
         try testing.expectError(error.CompileFailed, engine.layoutContent(&.{case.request}, &metrics, &detail));
-        try testing.expect(std.mem.indexOf(u8, detail.text(), case.position) != null);
-        if (std.mem.indexOf(u8, case.request.source, "bad()") != null) {
+        try testing.expect(std.mem.find(u8, detail.text(), case.position) != null);
+        if (std.mem.find(u8, case.request.source, "bad()") != null) {
             var view: typst.c.TypstDiagnosticView = undefined;
             try library.check(library.functions.diagnostics_get(detail.native, 0, &view), null);
             try testing.expect(view.note_count != 0);
-            try testing.expect(std.mem.indexOf(u8, detail.text(), "note: source:") != null);
+            try testing.expect(std.mem.find(u8, detail.text(), "note: source:") != null);
         }
     }
     var metrics: [1]typst.Metrics = undefined;
     var detail: typst.Diagnostic = .{};
     defer detail.deinit();
     try testing.expectError(error.CompileFailed, engine.layoutContent(&.{.{ .source = "#let body =", .preamble = "let prefix =" }}, &metrics, &detail));
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "source:") != null);
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "preamble:") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "source:") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "preamble:") != null);
     try testing.expectError(error.CompileFailed, engine.layoutContent(&.{.{ .source = "]", .preamble = "let prefix=1" }}, &metrics, &detail));
     var view: typst.c.TypstDiagnosticView = undefined;
     try library.check(library.functions.diagnostics_get(detail.native, 0, &view), null);
     try testing.expect(view.note_count != 0);
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "hint:") != null);
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "\\]") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "hint:") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "\\]") != null);
 }
 
 test "host templates apply as show rules and report positions in their originating file" {
@@ -143,7 +143,7 @@ test "host templates apply as show rules and report positions in their originati
     var detail: typst.Diagnostic = .{};
     defer detail.deinit();
     try testing.expectError(error.CompileFailed, engine.layoutContent(&.{broken}, &single, &detail));
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "styles.huak:8:18: unknown variable: missing") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "styles.huak:8:18: unknown variable: missing") != null);
 }
 
 test "binding inputs are validated by the library, which reads only the fields their kind selects" {
@@ -209,7 +209,7 @@ test "evaluated modules bind into requests, apply as show rules and place errors
     defer theme.deinit();
     var warnings = try theme.warnings();
     defer warnings.deinit();
-    try testing.expect(std.mem.indexOf(u8, warnings.bytes(), "theme.typ:1:") != null);
+    try testing.expect(std.mem.find(u8, warnings.bytes(), "theme.typ:1:") != null);
     var quiet = try base.warnings();
     defer quiet.deinit();
     try testing.expectEqual(@as(usize, 0), quiet.bytes().len);
@@ -233,7 +233,7 @@ test "evaluated modules bind into requests, apply as show rules and place errors
     var detail: typst.Diagnostic = .{};
     defer detail.deinit();
     try testing.expectError(error.CompileFailed, engine.layoutContent(&.{failing}, &single, &detail));
-    try testing.expect(std.mem.indexOf(u8, detail.text(), "styles.huak:7:") != null);
+    try testing.expect(std.mem.find(u8, detail.text(), "styles.huak:7:") != null);
     // An evaluation error is the library's last error, in the module's file.
     try testing.expectError(error.CompileFailed, engine.evalModule(.{
         .code = "#let broken = missing",
@@ -242,7 +242,7 @@ test "evaluated modules bind into requests, apply as show rules and place errors
     }));
     var message = try library.lastError();
     defer message.deinit();
-    try testing.expect(std.mem.indexOf(u8, message.bytes(), "styles.huak:10:18: unknown variable: missing") != null);
+    try testing.expect(std.mem.find(u8, message.bytes(), "styles.huak:10:18: unknown variable: missing") != null);
     // A module belongs to the library that evaluated it.
     var other = try typst.Library.open(options.library_path);
     defer other.deinit();

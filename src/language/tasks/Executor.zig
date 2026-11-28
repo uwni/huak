@@ -82,7 +82,7 @@ fn dispatch(context: ?*anyopaque, parent: *Machine, region: *const bc.TaskRegion
         }
         if (index >= window) {
             const credit = (index - window) * 2 + 1;
-            if (std.mem.indexOfScalar(usize, predecessors.items, credit) == null) try predecessors.append(a, credit);
+            if (std.mem.findScalar(usize, predecessors.items, credit) == null) try predecessors.append(a, credit);
         }
         dependencies[index * 2] = predecessors.items;
         inputs[index] = bindings.items;

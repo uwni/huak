@@ -72,7 +72,7 @@ test "subpaths preserve contour chains through namespaces UFCS lists and native 
         var svg = try runtime.render(pic, .svg);
         defer svg.deinit();
         for ([_][]const u8{ "<svg", "#ff0000", "#00ff00", "#0000ff" }) |marker|
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), marker) != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), marker) != null);
         var pdf = try runtime.render(pic, .pdf);
         defer pdf.deinit();
         try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
@@ -120,8 +120,8 @@ test "bytecode calls existing Hobby and linear solver and exports a true native 
     try t.expectApproxEqAbs(reference[0].p2.y, first.c2.y, 1e-12);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<svg") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<svg") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
 }
 
 test "path queries clipping picture copies and animation motion reuse core operations" {
@@ -150,7 +150,7 @@ test "path queries clipping picture copies and animation motion reuse core opera
     try execute(&machine);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "offset-path:path(") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "offset-path:path(") != null);
 }
 
 test "directional envelope preserves orientation subpaths and strict zero-line semantics through the VM" {
@@ -219,7 +219,7 @@ test "directional envelope rejects elliptical pens with source-located actionabl
         .{ .expression = "envelope(curve,pencircle(4pt))", .message = "EllipticalPen" },
         .{ .expression = "envelope(curve,pensquare(4pt),0pt)", .message = "InvalidTolerance" },
     }) |case| {
-        const source = try std.fmt.allocPrint(t.allocator, "import paint.{{envelope, path}};import pen.{{pencircle, pensquare}};curve:=path((0,0),(20,0))\nresult:={s}\nafter:=1\n", .{case.expression});
+        const source = try t.allocator.print("import paint.{{envelope, path}};import pen.{{pencircle, pensquare}};curve:=path((0,0),(20,0))\nresult:={s}\nafter:=1\n", .{case.expression});
         defer t.allocator.free(source);
         var program = try compileModulesOptimized(&library, source, &.{}, optimize);
         defer program.deinit();
@@ -229,9 +229,9 @@ test "directional envelope rejects elliptical pens with source-located actionabl
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         const failure = machine.failure.?;
-        try t.expect(std.mem.indexOf(u8, failure.text(), case.message) != null);
+        try t.expect(std.mem.find(u8, failure.text(), case.message) != null);
         try t.expectEqual(@as(usize, 2), failure.diagnostic.position(source).line);
-        if (std.mem.eql(u8, case.message, "EllipticalPen")) try t.expect(std.mem.indexOf(u8, failure.native_message, "polygonal pen") != null);
+        if (std.mem.eql(u8, case.message, "EllipticalPen")) try t.expect(std.mem.find(u8, failure.native_message, "polygonal pen") != null);
         try t.expect(machine.getGlobal("result") == null and machine.getGlobal("after") == null);
     };
 }

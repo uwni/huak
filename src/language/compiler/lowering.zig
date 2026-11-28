@@ -27,15 +27,15 @@ pub const Build = struct {
     allocator: std.mem.Allocator,
     syntax_allocator: std.mem.Allocator,
     graph: *const ModuleGraph,
-    functions: std.array_list.Managed(bc.Function),
-    constants: std.array_list.Managed(Value),
-    records: std.array_list.Managed(bc.Record),
-    argument_bindings: std.array_list.Managed(bc.ArgumentBinding),
+    functions: std.ArrayList(bc.Function) = .empty,
+    constants: std.ArrayList(Value) = .empty,
+    records: std.ArrayList(bc.Record) = .empty,
+    argument_bindings: std.ArrayList(bc.ArgumentBinding) = .empty,
     argument_names: std.ArrayList([]const ?[]const u8) = .empty,
-    parameters: std.array_list.Managed(bc.Parameter),
-    names: std.array_list.Managed([]const u8),
-    types: std.array_list.Managed(Type),
-    readonly: std.array_list.Managed(bool),
+    parameters: std.ArrayList(bc.Parameter) = .empty,
+    names: std.ArrayList([]const u8) = .empty,
+    types: std.ArrayList(Type) = .empty,
+    readonly: std.ArrayList(bool) = .empty,
     modules: []bc.Module,
     environments: []*Environment,
     outputs: []const bc.Output = &.{},
@@ -45,7 +45,7 @@ pub const Build = struct {
 fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagnostic: *?Diagnostic) !void {
     const memory = build.allocator;
     var compiler = try Compiler.init(memory, diagnostic, unit, module_index, build);
-    try compiler.declarations.append(null);
+    try compiler.declarations.append(build.syntax_allocator, null);
     try symbols.declareRecords(&compiler);
     try modules.collectImportedSymbols(&compiler);
     for (unit.script.statements) |statement| if (statement.value == .function) {
@@ -55,11 +55,11 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         if (compiler.environment.functions.contains(function.name) or compiler.environment.records.contains(function.name) or namedConstant(function.name) != null) return compiler.fail(statement.span, "duplicate function '{s}'", .{function.name});
         const index = try compiler.narrow(compiler.declarations.items.len + compiler.function_base, statement.span);
         try compiler.environment.functions.put(memory, function.name, index);
-        try compiler.declarations.append(statement);
+        try compiler.declarations.append(build.syntax_allocator, statement);
     };
     // Resolve every signature before compiling bodies, including forward calls.
     // Local and imported calls then share the same bytecode function metadata.
-    try compiler.output.append(.{ .name = "<script>", .code = &.{}, .parameters = &.{}, .result = .unit, .local_types = &.{}, .module = module_index });
+    try compiler.output.append(memory, .{ .name = "<script>", .code = &.{}, .parameters = &.{}, .result = .unit, .local_types = &.{}, .module = module_index });
     for (compiler.declarations.items[1..]) |declaration| {
         const statement = declaration.?;
         const function = statement.value.function;
@@ -87,7 +87,7 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
                 }
             }
         }
-        try compiler.output.append(.{ .name = function.name, .code = &.{}, .parameters = parameters, .parameter_names = parameter_names, .defaults = defaults, .variadic = variadic, .result = if (function.result) |annotation| try compiler.typeOf(annotation) else .unit, .local_types = &.{}, .span = statement.span, .module = module_index });
+        try compiler.output.append(memory, .{ .name = function.name, .code = &.{}, .parameters = parameters, .parameter_names = parameter_names, .defaults = defaults, .variadic = variadic, .result = if (function.result) |annotation| try compiler.typeOf(annotation) else .unit, .local_types = &.{}, .span = statement.span, .module = module_index });
     }
     try symbols.declareExpressionDefaults(&compiler);
     try groups.collectPrecedence(&compiler);
@@ -111,8 +111,8 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         try entry.constant(.unit, finish);
         _ = try entry.emit(.return_value, 0, 0, finish);
     }
-    compiler.output.items[0].code = try entry.code.toOwnedSlice();
-    compiler.output.items[0].local_types = try entry.local_types.toOwnedSlice();
+    compiler.output.items[0].code = try entry.code.toOwnedSlice(memory);
+    compiler.output.items[0].local_types = try entry.local_types.toOwnedSlice(memory);
     for (compiler.declarations.items[1..], 1..) |declaration, index| {
         const statement = declaration.?;
         const function = statement.value.function;
@@ -127,8 +127,8 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         if (result != .unit and !definitelyReturns(function.body)) return compiler.fail(statement.span, "function '{s}' may finish without returning {s}", .{ function.name, compiler.typeName(result) });
         try context.constant(.unit, statement.span);
         _ = try context.emit(.return_value, 0, 0, statement.span);
-        compiler.output.items[index].code = try context.code.toOwnedSlice();
-        compiler.output.items[index].local_types = try context.local_types.toOwnedSlice();
+        compiler.output.items[index].code = try context.code.toOwnedSlice(memory);
+        compiler.output.items[index].local_types = try context.local_types.toOwnedSlice(memory);
     }
     for (compiler.expression_defaults.items) |default| {
         var context = Context.init(&compiler, false, default.kind);
@@ -139,18 +139,18 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         try typst.checkTypstReads(&compiler, &context);
         _ = try context.emit(.return_value, 0, 0, default.span);
         const index = default.function - compiler.function_base;
-        compiler.output.items[index].code = try context.code.toOwnedSlice();
-        compiler.output.items[index].local_types = try context.local_types.toOwnedSlice();
+        compiler.output.items[index].code = try context.code.toOwnedSlice(memory);
+        compiler.output.items[index].local_types = try context.local_types.toOwnedSlice(memory);
     }
 
     for (compiler.global_names.items) |local_name| {
-        try build.names.append(if (module_index == 0) local_name else try std.fmt.allocPrint(memory, "{s}::{s}", .{ unit.name, local_name }));
+        try build.names.append(memory, if (module_index == 0) local_name else try memory.print("{s}::{s}", .{ unit.name, local_name }));
     }
-    try build.types.appendSlice(compiler.global_types.items);
-    try build.readonly.appendSlice(compiler.readonly_globals.items);
-    try build.functions.appendSlice(compiler.output.items);
-    try build.constants.appendSlice(compiler.constants.items);
-    try build.parameters.appendSlice(compiler.parameters.items);
+    try build.types.appendSlice(memory, compiler.global_types.items);
+    try build.readonly.appendSlice(memory, compiler.readonly_globals.items);
+    try build.functions.appendSlice(memory, compiler.output.items);
+    try build.constants.appendSlice(memory, compiler.constants.items);
+    try build.parameters.appendSlice(memory, compiler.parameters.items);
     if (module_index == 0) {
         var outputs: std.ArrayList(bc.Output) = .empty;
         for (unit.headers.scopes[0].ordinary_names) |name| {
@@ -180,12 +180,12 @@ fn compileUnit(build: *Build, unit: *ModuleGraph.Unit, module_index: u32, diagno
         if (compiler.default_output) |output| try outputs.append(memory, output);
         build.outputs = try outputs.toOwnedSlice(memory);
     }
-    build.modules[module_index] = .{ .name = unit.name, .source_text = unit.source_text, .entry = compiler.function_base, .exports = try compiler.exports.toOwnedSlice() };
+    build.modules[module_index] = .{ .name = unit.name, .source_text = unit.source_text, .entry = compiler.function_base, .exports = try compiler.exports.toOwnedSlice(memory) };
 }
 
 pub fn lowerGraph(graph: *const ModuleGraph, memory: std.mem.Allocator, syntax: std.mem.Allocator) !Build {
     const count = graph.units.items.len;
-    var build: Build = .{ .allocator = memory, .syntax_allocator = syntax, .graph = graph, .functions = .init(memory), .constants = .init(memory), .records = .init(memory), .argument_bindings = .init(memory), .parameters = .init(memory), .names = .init(memory), .types = .init(memory), .readonly = .init(memory), .modules = try memory.alloc(bc.Module, count), .environments = try syntax.alloc(*Environment, count), .precedence = try precedence.Table.init(syntax) };
+    var build: Build = .{ .allocator = memory, .syntax_allocator = syntax, .graph = graph, .modules = try memory.alloc(bc.Module, count), .environments = try syntax.alloc(*Environment, count), .precedence = try precedence.Table.init(syntax) };
     for (graph.order.items) |index| try compileUnit(&build, graph.units.items[index], index, graph.diagnostic);
     return build;
 }

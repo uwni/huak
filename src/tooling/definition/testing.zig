@@ -22,7 +22,7 @@ pub const Fixture = struct {
 
     pub fn lookup(self: *const Fixture, allocator: std.mem.Allocator, query: []const u8) !?Location {
         const frontend: Frontend = .{ .allocator = allocator, .io = std.testing.io, .source_parser = @import("../../language/Parser.zig").TestSourceParser.parser, .overlay = .{ .ptr = @constCast(self), .vtable = &.{ .resolve = resolve } } };
-        const offset = std.mem.lastIndexOf(u8, self.source, query) orelse return error.MissingTestQuery;
+        const offset = std.mem.findLast(u8, self.source, query) orelse return error.MissingTestQuery;
         return find(&frontend, allocator, self.source, self.name, offset);
     }
 
@@ -30,7 +30,7 @@ pub const Fixture = struct {
         var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         defer arena.deinit();
         const result = (try self.lookup(arena.allocator(), query)) orelse return error.MissingDefinition;
-        const start = std.mem.indexOf(u8, target_source, target_name) orelse return error.MissingTestTarget;
+        const start = std.mem.find(u8, target_source, target_name) orelse return error.MissingTestTarget;
         var diagnostic: ?@import("../../language/source.zig").Diagnostic = null;
         var scanner: Lexer = .{ .source = target_source, .pos = start, .diagnostic = &diagnostic };
         const token = try scanner.next();

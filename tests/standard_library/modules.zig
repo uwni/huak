@@ -68,7 +68,7 @@ test "standard root exports module namespaces and preserves nested native and so
         try execute(&machine);
         var svg = try runtime.render(machine.getGlobal("plate").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     }
 }
 
@@ -111,7 +111,7 @@ test "paint prelude reexports canonical functions without wrappers" {
         try execute(&machine);
         var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
     }
 }
 
@@ -175,7 +175,7 @@ test "fillet rounds polygons and rounded_rect accepts per-corner radii" {
         for ([_][]const u8{ "p0", "p1", "p2" }) |name| {
             var svg = try runtime.render(machine.getGlobal(name).?, .svg);
             defer svg.deinit();
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
         }
     }
 }
@@ -198,9 +198,9 @@ test "standard module private functions and unknown modules remain diagnosed" {
         }) |case| {
             var diagnostic: ?l.compiler.Diagnostic = null;
             try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, case.source, "private-standard-library.huak", .{ .optimize = optimize }, &diagnostic));
-            if (std.mem.indexOf(u8, diagnostic.?.text(), case.message) == null)
+            if (std.mem.find(u8, diagnostic.?.text(), case.message) == null)
                 std.debug.print("expected '{s}' in diagnostic '{s}'\n", .{ case.message, diagnostic.?.text() });
-            try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+            try t.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
         }
     }
 }

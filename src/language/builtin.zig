@@ -69,10 +69,10 @@ fn table(comptime namespace: ?Namespace) @TypeOf(@field(Domain(namespace), table
 const entry_names = collect: {
     @setEvalBranchQuota(10000);
     var count = 0;
-    for (order) |namespace| count += std.meta.fieldNames(@TypeOf(table(namespace))).len;
+    for (order) |namespace| count += @typeInfo(@TypeOf(table(namespace))).@"struct".field_names.len;
     var result: [count][:0]const u8 = undefined;
     var index = 0;
-    for (order) |namespace| for (std.meta.fieldNames(@TypeOf(table(namespace)))) |name| {
+    for (order) |namespace| for (@typeInfo(@TypeOf(table(namespace))).@"struct".field_names) |name| {
         result[index] = name;
         index += 1;
     };
@@ -99,7 +99,7 @@ pub const Signature = struct {
 fn buildSignature(comptime namespace: ?Namespace, comptime name: [:0]const u8) Signature {
     const entry = @field(table(namespace), name);
     const Parameters = struct {
-        const fields_ = std.meta.fieldNames(@TypeOf(entry.args));
+        const fields_ = @typeInfo(@TypeOf(entry.args)).@"struct".field_names;
         const data: struct { kinds: [fields_.len]Type, names: [fields_.len][]const u8 } = data: {
             var kinds: [fields_.len]Type = undefined;
             var names: [fields_.len][]const u8 = undefined;
@@ -128,7 +128,7 @@ pub const signatures = build: {
     @setEvalBranchQuota(10000);
     var result: [entry_names.len]Signature = undefined;
     var index = 0;
-    for (order) |namespace| for (std.meta.fieldNames(@TypeOf(table(namespace)))) |name| {
+    for (order) |namespace| for (@typeInfo(@TypeOf(table(namespace))).@"struct".field_names) |name| {
         result[index] = buildSignature(namespace, name);
         index += 1;
     };
@@ -189,7 +189,7 @@ pub fn Arguments(comptime id: Id) type {
     const parameters = signature(id);
     var kinds: [parameters.parameter_names.len]type = undefined;
     for (&kinds, 0..) |*kind, index| kind.* = if (index < parameters.minimum) Value else ?Value;
-    const attributes: [kinds.len]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
+    const attributes: [kinds.len]std.lang.Type.Struct.FieldAttributes = @splat(.{});
     return @Struct(.auto, null, parameters.parameter_names, &kinds, &attributes);
 }
 

@@ -138,7 +138,7 @@ test "special functions accept aliases named arguments and finite tail values" {
 
 test "each random operation prevents speculative worker execution through helpers" {
     for ([_][]const u8{ "math.seed(42)", "math.random()", "math.randint(-5,5)", "math.randn()" }) |call| {
-        const source = try std.fmt.allocPrint(t.allocator,
+        const source = try t.allocator.print(
             \\fn effect() -> void
             \\    {s}
             \\end

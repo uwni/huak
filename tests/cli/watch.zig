@@ -37,7 +37,7 @@ const Watch = struct {
         const timeout: std.Io.Timeout = .{ .deadline = .fromNow(t.io, .{ .raw = .fromSeconds(10), .clock = .awake }) };
         while (true) {
             const stream = self.reader.reader(0);
-            if (std.mem.indexOfScalar(u8, stream.buffered(), '\n')) |end| {
+            if (std.mem.findScalar(u8, stream.buffered(), '\n')) |end| {
                 const parsed = try std.json.parseFromSlice(Event, self.context.allocator(), stream.buffered()[0..end], .{ .allocate = .alloc_always });
                 stream.toss(end + 1);
                 return parsed.value;
@@ -93,7 +93,7 @@ pub fn run(context: *h.Harness) !void {
     try t.expectEqualStrings("default", first.outputs[0].name);
     try t.expectEqualStrings("alias", first.outputs[1].name);
     try t.expectEqualStrings(try context.path("watch-first.svg"), first.outputs[0].path);
-    try t.expect(std.fs.path.isAbsolute(first.outputs[1].path));
+    try t.expect(std.Io.Dir.path.isAbsolute(first.outputs[1].path));
     try t.expect(first.duration_ms.? >= 0);
     try (try context.svg("watch-first.svg")).viewBox("0 0 120 30");
     try t.expectEqualStrings(try context.read("watch-first.svg"), try context.read("watch-second.svg"));

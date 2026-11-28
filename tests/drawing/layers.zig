@@ -28,9 +28,9 @@ test "a layer is one group with an opacity in SVG and one transparency group in 
         defer output.deinit();
         const svg = output.bytes();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, " data-typst-label=\"huak-opacity-0.5\""));
-        try t.expect(std.mem.indexOf(u8, svg, "<style>[data-typst-label=\"huak-opacity-0.5\"]{opacity:0.5}</style></svg>") != null);
+        try t.expect(std.mem.find(u8, svg, "<style>[data-typst-label=\"huak-opacity-0.5\"]{opacity:0.5}</style></svg>") != null);
         // The fills themselves stay opaque.
-        try t.expect(std.mem.indexOf(u8, svg, "fill-opacity") == null);
+        try t.expect(std.mem.find(u8, svg, "fill-opacity") == null);
         try t.expectEqual(@as(usize, 2), std.mem.count(u8, svg, "<path fill=\"#"));
     }
     {
@@ -77,7 +77,7 @@ test "a layer is one group with an opacity in SVG and one transparency group in 
         defer output.deinit();
         const words = try @import("../support/pdf.zig").text(output.bytes(), .{});
         defer t.allocator.free(words);
-        try t.expect(std.mem.indexOf(u8, words, "Layer") != null);
+        try t.expect(std.mem.find(u8, words, "Layer") != null);
         const image = try @import("../support/pdf.zig").raster(output.bytes(), .{});
         defer t.allocator.free(image);
         const header = "P6\n60 60\n255\n";
@@ -92,7 +92,7 @@ test "a layer is one group with an opacity in SVG and one transparency group in 
     }
     var output = try shaded.render(t.allocator, &library, .svg, &diagnostic);
     defer output.deinit();
-    try t.expect(std.mem.indexOf(u8, output.bytes(), "{opacity:0.5}") != null);
+    try t.expect(std.mem.find(u8, output.bytes(), "{opacity:0.5}") != null);
 }
 
 test "opaque patches with translucent overlay fold into one opaque type 7 PDF mesh with no SMask" {
@@ -174,6 +174,6 @@ test "opaque patches with translucent overlay fold into one opaque type 7 PDF me
         defer output.deinit();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "/ShadingType 7"));
         try t.expectEqual(@as(usize, 0), std.mem.count(u8, output.bytes(), "/SMask"));
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "/ca 0.6") != null);
+        try t.expect(std.mem.find(u8, output.bytes(), "/ca 0.6") != null);
     }
 }

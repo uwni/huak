@@ -188,7 +188,7 @@ pub fn main(init: std.process.Init) !void {
     defer parent.close(init.io);
     var random: [8]u8 = undefined;
     try init.io.randomSecure(&random);
-    const name = try std.fmt.allocPrint(a, "run-{s}", .{std.fmt.bytesToHex(random, .lower)});
+    const name = try a.print("run-{s}", .{std.fmt.bytesToHex(random, .lower)});
     try parent.createDir(init.io, name, .default_dir);
     var work = try parent.openDir(init.io, name, .{});
     defer work.close(init.io);
@@ -204,11 +204,11 @@ pub fn main(init: std.process.Init) !void {
     for (inputs.cases, 0..) |case, index| {
         const storage = try a.alloc(Sample, 2 * 3 * trials);
         const reports = try a.alloc(NativeReport, 3 * trials);
-        const label = try std.fmt.allocPrint(a, "{d}", .{index});
+        const label = try a.print("{d}", .{index});
         for (0..trials) |trial| for (0..3) |batch_order| {
             const batch = if (trial % 2 == 0) batch_order else 2 - batch_order;
             const repeats = batch * count;
-            const repeat_arg = try std.fmt.allocPrint(a, "{d}", .{repeats});
+            const repeat_arg = try a.print("{d}", .{repeats});
             const source = try mp.source(init.gpa, case, repeats);
             defer init.gpa.free(source);
             try work.writeFile(init.io, .{ .sub_path = "batch.mp", .data = source });

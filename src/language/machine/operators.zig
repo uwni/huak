@@ -237,6 +237,6 @@ test "unary positive preserves numbers pairs and linear handles but checks dynam
         var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "unary +") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "unary +") != null);
     }
 }

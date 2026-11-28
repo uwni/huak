@@ -70,7 +70,7 @@ fn rebuild(session: *Session, cwd: []const u8, observed: *Dependencies) !bool {
         const absolute = try report.allocator.alloc(Output, session.options.outputs.len);
         for (absolute, session.options.outputs) |*to, from| to.* = .{
             .name = from.name,
-            .path = try std.fs.path.resolve(report.allocator, &.{ cwd, from.path }),
+            .path = try std.Io.Dir.path.resolveAlloc(report.allocator, &.{ cwd, from.path }),
         };
         try event(io, .{ .event = @tagName(WatchEvent.success), .outputs = absolute, .duration_ms = duration_ms });
     } else std.debug.print("watch: built in {d} ms; waiting for changes\n", .{duration_ms});
@@ -111,8 +111,8 @@ const Dependencies = struct {
 
     fn observe(context: *anyopaque, path: []const u8) !void {
         const self: *Dependencies = @ptrCast(@alignCast(context));
-        if (std.fs.path.isAbsolute(path) and self.files.contains(path)) return;
-        const absolute = try std.fs.path.resolve(self.arena.allocator(), &.{ self.cwd, path });
+        if (std.Io.Dir.path.isAbsolute(path) and self.files.contains(path)) return;
+        const absolute = try std.Io.Dir.path.resolveAlloc(self.arena.allocator(), &.{ self.cwd, path });
         if (!self.files.contains(absolute)) try self.files.put(self.arena.allocator(), absolute, Stamp.read(self.io, absolute));
     }
 

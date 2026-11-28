@@ -76,13 +76,13 @@ test "native glyph outlines become owned editable huak paths after labels and en
     var svg = try document.exportSvg(0);
     defer svg.deinit();
     try t.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<symbol") == null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<path") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<symbol") == null);
     var pdf = try document.exportPdf();
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-1.7"));
     // Every visible item is real path geometry. No invisible text overlay.
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") == null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") == null);
 }
 
 test "optional outlining leaves normal labels selectable in the same PDF" {
@@ -113,8 +113,8 @@ test "optional outlining leaves normal labels selectable in the same PDF" {
     engine.deinit();
     var pdf = try document.exportPdf();
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/FontFile") != null);
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/FontFile") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
 }
 
 test "fixed-height Typst content retains its external baseline in native labels and editable outlines" {
@@ -153,9 +153,9 @@ test "fixed-height Typst content retains its external baseline in native labels 
     var svg = try document.exportSvg(0);
     defer svg.deinit();
     try t.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<use ") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<path ") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#cc3333\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<use ") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<path ") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "fill=\"#cc3333\"") != null);
 }
 
 test "independent native frames produce separately owned editable glyph paths" {
@@ -188,7 +188,7 @@ test "independent native frames produce separately owned editable glyph paths" {
     var svg = try document.exportSvg(0);
     defer svg.deinit();
     try t.expect(std.mem.count(u8, svg.bytes(), "<path ") >= 2);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "<symbol ") == null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "<symbol ") == null);
 }
 
 test "editable glyphs retain combining RTL clusters and scale with their native font size" {

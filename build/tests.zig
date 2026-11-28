@@ -119,7 +119,7 @@ pub fn addSpaceTests(b: *std.Build, config: Configuration, modules: Modules, cli
     // the CLI finds the adapter through its rpath.
     const tree = b.addWriteFiles();
     tree.step.dependOn(backend.build);
-    const huak = tree.addCopyFile(cli.getEmittedBin(), b.fmt("bin/{s}", .{cli.out_filename}));
+    const huak = tree.addCopyFile(cli.getEmittedBin(), b.fmt("bin/{s}", .{cli.name}));
     _ = tree.addCopyFile(backend.library, b.fmt("lib/{s}", .{backend.name}));
     for (space_contracts.names) |name| {
         const projection = std.Build.Step.Run.create(b, b.fmt("run {s}", .{cli.name}));

@@ -36,7 +36,7 @@ test "imported global exports retain value syntax over a same-named private pref
     }
     var diagnostic: ?Diagnostic = null;
     try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, "import \"dependency\" as values\nanswer:=values.same(1)", "private-call.huak", .{ .import_resolver = resolver }, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "not callable") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "not callable") != null);
 }
 
 test "exports retain named global visibility without adding execution instructions" {
@@ -98,7 +98,7 @@ test "exports reject duplicate unknown and non-top-level declarations" {
     for (cases) |case| {
         var diagnostic: ?Diagnostic = null;
         try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, case.code, "invalid-export.huak", .{}, &diagnostic));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), case.message) != null);
     }
 }
 
@@ -213,7 +213,7 @@ test "forward constructor references to nested structs fail before reading modul
         }) |input| {
             var diagnostic: ?Diagnostic = null;
             try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, input, "nested-struct.huak", .{ .optimize = optimize }, &diagnostic));
-            try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "top level") != null);
+            try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "top level") != null);
         }
     }
 }

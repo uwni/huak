@@ -28,7 +28,7 @@ test "huak data typ.module and typ.show each need a library with the matching ca
         var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, case.message) != null);
+        try t.expect(std.mem.find(u8, machine.failure.?.native_message, case.message) != null);
     }
     // Without the member-use query the front end cannot tell what a block reads.
     var library = try typst.Library.open(options.library_path);
@@ -36,7 +36,7 @@ test "huak data typ.module and typ.show each need a library with the matching ca
     library.capabilities = library.capabilities.? & ~@as(u64, typst.c.TYPST_CAP_MEMBER_USES);
     var diagnostic: ?l.compiler.Diagnostic = null;
     try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, "caption:=typ[plain]", "member-uses.huak", .{ .source_parser = .init(&library) }, &diagnostic));
-    try t.expect(std.mem.indexOf(u8, diagnostic.?.text(), "cannot read the Huak names in a Typst block") != null);
+    try t.expect(std.mem.find(u8, diagnostic.?.text(), "cannot read the Huak names in a Typst block") != null);
 }
 
 test "a typ.module is evaluated when it is made and reused by the modules and blocks that read it" {
@@ -76,7 +76,7 @@ test "a typ.module is evaluated when it is made and reused by the modules and bl
     var failed = try l.Machine.init(t.allocator, &failed_program, failed_runtime.host(), .{});
     defer failed.deinit();
     try t.expectError(error.RuntimeFailed, failed.execute(&.{}));
-    try t.expect(std.mem.indexOf(u8, failed.failure.?.native_message, "native-test.huak:3:15: panicked with: inside base") != null);
+    try t.expect(std.mem.find(u8, failed.failure.?.native_message, "native-test.huak:3:15: panicked with: inside base") != null);
     // A module with an error is reported where it is made.
     var early_program = try compile(&library, "broken:=typ.module[#let x = missing]\nlater:=typ[never]");
     defer early_program.deinit();
@@ -85,7 +85,7 @@ test "a typ.module is evaluated when it is made and reused by the modules and bl
     var early = try l.Machine.init(t.allocator, &early_program, early_runtime.host(), .{});
     defer early.deinit();
     try t.expectError(error.RuntimeFailed, early.execute(&.{}));
-    try t.expect(std.mem.indexOf(u8, early.failure.?.native_message, "native-test.huak:1:29: unknown variable: missing") != null);
+    try t.expect(std.mem.find(u8, early.failure.?.native_message, "native-test.huak:1:29: unknown variable: missing") != null);
 }
 
 test "typ.module values carry data snapshots into other modules and nest by scope" {
@@ -178,7 +178,7 @@ test "typ.module values carry data snapshots into other modules and nest by scop
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         const detail = machine.failure.?.native_message;
-        try t.expect(std.mem.indexOf(u8, detail, failure.location) != null);
-        try t.expect(std.mem.indexOf(u8, detail, failure.message) != null);
+        try t.expect(std.mem.find(u8, detail, failure.location) != null);
+        try t.expect(std.mem.find(u8, detail, failure.message) != null);
     }
 }

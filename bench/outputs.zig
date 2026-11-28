@@ -63,8 +63,8 @@ pub fn main(init: std.process.Init) !void {
     const output_names = try allocator.alloc([]const u8, count);
     const output_args = try allocator.alloc([]const u8, count);
     for (output_names, output_args, 0..) |*output_name, *output_arg, index| {
-        output_name.* = try std.fmt.allocPrint(allocator, "figure-{d}.svg", .{index});
-        output_arg.* = try std.fmt.allocPrint(allocator, "--output=fig_{d}={s}", .{ index, output_name.* });
+        output_name.* = try allocator.print("figure-{d}.svg", .{index});
+        output_arg.* = try allocator.print("--output=fig_{d}={s}", .{ index, output_name.* });
     }
     const argv = try allocator.alloc([]const u8, 6 + count);
     @memcpy(argv[0..5], &[_][]const u8{ executable, "run", "batch.huak", "--libtypst", library });
@@ -156,7 +156,7 @@ fn privateDirectory(allocator: std.mem.Allocator, io: std.Io, parent: std.Io.Dir
     for (0..8) |_| {
         var random: [16]u8 = undefined;
         try io.randomSecure(&random);
-        const name = try std.fmt.allocPrint(allocator, "run-{s}", .{std.fmt.bytesToHex(random, .lower)});
+        const name = try allocator.print("run-{s}", .{std.fmt.bytesToHex(random, .lower)});
         parent.createDir(io, name, if (builtin.os.tag == .windows) .default_dir else .fromMode(0o700)) catch |err| switch (err) {
             error.PathAlreadyExists => continue,
             else => return err,

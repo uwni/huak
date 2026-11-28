@@ -162,7 +162,7 @@ test "labeled typeset elements become anchors in the text's own coordinates" {
         defer failing_machine.deinit();
         try t.expectError(error.RuntimeFailed, failing_machine.execute(&.{}));
         const detail = failing_machine.failure.?;
-        try t.expect(std.mem.indexOf(u8, detail.text(), failure.message) != null or std.mem.indexOf(u8, detail.native_message, failure.message) != null);
+        try t.expect(std.mem.find(u8, detail.text(), failure.message) != null or std.mem.find(u8, detail.native_message, failure.message) != null);
     }
     var diagnostic: ?l.compiler.Diagnostic = null;
     try t.expectError(error.LanguageError, l.compiler.compile(t.allocator, "p:=picture(); x:=p.anchors", "anchors-invalid.huak", .{ .source_parser = .init(&library) }, &diagnostic));

@@ -131,7 +131,7 @@ test "definition and hover token selection accepts identifier endpoints before p
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
-    const offset = std.mem.lastIndexOf(u8, source, "target()").? + "target".len;
+    const offset = std.mem.findLast(u8, source, "target()").? + "target".len;
     const token = (try tokenAt(&frontend, source, offset, &.{})).?;
     try std.testing.expectEqualStrings("target", source[token.span.start..token.span.end]);
     const result = (try find(&frontend, arena.allocator(), source, "/tmp/definition.huak", offset)).?;

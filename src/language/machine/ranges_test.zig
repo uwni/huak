@@ -230,7 +230,7 @@ test "range initialization validates every operand even before an empty range" {
         .{ .values = "[-9223372036854775808,-9223372036854775808,0]", .message = "range step must not be zero" },
     };
     for (cases) |case| {
-        const input = try std.fmt.allocPrint(std.testing.allocator, "values:={s}\nentered:=false\nfor i in values[0]:values[2]:values[1] do; entered=true; end\n", .{case.values});
+        const input = try std.testing.allocator.print("values:={s}\nentered:=false\nfor i in values[0]:values[2]:values[1] do; entered=true; end\n", .{case.values});
         defer std.testing.allocator.free(input);
         var diagnostic: ?source.Diagnostic = null;
         var program = try compiler.compile(std.testing.allocator, input, "invalid-range.huak", .{}, &diagnostic);
@@ -238,7 +238,7 @@ test "range initialization validates every operand even before an empty range" {
         var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), case.message) != null);
         try std.testing.expect(!machine.getGlobal("entered").?.boolean);
         try std.testing.expect(machine.getGlobal("i") == null);
     }
@@ -253,7 +253,7 @@ test "range initialization validates every operand even before an empty range" {
             var operands = [_]Value{ .{ .int = 3 }, .{ .int = 1 }, .{ .int = 1 } };
             operands[position] = .{ .number = nonfinite };
             try std.testing.expectError(error.RuntimeFailed, iteration.initializeRange(&machine, operands[0], operands[1], operands[2]));
-            try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "finite") != null);
+            try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "finite") != null);
         }
     }
 }

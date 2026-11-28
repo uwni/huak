@@ -14,8 +14,8 @@ const symbols = @import("symbols.zig");
 const Binding = symbols.Binding;
 
 pub const Loop = struct {
-    breaks: std.array_list.Managed(u32),
-    continues: std.array_list.Managed(u32),
+    breaks: std.ArrayList(u32) = .empty,
+    continues: std.ArrayList(u32) = .empty,
     stack_depth: usize,
 };
 
@@ -53,15 +53,15 @@ pub fn compileControl(self: *Compiler, context: *Context, statement_: *ast.Stmt)
             defer context.stack_depth = depth;
             while (context.stack_depth > loop.stack_depth) _ = try context.emit(.pop, 0, 0, span);
             const instruction = try context.emit(.jump, 0, 0, span);
-            if (statement_.value == .break_loop) try loop.breaks.append(instruction) else try loop.continues.append(instruction);
+            if (statement_.value == .break_loop) try loop.breaks.append(self.allocator, instruction) else try loop.continues.append(self.allocator, instruction);
         },
         .conditional => |conditional| {
-            var exits: std.array_list.Managed(u32) = .init(self.allocator);
+            var exits: std.ArrayList(u32) = .empty;
             for (conditional.branches) |branch| {
                 try self.require(.boolean, try expressions.compileExpression(self, context, branch.condition), branch.condition.span);
                 const skip = try context.emit(.jump_if_false, 0, 0, branch.condition.span);
                 try statements.compileStatements(self, context, branch.body);
-                try exits.append(try context.emit(.jump, 0, 0, span));
+                try exits.append(self.allocator, try context.emit(.jump, 0, 0, span));
                 try context.patch(skip, context.code.items.len);
             }
             try statements.compileStatements(self, context, conditional.otherwise);
@@ -84,8 +84,8 @@ pub fn compileControl(self: *Compiler, context: *Context, statement_: *ast.Stmt)
 
 pub fn newLoop(self: *Compiler, context: *Context) !*Loop {
     const loop = try self.allocator.create(Loop);
-    loop.* = .{ .breaks = .init(self.allocator), .continues = .init(self.allocator), .stack_depth = context.stack_depth };
-    try context.loops.append(loop);
+    loop.* = .{ .stack_depth = context.stack_depth };
+    try context.loops.append(self.allocator, loop);
     return loop;
 }
 

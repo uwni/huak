@@ -74,15 +74,15 @@ pub fn compile(allocator: std.mem.Allocator, input: []const u8, name: []const u8
     // Finish every arena allocation before copying its owner into Program.
     // A later allocation can grow the arena and make an earlier owner copy
     // omit the newly allocated block during deinit.
-    const functions = try build.functions.toOwnedSlice();
-    const constants = try build.constants.toOwnedSlice();
-    const parameters = try build.parameters.toOwnedSlice();
-    const records = try build.records.toOwnedSlice();
-    const argument_bindings = try build.argument_bindings.toOwnedSlice();
+    const functions = try build.functions.toOwnedSlice(memory);
+    const constants = try build.constants.toOwnedSlice(memory);
+    const parameters = try build.parameters.toOwnedSlice(memory);
+    const records = try build.records.toOwnedSlice(memory);
+    const argument_bindings = try build.argument_bindings.toOwnedSlice(memory);
     const groups = try memory.dupe(bc.PrecedenceGroup, build.precedence.groups.items);
-    const global_names = try build.names.toOwnedSlice();
-    const global_types = try build.types.toOwnedSlice();
-    const readonly = try build.readonly.toOwnedSlice();
+    const global_names = try build.names.toOwnedSlice(memory);
+    const global_types = try build.types.toOwnedSlice(memory);
+    const readonly = try build.readonly.toOwnedSlice(memory);
     var program: bc.Program = .{ .arena = undefined, .source_text = build.modules[0].source_text, .name = build.modules[0].name, .functions = functions, .constants = constants, .records = records, .argument_bindings = argument_bindings, .parameters = parameters, .exports = build.modules[0].exports, .outputs = build.outputs, .modules = build.modules, .groups = groups, .global_names = global_names, .global_types = global_types, .readonly_globals = readonly, .entry = build.modules[0].entry };
     program.argument_names = try build.argument_names.toOwnedSlice(memory);
     // Planning works in the caller's allocator and releases its state here;

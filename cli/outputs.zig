@@ -129,7 +129,7 @@ fn publish(io: std.Io, path: []const u8, bytes: []const u8, publication: Publica
 
 /// The format of an output file, as the options checked it.
 fn format(path: []const u8) Format {
-    return std.enums.values(Format)[formatOf(std.meta.fieldNames(Format), path).?];
+    return std.enums.values(Format)[formatOf(@typeInfo(Format).@"enum".field_names, path).?];
 }
 
 fn reportRenderFailure(path: []const u8, output: Output, cause: anyerror, diagnostic: ?typst.Buffer, report: *Report) void {

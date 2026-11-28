@@ -109,8 +109,8 @@ test "gradient color stops keep their positions through the native scene" {
     defer document.deinit();
     var svg = try document.exportSvg(0);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "offset=\"25%\"") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "offset=\"50%\"") == null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "offset=\"25%\"") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "offset=\"50%\"") == null);
 }
 
 test "patch paints become a type 7 PDF mesh and SVG triangles of the same field" {
@@ -129,10 +129,10 @@ test "patch paints become a type 7 PDF mesh and SVG triangles of the same field"
         defer output.deinit();
         const svg = output.bytes();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, "<image"));
-        try t.expect(std.mem.indexOf(u8, svg, "data:image/png;base64,") != null);
-        try t.expect(std.mem.indexOf(u8, svg, "clip-path=") != null);
+        try t.expect(std.mem.find(u8, svg, "data:image/png;base64,") != null);
+        try t.expect(std.mem.find(u8, svg, "clip-path=") != null);
         try t.expectEqual(@as(usize, 0), std.mem.count(u8, svg, " data-typst-label=\"huak-mesh\""));
-        try t.expect(std.mem.indexOf(u8, svg, "shape-rendering:crispEdges") == null);
+        try t.expect(std.mem.find(u8, svg, "shape-rendering:crispEdges") == null);
     }
     {
         // Explicit vector triangle mode: a linear field over flat patches needs
@@ -142,13 +142,13 @@ test "patch paints become a type 7 PDF mesh and SVG triangles of the same field"
         const svg = output.bytes();
         try t.expectEqual(@as(usize, 8), std.mem.count(u8, svg, "<path fill=\"url(#"));
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, " data-typst-label=\"huak-mesh\""));
-        try t.expect(std.mem.indexOf(u8, svg, "clip-path=") != null);
-        try t.expect(std.mem.indexOf(u8, svg, "</style></svg>") != null);
-        try t.expect(std.mem.indexOf(u8, svg, "<image") == null);
+        try t.expect(std.mem.find(u8, svg, "clip-path=") != null);
+        try t.expect(std.mem.find(u8, svg, "</style></svg>") != null);
+        try t.expect(std.mem.find(u8, svg, "<image") == null);
     }
     var output = try page(&library, &picture, .pdf);
     defer output.deinit();
-    try t.expect(std.mem.indexOf(u8, output.bytes(), "/ShadingType 7") != null);
+    try t.expect(std.mem.find(u8, output.bytes(), "/ShadingType 7") != null);
     const gray = try Gray.read(output.bytes());
     defer gray.deinit();
     // The gray follows x across every patch.
@@ -181,8 +181,8 @@ test "conic paints become a type 7 PDF mesh and SVG triangles of the same field"
         defer output.deinit();
         const svg = output.bytes();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, "<image"));
-        try t.expect(std.mem.indexOf(u8, svg, "data:image/png;base64,") != null);
-        try t.expect(std.mem.indexOf(u8, svg, "clip-path=") != null);
+        try t.expect(std.mem.find(u8, svg, "data:image/png;base64,") != null);
+        try t.expect(std.mem.find(u8, svg, "clip-path=") != null);
         try t.expectEqual(@as(usize, 0), std.mem.count(u8, svg, " data-typst-label=\"huak-mesh\""));
     }
     {
@@ -193,13 +193,13 @@ test "conic paints become a type 7 PDF mesh and SVG triangles of the same field"
         const svg = output.bytes();
         try t.expectEqual(@as(usize, 64), std.mem.count(u8, svg, "<path fill=\"url(#"));
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, " data-typst-label=\"huak-mesh\""));
-        try t.expect(std.mem.indexOf(u8, svg, "clip-path=") != null);
-        try t.expect(std.mem.indexOf(u8, svg, "</style></svg>") != null);
-        try t.expect(std.mem.indexOf(u8, svg, "<image") == null);
+        try t.expect(std.mem.find(u8, svg, "clip-path=") != null);
+        try t.expect(std.mem.find(u8, svg, "</style></svg>") != null);
+        try t.expect(std.mem.find(u8, svg, "<image") == null);
     }
     var output = try page(&library, &picture, .pdf);
     defer output.deinit();
-    try t.expect(std.mem.indexOf(u8, output.bytes(), "/ShadingType 7") != null);
+    try t.expect(std.mem.find(u8, output.bytes(), "/ShadingType 7") != null);
     const gray = try Gray.read(output.bytes());
     defer gray.deinit();
     // The gray is the field on the ray through each pixel; rows run down.
@@ -258,8 +258,8 @@ test "a radial gradient paints a stroke in the coordinates of its path" {
     {
         var output = try page(&library, &picture, .svg);
         defer output.deinit();
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "<radialGradient") != null);
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "<image") == null);
+        try t.expect(std.mem.find(u8, output.bytes(), "<radialGradient") != null);
+        try t.expect(std.mem.find(u8, output.bytes(), "<image") == null);
     }
     var output = try page(&library, &picture, .pdf);
     defer output.deinit();
@@ -295,7 +295,7 @@ test "a stroke painted with patches is drawn as its footprint" {
         var output = try page(&library, &picture, .svg);
         defer output.deinit();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, output.bytes(), "<image"));
-        try t.expect(std.mem.indexOf(u8, output.bytes(), "clip-path=") != null);
+        try t.expect(std.mem.find(u8, output.bytes(), "clip-path=") != null);
     }
     {
         var output = try pageMesh(&library, &picture, .svg, .triangles);
@@ -304,7 +304,7 @@ test "a stroke painted with patches is drawn as its footprint" {
     }
     var output = try page(&library, &picture, .pdf);
     defer output.deinit();
-    try t.expect(std.mem.indexOf(u8, output.bytes(), "/ShadingType 7") != null);
+    try t.expect(std.mem.find(u8, output.bytes(), "/ShadingType 7") != null);
     const gray = try Gray.read(output.bytes());
     defer gray.deinit();
     // Within the stroke the gray follows the field; the patches cover the
@@ -345,7 +345,7 @@ test "a fitted page measures each stroke the way it is drawn" {
         const svg = output.bytes();
         try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, "<image"));
         // Non-mesh elements, including the nib's stroke, stay pure vector paths.
-        try t.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1\"") != null);
+        try t.expect(std.mem.find(u8, svg, "stroke-width=\"1\"") != null);
     }
     const fitted_tri: render.Scene = .{ .picture = &picture, .svg_mesh = .triangles };
     var output = try fitted_tri.render(t.allocator, &library, .svg, &diagnostic);
@@ -353,5 +353,5 @@ test "a fitted page measures each stroke the way it is drawn" {
     const svg = output.bytes();
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, svg, " data-typst-label=\"huak-mesh\""));
     // The nib's stroke stays a native stroke of the normalized ellipse.
-    try t.expect(std.mem.indexOf(u8, svg, "stroke-width=\"1\"") != null);
+    try t.expect(std.mem.find(u8, svg, "stroke-width=\"1\"") != null);
 }

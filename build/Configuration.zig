@@ -3,6 +3,6 @@ const std = @import("std");
 const rust = @import("rust.zig");
 
 target: std.Build.ResolvedTarget,
-optimize: std.builtin.Optimize,
+optimize: std.lang.Optimize,
 typst: rust.Libtypst,
 use_llvm: ?bool

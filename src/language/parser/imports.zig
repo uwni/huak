@@ -26,7 +26,7 @@ pub fn importStatement(self: *Parser) anyerror!*ast.Stmt {
         finish = expression_.span;
         break :path literal.value.string;
     };
-    var namespace_path: std.array_list.Managed([]const u8) = .init(self.allocator);
+    var namespace_path: std.ArrayList([]const u8) = .empty;
     const form: ast.ImportForm = if (try self.accept(.dot)) form: {
         while (true) {
             if (self.current.kind == .star) {
@@ -34,11 +34,11 @@ pub fn importStatement(self: *Parser) anyerror!*ast.Stmt {
                 try self.advance();
                 break :form .all;
             }
-            var bindings: std.array_list.Managed(ast.ImportBinding) = .init(self.allocator);
+            var bindings: std.ArrayList(ast.ImportBinding) = .empty;
             if (try self.accept(.lbrace)) {
                 while (true) {
                     const binding = try importBinding(self);
-                    try bindings.append(binding);
+                    try bindings.append(self.allocator, binding);
                     if (!try self.accept(.comma) or self.current.kind == .rbrace) break;
                 }
                 finish = (try self.expect(.rbrace, "expected '}' after selected imports")).span;
@@ -47,20 +47,20 @@ pub fn importStatement(self: *Parser) anyerror!*ast.Stmt {
                 if (name.kind != .identifier) return self.fail(name.span, "expected an exported member name", .{});
                 try self.advance();
                 if (try self.accept(.dot)) {
-                    try namespace_path.append(self.text(name));
+                    try namespace_path.append(self.allocator, self.text(name));
                     continue;
                 }
                 const binding = try importBindingAfter(self, name);
-                try bindings.append(binding);
+                try bindings.append(self.allocator, binding);
                 finish = binding.span;
             }
-            break :form .{ .selected = try bindings.toOwnedSlice() };
+            break :form .{ .selected = try bindings.toOwnedSlice(self.allocator) };
         }
     } else if (try importAlias(self)) |alias| form: {
         finish = alias.span;
         break :form .{ .namespace = self.text(alias) };
     } else .{ .namespace = try importNamespace(self, path, path_span) };
-    return self.createStmt(.join(start, finish), .{ .imported = .{ .path = path, .bare = bare, .namespace_path = try namespace_path.toOwnedSlice(), .form = form } });
+    return self.createStmt(.join(start, finish), .{ .imported = .{ .path = path, .bare = bare, .namespace_path = try namespace_path.toOwnedSlice(self.allocator), .form = form } });
 }
 
 fn importBinding(self: *Parser) !ast.ImportBinding {
@@ -82,7 +82,7 @@ fn importAlias(self: *Parser) !?Lexer.Token {
 }
 
 fn importNamespace(self: *Parser, path: []const u8, span: source.Span) ![]const u8 {
-    const name = std.fs.path.stem(path);
+    const name = std.Io.Dir.path.stem(path);
     var diagnostic: ?source.Diagnostic = null;
     var lexer: Lexer = .{ .source = name, .diagnostic = &diagnostic };
     const first = lexer.next() catch return self.fail(span, "import filename needs an explicit namespace alias with 'as'", .{});

@@ -18,16 +18,16 @@ test "paint and compatible d morph animate the instance path and establish stati
     };
     const result = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 3, .tracks = &tracks, .repeat = false });
     defer t.allocator.free(result);
-    try t.expect(std.mem.indexOf(u8, result, "fill='red'") == null);
-    try t.expect(std.mem.indexOf(u8, result, "fill=\"rgb(0,0,255)\" fill-opacity=\"0.4\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "stroke-width=\"1\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "d=\"M 0 0 L 10 10 Z \"><animate") != null);
-    try t.expect(std.mem.indexOf(u8, result, "attributeName=\"d\" values=\"M 0 0 L 10 10 Z ;M 0 0 L 30 20 Z ") != null);
-    try t.expect(std.mem.indexOf(u8, result, "keySplines=\"0.3 0 0.7 1\"") != null);
+    try t.expect(std.mem.find(u8, result, "fill='red'") == null);
+    try t.expect(std.mem.find(u8, result, "fill=\"rgb(0,0,255)\" fill-opacity=\"0.4\"") != null);
+    try t.expect(std.mem.find(u8, result, "stroke-width=\"1\"") != null);
+    try t.expect(std.mem.find(u8, result, "d=\"M 0 0 L 10 10 Z \"><animate") != null);
+    try t.expect(std.mem.find(u8, result, "attributeName=\"d\" values=\"M 0 0 L 10 10 Z ;M 0 0 L 30 20 Z ") != null);
+    try t.expect(std.mem.find(u8, result, "keySplines=\"0.3 0 0.7 1\"") != null);
     // A single run is SMIL's default; holding its last value needs freeze.
-    try t.expect(std.mem.indexOf(u8, result, "repeatCount") == null);
-    try t.expect(std.mem.indexOf(u8, result, "fill=\"freeze\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "<defs><path id='glyph' d='M0 0L1 1'/></defs>") != null);
+    try t.expect(std.mem.find(u8, result, "repeatCount") == null);
+    try t.expect(std.mem.find(u8, result, "fill=\"freeze\"") != null);
+    try t.expect(std.mem.find(u8, result, "<defs><path id='glyph' d='M0 0L1 1'/></defs>") != null);
 }
 
 test "constant tracks write base attributes without interpolation elements" {
@@ -37,9 +37,9 @@ test "constant tracks write base attributes without interpolation elements" {
     };
     const result = try encodeSmil(t.allocator, fixture, &.{ .duration_seconds = 1, .tracks = &tracks });
     defer t.allocator.free(result);
-    try t.expect(std.mem.indexOf(u8, result, "transform=\"translate(20 30)\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "fill=\"rgb(0,0,0)\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "<animate") == null);
+    try t.expect(std.mem.find(u8, result, "transform=\"translate(20 30)\"") != null);
+    try t.expect(std.mem.find(u8, result, "fill=\"rgb(0,0,0)\"") != null);
+    try t.expect(std.mem.find(u8, result, "<animate") == null);
 }
 
 test "path morph retains nonidentity base transforms and writes local d coordinates" {
@@ -49,9 +49,9 @@ test "path morph retains nonidentity base transforms and writes local d coordina
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .path = &.{ .{ .time = 0, .value = &first }, .{ .time = 1, .value = &last } } } }} };
     const result = try encodeSmil(t.allocator, input, &animation);
     defer t.allocator.free(result);
-    try t.expect(std.mem.indexOf(u8, result, "transform='matrix(2 0 0 3 11 13)'") != null);
-    try t.expect(std.mem.indexOf(u8, result, "transform='translate(4 6)'") != null);
-    try t.expect(std.mem.indexOf(u8, result, "d=\"M 1 2 L 4 5 \"><animate attributeName=\"d\" values=\"M 1 2 L 4 5 ;M 1 2 L 6 7 \"") != null);
+    try t.expect(std.mem.find(u8, result, "transform='matrix(2 0 0 3 11 13)'") != null);
+    try t.expect(std.mem.find(u8, result, "transform='translate(4 6)'") != null);
+    try t.expect(std.mem.find(u8, result, "d=\"M 1 2 L 4 5 \"><animate attributeName=\"d\" values=\"M 1 2 L 4 5 ;M 1 2 L 6 7 \"") != null);
 }
 
 test "constant RGB and alpha components omit redundant animation while retaining first-key base paint" {
@@ -61,8 +61,8 @@ test "constant RGB and alpha components omit redundant animation while retaining
     } };
     const result = try encodeSmil(t.allocator, fixture, &animation);
     defer t.allocator.free(result);
-    try t.expect(std.mem.indexOf(u8, result, "fill=\"rgb(255,0,0)\" fill-opacity=\"1\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "stroke=\"rgb(0,0,0)\" stroke-opacity=\"0.25\"") != null);
+    try t.expect(std.mem.find(u8, result, "fill=\"rgb(255,0,0)\" fill-opacity=\"1\"") != null);
+    try t.expect(std.mem.find(u8, result, "stroke=\"rgb(0,0,0)\" stroke-opacity=\"0.25\"") != null);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, result, "<animate attributeName=\"fill\""));
     try t.expectEqual(@as(usize, 0), std.mem.count(u8, result, "<animate attributeName=\"fill-opacity\""));
     try t.expectEqual(@as(usize, 0), std.mem.count(u8, result, "<animate attributeName=\"stroke\""));
@@ -93,7 +93,7 @@ test "parent paints reject nested object content while child paths and group tra
     const output = try encodeSmil(t.allocator, input, &.{ .duration_seconds = 1, .tracks = &.{ translate, fill } });
     defer t.allocator.free(output);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, output, "attributeName=\"fill\""));
-    try t.expect(std.mem.indexOf(u8, output, "<path d='M0 0L1 1'/>") != null);
+    try t.expect(std.mem.find(u8, output, "<path d='M0 0L1 1'/>") != null);
 }
 
 test "writer fragments preserve nonempty path content and untouched attributes" {
@@ -104,8 +104,8 @@ test "writer fragments preserve nonempty path content and untouched attributes" 
     } } }};
     const output = try encodeSmil(t.allocator, source, &.{ .duration_seconds = 1, .tracks = &tracks });
     defer t.allocator.free(output);
-    try t.expect(std.mem.indexOf(u8, output, "data-note='A&amp;B' d='M0 0L1 1'") != null);
-    try t.expect(std.mem.indexOf(u8, output, "fill-opacity=\"1\"><!--keep--><![CDATA[<>&]]></path>") != null);
+    try t.expect(std.mem.find(u8, output, "data-note='A&amp;B' d='M0 0L1 1'") != null);
+    try t.expect(std.mem.find(u8, output, "fill-opacity=\"1\"><!--keep--><![CDATA[<>&]]></path>") != null);
     try t.expectEqual(@as(usize, 1), std.mem.count(u8, output, "</path>"));
     var source_reader: @import("xml_parser").Reader.Static = .init(t.allocator, output, .{});
     defer source_reader.deinit();
@@ -163,8 +163,8 @@ test "color constancy completion preserves every key and late validation" {
     const animation: a.Animation = .{ .duration_seconds = 1, .tracks = &.{.{ .target = 7, .property = .{ .fill = &keys } }} };
     const result = try encodeSmil(t.allocator, fixture, &animation);
     defer t.allocator.free(result);
-    try t.expect(std.mem.indexOf(u8, result, "values=\"rgb(0,0,0);rgb(255,0,0);rgb(0,255,0);rgb(0,0,255)\"") != null);
-    try t.expect(std.mem.indexOf(u8, result, "values=\"0;1;0.4;0.8\"") != null);
+    try t.expect(std.mem.find(u8, result, "values=\"rgb(0,0,0);rgb(255,0,0);rgb(0,255,0);rgb(0,0,255)\"") != null);
+    try t.expect(std.mem.find(u8, result, "values=\"0;1;0.4;0.8\"") != null);
     keys[3].value.r = std.math.nan(f64);
     try t.expectError(error.InvalidColor, encodeSmil(t.allocator, fixture, &animation));
 }

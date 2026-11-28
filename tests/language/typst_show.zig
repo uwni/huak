@@ -77,8 +77,8 @@ test "Typst show rules keep frame snapshots and body-local changes isolated" {
     var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
     defer pdf.deinit();
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/FontFile") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/FontFile") != null);
 }
 
 test "a shown style preserves raw markup with embedded math code and trailing comments" {
@@ -135,7 +135,7 @@ test "a shown style preserves raw markup with embedded math code and trailing co
     try execute(&machine);
     var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
 }
 
 test "block imports retain the settings of each text source module" {
@@ -241,7 +241,7 @@ test "module namespaces share native frames while isolating Typst show rules by 
     defer svg.deinit();
     var pdf = try runtime.render(page, .pdf);
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "viewBox=\"0 0 320 180\"") != null);
-    try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "viewBox=\"0 0 320 180\"") != null);
+    try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
     try t.expectEqual(@as(usize, 5), runtime.frames.items.len);
 }

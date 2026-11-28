@@ -9,7 +9,7 @@ const testing = @import("testing.zig");
 
 test "propagation follows known branch edges through arithmetic and local stores" {
     var constants = try testing.pool(t.allocator, &.{ .{ .int = 2 }, .{ .int = 3 }, .{ .int = 5 } });
-    defer constants.deinit();
+    defer constants.deinit(t.allocator);
     const code = [_]bc.Instruction{
         testing.ins(.constant, 0),     testing.ins(.store_global, 0),   testing.ins(.load_global, 0),  testing.ins(.constant, 1),
         testing.ins(.add, 0),          testing.ins(.store_local, 0),    testing.ins(.load_local, 0),   testing.ins(.constant, 2),
@@ -17,7 +17,7 @@ test "propagation follows known branch edges through arithmetic and local stores
         testing.ins(.jump, 15),        testing.ins(.constant, 1),       testing.ins(.store_global, 1), testing.ins(.load_global, 1),
         testing.ins(.store_global, 2), testing.ins(.halt, 0),
     };
-    const result = (try propagation.rewrite(t.allocator, &code, &constants, .{ .global_types = &.{ .int, .int, .int }, .local_types = &.{.int} })).?;
+    const result = (try propagation.rewrite(t.allocator, &code, t.allocator, &constants, .{ .global_types = &.{ .int, .int, .int }, .local_types = &.{.int} })).?;
     defer t.allocator.free(result);
     try testing.expectInt(result, constants.items, 2, 2);
     try testing.expectInt(result, constants.items, 6, 5);
@@ -35,16 +35,16 @@ test "propagation joins all executable predecessors and preserves signed zero" {
     };
     for ([_]bool{ false, true }) |equal| {
         var constants = try testing.pool(t.allocator, &.{ .{ .int = 7 }, .{ .int = if (equal) 7 else 8 } });
-        defer constants.deinit();
-        const result = try propagation.rewrite(t.allocator, &code, &constants, .{ .global_types = &.{ .boolean, .int, .int } });
+        defer constants.deinit(t.allocator);
+        const result = try propagation.rewrite(t.allocator, &code, t.allocator, &constants, .{ .global_types = &.{ .boolean, .int, .int } });
         defer if (result) |output| t.allocator.free(output);
         if (equal) {
             try testing.expectInt(result.?, constants.items, 7, 7);
         } else try t.expect(result == null);
     }
     var zeros = try testing.pool(t.allocator, &.{ .{ .number = -0.0 }, .{ .number = 0.0 } });
-    defer zeros.deinit();
-    try t.expect((try propagation.rewrite(t.allocator, &code, &zeros, .{ .global_types = &.{ .boolean, .number, .number } })) == null);
+    defer zeros.deinit(t.allocator);
+    try t.expect((try propagation.rewrite(t.allocator, &code, t.allocator, &zeros, .{ .global_types = &.{ .boolean, .number, .number } })) == null);
 
     // One predecessor reaches the read without assigning result at all.
     const uninitialized = [_]bc.Instruction{
@@ -52,20 +52,20 @@ test "propagation joins all executable predecessors and preserves signed zero" {
         testing.ins(.load_global, 1), testing.ins(.store_global, 2),  testing.ins(.halt, 0),
     };
     var constants = try testing.pool(t.allocator, &.{.{ .int = 7 }});
-    defer constants.deinit();
-    try t.expect((try propagation.rewrite(t.allocator, &uninitialized, &constants, .{ .global_types = &.{ .boolean, .int, .int } })) == null);
+    defer constants.deinit(t.allocator);
+    try t.expect((try propagation.rewrite(t.allocator, &uninitialized, t.allocator, &constants, .{ .global_types = &.{ .boolean, .int, .int } })) == null);
 }
 
 test "propagation loop fixed points retain invariants and revoke induction facts" {
     var constants = try testing.pool(t.allocator, &.{ .{ .int = 9 }, .{ .int = 0 }, .{ .int = 3 }, .{ .int = 1 } });
-    defer constants.deinit();
+    defer constants.deinit(t.allocator);
     const code = [_]bc.Instruction{
         testing.ins(.constant, 0),    testing.ins(.store_global, 0), testing.ins(.constant, 1),   testing.ins(.store_local, 0),
         testing.ins(.load_local, 0),  testing.ins(.constant, 2),     testing.ins(.less, 0),       testing.ins(.jump_if_false, 15),
         testing.ins(.load_global, 0), testing.ins(.store_global, 1), testing.ins(.load_local, 0), testing.ins(.constant, 3),
         testing.ins(.add, 0),         testing.ins(.store_local, 0),  testing.ins(.jump, 4),       testing.ins(.halt, 0),
     };
-    const result = (try propagation.rewrite(t.allocator, &code, &constants, .{ .global_types = &.{ .int, .int }, .local_types = &.{.int} })).?;
+    const result = (try propagation.rewrite(t.allocator, &code, t.allocator, &constants, .{ .global_types = &.{ .int, .int }, .local_types = &.{.int} })).?;
     defer t.allocator.free(result);
     try t.expectEqual(bc.Op.load_local, result[4].op);
     try t.expectEqual(bc.Op.load_local, result[10].op);
@@ -75,13 +75,13 @@ test "propagation loop fixed points retain invariants and revoke induction facts
 
 test "propagation call barriers forget bindings but retain evaluated operand values" {
     var constants = try testing.pool(t.allocator, &.{.{ .int = 7 }});
-    defer constants.deinit();
+    defer constants.deinit(t.allocator);
     const code = [_]bc.Instruction{
         testing.ins(.constant, 0),    testing.ins(.store_global, 0), testing.ins(.load_global, 0), testing.ins(.call, 0),
         testing.ins(.pop, 0),         testing.ins(.store_global, 1), testing.ins(.load_global, 0), testing.ins(.pop, 0),
         testing.ins(.load_global, 1), testing.ins(.store_global, 2), testing.ins(.halt, 0),
     };
-    const result = (try propagation.rewrite(t.allocator, &code, &constants, .{ .global_types = &.{ .int, .int, .int } })).?;
+    const result = (try propagation.rewrite(t.allocator, &code, t.allocator, &constants, .{ .global_types = &.{ .int, .int, .int } })).?;
     defer t.allocator.free(result);
     try testing.expectInt(result, constants.items, 2, 7);
     try t.expectEqual(bc.Op.load_global, result[6].op);
@@ -93,13 +93,13 @@ test "propagation unknown handle arithmetic is a host barrier but numeric arithm
     for ([_]bc.Op{ .add, .negate }) |operation| {
         for ([_]bc.Type{ .any, .variable, .int }) |kind| {
             var constants = try testing.pool(t.allocator, &.{ .{ .int = 7 }, .{ .int = 1 } });
-            defer constants.deinit();
+            defer constants.deinit(t.allocator);
             var code: std.ArrayList(bc.Instruction) = .empty;
             defer code.deinit(t.allocator);
             try code.appendSlice(t.allocator, &.{ testing.ins(.constant, 0), testing.ins(.store_global, 0), testing.ins(.load_global, 1) });
             if (operation == .add) try code.append(t.allocator, testing.ins(.constant, 1));
             try code.appendSlice(t.allocator, &.{ testing.ins(operation, 0), testing.ins(.pop, 0), testing.ins(.load_global, 0), testing.ins(.store_global, 2), testing.ins(.halt, 0) });
-            const result = try propagation.rewrite(t.allocator, code.items, &constants, .{ .global_types = &.{ .int, kind, .int } });
+            const result = try propagation.rewrite(t.allocator, code.items, t.allocator, &constants, .{ .global_types = &.{ .int, kind, .int } });
             defer if (result) |output| t.allocator.free(output);
             if (kind == .int) {
                 try testing.expectInt(result.?, constants.items, code.items.len - 3, 7);
@@ -126,8 +126,8 @@ test "propagation preserves a custom native arithmetic mutation after an earlier
         testing.ins(.load_global, 0), testing.ins(.store_global, 2), testing.ins(.halt, 0),
     };
     var constants = try testing.pool(t.allocator, &.{ .{ .int = 7 }, .{ .int = 1 } });
-    defer constants.deinit();
-    const result = (try propagation.rewrite(t.allocator, &code, &constants, .{ .global_types = &.{ .int, .any, .int } })).?;
+    defer constants.deinit(t.allocator);
+    const result = (try propagation.rewrite(t.allocator, &code, t.allocator, &constants, .{ .global_types = &.{ .int, .any, .int } })).?;
     defer t.allocator.free(result);
     try testing.expectInt(result, constants.items, 2, 7);
     try t.expectEqual(bc.Op.load_global, result[8].op);
@@ -158,7 +158,7 @@ test "propagation preserves a custom native arithmetic mutation after an earlier
 
 test "propagation does not bypass store conversions or mutable identities" {
     var constants = try testing.pool(t.allocator, &.{ .{ .int = 7 }, .{ .number = 7 }, bc.types.listView(&.{.{ .int = 1 }}), .{ .handle = .{ .kind = .picture, .index = 0 } } });
-    defer constants.deinit();
+    defer constants.deinit(t.allocator);
     const code = [_]bc.Instruction{
         testing.ins(.constant, 0), testing.ins(.store_global, 0), testing.ins(.load_global, 0), testing.ins(.pop, 0),
         testing.ins(.constant, 1), testing.ins(.store_global, 0), testing.ins(.load_global, 0), testing.ins(.pop, 0),
@@ -167,7 +167,7 @@ test "propagation does not bypass store conversions or mutable identities" {
         testing.ins(.constant, 3), testing.ins(.store_global, 3), testing.ins(.load_global, 3), testing.ins(.pop, 0),
         testing.ins(.halt, 0),
     };
-    const result = (try propagation.rewrite(t.allocator, &code, &constants, .{ .global_types = &.{ .number, .length, .list, .picture } })).?;
+    const result = (try propagation.rewrite(t.allocator, &code, t.allocator, &constants, .{ .global_types = &.{ .number, .length, .list, .picture } })).?;
     defer t.allocator.free(result);
     try t.expectEqual(bc.Op.load_global, result[2].op);
     try t.expectEqual(bc.Op.constant, result[6].op);
@@ -179,7 +179,7 @@ test "propagation unknown fields imports and typography remain host barriers" {
     const barriers = [_]bc.Instruction{ testing.ins(.import_module, 0), testing.ins(.typst_module, 1), testing.ins(.typst, 1), testing.ins(.field, 1) };
     for (barriers) |barrier| {
         var constants = try testing.pool(t.allocator, &.{ .{ .int = 7 }, .{ .string = "x" } });
-        defer constants.deinit();
+        defer constants.deinit(t.allocator);
         var code: std.ArrayList(bc.Instruction) = .empty;
         defer code.deinit(t.allocator);
         try code.appendSlice(t.allocator, &.{ testing.ins(.constant, 0), testing.ins(.store_global, 0) });
@@ -187,20 +187,20 @@ test "propagation unknown fields imports and typography remain host barriers" {
         try code.append(t.allocator, barrier);
         if (barrier.stackEffect().produced != 0) try code.append(t.allocator, testing.ins(.pop, 0));
         try code.appendSlice(t.allocator, &.{ testing.ins(.load_global, 0), testing.ins(.pop, 0), testing.ins(.halt, 0) });
-        try t.expect((try propagation.rewrite(t.allocator, code.items, &constants, .{ .global_types = &.{.int} })) == null);
+        try t.expect((try propagation.rewrite(t.allocator, code.items, t.allocator, &constants, .{ .global_types = &.{.int} })) == null);
     }
 }
 
 test "aggregate writes stop binding propagation without replacing aggregate identities" {
     for ([_]bc.Op{ .set_index, .set_field }) |operation| {
         var constants = try testing.pool(t.allocator, &.{ .{ .int = 7 }, .{ .string = "field" } });
-        defer constants.deinit();
+        defer constants.deinit(t.allocator);
         var code: std.ArrayList(bc.Instruction) = .empty;
         defer code.deinit(t.allocator);
         try code.appendSlice(t.allocator, &.{ testing.ins(.constant, 0), testing.ins(.store_global, 0), testing.ins(.load_global, 0), testing.ins(.pop, 0), testing.ins(.load_global, 1) });
         if (operation == .set_index) try code.append(t.allocator, testing.ins(.constant, 0));
         try code.appendSlice(t.allocator, &.{ testing.ins(.constant, 0), testing.ins(operation, 1), testing.ins(.load_global, 0), testing.ins(.pop, 0), testing.ins(.halt, 0) });
-        const result = (try propagation.rewrite(t.allocator, code.items, &constants, .{ .global_types = &.{ .int, if (operation == .set_index) .dict else bc.Type.record(0) } })).?;
+        const result = (try propagation.rewrite(t.allocator, code.items, t.allocator, &constants, .{ .global_types = &.{ .int, if (operation == .set_index) .dict else bc.Type.record(0) } })).?;
         defer t.allocator.free(result);
         try testing.expectInt(result, constants.items, 2, 7);
         try t.expectEqual(bc.Op.load_global, result[result.len - 3].op);

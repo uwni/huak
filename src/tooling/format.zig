@@ -47,7 +47,7 @@ fn formatSource(allocator: std.mem.Allocator, input: []const u8, source_blocks: 
     var beginning: usize = 0;
     var token_index: usize = 0;
     while (beginning < input.len) {
-        const newline = std.mem.indexOfScalarPos(u8, input, beginning, '\n') orelse input.len;
+        const newline = std.mem.findScalarPos(u8, input, beginning, '\n') orelse input.len;
         const end = if (newline > beginning and input[newline - 1] == '\r' and newline < input.len) newline - 1 else newline;
         while (token_index < tokens.items.len and tokens.items[token_index].span.end <= beginning) token_index += 1;
         var stop = token_index;
@@ -161,7 +161,7 @@ const Indentation = struct {
             }
             if (closing != 0 and closing <= self.delimiters.items.len)
                 return self.delimiters.items[self.delimiters.items.len - closing];
-            if (tokens[0].kind) |kind| if (std.mem.indexOfScalar(Lexer.Kind, &leads_out, kind) != null) return self.blocks -| 1;
+            if (tokens[0].kind) |kind| if (std.mem.findScalar(Lexer.Kind, &leads_out, kind) != null) return self.blocks -| 1;
         }
         if (self.delimiters.items.len != 0) return self.delimiters.items[self.delimiters.items.len - 1] + 1;
         return self.continuation orelse self.blocks;
@@ -177,7 +177,7 @@ const Indentation = struct {
             previous = if (last) |item| item.kind else null;
             last = token;
             const kind = token.kind orelse continue;
-            if (std.mem.indexOfScalar(Lexer.Kind, &opens_block, kind) != null) {
+            if (std.mem.findScalar(Lexer.Kind, &opens_block, kind) != null) {
                 self.blocks += 1;
                 continue;
             }

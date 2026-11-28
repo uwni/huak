@@ -66,17 +66,17 @@ test "exposed data preserves typed values immutable text snapshots and repeated 
             var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
             defer svg.deinit();
             try t.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
-            try t.expect(std.mem.indexOf(u8, svg.bytes(), "#336699") != null);
+            try t.expect(std.mem.find(u8, svg.bytes(), "#336699") != null);
             var pdf = try runtime.render(machine.getGlobal("pic").?, .pdf);
             defer pdf.deinit();
-            try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+            try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
             const text = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
             defer t.allocator.free(text);
             const first_number = if (std.mem.eql(u8, initial, "42")) "Count 42" else "Count 9007199254740993";
             const changed_number = if (std.mem.eql(u8, initial, "42")) "Count 44" else "Count 9007199254740995";
-            try t.expect(std.mem.indexOf(u8, text, first_number) != null);
-            try t.expect(std.mem.indexOf(u8, text, changed_number) != null);
-            try t.expect(std.mem.indexOf(u8, text, "Ω #panic(\"not evaluated\")") != null);
+            try t.expect(std.mem.find(u8, text, first_number) != null);
+            try t.expect(std.mem.find(u8, text, changed_number) != null);
+            try t.expect(std.mem.find(u8, text, "Ω #panic(\"not evaluated\")") != null);
         };
     }
 }
@@ -115,7 +115,7 @@ test "Typst code that uses huak as a whole value sees exactly the members it rea
     var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
     defer machine.deinit();
     try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-    try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, "unknown variable: huak") != null);
+    try t.expect(std.mem.find(u8, machine.failure.?.native_message, "unknown variable: huak") != null);
 }
 
 test "Typst reads respect local shadowing aliases block restoration and module boundaries" {
@@ -156,7 +156,7 @@ test "Typst reads respect local shadowing aliases block restoration and module b
         const text = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(text);
         for ([_][]const u8{ "module", "local", "branch", "root module" }) |expected|
-            try t.expect(std.mem.indexOf(u8, text, expected) != null);
+            try t.expect(std.mem.find(u8, text, expected) != null);
     }
 }
 
@@ -222,12 +222,12 @@ test "Typst read batches preserve earlier native errors before later length conv
         var machine = try l.Machine.init(t.allocator, &program, host, .{});
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, "missing") != null);
+        try t.expect(std.mem.find(u8, machine.failure.?.native_message, "missing") != null);
         try t.expect(machine.getGlobal("first") == null);
         try t.expect(machine.getGlobal("second") == null);
     };
     for ([_][]const u8{ "[1]", "1deg", "picture(640, 480)" }) |bad| {
-        const input = try std.fmt.allocPrint(t.allocator, "import paint.picture;fn read_any(value:any)->text\nreturn typ[#huak.value]\nend\ncaption:=read_any({s})\n", .{bad});
+        const input = try t.allocator.print("import paint.picture;fn read_any(value:any)->text\nreturn typ[#huak.value]\nend\ncaption:=read_any({s})\n", .{bad});
         defer t.allocator.free(input);
         var program = try compile(&library, input);
         defer program.deinit();
@@ -237,6 +237,6 @@ test "Typst read batches preserve earlier native errors before later length conv
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         try t.expect(machine.getGlobal("caption") == null);
-        try t.expect(std.mem.indexOf(u8, machine.failure.?.text(), "Typst code can read") != null);
+        try t.expect(std.mem.find(u8, machine.failure.?.text(), "Typst code can read") != null);
     }
 }

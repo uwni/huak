@@ -88,17 +88,17 @@ test "one typeset scene yields continuous tracks with shared glyph resources and
     try std.testing.expect(std.mem.count(u8, output, "<symbol ") > 0);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "<svg "));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "<animateMotion "));
-    try std.testing.expect(std.mem.indexOf(u8, output, "attributeName=\"d\"") != null);
+    try std.testing.expect(std.mem.find(u8, output, "attributeName=\"d\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "libtypst-object-18446744073709551615"));
     // The same scene by default, as CSS: one stylesheet, no SMIL elements, the same glyphs.
     const css = try native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 2, .tracks = &Fixture.tracks });
     defer std.testing.allocator.free(css);
     try std.testing.expectEqual(std.mem.count(u8, static.bytes(), "<symbol "), std.mem.count(u8, css, "<symbol "));
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, css, "<style>"));
-    try std.testing.expect(std.mem.indexOf(u8, css, "<animate") == null);
-    try std.testing.expect(std.mem.indexOf(u8, css, "offset-path:path(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, css, "d:path(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, css, "@media (prefers-reduced-motion:no-preference)") != null);
+    try std.testing.expect(std.mem.find(u8, css, "<animate") == null);
+    try std.testing.expect(std.mem.find(u8, css, "offset-path:path(") != null);
+    try std.testing.expect(std.mem.find(u8, css, "d:path(") != null);
+    try std.testing.expect(std.mem.find(u8, css, "@media (prefers-reduced-motion:no-preference)") != null);
 }
 
 test "animation bytes outlive native owners and unknown objects fail explicitly" {
@@ -124,7 +124,7 @@ test "animation bytes outlive native owners and unknown objects fail explicitly"
     const tracks = [_]a.Track{.{ .target = Fixture.label_id, .property = .{ .opacity = &opacity }, .smil = true }};
     const output = try native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 1, .repeat = false, .tracks = &tracks });
     defer std.testing.allocator.free(output);
-    try std.testing.expect(std.mem.indexOf(u8, output, "attributeName=\"opacity\"") != null);
+    try std.testing.expect(std.mem.find(u8, output, "attributeName=\"opacity\"") != null);
     const invalid = [_]a.Track{.{ .target = 999, .property = .{ .opacity = &opacity } }};
     try std.testing.expectError(error.MissingTarget, native_svg.encodeAnimatedSvg(std.testing.allocator, static.bytes(), &.{ .duration_seconds = 1, .tracks = &invalid }));
 }

@@ -188,10 +188,10 @@ pub fn compileAccess(self: *Compiler, context: *Context, expression_: *ast.Expr)
 }
 
 pub fn compilePathLiteral(self: *Compiler, context: *Context, expression_: *ast.Expr) anyerror!Type {
-    var points: std.array_list.Managed(*ast.Expr) = .init(self.build.syntax_allocator);
-    defer points.deinit();
-    var joins: std.array_list.Managed(ast.PathJoin) = .init(self.build.syntax_allocator);
-    defer joins.deinit();
+    var points: std.ArrayList(*ast.Expr) = .empty;
+    defer points.deinit(self.build.syntax_allocator);
+    var joins: std.ArrayList(ast.PathJoin) = .empty;
+    defer joins.deinit(self.build.syntax_allocator);
     var closed = false;
     try collectPathLiteral(self, expression_, &points, &joins, &closed, 0);
     if (points.items.len < 2) return self.fail(expression_.span, "a path literal needs at least two points", .{});
@@ -214,13 +214,13 @@ pub fn compilePathLiteral(self: *Compiler, context: *Context, expression_: *ast.
     };
 }
 
-pub fn collectPathLiteral(self: *Compiler, expression_: *ast.Expr, points: *std.array_list.Managed(*ast.Expr), joins: *std.array_list.Managed(ast.PathJoin), closed: *bool, depth: usize) anyerror!void {
+pub fn collectPathLiteral(self: *Compiler, expression_: *ast.Expr, points: *std.ArrayList(*ast.Expr), joins: *std.ArrayList(ast.PathJoin), closed: *bool, depth: usize) anyerror!void {
     if (depth > ast.max_depth) return self.fail(expression_.span, "path literal exceeds compilation depth {d}", .{ast.max_depth});
     switch (expression_.value) {
         .path_literal => |join| {
             try collectPathLiteral(self, join.left, points, joins, closed, depth + 1);
             if (closed.*) return self.fail(join.left.span, "cycle must be the final endpoint of a path literal", .{});
-            try joins.append(join.kind);
+            try joins.append(self.build.syntax_allocator, join.kind);
             try collectPathLiteral(self, join.right, points, joins, closed, depth + 1);
         },
         .cycle => {
@@ -228,7 +228,7 @@ pub fn collectPathLiteral(self: *Compiler, expression_: *ast.Expr, points: *std.
                 return self.fail(expression_.span, "cycle is only valid as the closing endpoint of a path literal", .{});
             closed.* = true;
         },
-        else => try points.append(expression_),
+        else => try points.append(self.build.syntax_allocator, expression_),
     }
 }
 

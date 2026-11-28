@@ -34,7 +34,7 @@ test "selected data imports shadow calls while explicit function aliases remain 
     try std.testing.expectEqual(Type.int, testGlobalType(&program, "value"));
     try std.testing.expectEqual(Type.number, testGlobalType(&program, "angle"));
     try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, "import math.sin; import \"data.huak\".sin; value:=sin(0)", "shadowed.huak", .{ .import_resolver = resolver }, &diagnostic));
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "not callable") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "not callable") != null);
 }
 
 test "reexported operator groups must agree when the same function is imported twice" {
@@ -48,7 +48,7 @@ test "reexported operator groups must agree when the same function is imported t
     for ([_][]const u8{ "import \"base\".f;import \"bridge\".f", "import \"bridge\".f;import \"base\".f" }) |input| {
         var diagnostic: ?Diagnostic = null;
         try std.testing.expectError(error.LanguageError, compile(std.testing.allocator, input, "root.huak", .{ .import_resolver = .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } } }, &diagnostic));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "conflicting imported operator roles") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "conflicting imported operator roles") != null);
     }
 }
 
@@ -105,8 +105,7 @@ test "standard assertions execute without a host and retain optional failure mes
         .{ .arguments = "false,\"验证失败 Ω\"", .message = "验证失败 Ω" },
     };
     for ([_]bool{ false, true }) |optimize| for (cases) |case| {
-        const input = try std.fmt.allocPrint(
-            std.testing.allocator,
+        const input = try std.testing.allocator.print(
             "import \"std/assertions.huak\".assert\nexport assert\nassert({s})\ncompleted:=1\n",
             .{case.arguments},
         );
@@ -198,7 +197,7 @@ test "nested namespace access checks the facade before argument effects even whe
         .{ .imported = "import \"facade\".tools as library", .expression = "library.f(effect())" },
         .{ .imported = "import \"facade\" as library", .expression = "library.tools.values[0]" },
     }) |fixture| for ([_]bool{ false, true }) |optimize| {
-        const input = try std.fmt.allocPrint(std.testing.allocator,
+        const input = try std.testing.allocator.print(
             \\import "tools" as direct
             \\events := direct.values
             \\early()
@@ -219,7 +218,7 @@ test "nested namespace access checks the facade before argument effects even whe
         var machine = try @import("../Machine.zig").init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "not initialized") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "not initialized") != null);
         try std.testing.expectEqual(@as(i64, 0), machine.getGlobal("events").?.list.items()[0].int);
     };
 }

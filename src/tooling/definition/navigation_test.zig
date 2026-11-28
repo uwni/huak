@@ -219,7 +219,7 @@ test "nested drawing modules preserve imported mixfix and infix navigation" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const frontend: Frontend = .{ .allocator = std.testing.allocator, .io = std.testing.io };
-    const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.indexOf(u8, input, "center (0,0)").?)).?;
+    const detail = (try describe(&frontend, arena.allocator(), input, fixture.name, std.mem.find(u8, input, "center (0,0)").?)).?;
     try std.testing.expect(std.mem.startsWith(u8, detail, "fn geometry.circle("));
     const template = "export expand_block drawing(target:int)\nplace:=len.with(\"abc\")\nmixfix(place) place _ in unary\n...\nreturn target\nend\n";
     const caller = "import \"/tmp/commands.huak\".drawing as paint\nanswer:=paint 3 do\nplace()\nend\n";

@@ -39,7 +39,7 @@ test "embedded source requires a native source-block provider" {
     var diagnostic: ?source.Diagnostic = null;
     var parser = try Parser.init(arena.allocator(), "t:=typ[Hello]\n", .{}, &diagnostic);
     try std.testing.expectError(error.LanguageError, parser.parse());
-    try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "source-block") != null);
+    try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "source-block") != null);
 }
 
 test "native Typst blocks preserve their source and resume host expressions" {
@@ -72,7 +72,7 @@ test "native Typst blocks preserve their source and resume host expressions" {
         diagnostic = null;
         parser = try Parser.init(arena.allocator(), input, options, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "expected '") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "expected '") != null);
     }
 }
 
@@ -90,7 +90,7 @@ test "Typst block providers cannot return ranges outside the source" {
         var diagnostic: ?source.Diagnostic = null;
         var parser = try Parser.init(arena.allocator(), "value:=typ[Hello]", .{ .source_parser = .{ .ptr = &length, .vtable = &.{ .block = Blocks.block } } }, &diagnostic);
         try std.testing.expectError(error.LanguageError, parser.parse());
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "invalid range") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "invalid range") != null);
     }
 }
 

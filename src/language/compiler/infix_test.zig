@@ -16,9 +16,9 @@ test "infix and ordinary calls produce the same checked and optimized instructio
         \\fn combine(a:int,b:int)->int;return a*10+b;end
         \\
     ;
-    const left = try std.fmt.allocPrint(std.testing.allocator, "{s}answer:=1 combine 2 combine 3\n", .{declarations});
+    const left = try std.testing.allocator.print("{s}answer:=1 combine 2 combine 3\n", .{declarations});
     defer std.testing.allocator.free(left);
-    const right = try std.fmt.allocPrint(std.testing.allocator, "{s}answer:=combine(combine(1,2),3)\n", .{declarations});
+    const right = try std.testing.allocator.print("{s}answer:=combine(combine(1,2),3)\n", .{declarations});
     defer std.testing.allocator.free(right);
     for ([_]bool{ false, true }) |optimize| {
         var diagnostic: ?Diagnostic = null;

@@ -83,7 +83,7 @@ pub fn linkPrecedenceRelations(self: *Compiler) !void {
     // A module can insert its groups into an established order, but must
     // not change the meaning of two groups owned by another module.
     const count = table.groups.items.len;
-    var before = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(scratch, count * count);
+    var before = try std.bit_set.Dynamic.initEmpty(scratch, count * count);
     defer before.deinit(scratch);
     for (table.groups.items, 0..) |left, i| {
         if (left.module == self.environment.module_index) continue;

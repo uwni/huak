@@ -260,7 +260,7 @@ pub const List = union(enum) {
 /// script ownership boundaries; runtime copies share the same mutable node.
 pub const Dict = struct {
     owner: ?*const Ownership = null,
-    entries: std.StringArrayHashMapUnmanaged(Value) = .empty,
+    entries: std.array_hash_map.String(Value) = .empty,
 };
 pub const Record = struct {
     owner: ?*const Ownership = null,

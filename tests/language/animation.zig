@@ -100,10 +100,10 @@ test "script animation uses one retained frame and continuous native object trac
     try t.expectEqual(@as(usize, 1), runtime.frames.items.len);
     var svg = try runtime.render(machine.getGlobal("pic").?, .svg);
     defer svg.deinit();
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "37%{transform:translate(50px,20px)}") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "2.5s linear both") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "100%{fill:rgb(255,0,0)}") != null);
-    try t.expect(std.mem.indexOf(u8, svg.bytes(), "0%{opacity:0.2}") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "37%{transform:translate(50px,20px)}") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "2.5s linear both") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "100%{fill:rgb(255,0,0)}") != null);
+    try t.expect(std.mem.find(u8, svg.bytes(), "0%{opacity:0.2}") != null);
     try t.expectError(error.AnimationRequiresSvg, runtime.render(machine.getGlobal("pic").?, .pdf));
     // Encoding the same immutable scene again doesn't evaluate text again.
     var again = try runtime.render(machine.getGlobal("pic").?, .svg);
@@ -138,8 +138,8 @@ test "animation and group state belong to each explicit picture" {
     defer static.deinit();
     var pdf = try runtime.render(machine.getGlobal("static").?, .pdf);
     defer pdf.deinit();
-    try t.expect(std.mem.indexOf(u8, animated.bytes(), "@keyframes ") != null);
-    try t.expect(std.mem.indexOf(u8, animated.bytes(), " 1.25s ") != null);
-    try t.expect(std.mem.indexOf(u8, static.bytes(), "<style>") == null);
+    try t.expect(std.mem.find(u8, animated.bytes(), "@keyframes ") != null);
+    try t.expect(std.mem.find(u8, animated.bytes(), " 1.25s ") != null);
+    try t.expect(std.mem.find(u8, static.bytes(), "<style>") == null);
     try t.expect(std.mem.startsWith(u8, pdf.bytes(), "%PDF-"));
 }

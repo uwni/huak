@@ -63,7 +63,7 @@ test "list slices reject invalid selected indices and validate empty range opera
         var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
         defer machine.deinit();
         try std.testing.expectError(error.RuntimeFailed, lists.sliceList(&machine, values, case.start, case.stop, case.step));
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), case.message) != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), case.message) != null);
     }
     var wrong_object = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer wrong_object.deinit();

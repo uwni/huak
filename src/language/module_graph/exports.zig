@@ -94,7 +94,7 @@ test "ordinary sources cannot reexport unimported domain functions" {
         var diagnostic: ?source.Diagnostic = null;
         var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, null, &diagnostic);
         try std.testing.expectError(error.LanguageError, graph.root("root.huak", input));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "must be explicitly imported") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "must be explicitly imported") != null);
     }
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -139,6 +139,6 @@ test "public export identities use bindings visible at the export declaration" {
     for ([_][]const u8{ "export f;import \"library\".f", "export library;import \"library\" as library" }) |input| {
         var rejected = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, resolver_, &diagnostic);
         try std.testing.expectError(error.LanguageError, rejected.root("early-export.huak", input));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "unknown exported variable or function") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "unknown exported variable or function") != null);
     }
 }

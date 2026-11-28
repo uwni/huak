@@ -20,7 +20,7 @@ pub fn gleams(layers: []const c.HuakLayer, light: []const Bands.Sample, layer: c
 pub fn lightsOf(self: *const Bands, work: *Work, layers: []const c.HuakLayer) Model.Error![]const Bands.Sample {
     const s = work.scratch;
     const result = try s.alloc(Bands.Sample, layers.len);
-    var by_face: std.AutoArrayHashMapUnmanaged([2]usize, std.ArrayList(usize)) = .empty;
+    var by_face: std.array_hash_map.Auto([2]usize, std.ArrayList(usize)) = .empty;
     for (layers, 0..) |layer, index| {
         const entry = try by_face.getOrPut(s, .{ layer.source, layer.face });
         if (!entry.found_existing) entry.value_ptr.* = .empty;

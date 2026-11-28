@@ -7,7 +7,7 @@ const SharedLibrary = @This();
 handle: *anyopaque,
 
 pub fn open(path: []const u8) error{ InvalidLibraryPath, LibraryNotFound }!SharedLibrary {
-    if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidLibraryPath;
+    if (std.mem.findScalar(u8, path, 0) != null) return error.InvalidLibraryPath;
     const name = std.posix.toPosixPath(path) catch return error.InvalidLibraryPath;
     return .{ .handle = @call(.never_tail, dl.dlopen, .{ &name, dl.RTLD_NOW | dl.RTLD_LOCAL }) orelse return error.LibraryNotFound };
 }

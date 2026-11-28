@@ -80,10 +80,10 @@ test "real Unicode math and graphics render repeatedly through one native engine
         defer svg.deinit();
         try testing.expect(std.mem.startsWith(u8, svg.bytes(), "<svg"));
         try testing.expect(std.mem.endsWith(u8, svg.bytes(), "</svg>"));
-        try testing.expect(std.mem.indexOf(u8, svg.bytes(), "<symbol ") != null);
-        try testing.expect(std.mem.indexOf(u8, svg.bytes(), "<use ") != null);
-        try testing.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#68a8d8\"") != null);
-        try testing.expect(std.mem.indexOf(u8, svg.bytes(), "fill=\"#d8a868\"") != null);
+        try testing.expect(std.mem.find(u8, svg.bytes(), "<symbol ") != null);
+        try testing.expect(std.mem.find(u8, svg.bytes(), "<use ") != null);
+        try testing.expect(std.mem.find(u8, svg.bytes(), "fill=\"#68a8d8\"") != null);
+        try testing.expect(std.mem.find(u8, svg.bytes(), "fill=\"#d8a868\"") != null);
         try testing.expectError(error.InvalidPage, document.exportSvg(1));
     }
 }
@@ -156,9 +156,9 @@ test "batch warnings retain request indices and source order" {
     defer layout.deinit();
     var warnings = try layout.warnings();
     defer warnings.deinit();
-    const first = std.mem.indexOf(u8, warnings.bytes(), "request 0:") orelse return error.MissingFirstWarning;
-    const second = std.mem.indexOf(u8, warnings.bytes(), "request 1:") orelse return error.MissingSecondWarning;
+    const first = std.mem.find(u8, warnings.bytes(), "request 0:") orelse return error.MissingFirstWarning;
+    const second = std.mem.find(u8, warnings.bytes(), "request 1:") orelse return error.MissingSecondWarning;
     try testing.expect(first < second);
-    try testing.expect(std.mem.indexOf(u8, warnings.bytes()[first..second], "huak-missing-font-first") != null);
-    try testing.expect(std.mem.indexOf(u8, warnings.bytes()[second..], "huak-missing-font-second") != null);
+    try testing.expect(std.mem.find(u8, warnings.bytes()[first..second], "huak-missing-font-first") != null);
+    try testing.expect(std.mem.find(u8, warnings.bytes()[second..], "huak-missing-font-second") != null);
 }

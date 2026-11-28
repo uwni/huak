@@ -155,7 +155,7 @@ test "same function imported with different prefix roles is rejected in either o
         var diagnostic: ?source.Diagnostic = null;
         var graph = ModuleGraph.init(arena.allocator(), arena.allocator(), .{}, .{ .ptr = &context, .vtable = &.{ .resolve = Resolver.resolve } }, &diagnostic);
         try std.testing.expectError(error.LanguageError, graph.root("root.huak", input));
-        try std.testing.expect(std.mem.indexOf(u8, diagnostic.?.text(), "conflicting imported mixfix forms") != null);
+        try std.testing.expect(std.mem.find(u8, diagnostic.?.text(), "conflicting imported mixfix forms") != null);
     }
 }
 
@@ -245,7 +245,7 @@ test "symbol storage survives map growth and rolls back failed allocation" {
     const initial_capacity = tables[0].capacity();
     var names: [32][16]u8 = undefined;
     for (&names, 0..) |*buffer, index| {
-        const name = try std.fmt.bufPrint(buffer, "symbol-{d}", .{index});
+        const name = try std.mem.print(buffer, "symbol-{d}", .{index});
         _ = try symbol(&graph, &unit, 0, name);
     }
     try t.expect(tables[0].capacity() > initial_capacity);

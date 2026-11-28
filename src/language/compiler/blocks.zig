@@ -102,7 +102,7 @@ pub fn compileExpansion(self: *Compiler, context: *Context, invocation: @FieldTy
         const resolver = caller.unit.resolverAt(span.start);
         const scope = caller.unit.scopeAt(span.start);
         const initializer = if (invocation.name.namespace) |namespace|
-            resolver.namespaceInitializer(scope, namespace[0 .. std.mem.indexOfScalar(u8, namespace, '.') orelse namespace.len])
+            resolver.namespaceInitializer(scope, namespace[0 .. std.mem.findScalar(u8, namespace, '.') orelse namespace.len])
         else if (resolver.callable(scope, invocation.name.name).member) |member|
             (if (member.initializer == std.math.maxInt(u32)) null else member.initializer)
         else
@@ -137,7 +137,7 @@ pub fn compileExpansion(self: *Compiler, context: *Context, invocation: @FieldTy
         const slots = try self.allocator.alloc(u32, params.len);
         for (slots, 0..) |*slot, i| slot.* = @intCast(params.len - 1 - i);
         const index: u32 = @intCast(self.build.argument_bindings.items.len);
-        try self.build.argument_bindings.append(.{ .slots = slots, .parameter_count = @intCast(params.len) });
+        try self.build.argument_bindings.append(self.allocator, .{ .slots = slots, .parameter_count = @intCast(params.len) });
         _ = try context.emit(.bind_arguments, index, @intCast(params.len), span);
     }
     self.environment = owner;

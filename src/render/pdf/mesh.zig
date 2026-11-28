@@ -230,10 +230,10 @@ test "opaque patches paint through their coverage inside an exact curved clip" {
     const encoded = try encode(testing.allocator, workspace, patches, &clip, false);
     defer testing.allocator.free(encoded.pdf);
     try testing.expectEqualStrings("0 0 m\n1 0 l\n1.5 0.25 0.33333334 1.25 1 1 c\n0 1 l\nh\nW\nn\n/Coverage gs\n/Color Do", try streamOf(encoded.pdf, 4));
-    try testing.expect(std.mem.indexOf(u8, encoded.pdf, "/Resources<</ExtGState<</Coverage<</SMask<</Type/Mask/S/Alpha/G 6 0 R>>>>>>/XObject<</Color 7 0 R>>>>") != null);
+    try testing.expect(std.mem.find(u8, encoded.pdf, "/Resources<</ExtGState<</Coverage<</SMask<</Type/Mask/S/Alpha/G 6 0 R>>>>>>/XObject<</Color 7 0 R>>>>") != null);
     try testing.expectEqualStrings("1 0 0 rg\n0 0 1 1 re\nf\nq\n/Ramp1 gs\n0 0 1 rg\n0 0 1 1 re\nf\nQ", try streamOf(encoded.pdf, 7));
-    try testing.expect(std.mem.indexOf(u8, encoded.pdf, "/Opacity") == null);
-    try testing.expect(std.mem.indexOf(u8, encoded.pdf, "xref\n0 8\n") != null);
+    try testing.expect(std.mem.find(u8, encoded.pdf, "/Opacity") == null);
+    try testing.expect(std.mem.find(u8, encoded.pdf, "xref\n0 8\n") != null);
 }
 
 test "one workspace serves consecutive encodings identically" {

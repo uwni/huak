@@ -89,10 +89,10 @@ test "cut outlines independent picture primitives without cancelling overlaps or
         }
         var pdf = try runtime.render(machine.getGlobal("output").?, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
         const extracted = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(extracted);
-        try t.expect(std.mem.indexOf(u8, extracted, "Native source text") != null);
+        try t.expect(std.mem.find(u8, extracted, "Native source text") != null);
     }
 }
 
@@ -144,7 +144,7 @@ test "outline picture workers retain independent geometry after their borrowed o
             defer source_pdf.deinit();
             const extracted = try @import("../support/pdf.zig").text(source_pdf.bytes(), .{ .raw = true });
             defer t.allocator.free(extracted);
-            try t.expect(std.mem.indexOf(u8, extracted, "Worker Ω") != null);
+            try t.expect(std.mem.find(u8, extracted, "Worker Ω") != null);
         }
     }
 }

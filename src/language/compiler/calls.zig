@@ -155,7 +155,7 @@ pub fn compileBoundArguments(self: *Compiler, context: *Context, call: @FieldTyp
     if (!ordered) {
         const index = try self.narrow(self.build.argument_bindings.items.len, span);
         const count = try self.narrow(slots.items.len, span);
-        try self.build.argument_bindings.append(.{ .slots = try slots.toOwnedSlice(self.allocator), .parameter_count = count });
+        try self.build.argument_bindings.append(self.allocator, .{ .slots = try slots.toOwnedSlice(self.allocator), .parameter_count = count });
         const binding = &self.build.argument_bindings.items[index];
         _ = try context.emit(.bind_arguments, index, binding.parameter_count, span);
         return binding.parameter_count;

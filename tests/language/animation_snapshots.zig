@@ -103,7 +103,7 @@ test "animation snapshots are static pictures of the playback state" {
             var expected = try runtime.render(machine.getGlobal(pair[1]).?, .svg);
             defer expected.deinit();
             try t.expectEqualSlices(u8, expected.bytes(), still.bytes());
-            try t.expect(std.mem.indexOf(u8, still.bytes(), "<animate") == null);
+            try t.expect(std.mem.find(u8, still.bytes(), "<animate") == null);
         }
         // The animated source still needs SVG; its snapshot exports as PDF.
         try t.expectError(error.AnimationRequiresSvg, runtime.render(machine.getGlobal("pic").?, .pdf));
@@ -118,17 +118,17 @@ test "animation snapshots are static pictures of the playback state" {
         // The easing list reaches CSS as one cubic-bezier timing curve.
         var curved = try runtime.render(machine.getGlobal("curved").?, .svg);
         defer curved.deinit();
-        try t.expect(std.mem.indexOf(u8, curved.bytes(), " 2s cubic-bezier(0.42,0,0.58,1) infinite") != null);
+        try t.expect(std.mem.find(u8, curved.bytes(), " 2s cubic-bezier(0.42,0,0.58,1) infinite") != null);
         // A phase starts the loop partway: an inline delay over its start state.
         var phased = try runtime.render(machine.getGlobal("phased").?, .svg);
         defer phased.deinit();
-        try t.expect(std.mem.indexOf(u8, phased.bytes(), "opacity=\"0.25\" class=\"huak-a") != null);
-        try t.expect(std.mem.indexOf(u8, phased.bytes(), "\" style=\"animation-delay:-1s\"") != null);
+        try t.expect(std.mem.find(u8, phased.bytes(), "opacity=\"0.25\" class=\"huak-a") != null);
+        try t.expect(std.mem.find(u8, phased.bytes(), "\" style=\"animation-delay:-1s\"") != null);
         // A track marked smil plays as SMIL and needs no stylesheet.
         var mixed = try runtime.render(machine.getGlobal("mixed").?, .svg);
         defer mixed.deinit();
-        try t.expect(std.mem.indexOf(u8, mixed.bytes(), "<animate attributeName=\"opacity\" values=\"0;1\" dur=\"2s\" repeatCount=\"indefinite\"/>") != null);
-        try t.expect(std.mem.indexOf(u8, mixed.bytes(), "<style>") == null);
+        try t.expect(std.mem.find(u8, mixed.bytes(), "<animate attributeName=\"opacity\" values=\"0;1\" dur=\"2s\" repeatCount=\"indefinite\"/>") != null);
+        try t.expect(std.mem.find(u8, mixed.bytes(), "<style>") == null);
     }
     const failures = [_]struct { source: []const u8, message: []const u8 }{
         .{ .source = "pic:=picture(40pt,40pt); pic.timeline(1)\ndot:=object.append(pic, fill(circle((9pt,9pt),3pt),rgb(0,0,0)))\nanimate(dot,\"stroke\",[[0,rgb(0,0,0)],[1,rgb(1,0,0)]])\nstill:=animation.snapshot(pic,0.5)", .message = "already has a stroke" },
@@ -147,7 +147,7 @@ test "animation snapshots are static pictures of the playback state" {
         defer machine.deinit();
         try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
         const detail = machine.failure.?;
-        const reported = std.mem.indexOf(u8, detail.text(), failure.message) != null or std.mem.indexOf(u8, detail.native_message, failure.message) != null;
+        const reported = std.mem.find(u8, detail.text(), failure.message) != null or std.mem.find(u8, detail.native_message, failure.message) != null;
         if (!reported) std.debug.print("snapshot failure: {s} / {s}\n", .{ detail.text(), detail.native_message });
         try t.expect(reported);
     }

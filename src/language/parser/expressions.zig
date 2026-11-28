@@ -194,18 +194,18 @@ pub fn prefix(self: *Parser) anyerror!*ast.Expr {
         },
         .lbracket => {
             try self.advance();
-            var values: std.array_list.Managed(*ast.Expr) = .init(self.allocator);
+            var values: std.ArrayList(*ast.Expr) = .empty;
             if (self.current.kind != .rbracket) while (true) {
-                try values.append(try expression(self, 0));
+                try values.append(self.allocator, try expression(self, 0));
                 if (!try self.accept(.comma)) break;
                 if (self.current.kind == .rbracket) break;
             };
             const finish = try self.expect(.rbracket, "expected ']' after array");
-            return self.createExpr(.join(token.span, finish.span), .{ .list = try values.toOwnedSlice() });
+            return self.createExpr(.join(token.span, finish.span), .{ .list = try values.toOwnedSlice(self.allocator) });
         },
         .lbrace => {
             try self.advance();
-            var entries: std.array_list.Managed(ast.DictEntry) = .init(self.allocator);
+            var entries: std.ArrayList(ast.DictEntry) = .empty;
             if (self.current.kind != .rbrace) while (true) {
                 if (self.current.kind != .string) return self.fail(self.current.span, "dictionary keys must be string literals", .{});
                 const key = try prefix(self);
@@ -213,12 +213,12 @@ pub fn prefix(self: *Parser) anyerror!*ast.Expr {
                     return self.fail(key.span, "duplicate dictionary key '{s}'", .{entry.key});
                 _ = try self.expect(.colon, "expected ':' after dictionary key");
                 const value = try expression(self, 0);
-                try entries.append(.{ .key = key.value.string, .value = value, .span = .join(key.span, value.span) });
+                try entries.append(self.allocator, .{ .key = key.value.string, .value = value, .span = .join(key.span, value.span) });
                 if (!try self.accept(.comma)) break;
                 if (self.current.kind == .rbrace) break;
             };
             const finish = try self.expect(.rbrace, "expected '}' after dictionary");
-            return self.createExpr(.join(token.span, finish.span), .{ .dict = try entries.toOwnedSlice() });
+            return self.createExpr(.join(token.span, finish.span), .{ .dict = try entries.toOwnedSlice(self.allocator) });
         },
         .kw_block => {
             const newline_nesting = self.lexer.newline_nesting;

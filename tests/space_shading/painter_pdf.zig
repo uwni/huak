@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
         const pdf = try std.Io.Dir.cwd().readFileAlloc(init.io, case.path, a, .limited(64 * 1024 * 1024));
         const shadings = std.mem.count(u8, pdf, "/ShadingType 7");
         const smasks = std.mem.count(u8, pdf, "/SMask");
-        const has_ca = std.mem.indexOf(u8, pdf, "/ca 0.6") != null;
+        const has_ca = std.mem.find(u8, pdf, "/ca 0.6") != null;
         if (shadings != 1 or smasks != 0 or has_ca != case.expect_group) {
             std.debug.print("{s}: ShadingType7={d}, SMask={d}, has /ca 0.6={} (expected 1, 0, {})\n", .{
                 case.name, shadings, smasks, has_ca, case.expect_group,

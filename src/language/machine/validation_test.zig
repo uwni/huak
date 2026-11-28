@@ -31,7 +31,7 @@ test "aggregate VM finite validation walks cyclic nested containers" {
     var machine = try Machine.init(std.testing.allocator, &program, .{}, .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, validation.checkFinite(&machine, .{ .dict = &dict }));
-    try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "non-finite") != null);
+    try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "non-finite") != null);
 }
 
 test "aggregate VM internal coercion reuses validated execution ownership without allocations" {
@@ -89,7 +89,7 @@ test "aggregate VM external validation ignores forged owners and template clones
             .dictionary_key => "valid UTF-8",
             .native_handle => "invalid native handle",
         };
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), expected) != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), expected) != null);
     };
 }
 
@@ -108,7 +108,7 @@ test "aggregate VM borrowed nodes retain complete finite and nominal field valid
         // never cached. Production task parents stay frozen until join.
         if (record_case) value.record.fields[0] = .{ .string = "wrong" } else value.list.owned.values.items[0] = .{ .number = std.math.nan(f64) };
         try std.testing.expectError(error.RuntimeFailed, validation.checkFinite(&borrower, value));
-        try std.testing.expect(std.mem.indexOf(u8, borrower.failure.?.text(), if (record_case) "expects int" else "non-finite") != null);
+        try std.testing.expect(std.mem.find(u8, borrower.failure.?.text(), if (record_case) "expects int" else "non-finite") != null);
     }
 }
 
@@ -158,6 +158,6 @@ test "aggregate VM every host return path fully checks nested values despite a m
         probe.owner = machine.identity;
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
         try std.testing.expectEqual(@as(usize, 1), probe.calls);
-        try std.testing.expect(std.mem.indexOf(u8, machine.failure.?.text(), "non-finite") != null);
+        try std.testing.expect(std.mem.find(u8, machine.failure.?.text(), "non-finite") != null);
     }
 }

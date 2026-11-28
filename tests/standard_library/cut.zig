@@ -96,13 +96,13 @@ test "cut composes many holes in one clip and preserves native text canvas and o
         try t.expectEqual(@as(usize, 0), runtime.outline_cache.count());
         var svg = try runtime.render(machine.getGlobal("output").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<clipPath") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<clipPath") != null);
         var pdf = try runtime.render(machine.getGlobal("output").?, .pdf);
         defer pdf.deinit();
-        try t.expect(std.mem.indexOf(u8, pdf.bytes(), "/ToUnicode") != null);
+        try t.expect(std.mem.find(u8, pdf.bytes(), "/ToUnicode") != null);
         const extracted = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(extracted);
-        try t.expect(std.mem.indexOf(u8, extracted, "Retained native text") != null);
+        try t.expect(std.mem.find(u8, extracted, "Retained native text") != null);
     }
 }
 
@@ -119,7 +119,7 @@ test "cut validates static input and tolerance without changing aliases" {
             .{ .setup = "import paint.{circle, fill, picture};import animation.{timeline, animate};cutter:=picture(640, 480); id=object.append(cutter, object.fill(circle((5pt,5pt),2pt))); cutter.timeline(2); animate(id,\"opacity\",[[0,0],[1,1]])", .call = "cut(source,cutter)", .message = "operation requires a static object" },
         };
         for (cases) |fixture| {
-            const input = try std.fmt.allocPrint(t.allocator,
+            const input = try t.allocator.print(
                 \\import paint.*
                 \\import object.region
                 \\source:=picture(80pt,60pt); alias:=source
@@ -136,7 +136,7 @@ test "cut validates static input and tolerance without changing aliases" {
             var machine = try l.Machine.init(t.allocator, &program, runtime.host(), .{});
             defer machine.deinit();
             try t.expectError(error.RuntimeFailed, machine.execute(&.{}));
-            try t.expect(std.mem.indexOf(u8, machine.failure.?.native_message, fixture.message) != null);
+            try t.expect(std.mem.find(u8, machine.failure.?.native_message, fixture.message) != null);
             var source = try scene.view(machine.getGlobal("source").?);
             defer source.deinit();
             try t.expectEqual(@as(usize, 1), scene.count(&source, .path));
@@ -199,12 +199,12 @@ test "object cut retains overflowing native text images and paint without outlin
         try execute(&machine);
         var svg = try runtime.render(machine.getGlobal("plate").?, .svg);
         defer svg.deinit();
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<image") != null);
-        try t.expect(std.mem.indexOf(u8, svg.bytes(), "<linearGradient") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<image") != null);
+        try t.expect(std.mem.find(u8, svg.bytes(), "<linearGradient") != null);
         var pdf = try runtime.render(machine.getGlobal("plate").?, .pdf);
         defer pdf.deinit();
         const text = try @import("../support/pdf.zig").text(pdf.bytes(), .{ .raw = true });
         defer t.allocator.free(text);
-        try t.expect(std.mem.indexOf(u8, text, "WWW") != null);
+        try t.expect(std.mem.find(u8, text, "WWW") != null);
     }
 }

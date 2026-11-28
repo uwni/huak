@@ -9,7 +9,7 @@ fn next(reader: *std.Io.File.MultiReader, allocator: std.mem.Allocator, io: std.
     const timeout: std.Io.Timeout = .{ .deadline = .fromNow(io, .{ .raw = .fromSeconds(30), .clock = .awake }) };
     while (true) {
         const stream = reader.reader(0);
-        if (std.mem.indexOfScalar(u8, stream.buffered(), '\n')) |end| {
+        if (std.mem.findScalar(u8, stream.buffered(), '\n')) |end| {
             const parsed = try std.json.parseFromSlice(Event, allocator, stream.buffered()[0..end], .{ .allocate = .alloc_always, .ignore_unknown_fields = true });
             stream.toss(end + 1);
             return parsed.value;
@@ -46,9 +46,9 @@ pub fn main(init: std.process.Init) !void {
     const source = try cwd.readFileAlloc(io, source_path, a, .unlimited);
     const count = try std.fmt.parseInt(usize, args[5], 10);
     if (count == 0 or count > 20) return error.InvalidArguments;
-    const output = try std.fmt.allocPrint(a, "{s}-process.svg", .{args[4]});
-    const watched = try std.fmt.allocPrint(a, "{s}-watch.huak", .{args[4]});
-    const child_log = try std.fmt.allocPrint(a, "{s}-child.log", .{args[4]});
+    const output = try a.print("{s}-process.svg", .{args[4]});
+    const watched = try a.print("{s}-watch.huak", .{args[4]});
+    const child_log = try a.print("{s}-child.log", .{args[4]});
     var expected: ?Digest = null;
     std.debug.print("executable={s} library={s} source={s} trials={d} OS_caches_not_flushed=true\n", .{ executable, library, source_path, count });
     for (0..count) |iteration| {
@@ -76,7 +76,7 @@ pub fn main(init: std.process.Init) !void {
     var changed = start;
     for (0..count) |iteration| {
         if (iteration != 0) {
-            const changed_source = try std.fmt.allocPrint(a, "{s}\n// watch measurement {d}\n", .{ source, iteration });
+            const changed_source = try a.print("{s}\n// watch measurement {d}\n", .{ source, iteration });
             changed = std.Io.Clock.awake.now(io);
             try cwd.writeFile(io, .{ .sub_path = watched, .data = changed_source });
         }

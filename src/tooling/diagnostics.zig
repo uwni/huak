@@ -96,7 +96,7 @@ fn narrow(value: usize) u32 {
 fn addString(wip: *std.zig.ErrorBundle.Wip, text: []const u8) !std.zig.ErrorBundle.String {
     // ErrorBundle strings are NUL-terminated. Escape a literal NUL with the
     // standard formatter rather than silently losing the rest of a message.
-    if (std.mem.indexOfScalar(u8, text, 0) != null) return wip.printString("{f}", .{std.zig.fmtString(text)});
+    if (std.mem.findScalar(u8, text, 0) != null) return wip.printString("{f}", .{std.zig.fmtString(text)});
     return wip.addString(text);
 }
 
@@ -134,8 +134,8 @@ test "standard bundles own source snapshots and retain complete native notes" {
     var rendered: std.Io.Writer.Allocating = .init(allocator);
     defer rendered.deinit();
     try bundle.renderToWriter(.{}, &rendered.writer);
-    try std.testing.expect(std.mem.indexOf(u8, rendered.written(), "/project/figure.huak:2:1: error: native operation failed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered.written(), "note: at figure") != null);
+    try std.testing.expect(std.mem.find(u8, rendered.written(), "/project/figure.huak:2:1: error: native operation failed") != null);
+    try std.testing.expect(std.mem.find(u8, rendered.written(), "note: at figure") != null);
     try std.testing.expect(rendered.written().len > 8192);
 }
 
@@ -159,7 +159,7 @@ test "embedded NUL in native diagnostics does not truncate later text" {
     var bundle = try fromRuntime(std.testing.allocator, "figure.huak", "x", &detail, &.{});
     defer bundle.deinit(std.testing.allocator);
     const note = bundle.getNotes(bundle.getMessages()[0])[0];
-    try std.testing.expect(std.mem.indexOf(u8, bundle.nullTerminatedString(bundle.getErrorMessage(note).msg), "after") != null);
+    try std.testing.expect(std.mem.find(u8, bundle.nullTerminatedString(bundle.getErrorMessage(note).msg), "after") != null);
 }
 
 fn allocationFailures(allocator: std.mem.Allocator) !void {

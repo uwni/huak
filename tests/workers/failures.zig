@@ -66,7 +66,7 @@ test "speculative typography preparation preserves earlier errors and successful
         \\
     ;
     for ([_]i64{ 0, 1 }) |divisor| {
-        const source = try std.fmt.allocPrint(t.allocator, "{s}first:=early({d})\nsecond:=late()\n", .{ builders, divisor });
+        const source = try t.allocator.print("{s}first:=early({d})\nsecond:=late()\n", .{ builders, divisor });
         defer t.allocator.free(source);
         var program = try harness.compile(&library, source, true);
         defer program.deinit();
@@ -145,7 +145,7 @@ test "native worker diagnostics survive temporary layout and task arenas" {
     var parallel = try failing(&library, &program, 4, .{});
     defer parallel.deinit();
     try expectSameFailure(serial, parallel);
-    try t.expect(std.mem.indexOf(u8, parallel.native_message, "unknown_worker_symbol") != null);
+    try t.expect(std.mem.find(u8, parallel.native_message, "unknown_worker_symbol") != null);
 }
 
 test "instruction budgets preserve serial source locations and initialized bindings" {

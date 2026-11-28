@@ -85,7 +85,7 @@ pub fn build(self: *Session, report: *Report, observer: ?huak.tooling.Frontend.O
             .run, .watch => {},
             .check, .help => unreachable,
         }
-        for (program.modules) |mod| if (std.fs.path.isAbsolute(mod.name)) try output_paths.checkInput(self.io, &destinations, mod.name, report);
+        for (program.modules) |mod| if (std.Io.Dir.path.isAbsolute(mod.name)) try output_paths.checkInput(self.io, &destinations, mod.name, report);
         for (self.options.fonts) |font| try output_paths.checkInput(self.io, &destinations, font, report);
         const library = if (self.typesetter) |*lib| lib else |err| return self.reportTypesetterLoadFailure(err, report);
         // A library supplied by path can re-export symbols from another image.

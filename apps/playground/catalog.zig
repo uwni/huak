@@ -12,7 +12,7 @@ pub fn main(init: std.process.Init) !void {
     while (try walker.next(init.io)) |item| {
         if (item.kind != .file) continue;
         const path = try arena.dupe(u8, item.path);
-        std.mem.replaceScalar(u8, path, std.fs.path.sep, '/');
+        std.mem.replaceScalar(u8, path, std.Io.Dir.path.sep, '/');
         if (args.len == 3 and std.mem.startsWith(u8, path, "space/")) continue;
         try paths.append(arena, path);
     }

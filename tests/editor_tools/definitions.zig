@@ -21,10 +21,10 @@ test "standalone language server resolves standard module tree and nested native
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 1, .method = "initialize", .params = .{} });
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .method = "initialized", .params = .{} });
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .version = 1, .text = source } } });
-    try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, std.mem.indexOf(u8, source, "std.math.sin").? + "std.".len) } });
-    try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 3, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, std.mem.indexOf(u8, source, "sin(wave").?) } });
+    try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 2, .method = "textDocument/completion", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, std.mem.find(u8, source, "std.math.sin").? + "std.".len) } });
+    try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 3, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, std.mem.find(u8, source, "sin(wave").?) } });
     try definitionRequest(a, writer, 4, uri, source, "sin(wave");
-    try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 5, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, std.mem.indexOf(u8, source, "wave(0)").?) } });
+    try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 5, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, std.mem.find(u8, source, "wave(0)").?) } });
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .id = 6, .method = "shutdown", .params = @as(?bool, null) });
     try tooling.lsp.writeMessage(a, writer, .{ .jsonrpc = "2.0", .method = "exit", .params = @as(?bool, null) });
     try temporary.dir.writeFile(t.io, .{ .sub_path = "standard-tree-input", .data = input.written() });
@@ -138,8 +138,8 @@ test "standalone definitions follow unsaved reexports edits and virtual standard
             4 => try t.expectEqualStrings(std_uri, response.get("result").?.object.get("uri").?.string),
             5 => {
                 const source = response.get("result").?.string;
-                try t.expect(std.mem.indexOf(u8, source, "export fn assert(") != null);
-                try t.expect(std.mem.indexOf(u8, source, "panic(message)") != null);
+                try t.expect(std.mem.find(u8, source, "export fn assert(") != null);
+                try t.expect(std.mem.find(u8, source, "panic(message)") != null);
             },
             6 => {
                 const location = response.get("result").?.object;
@@ -157,6 +157,6 @@ test "standalone definitions follow unsaved reexports edits and virtual standard
 }
 
 fn definitionRequest(allocator: std.mem.Allocator, writer: *std.Io.Writer, id: u32, uri: []const u8, source: []const u8, query: []const u8) !void {
-    const offset = std.mem.lastIndexOf(u8, source, query) orelse return error.MissingTestQuery;
+    const offset = std.mem.findLast(u8, source, query) orelse return error.MissingTestQuery;
     try tooling.lsp.writeMessage(allocator, writer, .{ .jsonrpc = "2.0", .id = id, .method = "textDocument/definition", .params = .{ .textDocument = .{ .uri = uri }, .position = tooling.position.at(source, offset) } });
 }

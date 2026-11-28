@@ -62,7 +62,7 @@ fn targetName(allocator: std.mem.Allocator, target: std.Target) !?[]const u8 {
         else => false,
     };
     if (!supported) return null;
-    return try std.fmt.allocPrint(allocator, "{s}-unknown-linux-{t}", .{ name, abi });
+    return try allocator.print("{s}-unknown-linux-{t}", .{ name, abi });
 }
 
 /// The desktop library as Cargo builds it or as `-Dlibtypst` names it.
@@ -85,7 +85,7 @@ pub const Libtypst = struct {
 pub fn libtypst(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.Optimize,
+    optimize: std.lang.Optimize,
     name: []const u8,
     prebuilt: ?[]const u8,
 ) Libtypst {

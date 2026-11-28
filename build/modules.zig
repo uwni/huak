@@ -40,7 +40,7 @@ const EngineModules = struct {
 pub fn engineModules(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.Optimize,
+    optimize: std.lang.Optimize,
     comptime public: bool,
 ) EngineModules {
     const loader: Import = .{
@@ -256,7 +256,7 @@ pub fn fixtureModules(b: *std.Build, config: Configuration, modules: Modules) Fi
 pub fn module(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.Optimize,
+    optimize: std.lang.Optimize,
     source: []const u8,
     imports: []const Import,
 ) *std.Build.Module {

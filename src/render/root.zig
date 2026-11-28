@@ -131,7 +131,7 @@ pub const Scene = struct {
 
 /// Export a prepared huak document with the host and loaded backend versions.
 pub fn exportPdf(allocator: std.mem.Allocator, document: *const typst.Document) !typst.Buffer {
-    const creator = try std.fmt.allocPrint(allocator, "huak {s} (Typst {s})", .{
+    const creator = try allocator.print("huak {s} (Typst {s})", .{
         @import("build_options").version,
         try document.library.typstVersion(),
     });

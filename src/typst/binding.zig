@@ -32,7 +32,7 @@ pub const Functions = blk: {
     }
     var names: [count][]const u8 = undefined;
     var types: [count]type = undefined;
-    const attrs: [count]std.builtin.Type.Struct.FieldAttributes = @splat(.{});
+    const attrs: [count]std.lang.Type.Struct.FieldAttributes = @splat(.{});
     var index: usize = 0;
     for (@typeInfo(c).@"struct".decl_names) |name| {
         if (std.mem.startsWith(u8, name, "typst_") and @typeInfo(@TypeOf(@field(c, name))) == .@"fn") {

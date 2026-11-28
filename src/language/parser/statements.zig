@@ -10,13 +10,13 @@ const declarations = @import("declarations.zig");
 const expressions = @import("expressions.zig");
 
 pub fn body(self: *Parser) anyerror![]const *ast.Stmt {
-    var statements: std.array_list.Managed(*ast.Stmt) = .init(self.allocator);
+    var statements: std.ArrayList(*ast.Stmt) = .empty;
     self.separators() catch |err| return err;
     while (!switch (self.current.kind) {
         .eof, .kw_end, .kw_else, .kw_elseif => true,
         else => false,
     }) {
-        try statements.append(try statement(self));
+        try statements.append(self.allocator, try statement(self));
         if (!switch (self.current.kind) {
             .eof, .kw_end, .kw_else, .kw_elseif, .newline, .semicolon => true,
             else => false,
@@ -24,7 +24,7 @@ pub fn body(self: *Parser) anyerror![]const *ast.Stmt {
             return self.fail(self.current.span, "expected a newline or ';' between statements", .{});
         try self.separators();
     }
-    return statements.toOwnedSlice();
+    return statements.toOwnedSlice(self.allocator);
 }
 
 pub fn statement(self: *Parser) anyerror!*ast.Stmt {
@@ -45,12 +45,12 @@ pub fn statement(self: *Parser) anyerror!*ast.Stmt {
         .kw_struct => return declarations.structure(self),
         .kw_param => return declarations.scriptParameter(self),
         .kw_if => {
-            var branches: std.array_list.Managed(ast.Branch) = .init(self.allocator);
+            var branches: std.ArrayList(ast.Branch) = .empty;
             while (true) {
                 try self.advance();
                 const condition = try expressions.expression(self, 0);
                 try self.controlDelimiter(.kw_then, "expected 'then' after if or elseif condition");
-                try branches.append(.{ .condition = condition, .body = try body(self) });
+                try branches.append(self.allocator, .{ .condition = condition, .body = try body(self) });
                 if (self.current.kind != .kw_elseif) break;
             }
             var otherwise: []const *ast.Stmt = &.{};
@@ -58,7 +58,7 @@ pub fn statement(self: *Parser) anyerror!*ast.Stmt {
                 otherwise = try body(self);
             }
             const finish = try self.expect(.kw_end, "expected 'end' for if");
-            return self.createStmt(.join(start, finish.span), .{ .conditional = .{ .branches = try branches.toOwnedSlice(), .otherwise = otherwise } });
+            return self.createStmt(.join(start, finish.span), .{ .conditional = .{ .branches = try branches.toOwnedSlice(self.allocator), .otherwise = otherwise } });
         },
         .kw_while => {
             try self.advance();

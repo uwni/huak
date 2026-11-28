@@ -102,7 +102,7 @@ pub const Objects = struct {
     pub fn endStream(self: *Objects, stream: *Stream) std.Io.Writer.Error!void {
         const written = self.pdf.written();
         stream.length = written.len - stream.data_at;
-        _ = std.fmt.bufPrint(written[stream.length_at..][0..length_width], "{d}", .{stream.length}) catch unreachable;
+        _ = std.mem.print(written[stream.length_at..][0..length_width], "{d}", .{stream.length}) catch unreachable;
         try self.pdf.writer.writeAll("\nendstream\nendobj\n\n");
     }
 

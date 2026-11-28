@@ -190,7 +190,7 @@ pub fn expressionTarget(self: Query, expr: *const ast.Expr) ?Target {
 }
 
 pub fn resolveAnnotation(self: Query, annotation_: ast.Annotation) ?Target {
-    if (std.mem.lastIndexOfScalar(u8, annotation_.name, '.')) |dot| {
+    if (std.mem.findScalarLast(u8, annotation_.name, '.')) |dot| {
         const namespace = annotation_.name[0..dot];
         const id = self.graph.resolveNamespaceAt(self.unit, self.unit.scopeAt(annotation_.span.start), namespace, annotation_.span.start) orelse return null;
         if (self.token.span.end < annotation_.span.end)

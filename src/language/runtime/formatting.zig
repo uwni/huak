@@ -185,18 +185,18 @@ fn appendValue(a: std.mem.Allocator, output: *std.ArrayList(u8), value: Value, d
         .omitted => return error.InvalidValue,
         .boolean => |x| try appendBytes(a, output, if (x) "true" else "false"),
         .string => |x| try appendBytes(a, output, x),
-        .int => |x| try appendBytes(a, output, std.fmt.bufPrint(&buffer, "{d}", .{x}) catch return error.ValueFormattingLimit),
-        .number => |x| try appendBytes(a, output, std.fmt.bufPrint(&buffer, "{d}", .{x}) catch return error.ValueFormattingLimit),
+        .int => |x| try appendBytes(a, output, std.mem.print(&buffer, "{d}", .{x}) catch return error.ValueFormattingLimit),
+        .number => |x| try appendBytes(a, output, std.mem.print(&buffer, "{d}", .{x}) catch return error.ValueFormattingLimit),
         .quantity => |x| {
-            try appendBytes(a, output, std.fmt.bufPrint(&buffer, "{d}", .{x.value}) catch return error.ValueFormattingLimit);
+            try appendBytes(a, output, std.mem.print(&buffer, "{d}", .{x.value}) catch return error.ValueFormattingLimit);
             if (x.dimension.length != 0) {
                 try appendBytes(a, output, "mm");
-                if (x.dimension.length != 1) try appendBytes(a, output, std.fmt.bufPrint(&buffer, "^{d}", .{x.dimension.length}) catch return error.ValueFormattingLimit);
+                if (x.dimension.length != 1) try appendBytes(a, output, std.mem.print(&buffer, "^{d}", .{x.dimension.length}) catch return error.ValueFormattingLimit);
             }
             if (x.dimension.angle != 0) {
                 if (x.dimension.length != 0) try appendBytes(a, output, " ");
                 try appendBytes(a, output, "rad");
-                if (x.dimension.angle != 1) try appendBytes(a, output, std.fmt.bufPrint(&buffer, "^{d}", .{x.dimension.angle}) catch return error.ValueFormattingLimit);
+                if (x.dimension.angle != 1) try appendBytes(a, output, std.mem.print(&buffer, "^{d}", .{x.dimension.angle}) catch return error.ValueFormattingLimit);
             }
         },
         inline .vec2, .vec3 => |x| {
@@ -210,13 +210,13 @@ fn appendValue(a: std.mem.Allocator, output: *std.ArrayList(u8), value: Value, d
             }
             try appendBytes(a, output, ")");
         },
-        .function => |x| try appendBytes(a, output, std.fmt.bufPrint(&buffer, "<function:{s}:{d}>", .{ @tagName(x), switch (x) {
+        .function => |x| try appendBytes(a, output, std.mem.print(&buffer, "<function:{s}:{d}>", .{ @tagName(x), switch (x) {
             .bytecode, .native => |i| i,
             .bound => |bound| switch (bound.target) {
                 .bytecode, .native => |i| i,
             },
         } }) catch return error.ValueFormattingLimit),
         .object => try appendBytes(a, output, "<object>"),
-        .handle => |x| try appendBytes(a, output, std.fmt.bufPrint(&buffer, "<{s}:{d}>", .{ x.kind.name(), x.index }) catch return error.ValueFormattingLimit),
+        .handle => |x| try appendBytes(a, output, std.mem.print(&buffer, "<{s}:{d}>", .{ x.kind.name(), x.index }) catch return error.ValueFormattingLimit),
     }
 }

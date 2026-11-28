@@ -64,7 +64,7 @@ test "native document and binary buffers remain owned after context destruction"
     var svg: ?*c.TypstBuffer = null;
     defer functions.buffer_release(svg);
     try check(&functions, functions.document_export_svg(document, 0, &svg, &diagnostics), &diagnostics);
-    try t.expect(std.mem.indexOf(u8, binding.bytes(functions.buffer_data(svg)), "<path") != null);
+    try t.expect(std.mem.find(u8, binding.bytes(functions.buffer_data(svg)), "<path") != null);
     var pdf: ?*c.TypstBuffer = null;
     defer functions.buffer_release(pdf);
     try check(&functions, functions.document_export_pdf(document, null, &pdf, &diagnostics), &diagnostics);
@@ -74,8 +74,8 @@ test "native document and binary buffers remain owned after context destruction"
     document = null;
     const output = binding.bytes(functions.buffer_data(pdf));
     try t.expect(std.mem.startsWith(u8, output, "%PDF-"));
-    try t.expect(std.mem.indexOf(u8, output, "/FontFile") != null);
-    try t.expect(std.mem.indexOf(u8, output, "/ToUnicode") != null);
+    try t.expect(std.mem.find(u8, output, "/FontFile") != null);
+    try t.expect(std.mem.find(u8, output, "/ToUnicode") != null);
 }
 
 test "native batch preserves successes errors diagnostic indices and independent ownership" {

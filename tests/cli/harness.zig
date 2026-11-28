@@ -19,7 +19,7 @@ pub const Harness = struct {
         const a = arena.allocator();
         const executable = try std.Io.Dir.cwd().realPathFileAlloc(t.io, options.executable_path, a);
         const library = try std.Io.Dir.cwd().realPathFileAlloc(t.io, options.library_path, a);
-        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const n = try temporary.dir.realPath(t.io, &path_buffer);
         const work = try a.dupe(u8, path_buffer[0..n]);
         return .{ .temporary = temporary, .arena = arena, .executable = executable, .library = library, .work = work };
@@ -32,14 +32,14 @@ pub const Harness = struct {
         return self.arena.allocator();
     }
     pub fn fmt(self: *Harness, comptime format: []const u8, args: anytype) ![]const u8 {
-        return std.fmt.allocPrint(self.allocator(), format, args);
+        return self.allocator().print(format, args);
     }
     pub fn path(self: *Harness, relative: []const u8) ![]const u8 {
-        return std.fs.path.join(self.allocator(), &.{ self.work, relative });
+        return std.Io.Dir.path.join(self.allocator(), &.{ self.work, relative });
     }
     pub fn script(self: *Harness, name: []const u8, source: []const u8) ![]const u8 {
         const relative = try self.fmt("{s}.huak", .{name});
-        if (std.fs.path.dirname(relative)) |parent| try self.temporary.dir.createDirPath(t.io, parent);
+        if (std.Io.Dir.path.dirname(relative)) |parent| try self.temporary.dir.createDirPath(t.io, parent);
         try self.temporary.dir.writeFile(t.io, .{ .sub_path = relative, .data = source });
         return self.path(relative);
     }
@@ -99,16 +99,16 @@ pub const Harness = struct {
     }
 };
 pub fn contains(text: []const u8, fragment: []const u8) !void {
-    if (std.mem.indexOf(u8, text, fragment) == null) {
+    if (std.mem.find(u8, text, fragment) == null) {
         std.debug.print("missing {s} in:\n{s}\n", .{ fragment, text });
         return error.TestExpectedSubstring;
     }
 }
 pub fn excludes(text: []const u8, fragment: []const u8) !void {
-    try t.expect(std.mem.indexOf(u8, text, fragment) == null);
+    try t.expect(std.mem.find(u8, text, fragment) == null);
 }
 pub fn either(text: []const u8, a: []const u8, b: []const u8) !void {
-    try t.expect(std.mem.indexOf(u8, text, a) != null or std.mem.indexOf(u8, text, b) != null);
+    try t.expect(std.mem.find(u8, text, a) != null or std.mem.find(u8, text, b) != null);
 }
 pub fn output(result: Result, expected: []const u8) !void {
     try t.expectEqualStrings(expected, result.stdout);

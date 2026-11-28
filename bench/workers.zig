@@ -88,11 +88,11 @@ fn fixture(allocator: std.mem.Allocator, workload: Workload, count: usize) !Fixt
     });
     switch (workload) {
         .independent => for (names, 0..) |*name, index| {
-            name.* = try std.fmt.allocPrint(allocator, "figure_{d}", .{index});
+            name.* = try allocator.print("figure_{d}", .{index});
             try writer.writer.print("export {s}:=figure({d})\n", .{ name.*, index });
         },
         .diamond => for (names, 0..) |*name, index| {
-            name.* = try std.fmt.allocPrint(allocator, "diamond_{d}", .{index});
+            name.* = try allocator.print("diamond_{d}", .{index});
             try writer.writer.print(
                 "base_{d}:=figure({d})\nleft_{d}:=extended(base_{d},{d})\nright_{d}:=extended(base_{d},{d})\nexport {s}:=combined(left_{d},right_{d})\n",
                 .{ index, index * 3, index, index, index * 3 + 1, index, index, index * 3 + 2, name.*, index, index },
@@ -101,7 +101,7 @@ fn fixture(allocator: std.mem.Allocator, workload: Workload, count: usize) !Fixt
         .chain => {
             try writer.writer.writeAll("chain_0:=figure(0)\n");
             for (1..count) |index| try writer.writer.print("chain_{d}:=extended(chain_{d},{d})\n", .{ index, index - 1, index });
-            names[0] = try std.fmt.allocPrint(allocator, "chain_{d}", .{count - 1});
+            names[0] = try allocator.print("chain_{d}", .{count - 1});
             try writer.writer.print("export {s}\n", .{names[0]});
         },
     }
@@ -271,11 +271,11 @@ fn child(init: std.process.Init, library_path: []const u8, workload: Workload, c
 }
 
 fn measure(allocator: std.mem.Allocator, io: std.Io, executable: []const u8, library: []const u8, workload: Workload, config: Configuration, count: usize) !Sample {
-    const construct_arg = try std.fmt.allocPrint(allocator, "{d}", .{config.construct});
+    const construct_arg = try allocator.print("{d}", .{config.construct});
     defer allocator.free(construct_arg);
-    const output_arg = try std.fmt.allocPrint(allocator, "{d}", .{config.output});
+    const output_arg = try allocator.print("{d}", .{config.output});
     defer allocator.free(output_arg);
-    const count_arg = try std.fmt.allocPrint(allocator, "{d}", .{count});
+    const count_arg = try allocator.print("{d}", .{count});
     defer allocator.free(count_arg);
     const start = std.Io.Clock.awake.now(io);
     const result = try std.process.run(allocator, io, .{
