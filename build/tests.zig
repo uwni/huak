@@ -105,9 +105,9 @@ pub fn addTests(b: *std.Build, config: Configuration, modules: Modules, fixtures
     _ = program(b, config, .{ .name = "animation-references", .source = "tests/animation/references.zig", .step = "verify-animation", .description = "Generate native animation reference fixtures", .imports = &.{ modules.native, modules.huak, fixtures.animation, modules.options } });
 }
 
-pub fn addSpaceTests(b: *std.Build, config: Configuration, modules: Modules, cli: *std.Build.Step.Compile, backend: space_build.Backend, include_in_suite: bool) void {
+pub fn addSpaceTests(b: *std.Build, config: Configuration, modules: Modules, cli: *std.Build.Step.Compile, backend: space_build.Backend) void {
     const space = b.step("test-space", "Test native OCCT modeling and projected visibility in SVG and PDF");
-    if (include_in_suite) b.top_level_steps.get("test").?.step.dependOn(space);
+    b.top_level_steps.get("test").?.step.dependOn(space);
     space.dependOn(backend.check);
     // Smooth light against exact light, through the built library.
     const shading = b.addRunArtifact(b.addExecutable(.{ .name = "space-shading", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/space_shading.zig", &.{ modules.huak, modules.space_c }) }));

@@ -14,6 +14,8 @@ on:
       - 'apps/language_server/**'
       - 'libtypst/include/**'
       - 'tests/space_projection.cpp'
+      - 'tests/space_contour_function.cpp'
+      - 'tests/space_regions.cpp'
       - 'tests/space_loader.cpp'
       - '.github/workflows/huak-nightly.yml'
   workflow_dispatch:
@@ -37,58 +39,37 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: "0.17.1"
-      - name: Build and test the desktop tools
+      - name: Restore Zig and OCCT build cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: zig-cache
+        with:
+          path: |
+            ~/.cache/zig
+            .zig-cache
+          key: zig-occt-8.0.2-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon', 'build/occt.zig') }}
+          restore-keys: |
+            zig-occt-8.0.2-${{ matrix.runner }}-${{ runner.arch }}-
+      - name: Build and test desktop tools and the OCCT projection library
         run: |
-          zig build tools test-backend test-cli-options \
+          zig build tools space-backend test-backend test-cli-options test-space-cpp \
             -Doptimize=ReleaseSafe -Dcpu=baseline
           zig-out/bin/huak --help
-      - name: Restore OCCT SDK
-        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        id: occt
-        with:
-          path: .occt-sdk
-          key: occt-8.0.1-modeling-v1-${{ matrix.runner }}-${{ runner.arch }}
-      - name: Check out OCCT 8.0.1
-        if: steps.occt.outputs.cache-hit != 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: Open-Cascade-SAS/OCCT
-          ref: b8f597c677811d1f9f4d8a97f5ae2825c0353a42
-          path: .occt-source
-          persist-credentials: false
-      - name: Build the required OCCT toolkits
-        if: steps.occt.outputs.cache-hit != 'true'
-        run: |
-          cmake -S .occt-source -B "$RUNNER_TEMP/occt" -G Ninja \
-            -DINSTALL_DIR="$PWD/.occt-sdk" -DINSTALL_DIR_LAYOUT=Unix -DINSTALL_DIR_LIB=lib \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_RESOURCES=OFF -DBUILD_MODULE_Draw=OFF \
-            -DBUILD_MODULE_ApplicationFramework=OFF -DBUILD_MODULE_DataExchange=OFF \
-            -DBUILD_MODULE_Visualization=OFF -DBUILD_MODULE_ModelingAlgorithms=OFF \
-            -DBUILD_MODULE_ModelingData=OFF -DBUILD_MODULE_FoundationClasses=OFF \
-            "-DBUILD_ADDITIONAL_TOOLKITS=TKOffset TKHLR"
-          cmake --build "$RUNNER_TEMP/occt" --parallel 2
-          cmake --install "$RUNNER_TEMP/occt"
       # Saved right after the build, so a later failing step does not discard it.
-      - name: Save OCCT SDK
-        if: steps.occt.outputs.cache-hit != 'true'
+      - name: Save Zig and OCCT build cache
+        if: steps.zig-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
-          path: .occt-sdk
-          key: ${{ steps.occt.outputs.cache-primary-key }}
-      - name: Build and test the C++ adapter against the native SDK
-        run: |
-          cmake -S src/drawing/space -B "$RUNNER_TEMP/projection" \
-            -DCMAKE_BUILD_TYPE=Release -DOpenCASCADE_ROOT="$PWD/.occt-sdk"
-          cmake --build "$RUNNER_TEMP/projection" --parallel --target huak_space check
-          cmake --install "$RUNNER_TEMP/projection" --prefix "$PWD/zig-out"
-      - name: Package executables and the optional projection library
+          path: |
+            ~/.cache/zig
+            .zig-cache
+          key: ${{ steps.zig-cache.outputs.cache-primary-key }}
+      - name: Package executables and the projection library
         run: |
           tar -czf huak-${{ matrix.platform }}.tar.gz -C "$PWD/zig-out/bin" huak huak-fmt huak-lsp \
             -C "$PWD/zig-out/lib" ${{ matrix.backend }} -C "$PWD/zig-out" share/licenses/huak/occt
           dest=$(mktemp -d)
           tar -xf huak-${{ matrix.platform }}.tar.gz -C "$dest"
-          export LD_LIBRARY_PATH="$PWD/.occt-sdk/lib" DYLD_LIBRARY_PATH="$PWD/.occt-sdk/lib"
-          "$RUNNER_TEMP/projection/space_loader" "$dest/${{ matrix.backend }}"
+          zig build run-space-loader -Doptimize=ReleaseSafe -Dcpu=baseline -- "$dest/${{ matrix.backend }}"
           if [[ "$RUNNER_OS" == macOS ]]; then
             DYLD_PRINT_LIBRARIES=1 "$dest/huak" --help 2>"$dest/loaded"
             grep -F "$dest/${{ matrix.backend }}" "$dest/loaded"

@@ -44,10 +44,10 @@ PDF 的生成工具信息写作 `huak <版本> (Typst <版本>)`，同时记录�
 
 二维和三维路径共用 `--`、`&` 和 Bézier 构造器。用 `space` 拉伸、旋转、扫掠或放样轮廓，再将模型投影成二维路径。棱线、曲面轮廓和模型交线可分别设置线型。画半透明表面时按 `projection.layers` 从远到近填色、描边。[同一条圆弧生成曲面和实体](examples/space/profiles.huak) · [圆柱穿过透明球](examples/space/solids.huak) · [圆环与贴面螺旋](examples/space/torus.huak)
 
-桌面版启动时自动加载三维投影库。只画二维图可以省去 OCCT。使用 nightly 时，将随包提供的 `libhuak_space` 放在 `huak` 旁边，并安装匹配的 OCCT 8.0 运行库。自行构建投影库需要 CMake 和 OCCT SDK，将 `OCCT_PREFIX` 设为 SDK 安装目录即可。[OCCT 8.0.1](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8.0.1) · [许可证与声明](src/drawing/space/licenses/) · [三维接口与构建说明](src/drawing/space/README.md)
+桌面版启动时自动加载三维投影库 `libhuak_space`。该库由 `zig build` 从 `build.zig.zon` 锁定的源码直接编译并静态链接 OCCT 8.0.2 建模工具包，无需安装 CMake 或系统 OCCT 运行库；只画二维图时也可单独运行 `zig build tools`。[OCCT 8.0.2](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8_0_2) · [许可证与声明](src/drawing/space/licenses/) · [三维接口与构建说明](src/drawing/space/README.md)
 
 ```sh
-zig build space-backend -Docct="$OCCT_PREFIX"
+zig build space-backend
 zig-out/bin/huak run examples/space/torus.huak --output torus.svg --output torus.pdf
 ```
 

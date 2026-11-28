@@ -38,7 +38,8 @@ class Holding : public BVH_Traverse<double, 2, Boxes, bool> {
 public:
   Holding(const gp_Pnt2d &at, int only, std::vector<Sights::Entry> &found) : at(at), only(only), found(found) {}
 
-  bool RejectNode(const BVH_Vec2d &low, const BVH_Vec2d &high, bool &) const override {
+  bool RejectNode(const BVH_Vec2d &low, const BVH_Vec2d &high, bool &metric) const override {
+    metric = false;
     return outside(low, high);
   }
 

@@ -5,8 +5,11 @@ OCCT is distributed under the GNU Lesser General Public License, version 2.1,
 with the Open CASCADE exception, version 1.0. Both texts accompany this notice.
 OCCT source and release history: https://github.com/Open-Cascade-SAS/OCCT
 
-The desktop projection backend links to the OCCT shared libraries installed on
-the user's system. The user can replace them with interface-compatible builds.
+The desktop projection library (`libhuak_space.dylib` / `libhuak_space.so`)
+statically links the OCCT 8.0.2 modeling toolkits (`V8_0_2`, commit
+83f9abe9477af36e4ca218e1468068aed052779f) fetched via `build.zig.zon`. Huak
+loads `libhuak_space` dynamically at runtime, so users can rebuild and replace
+it against a modified OCCT build with `zig build space-backend`.
 
 The optional local WASI build uses the OCCT 8.0.1 port and single-threaded
 header from OCCTSwift (also LGPL 2.1). The kernel build, sources and patches

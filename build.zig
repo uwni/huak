@@ -66,16 +66,10 @@ pub fn build(b: *std.Build) void {
         .name = "host_options",
         .module = runtime_options.createModule(),
     };
-    const occt = b.option(
-        []const u8,
-        "occt",
-        "OCCT SDK prefix for building the separate projection library",
-    );
     const backend = space_build.build(
         b,
         target,
         optimize,
-        occt,
     );
     const cli = executables.addCli(
         b,
@@ -84,12 +78,12 @@ pub fn build(b: *std.Build) void {
         desktop,
         tools,
     );
-    if (occt != null) b.getInstallStep().dependOn(backend.install);
+    b.getInstallStep().dependOn(backend.install);
     const run = executables.runInstalled(
         b,
         config,
         cli,
-        if (occt != null) backend.install else null,
+        backend.install,
     );
     run.addPassthruArgs();
     b.step("run", "Run the huak script CLI").dependOn(&run.step);
@@ -118,7 +112,7 @@ pub fn build(b: *std.Build) void {
         modules,
         fixtures,
         cli,
-        if (occt != null) backend.install else null,
+        backend.install,
         desktop,
     );
     tests.addTests(
@@ -135,7 +129,6 @@ pub fn build(b: *std.Build) void {
         modules,
         cli.artifact,
         backend,
-        occt != null,
     );
 
     lint.addLint(b);

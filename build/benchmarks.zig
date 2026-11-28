@@ -13,7 +13,7 @@ const Program = executables.Program;
 const desktopExecutable = executables.desktopExecutable;
 const runInstalled = executables.runInstalled;
 
-pub fn addBenchmarks(b: *std.Build, config: Configuration, modules: Modules, fixtures: Fixtures, cli: *std.Build.Step.InstallArtifact, backend: ?*std.Build.Step, desktop: Import) void {
+pub fn addBenchmarks(b: *std.Build, config: Configuration, modules: Modules, fixtures: Fixtures, cli: *std.Build.Step.InstallArtifact, backend: *std.Build.Step, desktop: Import) void {
     const resources: Translator = .init(b.dependency("translate_c", .{}), .{ .c_source_file = b.path("bench/support/resources.h"), .target = config.target, .optimize = config.optimize });
     const metrics: Import = .{ .name = "metrics", .module = module(b, config.target, config.optimize, "bench/support/metrics.zig", &.{.{ .name = "resources", .module = resources.mod }}) };
     _ = program(b, config, .{ .name = "bench-regions", .source = "bench/regions.zig", .step = "bench-regions", .description = "Measure validated f64 curve-region operations", .imports = &.{ fixtures.regions, metrics, modules.clap } });
@@ -52,7 +52,7 @@ pub fn addBenchmarks(b: *std.Build, config: Configuration, modules: Modules, fix
     space_run.addFileArg2(b.graph.path(.install_bin, cli.artifact.name), .{});
     space_run.step.dependOn(&cli.step);
     space_run.step.dependOn(config.typst.install);
-    if (backend) |install| space_run.step.dependOn(install);
+    space_run.step.dependOn(backend);
     space_run.addPassthruArgs();
     b.step("bench-space", "Measure 3D projection, smooth shading and Type 7/SVG mesh export").dependOn(&space_run.step);
     const simd_api = b.createModule(.{ .root_source_file = b.path("src/drawing/simd.zig"), .target = config.target, .optimize = .ReleaseSafe });

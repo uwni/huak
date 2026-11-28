@@ -1,0 +1,263 @@
+import space as s
+import paint.*
+import regions.*
+import geometry.arc
+import transform.compose
+import math.{PI, sin, cos, norm}
+
+// Tokamak magnet system cutaway:
+// - Central Solenoid (CS): 6 stacked coaxial solenoid modules in the central bore
+// - Toroidal Field (TF) coils: 12 of 16 D-shaped coils (front 90 deg cutaway)
+// - Poloidal Field (PF) coils: 6 horizontal rings (PF1-PF6) outside the TF cage
+// - Correction Coils (CC): top, side, and bottom saddle frames (5 of 6 each)
+// - In-Vessel Vertical Stability (VS) coils: upper & lower internal rings
+// - D-shaped plasma torus (270 deg cutaway) with helical magnetic field lines
+
+theme := typ.module[
+  #let style(body) = {
+    set text(font: "Libertinus Serif", size: 8.5pt, fill: rgb("#1d262e"))
+    body
+  }
+]
+typ.show theme.style
+
+// Closed C1-smooth D-shaped wire in the XY plane made strictly of a straight
+// inner vertical leg and three tangent circular arcs (all analytic in OCCT).
+fn d_wire(r1:length, h1:length, rad1:length, alpha:angle) -> shape
+    cx := r1 + rad1
+    dr := h1 / sin(alpha)
+    rad2 := rad1 + dr
+    c2 := cx - dr * cos(alpha)
+    leg := (r1, h1, 0mm) -- (r1, -h1, 0mm)
+    bot := arc((cx, -h1, 0mm), rad1, -180deg, 180deg - alpha)
+    out := arc((c2, 0mm, 0mm), rad2, -alpha, 2 * alpha)
+    top := arc((cx, h1, 0mm), rad1, alpha, 180deg - alpha)
+    return leg & bot & out & top
+end
+
+// Point on the D-shaped contour in (R, z) parameterized by u in [0, 1).
+fn d_point(u:float, r1:length, h1:length, rad1:length, alpha:angle) -> vec2
+    cx := r1 + rad1
+    dr := h1 / sin(alpha)
+    rad2 := rad1 + dr
+    c2 := cx - dr * cos(alpha)
+    alpha_rad := alpha / 1rad
+    l_leg := 2 * h1
+    l_elbow := rad1 * (PI - alpha_rad)
+    l_out := rad2 * (2 * alpha_rad)
+    total := l_leg + 2 * l_elbow + l_out
+    d := (u - float(int(u))) * total
+    if d < 0mm then d = d + total end
+    if d <= l_leg then
+        return (r1, h1 - d)
+    end
+    d = d - l_leg
+    if d <= l_elbow then
+        theta := -PI + (d / rad1)
+        return (cx + rad1 * cos(theta * 1rad), -h1 + rad1 * sin(theta * 1rad))
+    end
+    d = d - l_elbow
+    if d <= l_out then
+        theta := -alpha_rad + (d / rad2)
+        return (c2 + rad2 * cos(theta * 1rad), rad2 * sin(theta * 1rad))
+    end
+    d = d - l_out
+    theta := alpha_rad + (d / rad1)
+    return (cx + rad1 * cos(theta * 1rad), h1 + rad1 * sin(theta * 1rad))
+end
+
+// Hollow rectangular coil frame centered at the origin, lying in the XY plane.
+fn rect_frame(width:length, height:length, bar:length, thick:length) -> shape
+    outer := s.extrude(rectangle((-width / 2, -height / 2), width, height), (0mm, 0mm, thick))
+    inner := transformed(
+        s.extrude(
+            rectangle((-(width / 2 - bar), -(height / 2 - bar)), width - 2 * bar, height - 2 * bar),
+            (0mm, 0mm, thick + 2mm),
+        ),
+        translate((0mm, 0mm, -1mm)),
+    )
+    return transformed(outer minus inner, translate((0mm, 0mm, -thick / 2)))
+end
+
+// Horizontal circular ring coil with rectangular cross-section.
+fn ring_coil(r_in:length, dr:length, z_mid:length, dz:length, sweep:angle = 360deg) -> shape
+    return s.revolve(rectangle((r_in, z_mid - dz / 2), dr, dz), angle: sweep)
+end
+
+// Orthographic projection of a 3D world point to 2D page coordinates.
+fn project_point(p:vec3, az:angle, el:angle) -> vec2
+    px := -sin(az) * p.x + cos(az) * p.y
+    py := -sin(el) * cos(az) * p.x - sin(el) * sin(az) * p.y + cos(el) * p.z
+    return (px, py)
+end
+
+// Assemble all coil systems and plasma into one scene list with matching inks.
+shapes := []
+inks := []
+
+cs_ink := rgb(0.84, 0.56, 0.17)
+tf_ink := rgb(0.24, 0.45, 0.68)
+pf_ink := rgb(0.16, 0.58, 0.52)
+cc_ink := rgb(0.75, 0.34, 0.25)
+vs_ink := rgb(0.42, 0.68, 0.86)
+plasma_ink := rgb(0.78, 0.28, 0.60)
+
+// 1. Central Solenoid (CS): 6 stacked coaxial modules inside the central bore.
+cs_h := 11.4mm
+cs_gap := 1.5mm
+cs_pitch := cs_h + cs_gap
+for i in 0:5 do
+    z_mid := (float(i) - 2.5) * cs_pitch
+    shapes += [ring_coil(9.0mm, 6.5mm, z_mid, cs_h)]
+    inks += [cs_ink]
+end
+
+// 2. Toroidal Field (TF) coils: D-shaped coils (16-fold symmetry, 4 omitted at front).
+tf_r1 := 17.5mm
+tf_h1 := 22.0mm
+tf_rad1 := 21.0mm
+tf_alpha := 40deg
+tf_wall := 4.2mm
+tf_thick := 3.8mm
+
+tf_outer := s.extrude(s.face(d_wire(tf_r1, tf_h1, tf_rad1, tf_alpha)), (0mm, 0mm, tf_thick))
+tf_inner := transformed(
+    s.extrude(s.face(d_wire(tf_r1 + tf_wall, tf_h1, tf_rad1 - tf_wall, tf_alpha)), (0mm, 0mm, tf_thick + 2mm)),
+    translate((0mm, 0mm, -1mm)),
+)
+tf_base := transformed(
+    tf_outer minus tf_inner,
+    compose(translate((0mm, 0mm, -tf_thick / 2)), rotate(90deg, axis: (1, 0, 0))),
+)
+// Front cutaway spans [-105 deg, -15 deg]; keep slots k = 0..11 (0 deg to 247.5 deg).
+for k in 0:11 do
+    phi := float(k) * 22.5deg
+    shapes += [transformed(tf_base, rotate(phi, axis: (0, 0, 1)))]
+    inks += [tf_ink]
+end
+
+// 3. Poloidal Field (PF1-PF6) horizontal ring coils outside the TF cage.
+pf_specs := [
+    [25.5mm, 6.5mm, 48.5mm, 5.0mm],
+    [60.5mm, 6.0mm, 39.5mm, 5.0mm],
+    [77.0mm, 6.0mm, 16.5mm, 5.5mm],
+    [77.0mm, 6.0mm, -16.5mm, 5.5mm],
+    [60.5mm, 6.0mm, -39.5mm, 5.0mm],
+    [26.5mm, 7.5mm, -48.8mm, 5.5mm],
+]
+for spec in pf_specs do
+    shapes += [ring_coil(spec[0], spec[1], spec[2], spec[3])]
+    inks += [pf_ink]
+end
+
+// 4. Correction Coils (CC): Side, Top, and Bottom saddle frames (omit front at -60 deg).
+side_cc := transformed(
+    rect_frame(44.0mm, 36.0mm, 2.4mm, 2.2mm),
+    compose(rotate(90deg, axis: (0, 1, 0)), translate((71.8mm, 0mm, 0mm))),
+)
+top_cc := transformed(
+    rect_frame(14.5mm, 23.0mm, 2.0mm, 2.0mm),
+    compose(rotate(28deg, axis: (0, 1, 0)), translate((50.5mm, 0mm, 44.5mm))),
+)
+bot_cc := transformed(
+    rect_frame(14.5mm, 23.0mm, 2.0mm, 2.0mm),
+    compose(rotate(-28deg, axis: (0, 1, 0)), translate((50.5mm, 0mm, -44.5mm))),
+)
+for k in 0:4 do
+    phi := float(k) * 60deg
+    rot := rotate(phi, axis: (0, 0, 1))
+    shapes += [transformed(side_cc, rot), transformed(top_cc, rot), transformed(bot_cc, rot)]
+    inks += [cc_ink, cc_ink, cc_ink]
+end
+
+// 5. In-Vessel Vertical Stability (VS) coils (270 deg cutaway matching plasma).
+vs_rot := rotate(-15deg, axis: (0, 0, 1))
+shapes += [
+    transformed(ring_coil(55.5mm, 2.4mm, 15.8mm, 2.4mm, 270deg), vs_rot),
+    transformed(ring_coil(55.5mm, 2.4mm, -15.8mm, 2.4mm, 270deg), vs_rot),
+]
+inks += [vs_ink, vs_ink]
+
+// 6. D-shaped plasma torus (270 deg cutaway revealing the poloidal cross-section).
+pl_r1 := 29.0mm
+pl_h1 := 7.5mm
+pl_rad1 := 11.0mm
+pl_alpha := 45deg
+plasma_face := s.face(transformed(d_wire(pl_r1, pl_h1, pl_rad1, pl_alpha), rotate(90deg, axis: (1, 0, 0))))
+plasma := transformed(s.revolve(plasma_face, angle: 270deg), rotate(-15deg, axis: (0, 0, 1)))
+plasma_idx := len(shapes)
+shapes += [plasma]
+inks += [plasma_ink]
+
+// 7. Helical magnetic field lines wrapping just outside the plasma surface.
+field_start := len(shapes)
+helix_steps := 120
+for phase in [0.0, 0.5] do
+    pts := []
+    for i in 0:helix_steps do
+        t := float(i) / float(helix_steps)
+        phi := -15deg + t * 270deg
+        u := phase + t * 2.25
+        rz := d_point(u, pl_r1 - 0.5mm, pl_h1, pl_rad1 + 0.5mm, pl_alpha)
+        pts += [(rz.x * cos(phi), rz.x * sin(phi), rz.y)]
+    end
+    shapes += [path(pts)]
+    inks += [rgb(0.98, 0.85, 0.25)]
+end
+
+// Project with orthographic camera and smooth directional shading.
+az := -60deg
+el := 25deg
+camera := s.orthographic(az, el)
+light := s.page_light(camera)
+view := s.project(shapes, camera, tolerance: 0.03pt, light: light, spot: 22deg, smooth: true)
+
+// Draw a crisp bent callout leader from a 3D anchor point to a Typst label.
+fn callout(anchor3d:vec3, elbow:vec2, text_end:vec2, label_text:text, swatch:color, align_right:bool) -> picture
+    p0 := project_point(anchor3d, az, el)
+    leader_pen := pen(rgb(0.24, 0.29, 0.35), 0.45pt, "round", "round")
+    dot_pen := pen(rgb(1, 1, 1), 0.4pt)
+    item := picture()
+    drawing item do
+        +draw(p0 -- elbow -- text_end, leader_pen)
+        +filldraw(circle(p0, 1.05mm), swatch, dot_pen)
+        if align_right then
+            +label_text at (text_end.x - label_text.width - 2.0mm, text_end.y - 1.1mm)
+        else
+            +label_text at (text_end.x + 2.0mm, text_end.y - 1.1mm)
+        end
+    end
+    return item
+end
+
+edge_pen := pen(rgb(0.11, 0.15, 0.19), 0.30pt, "round", "round")
+field_pen := pen(rgb(0.98, 0.84, 0.22), 0.95pt, "round", "round")
+field_halo := pen(rgb(0.28, 0.08, 0.22), 1.45pt, "round", "round")
+
+default drawing picture() do
+    +s.shaded(view.visible_faces, inks)
+    for line in view.lines do
+        if line.visible and (line.kind == "edge" or line.kind == "outline") then
+            +draw line.curve with edge_pen
+        end
+    end
+    for line in view.lines do
+        if line.visible and line.kind == "curve" and line.source >= field_start then
+            +draw line.curve with field_halo
+            +draw line.curve with field_pen
+        end
+    end
+
+    // Left-side callouts
+    +callout((-12.2mm, 0mm, 34.0mm), (-92mm, 49mm), (-100mm, 49mm), typ[Central Solenoid (CS)], cs_ink, true)
+    +callout((-38.0mm, -48.0mm, 39.5mm), (-92mm, 32mm), (-100mm, 32mm), typ[Toroidal Field (TF) Coils], tf_ink, true)
+    +callout((-78.0mm, -15.0mm, 16.5mm), (-92mm, 9mm), (-100mm, 9mm), typ[Poloidal Field (PF1–PF6)], pf_ink, true)
+    +callout((-62.0mm, -36.0mm, -12.0mm), (-92mm, -22mm), (-100mm, -22mm), typ[Correction Coils (CC)], cc_ink, true)
+
+    // Right-side callouts
+    +callout((28.0mm, 14.0mm, 49.0mm), (92mm, 52mm), (100mm, 52mm), typ[Upper PF Coil (PF1)], pf_ink, false)
+    +callout((43.0mm, 26.0mm, 45.0mm), (92mm, 36mm), (100mm, 36mm), typ[Top Correction Coil], cc_ink, false)
+    +callout((56.7mm, -15.0mm, 15.8mm), (92mm, 14mm), (100mm, 14mm), typ[In-Vessel VS Coils], vs_ink, false)
+    +callout((49.0mm, -13.0mm, 2.0mm), (92mm, -4mm), (100mm, -4mm), typ[D-Shaped Plasma], plasma_ink, false)
+    +callout((45.0mm, 16.0mm, -10.0mm), (92mm, -22mm), (100mm, -22mm), typ[Helical Field Line $B = B_T + B_P$], rgb(0.90, 0.72, 0.12), false)
+end

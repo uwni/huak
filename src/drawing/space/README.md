@@ -225,21 +225,23 @@ See [different pens for contours, edges and intersections](../../../examples/spa
 The same desktop executable handles 2D and 3D. At startup it opens
 `libhuak_space.dylib` (macOS) or `libhuak_space.so` (Linux) once. It looks in
 `../lib/` relative to the executable and in the executable's directory.
-The adapter links against OCCT. The system loader must be able to find those
-libraries, for example beside the adapter or via `DYLD_LIBRARY_PATH` on macOS
-and `LD_LIBRARY_PATH` on Linux. If loading fails, 2D drawing and model construction
-remain available. Calling `space.project` then reports the missing backend.
+The adapter statically links the [OCCT 8.0.2](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8_0_2)
+modeling toolkits directly from the hash-locked source package in `build.zig.zon`,
+so `libhuak_space` needs no separate OCCT shared libraries on the system. If loading
+fails, 2D drawing and model construction remain available, and calling `space.project`
+reports the missing backend.
 
-Build the adapter with CMake and the [OCCT 8.0.1 SDK](https://github.com/Open-Cascade-SAS/OCCT/releases/tag/V8.0.1):
+Build and test the adapter directly with `zig build` (no CMake required):
 
 ```sh
-zig build space-backend -Docct="$OCCT_PREFIX"
-zig build test-space -Docct="$OCCT_PREFIX"
+zig build space-backend
+zig build test-space-cpp
+zig build test-space
 ```
 
-CMake can also discover a system SDK when the prefix is omitted. The native
-C++ toolchain uses the SDK's imported libraries. The versioned C entry point
-`huak_space_api_v7` returns the function table. The adapter only runs OCCT:
+Zig compiles OCCT and the C++ adapter with the same toolchain and links OCCT
+statically into `libhuak_space`, keeping only the C entry point
+`huak_space_api_v7` exported. The adapter only runs OCCT:
 it builds a model and opens views of it, and each query is one OCCT operation
 over a batch, such as hidden-line removal of a shape, the image of curves,
 their crossings, where lines of sight meet the shapes, the partition of the

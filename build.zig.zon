@@ -40,6 +40,11 @@
             .url = "git+https://github.com/kurtwagner/zlinter?ref=0.17.x#e1f92a1159a36fa301730596f742d0f66e60908d",
             .hash = "zlinter-0.0.1-OjQ08aZsFgB3c_awcIosz3PylM-2Xui24XuPsEONY3n1",
         },
+        .occt = .{
+            .url = "git+https://github.com/Open-Cascade-SAS/OCCT?ref=V8_0_2#83f9abe9477af36e4ca218e1468068aed052779f",
+            .hash = "N-V-__8AAJih9wuXlAW36odxfaw7P052zMb53Rl0Rp_n1NnA",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",
