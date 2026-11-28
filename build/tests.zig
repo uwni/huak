@@ -6,7 +6,7 @@ const Import = std.Build.Module.Import;
 const Configuration = @import("Configuration.zig");
 const module_graph = @import("modules.zig");
 const executables = @import("executables.zig");
-const Libraries = module_graph.Libraries;
+const Modules = module_graph.Modules;
 const Fixtures = module_graph.Fixtures;
 const EditorTools = executables.EditorTools;
 const module = module_graph.module;
@@ -14,9 +14,9 @@ const editor_grammar = executables.editor_grammar;
 const editor_configuration = executables.editor_configuration;
 const program = executables.program;
 
-pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixtures: Fixtures, cli: *std.Build.Step.Compile, editors: EditorTools) void {
-    const native = libraries.native;
-    const huak = libraries.huak;
+pub fn addTests(b: *std.Build, config: Configuration, modules: Modules, fixtures: Fixtures, cli: *std.Build.Step.Compile, editors: EditorTools) void {
+    const native = modules.native;
+    const huak = modules.huak;
     const sample = fixtures.sample;
     const drawing = fixtures.drawing;
     const fixture_options = b.addOptions();
@@ -24,7 +24,7 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
     fixture_options.addOptionPath("incompatible_path", fixture(b, config, "incompatible", true).getEmittedBin());
     fixture_options.addOptionPath("incomplete_path", fixture(b, config, "incomplete", false).getEmittedBin());
     const loader_options: Import = .{ .name = "test_options", .module = fixture_options.createModule() };
-    const test_options: Import = .{ .name = "test_options", .module = libraries.options.module };
+    const test_options: Import = .{ .name = "test_options", .module = modules.options.module };
     const cli_options = b.addOptions();
     cli_options.addOptionPath("executable_path", cli.getEmittedBin());
     cli_options.addOptionPathUntracked("library_path", config.typst.library);
@@ -34,8 +34,8 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
     const animation_tests = b.step("test-animation", "Test animation encoding and native rendering");
     const region_tests = b.step("test-region-geometry", "Test curve regions with their drawing dependencies");
     const suites = [_]struct { source: []const u8, name: []const u8, imports: []const Import, native: bool = true, group: ?*std.Build.Step = null }{
-        .{ .source = "tests/cli.zig", .name = "test-cli", .imports = &.{ native, .{ .name = "test_options", .module = cli_options.createModule() }, .{ .name = "xml_parser", .module = libraries.xml } }, .group = language_tests },
-        .{ .source = "tests/native_binding.zig", .name = "test-native-binding", .imports = &.{ libraries.binding, test_options } },
+        .{ .source = "tests/cli.zig", .name = "test-cli", .imports = &.{ native, .{ .name = "test_options", .module = cli_options.createModule() }, modules.xml }, .group = language_tests },
+        .{ .source = "tests/native_binding.zig", .name = "test-native-binding", .imports = &.{ modules.binding, test_options } },
         .{ .source = "tests/typst.zig", .name = "test-typst", .imports = &.{ native, sample, loader_options } },
         .{ .source = "tests/language.zig", .name = "test-language-native", .imports = &.{ native, huak, test_options }, .group = language_tests },
         .{ .source = "tests/math.zig", .name = "test-math", .imports = &.{ native, huak, test_options }, .group = language_tests },
@@ -50,13 +50,13 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
         .{ .source = "tests/regions.zig", .name = "test-region-render", .imports = &.{ native, huak, test_options } },
         .{ .source = "tests/outlines.zig", .name = "test-outlines", .imports = &.{ native, huak, test_options } },
         .{ .source = "tests/animation.zig", .name = "test-animation-native", .imports = &.{ native, huak, test_options }, .group = animation_tests },
-        .{ .source = "tests/abi.zig", .name = "test-abi", .imports = &.{ native, libraries.binding, huak, test_options } },
+        .{ .source = "tests/abi.zig", .name = "test-abi", .imports = &.{ native, modules.binding, huak, test_options } },
         .{ .source = "build/rust.zig", .name = "test-rust-targets", .imports = &.{}, .native = false },
-        .{ .source = "cli/options.zig", .name = "test-cli-options", .imports = &.{libraries.clap}, .native = false },
-        .{ .source = "bench/regions_compare.zig", .name = "test-region-benchmark", .imports = &.{libraries.clap}, .native = false },
+        .{ .source = "cli/options.zig", .name = "test-cli-options", .imports = &.{modules.clap}, .native = false },
+        .{ .source = "bench/regions_compare.zig", .name = "test-region-benchmark", .imports = &.{modules.clap}, .native = false },
         .{ .source = "tests/region/regressions.zig", .name = "test-region", .imports = &.{fixtures.regions}, .native = false },
-        .{ .source = "tests/region.zig", .name = "test-region-operations", .imports = &.{libraries.drawing}, .native = false },
-        .{ .source = "src/drawing/root.zig", .name = "test-geometry", .imports = &.{libraries.workers}, .native = false, .group = region_tests },
+        .{ .source = "tests/region.zig", .name = "test-region-operations", .imports = &.{modules.drawing}, .native = false },
+        .{ .source = "src/drawing/root.zig", .name = "test-geometry", .imports = &.{modules.workers}, .native = false, .group = region_tests },
         .{ .source = "src/concurrency/Workers.zig", .name = "test-concurrency", .imports = &.{}, .native = false },
     };
     inline for (suites) |suite| {
@@ -67,7 +67,7 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
         if (suite.group) |group| group.dependOn(&command.step);
         b.step(suite.name, b.fmt("Run {s}", .{suite.source})).dependOn(&command.step);
     }
-    const pure = b.addRunArtifact(b.addTest(.{ .root_module = libraries.huak.module, .use_llvm = config.use_llvm }));
+    const pure = b.addRunArtifact(b.addTest(.{ .root_module = modules.huak.module, .use_llvm = config.use_llvm }));
     all_tests.dependOn(&pure.step);
     language_tests.dependOn(&pure.step);
     animation_tests.dependOn(&pure.step);
@@ -77,14 +77,14 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
     editor_options.addOptionPathUntracked("library_path", config.typst.library);
     editor_options.addOptionPath("formatter_path", editors.formatter.getEmittedBin());
     editor_options.addOptionPath("language_server_path", editors.language_server.getEmittedBin());
-    const editor_tests = b.addRunArtifact(b.addTest(.{ .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/editor_tools.zig", &.{ libraries.tooling, libraries.native, .{ .name = "test_options", .module = editor_options.createModule() } }) }));
+    const editor_tests = b.addRunArtifact(b.addTest(.{ .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/editor_tools.zig", &.{ modules.tooling, modules.native, .{ .name = "test_options", .module = editor_options.createModule() } }) }));
     config.typst.loadIn(editor_tests);
     all_tests.dependOn(&editor_tests.step);
     const tools_tests = b.step("test-tools", "Test formatter and language server processes");
     tools_tests.dependOn(&editor_tests.step);
     // The editor files against what the language and the tools define.
-    const command_line: Import = .{ .name = "cli_options", .module = module(b, config.target, config.optimize, "cli/options.zig", &.{libraries.clap}) };
-    const contract = module(b, config.target, config.optimize, "tests/editor_contract.zig", &.{ libraries.huak, command_line });
+    const command_line: Import = .{ .name = "cli_options", .module = module(b, config.target, config.optimize, "cli/options.zig", &.{modules.clap}) };
+    const contract = module(b, config.target, config.optimize, "tests/editor_contract.zig", &.{ modules.huak, command_line });
     contract.addAnonymousImport("editor_grammar", .{ .root_source_file = b.path(editor_grammar) });
     contract.addAnonymousImport("editor_configuration", .{ .root_source_file = b.path(editor_configuration) });
     for ([_][2][]const u8{ .{ "extension_main", "extension.js" }, .{ "extension_render", "render.js" }, .{ "extension_preview", "preview.js" }, .{ "extension_watch", "watch.js" }, .{ "extension_outputs", "outputs.js" } }) |file|
@@ -99,18 +99,18 @@ pub fn addTests(b: *std.Build, config: Configuration, libraries: Libraries, fixt
     hygiene_tests.has_side_effects = true;
     all_tests.dependOn(&hygiene_tests.step);
     b.step("test-hygiene", "Run repository hygiene contract tests").dependOn(&hygiene_tests.step);
-    const tool_units = b.addRunArtifact(b.addTest(.{ .use_llvm = config.use_llvm, .root_module = libraries.tooling.module }));
+    const tool_units = b.addRunArtifact(b.addTest(.{ .use_llvm = config.use_llvm, .root_module = modules.tooling.module }));
     tools_tests.dependOn(&tool_units.step);
     all_tests.dependOn(&tool_units.step);
-    _ = program(b, config, .{ .name = "animation-references", .source = "tests/animation/references.zig", .step = "verify-animation", .description = "Generate native animation reference fixtures", .imports = &.{ libraries.native, libraries.huak, fixtures.animation, libraries.options } });
+    _ = program(b, config, .{ .name = "animation-references", .source = "tests/animation/references.zig", .step = "verify-animation", .description = "Generate native animation reference fixtures", .imports = &.{ modules.native, modules.huak, fixtures.animation, modules.options } });
 }
 
-pub fn addSpaceTests(b: *std.Build, config: Configuration, libraries: Libraries, cli: *std.Build.Step.Compile, backend: space_build.Backend, include_in_suite: bool) void {
+pub fn addSpaceTests(b: *std.Build, config: Configuration, modules: Modules, cli: *std.Build.Step.Compile, backend: space_build.Backend, include_in_suite: bool) void {
     const space = b.step("test-space", "Test native OCCT modeling and projected visibility in SVG and PDF");
     if (include_in_suite) b.top_level_steps.get("test").?.step.dependOn(space);
     space.dependOn(backend.check);
     // Smooth light against exact light, through the built library.
-    const shading = b.addRunArtifact(b.addExecutable(.{ .name = "space-shading", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/space_shading.zig", &.{ libraries.huak, libraries.space_c }) }));
+    const shading = b.addRunArtifact(b.addExecutable(.{ .name = "space-shading", .use_llvm = config.use_llvm, .root_module = module(b, config.target, config.optimize, "tests/space_shading.zig", &.{ modules.huak, modules.space_c }) }));
     shading.addFileArg2(backend.library, .{});
     shading.step.dependOn(backend.build);
     shading.has_side_effects = true;

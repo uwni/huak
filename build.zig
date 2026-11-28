@@ -7,22 +7,13 @@ const Configuration = @import("build/Configuration.zig");
 const module_graph = @import("build/modules.zig");
 const executables = @import("build/executables.zig");
 const benchmarks = @import("build/benchmarks.zig");
+const lint = @import("build/lint.zig");
 const tests = @import("build/tests.zig");
-const addPlayground = playground.addPlayground;
-const addLibraries = module_graph.addLibraries;
-const addCli = executables.addCli;
-const runInstalled = executables.runInstalled;
-const addEditorTools = executables.addEditorTools;
-const fixtureModules = module_graph.fixtureModules;
-const addExamples = executables.addExamples;
-const addBenchmarks = benchmarks.addBenchmarks;
-const addTests = tests.addTests;
-const addSpaceTests = tests.addSpaceTests;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    addPlayground(b);
+    playground.addPlayground(b);
     const name = switch (target.result.os.tag) {
         .macos => "libtypst.dylib",
         .linux => "libtypst.so",
@@ -31,31 +22,121 @@ pub fn build(b: *std.Build) void {
             return;
         },
     };
-    const prebuilt = b.option([]const u8, "libtypst", "Use an independently built libtypst instead of building it");
-    const typst = rust.libtypst(b, target, optimize, name, prebuilt);
+    const prebuilt = b.option(
+        []const u8,
+        "libtypst",
+        "Use an independently built libtypst instead of building it",
+    );
+    const typst = rust.libtypst(
+        b,
+        target,
+        optimize,
+        name,
+        prebuilt,
+    );
     b.getInstallStep().dependOn(typst.install);
-    const tools = b.step("tools", "Build and install the desktop executables");
+    const tools = b.step(
+        "tools",
+        "Build and install the desktop executables",
+    );
     b.getInstallStep().dependOn(tools);
     // Zig 0.17's x86_64 ELF backend emits unresolved debug references for C
     // function types; LLVM correctly keeps dynamically bound symbols unlinked.
-    const config: Configuration = .{ .target = target, .optimize = optimize, .typst = typst, .use_llvm = if (target.result.os.tag == .linux and target.result.cpu.arch == .x86_64) true else null };
+    const config: Configuration = .{
+        .target = target,
+        .optimize = optimize,
+        .typst = typst,
+        .use_llvm = if (target.result.os.tag == .linux and target.result.cpu.arch == .x86_64) true else null,
+    };
 
-    const libraries = addLibraries(b, config);
+    const modules = module_graph.addModules(b, config);
     const runtime_options = b.addOptions();
     const runtime_name = if (target.result.os.tag == .macos) b.fmt("@rpath/{s}", .{name}) else name;
-    runtime_options.addOption([]const u8, "library_path", b.option([]const u8, "runtime-libtypst", "Override the installed tools' default libtypst name or path") orelse runtime_name);
-    const desktop: Import = .{ .name = "host_options", .module = runtime_options.createModule() };
-    const occt = b.option([]const u8, "occt", "OCCT SDK prefix for building the separate projection library");
-    const backend = space_build.build(b, target, optimize, occt);
-    const cli = addCli(b, config, libraries, desktop, tools);
+
+    runtime_options.addOption(
+        []const u8,
+        "library_path",
+        b.option(
+            []const u8,
+            "runtime-libtypst",
+            "Override the installed tools' default libtypst name or path",
+        ) orelse runtime_name,
+    );
+    const desktop: Import = .{
+        .name = "host_options",
+        .module = runtime_options.createModule(),
+    };
+    const occt = b.option(
+        []const u8,
+        "occt",
+        "OCCT SDK prefix for building the separate projection library",
+    );
+    const backend = space_build.build(
+        b,
+        target,
+        optimize,
+        occt,
+    );
+    const cli = executables.addCli(
+        b,
+        config,
+        modules,
+        desktop,
+        tools,
+    );
     if (occt != null) b.getInstallStep().dependOn(backend.install);
-    const run = runInstalled(b, config, cli, if (occt != null) backend.install else null);
+    const run = executables.runInstalled(
+        b,
+        config,
+        cli,
+        if (occt != null) backend.install else null,
+    );
     run.addPassthruArgs();
     b.step("run", "Run the huak script CLI").dependOn(&run.step);
-    const editors = addEditorTools(b, config, libraries, desktop, tools);
-    const fixtures = fixtureModules(b, config, libraries);
-    addExamples(b, config, libraries, fixtures, desktop);
-    addBenchmarks(b, config, libraries, fixtures, cli, if (occt != null) backend.install else null, desktop);
-    addTests(b, config, libraries, fixtures, cli.artifact, editors);
-    addSpaceTests(b, config, libraries, cli.artifact, backend, occt != null);
+    const editors = executables.addEditorTools(
+        b,
+        config,
+        modules,
+        desktop,
+        tools,
+    );
+    const fixtures = module_graph.fixtureModules(
+        b,
+        config,
+        modules,
+    );
+    executables.addExamples(
+        b,
+        config,
+        modules,
+        fixtures,
+        desktop,
+    );
+    benchmarks.addBenchmarks(
+        b,
+        config,
+        modules,
+        fixtures,
+        cli,
+        if (occt != null) backend.install else null,
+        desktop,
+    );
+    tests.addTests(
+        b,
+        config,
+        modules,
+        fixtures,
+        cli.artifact,
+        editors,
+    );
+    tests.addSpaceTests(
+        b,
+        config,
+        modules,
+        cli.artifact,
+        backend,
+        occt != null,
+    );
+
+    lint.addLint(b);
 }

@@ -36,6 +36,10 @@
             .url = "https://registry.npmjs.org/tm-themes/-/tm-themes-1.12.12.tgz",
             .hash = "N-V-__8AABGtHQAb-Rh0H2QQ5Qhla4p3_PdBQjaCPzbAl8w9",
         },
+        .zlinter = .{
+            .url = "git+https://github.com/kurtwagner/zlinter?ref=0.17.x#e1f92a1159a36fa301730596f742d0f66e60908d",
+            .hash = "zlinter-0.0.1-OjQ08aZsFgB3c_awcIosz3PylM-2Xui24XuPsEONY3n1",
+        },
     },
     .paths = .{
         "build.zig",

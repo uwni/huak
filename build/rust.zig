@@ -4,7 +4,12 @@ const std = @import("std");
 /// the Rust target. Only the Cargo step depends on this mapping.
 pub fn setTarget(b: *std.Build, cargo: *std.Build.Step.Run, target: std.Target, output: std.Build.LazyPath) std.Build.LazyPath {
     const name = targetName(b.allocator, target) catch @panic("OOM") orelse {
-        cargo.step.dependOn(&b.addFail(b.fmt("no Rust target mapping for Zig target {t}-{t}-{t} (CPU {s})", .{ target.cpu.arch, target.os.tag, target.abi, target.cpu.model.name })).step);
+        cargo.step.dependOn(
+            &b.addFail(b.fmt(
+                "no Rust target mapping for Zig target {t}-{t}-{t} (CPU {s})",
+                .{ target.cpu.arch, target.os.tag, target.abi, target.cpu.model.name },
+            )).step,
+        );
         return output;
     };
     cargo.addArgs(&.{ "--target", name });
@@ -77,7 +82,13 @@ pub const Libtypst = struct {
     }
 };
 
-pub fn libtypst(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.Optimize, name: []const u8, prebuilt: ?[]const u8) Libtypst {
+pub fn libtypst(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.Optimize,
+    name: []const u8,
+    prebuilt: ?[]const u8,
+) Libtypst {
     const step = b.step("libtypst", "Build and install the desktop Typst library and C header");
     var build: ?*std.Build.Step = null;
     const library = if (prebuilt) |path| b.graph.cwdRelativePath(path) else lib: {
