@@ -293,7 +293,7 @@ pub fn svgTriangles(self: *Builder, path_: *const c.TypstPath, evenodd: bool, me
             color.* = mesh.vertices[index].color;
         }
         // Each piece's colors lie in one stop band, so on one line.
-        const triangle_paint = svg_mesh.triangle(points, colors) orelse unreachable;
+        const triangle_paint = svg_mesh.triangle(points, colors).?;
         if (triangle_paint == .none) continue;
         const corners = svg_mesh.expanded(points, distance);
         const outline = outlines[count * 4 ..][0..4];

@@ -109,10 +109,10 @@ pub const TypstBatchProbe = struct {
         return .unit;
     }
 
-    const host_vtable: Host.VTable = .{ .typst = one, .typst_batch = batch, .typst_module = makeModule, .field = field, .call_builtin = effect, .error_message = message };
+    const host_vtable: Host.VTable = .{ .typst = one, .typstBatch = batch, .typstModule = makeModule, .field = field, .callBuiltin = effect, .errorMessage = message };
     const single_host_vtable = blk: {
         var table = host_vtable;
-        table.typst_batch = null;
+        table.typstBatch = null;
         break :blk table;
     };
 

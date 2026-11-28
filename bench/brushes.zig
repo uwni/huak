@@ -9,7 +9,7 @@ const l = huak.language;
 const Value = l.types.Value;
 const ms = metrics.milliseconds;
 const Digest = [std.crypto.hash.Blake3.digest_length]u8;
-const HostCall = @typeInfo(@typeInfo(@FieldType(l.Machine.Host.VTable, "call_builtin")).optional.child).pointer.child;
+const HostCall = @typeInfo(@typeInfo(@FieldType(l.Machine.Host.VTable, "callBuiltin")).optional.child).pointer.child;
 const BuiltinId = @typeInfo(HostCall).@"fn".param_types[2].?;
 
 const Timing = struct {
@@ -36,15 +36,15 @@ const Profile = struct {
     fn context(pointer: ?*anyopaque) *Profile {
         return @ptrCast(@alignCast(pointer.?));
     }
-    const host_vtable: l.Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = batch, .typst_module = typstModule, .error_message = message };
+    const host_vtable: l.Machine.Host.VTable = .{ .callBuiltin = call, .field = field, .binary = binary, .typst = typeset, .typstBatch = batch, .typstModule = typstModule, .errorMessage = message };
     const single_host_vtable = blk: {
         var table = host_vtable;
-        table.typst_batch = null;
+        table.typstBatch = null;
         break :blk table;
     };
 
     fn host(self: *Profile) l.Machine.Host {
-        return .{ .ptr = self, .vtable = if (self.base.vtable.typst_batch != null) &host_vtable else &single_host_vtable };
+        return .{ .ptr = self, .vtable = if (self.base.vtable.typstBatch != null) &host_vtable else &single_host_vtable };
     }
     fn call(pointer: ?*anyopaque, a: std.mem.Allocator, id: BuiltinId, args: []const Value, machine: ?*l.Machine) anyerror!Value {
         const self = context(pointer);

@@ -16,7 +16,6 @@ const Shading = space_shading.Shading;
 const Face = space_shading.Face;
 const Info = space_shading.Info;
 const Error = space_shading.Error;
-const Patch = space_shading.Patch;
 const DepthPatch = patches.DepthPatch;
 const SkirtPatch = patches.SkirtPatch;
 const Output = space_shading.Output;

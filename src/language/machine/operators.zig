@@ -203,7 +203,7 @@ test "list equality terminates on cycles and native sequences become owned lists
         , "list-graphs.huak", .{ .optimize = optimize }, &diagnostic);
         defer program.deinit();
         for (0..2) |_| {
-            var machine = try Machine.init(std.testing.allocator, &program, .{ .vtable = &.{ .call_builtin = Native.call } }, .{});
+            var machine = try Machine.init(std.testing.allocator, &program, .{ .vtable = &.{ .callBuiltin = Native.call } }, .{});
             defer machine.deinit();
             _ = try machine.execute(&.{});
             try std.testing.expect(machine.getGlobal("same").?.boolean);

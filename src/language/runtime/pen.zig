@@ -166,7 +166,7 @@ fn readMotion(a: std.mem.Allocator, input: Value, legacy: bool, tolerance: f64) 
             const operand = op[1];
             const list = types.sequence(operand);
             if (list == null or (list.?.len > 0 and list.?[0] == .string)) {
-                const polynomial = try @import("pen_polynomial.zig").read(operand, 0, &visits);
+                const polynomial = try @import("PenPolynomial.zig").read(operand, 0, &visits);
                 track.* = try polynomial.append(kind, a, &keys);
                 continue;
             }

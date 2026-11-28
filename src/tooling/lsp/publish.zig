@@ -23,6 +23,7 @@ const PublishedDiagnostic = struct {
     severity: u8 = 1,
     source: []const u8 = "huak",
     message: []const u8,
+    // zlinter-disable-next-line field_naming - LSP JSON field name
     relatedInformation: []const RelatedInformation,
 };
 

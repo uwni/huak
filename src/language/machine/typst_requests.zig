@@ -97,7 +97,7 @@ pub fn typesetBlock(self: *Machine, instruction: bytecode.Instruction, frame_ind
 /// Makes a typ.module value from its code and captured bindings.
 pub fn createModule(self: *Machine, instruction: bytecode.Instruction, function: bytecode.Function) Error!void {
     const code = try interpreter.stringConstant(self, instruction.a);
-    if (self.host.vtable.typst_module == null) return self.fail("typ.module requires a Typst host", .{});
+    if (self.host.vtable.typstModule == null) return self.fail("typ.module requires a Typst host", .{});
     const operands = instruction.typstCaptures();
     const length = @as(usize, operands.pairs) * 2;
     if (length >= self.stack.items.len) return self.fail("invalid Typst capture operands", .{});
@@ -187,7 +187,7 @@ fn chargeText(self: *Machine, frame_index: usize, function: bytecode.Function, b
 /// explicit bytecode operands; planning neither mutates VM bindings nor
 /// crosses an effect or an operand that can observe a preceding result.
 fn typesetBatch(self: *Machine, frame_index: usize, function: bytecode.Function, start: usize) Error!bool {
-    if (self.host.vtable.typst_batch == null) return false;
+    if (self.host.vtable.typstBatch == null) return false;
     const maximum = 64;
     var assignments: [maximum]TextAssignment = undefined;
     var requests: [maximum]TypstRequest = undefined;

@@ -56,7 +56,7 @@ fn run(allocator: std.mem.Allocator, io: std.Io, library: *typst.Library, progra
     defer runtime.deinit();
     var host = runtime.host();
     var vtable = host.vtable.*;
-    if (!batched) vtable.typst_batch = null;
+    if (!batched) vtable.typstBatch = null;
     host.vtable = &vtable;
     var machine = try language.Machine.init(allocator, program, host, .{});
     defer machine.deinit();

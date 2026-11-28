@@ -51,7 +51,7 @@ test "exposed data preserves typed values immutable text snapshots and repeated 
             defer runtime.deinit();
             var host = runtime.host();
             var vtable = host.vtable.*;
-            if (!batched) vtable.typst_batch = null;
+            if (!batched) vtable.typstBatch = null;
             host.vtable = &vtable;
             var machine = try l.Machine.init(t.allocator, &program, host, .{});
             defer machine.deinit();
@@ -217,7 +217,7 @@ test "Typst read batches preserve earlier native errors before later length conv
         defer runtime.deinit();
         var host = runtime.host();
         var vtable = host.vtable.*;
-        if (!batched) vtable.typst_batch = null;
+        if (!batched) vtable.typstBatch = null;
         host.vtable = &vtable;
         var machine = try l.Machine.init(t.allocator, &program, host, .{});
         defer machine.deinit();

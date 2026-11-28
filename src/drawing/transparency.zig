@@ -40,7 +40,6 @@ const g = @import("geometry.zig");
 const Path = @import("path/Path.zig");
 const DisplayList = @import("DisplayList.zig");
 const style = @import("style.zig");
-const regions = @import("region/root.zig");
 const enclosure = @import("enclosure.zig");
 const color_patches = @import("color_patches.zig");
 const Workers = @import("workers");
@@ -51,7 +50,6 @@ const Allocator = std.mem.Allocator;
 const Color = style.Color;
 const Gradient = style.Gradient;
 const Real = enclosure.Real;
-const Enclosure = enclosure.Enclosure;
 const Rgba = enclosure.Rgba;
 
 pub const Options = struct {

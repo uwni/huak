@@ -155,7 +155,7 @@ test "constant propagation clears bindings at observable host calls" {
         var program = try compile(std.testing.allocator, "value:=2; print(\"change\"); result:=value+1", "constant-host-barrier.huak", .{ .optimize = optimize }, &diagnostic);
         defer program.deinit();
         var observer: Observer = .{};
-        var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &observer, .vtable = &.{ .call_builtin = Observer.call } }, .{});
+        var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &observer, .vtable = &.{ .callBuiltin = Observer.call } }, .{});
         defer machine.deinit();
         observer.machine = &machine;
         _ = try machine.execute(&.{});
@@ -213,7 +213,7 @@ test "constant propagation treats dynamic handle arithmetic as an implicit host 
         var program = try compile(std.testing.allocator, input, "constant-binary-barrier.huak", .{ .optimize = optimize }, &diagnostic);
         defer program.deinit();
         var observer: Observer = .{};
-        var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &observer, .vtable = &.{ .call_builtin = Observer.path, .binary = Observer.binary } }, .{});
+        var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &observer, .vtable = &.{ .callBuiltin = Observer.path, .binary = Observer.binary } }, .{});
         defer machine.deinit();
         observer.machine = &machine;
         _ = try machine.execute(&.{});

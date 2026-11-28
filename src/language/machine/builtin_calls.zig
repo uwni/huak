@@ -32,7 +32,7 @@ pub fn callBuiltin(self: *Machine, index_: u32, count: usize) Error!void {
         try self.push(try validation.coerceValidated(self, try templates.materializeValidated(self, value), signature.result));
         return;
     }
-    if (self.host.vtable.call_builtin == null) return self.fail("builtin '{s}' requires a host", .{signature.name});
+    if (self.host.vtable.callBuiltin == null) return self.fail("builtin '{s}' requires a host", .{signature.name});
     const value = self.host.callBuiltin(self.arena.allocator(), id, args, self) catch |err| return failures.nativeFailure(self, err);
     try validation.checkFiniteExternal(self, value);
     self.stack.items.len -= count;
@@ -112,7 +112,7 @@ test "aggregate VM optional builtin omissions remain distinct from explicit unit
     var program = try testProgram(&.{.{ .name = "script", .code = &code, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{ .{ .number = 0 }, .omitted }, &.{}, &.{});
     defer program.deinit();
     var probe: Probe = .{};
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .call_builtin = Probe.call } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .callBuiltin = Probe.call } }, .{});
     defer machine.deinit();
     _ = try machine.execute(&.{});
     try std.testing.expect(probe.seen);
@@ -149,7 +149,7 @@ test "host builtin claims fresh ownerless lists in place and checks leaves inlin
     var program = try testProgram(&.{.{ .name = "script", .code = &code, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{.{ .int = 0 }}, &.{"result"}, &.{.list});
     defer program.deinit();
     var probe: Probe = .{};
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .call_builtin = Probe.call } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .callBuiltin = Probe.call } }, .{});
     defer machine.deinit();
     _ = try machine.execute(&.{});
     const result = machine.getGlobal("result").?;
@@ -160,7 +160,7 @@ test "host builtin claims fresh ownerless lists in place and checks leaves inlin
     try std.testing.expectEqual(machine.identity, child.list.owned.owner.?);
 
     var bad_probe: Probe = .{ .poison = true };
-    var invalid = try Machine.init(std.testing.allocator, &program, .{ .ptr = &bad_probe, .vtable = &.{ .call_builtin = Probe.call } }, .{});
+    var invalid = try Machine.init(std.testing.allocator, &program, .{ .ptr = &bad_probe, .vtable = &.{ .callBuiltin = Probe.call } }, .{});
     defer invalid.deinit();
     try std.testing.expectError(error.RuntimeFailed, invalid.execute(&.{}));
     try std.testing.expect(std.mem.indexOf(u8, invalid.failure.?.text(), "non-finite") != null);

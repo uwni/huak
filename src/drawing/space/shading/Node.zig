@@ -2,7 +2,6 @@
 //! the script's field.
 const g = @import("../../geometry.zig");
 const space_shading = @import("../shading.zig");
-const Node = @This();
 const Shine = space_shading.Shine;
 const Vec3 = space_shading.Vec3;
 

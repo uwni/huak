@@ -63,7 +63,7 @@ pub const limits = struct {
 };
 
 fn internValue(allocator: Allocator, pool: *std.array_list.Managed(Value), map: *Intern, value: Value) Error!u32 {
-    const key = keyOf(value) orelse unreachable;
+    const key = keyOf(value).?;
     if (map.get(key)) |index| return index;
     const index = std.math.cast(u32, pool.items.len) orelse return error.BytecodeCapacity;
     // Reserve both allocations before changing the pool or its shared index.

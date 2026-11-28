@@ -8,6 +8,7 @@ pub const LabelPart = struct { value: []const u8, location: locations.Location }
 pub const Hint = struct {
     position: locations.Position,
     label: []const LabelPart,
+    // zlinter-disable-next-line field_naming - LSP JSON field name
     paddingLeft: bool = true,
 };
 

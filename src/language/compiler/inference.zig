@@ -8,7 +8,6 @@ const modules = @import("modules.zig");
 const calls = @import("calls.zig");
 const Compiler = @import("Compiler.zig");
 const Context = @import("Context.zig");
-const expressions = @import("expressions.zig");
 const ungroup = ast.ungroup;
 const CallTarget = modules.CallTarget;
 

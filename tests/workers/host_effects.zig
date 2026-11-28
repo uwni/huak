@@ -57,7 +57,7 @@ test "custom host callbacks retain their behavior when construction workers are 
     , true);
     defer program.deinit();
     try t.expect(program.task_regions.len > 0);
-    const Callback = std.meta.Child(@FieldType(l.Machine.Host.VTable, "call_builtin"));
+    const Callback = std.meta.Child(@FieldType(l.Machine.Host.VTable, "callBuiltin"));
     const BuiltinId = @FieldType(std.meta.ArgsTuple(std.meta.Child(Callback)), "2");
     const Wrapped = struct {
         var calls: std.atomic.Value(usize) = .init(0);
@@ -79,7 +79,7 @@ test "custom host callbacks retain their behavior when construction workers are 
         defer runtime.deinit();
         var host = runtime.host();
         var vtable = host.vtable.*;
-        vtable.call_builtin = Wrapped.call;
+        vtable.callBuiltin = Wrapped.call;
         host.vtable = &vtable;
         var machine = try l.Machine.init(t.allocator, &program, host, .{});
         defer machine.deinit();

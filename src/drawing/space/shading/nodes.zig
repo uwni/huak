@@ -1,5 +1,4 @@
 //! Lattice nodes asked for where a step needs them, and evaluated in one batch.
-const std = @import("std");
 const g = @import("../../geometry.zig");
 const space_shading = @import("../shading.zig");
 const Sheet = @import("Sheet.zig");

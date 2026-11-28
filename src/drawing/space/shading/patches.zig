@@ -9,7 +9,6 @@ const Node = @import("Node.zig");
 const Patch = space_shading.Patch;
 const Placed = Sheet.Placed;
 const Error = space_shading.Error;
-const Piece = Sheet.Piece;
 const Corner = Sheet.Corner;
 const ordered = lattice_nodes.ordered;
 const on_contour = Node.on_contour;

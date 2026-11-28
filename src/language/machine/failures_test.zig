@@ -43,7 +43,7 @@ test "native errors preserve the upstream diagnostic and source position" {
     const failure_span: Span = .{ .start = 42, .end = 55 };
     var program = try testProgram(&.{.{ .name = "script", .code = &.{ ins(.constant, 0), .{ .op = .call_builtin, .a = @backingInt(builtin.Id.print), .b = 1, .span = failure_span }, ins(.halt, 0) }, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{.{ .string = "x" }}, &.{}, &.{});
     defer program.deinit();
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .vtable = &.{ .call_builtin = FailingHost.call, .error_message = FailingHost.message } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .vtable = &.{ .callBuiltin = FailingHost.call, .errorMessage = FailingHost.message } }, .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
     try std.testing.expectEqual(failure_span, machine.failure.?.diagnostic.span);
@@ -93,7 +93,7 @@ test "panic is a host-independent failure with source and script call stack" {
     var program = try @import("../compiler.zig").compile(std.testing.allocator, script, "panic.huak", .{}, &diagnostic);
     defer program.deinit();
     var probe: HostProbe = .{};
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .call_builtin = HostProbe.call } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .callBuiltin = HostProbe.call } }, .{});
     defer machine.deinit();
     try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));
     try std.testing.expectEqual(@as(usize, 0), probe.calls);

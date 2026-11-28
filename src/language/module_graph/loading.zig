@@ -174,7 +174,7 @@ fn nativeSource(self: *ModuleGraph, namespace: Namespace) ![]const u8 {
         try text.appendSlice(self.syntax, "\n");
     }
     for (builtins.constantNames(namespace)) |name| {
-        const constant = (builtins.namespaceConstant(namespace, name) orelse unreachable).number;
+        const constant = builtins.namespaceConstant(namespace, name).?.number;
         const declaration = try std.fmt.allocPrint(self.syntax, "export {s}:={d}\n", .{ name, constant });
         defer self.syntax.free(declaration);
         try text.appendSlice(self.syntax, declaration);

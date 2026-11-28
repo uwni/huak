@@ -8,7 +8,7 @@ const typst_namespace = Parser.typst_namespace;
 /// A block's Typst code with the places where it reads `huak` members. The
 /// native parser finds them; Huak reads no Typst syntax itself.
 fn typstCode(self: *Parser, block: TypstBlock) anyerror!ast.Typst {
-    const provider = (self.options.source_parser catch unreachable) orelse unreachable;
+    const provider = (self.options.source_parser catch unreachable).?;
     // The provider's records are temporary. A block reads few names, so they
     // fit this buffer instead of staying behind in the syntax arena.
     var storage: [1024]u8 = undefined;

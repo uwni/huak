@@ -208,7 +208,7 @@ test "range operands are evaluated once before normalization in their existing o
     , "range-evaluation.huak", .{}, &diagnostic);
     defer program.deinit();
     var log: Log = .{};
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &log, .vtable = &.{ .call_builtin = Log.print } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &log, .vtable = &.{ .callBuiltin = Log.print } }, .{});
     defer machine.deinit();
     _ = try machine.execute(&.{});
     try std.testing.expectEqual(@as(usize, 3), log.count);

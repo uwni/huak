@@ -8,7 +8,6 @@ const patches_mod = @import("patches.zig");
 const patch_math = @import("../../patches.zig");
 const Patch = space_shading.Patch;
 const DepthPatch = patches_mod.DepthPatch;
-const g = @import("../../geometry.zig");
 const side_controls = patches_mod.side_controls;
 
 pub const max_subdiv_depth: u8 = 10;

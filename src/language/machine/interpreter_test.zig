@@ -172,7 +172,7 @@ test "dot calls evaluate the receiver once before arguments and use the builtin 
     , "dot-evaluation.huak", .{}, &diagnostic);
     defer program.deinit();
     var log: Log = .{};
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &log, .vtable = &.{ .call_builtin = Log.print } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &log, .vtable = &.{ .callBuiltin = Log.print } }, .{});
     defer machine.deinit();
     _ = try machine.execute(&.{});
     try std.testing.expectEqual(@as(i64, 234), machine.getGlobal("answer").?.int);

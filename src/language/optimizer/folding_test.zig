@@ -151,8 +151,8 @@ test "static branch pruning retains host effects only on reachable paths" {
     try std.testing.expect(result.len < code.len);
     var before: Log = .{};
     var after: Log = .{};
-    const original = try runTest(&code, pool.items, .{}, .{ .ptr = &before, .vtable = &.{ .call_builtin = Log.call } });
-    const optimized = try runTest(result, pool.items, .{}, .{ .ptr = &after, .vtable = &.{ .call_builtin = Log.call } });
+    const original = try runTest(&code, pool.items, .{}, .{ .ptr = &before, .vtable = &.{ .callBuiltin = Log.call } });
+    const optimized = try runTest(result, pool.items, .{}, .{ .ptr = &after, .vtable = &.{ .callBuiltin = Log.call } });
     try std.testing.expectEqual(@as(usize, 1), before.calls);
     try std.testing.expectEqual(before.calls, after.calls);
     try std.testing.expectEqualDeep(original.value, optimized.value);

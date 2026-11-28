@@ -80,7 +80,7 @@ fn moduleAllocationExercise(allocator: std.mem.Allocator) !void {
     try std.testing.expectEqual(@as(usize, 4), program.modules.len);
     var calls: usize = 0;
     for (0..2) |_| {
-        var machine = try @import("../Machine.zig").init(allocator, &program, .{ .ptr = &calls, .vtable = &.{ .call_builtin = ModuleTestSources.count } }, .{});
+        var machine = try @import("../Machine.zig").init(allocator, &program, .{ .ptr = &calls, .vtable = &.{ .callBuiltin = ModuleTestSources.count } }, .{});
         defer machine.deinit();
         _ = try machine.execute(&.{});
         try std.testing.expectEqual(@as(i64, 6), machine.getGlobal("result").?.int);

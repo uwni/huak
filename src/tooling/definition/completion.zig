@@ -17,7 +17,13 @@ const recordAt = records.recordAt;
 const builtinText = hover.builtinText;
 const functionText = hover.functionText;
 
-pub const Completion = struct { label: []const u8, kind: u8, detail: []const u8, insertText: ?[]const u8 = null };
+pub const Completion = struct {
+    label: []const u8,
+    kind: u8,
+    detail: []const u8,
+    // zlinter-disable-next-line field_naming - LSP JSON field name
+    insertText: ?[]const u8 = null,
+};
 
 fn appendCompletion(arena: std.mem.Allocator, items: *std.ArrayList(Completion), item: Completion) !void {
     for (items.items) |previous| if (std.mem.eql(u8, previous.label, item.label)) return;

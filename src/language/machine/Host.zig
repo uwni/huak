@@ -25,7 +25,7 @@ tasks: ?Tasks = null,
 /// Optional entries describe host capabilities. Callers check availability
 /// before invoking a required operation; the context and table are borrowed.
 pub inline fn callBuiltin(self: Host, allocator: std.mem.Allocator, id: builtin.Id, operands: []const Value, machine: ?*Machine) anyerror!Value {
-    return self.vtable.call_builtin.?(self.ptr, allocator, id, operands, machine);
+    return self.vtable.callBuiltin.?(self.ptr, allocator, id, operands, machine);
 }
 pub inline fn field(self: Host, allocator: std.mem.Allocator, value: Value, name: []const u8) anyerror!Value {
     return self.vtable.field.?(self.ptr, allocator, value, name);
@@ -37,29 +37,29 @@ pub inline fn typeset(self: Host, allocator: std.mem.Allocator, request: TypstRe
     return self.vtable.typst.?(self.ptr, allocator, request);
 }
 pub inline fn typesetBatch(self: Host, allocator: std.mem.Allocator, requests: []const TypstRequest, values: []Value, diagnostic: *TypstBatchDiagnostic) anyerror!void {
-    return self.vtable.typst_batch.?(self.ptr, allocator, requests, values, diagnostic);
+    return self.vtable.typstBatch.?(self.ptr, allocator, requests, values, diagnostic);
 }
 pub inline fn typstModule(self: Host, allocator: std.mem.Allocator, module: TypstModule) anyerror!Value {
-    return self.vtable.typst_module.?(self.ptr, allocator, module);
+    return self.vtable.typstModule.?(self.ptr, allocator, module);
 }
 pub fn errorMessage(self: Host) []const u8 {
-    return if (self.vtable.error_message) |message| message(self.ptr) else "";
+    return if (self.vtable.errorMessage) |message| message(self.ptr) else "";
 }
 
 pub const VTable = struct {
     /// Arguments are borrowed until the first reentrant call. A host that
     /// invokes a script function must copy the values it still needs first.
-    call_builtin: ?*const fn (?*anyopaque, std.mem.Allocator, builtin.Id, []const Value, ?*Machine) anyerror!Value = null,
+    callBuiltin: ?*const fn (?*anyopaque, std.mem.Allocator, builtin.Id, []const Value, ?*Machine) anyerror!Value = null,
     field: ?*const fn (?*anyopaque, std.mem.Allocator, Value, []const u8) anyerror!Value = null,
     binary: ?*const fn (?*anyopaque, std.mem.Allocator, bytecode.Op, Value, Value) anyerror!Value = null,
     typst: ?*const fn (?*anyopaque, std.mem.Allocator, TypstRequest) anyerror!Value = null,
     /// Success initializes every output. Errors initialize only the diagnostic's
     /// completed prefix. Neither descriptor slice may be retained by the host.
-    typst_batch: ?*const fn (?*anyopaque, std.mem.Allocator, []const TypstRequest, []Value, *TypstBatchDiagnostic) anyerror!void = null,
+    typstBatch: ?*const fn (?*anyopaque, std.mem.Allocator, []const TypstRequest, []Value, *TypstBatchDiagnostic) anyerror!void = null,
     /// Makes a typ.module from the content of a Typst file, snapshotting
     /// the bindings its code reads. Inputs are borrowed.
-    typst_module: ?*const fn (?*anyopaque, std.mem.Allocator, TypstModule) anyerror!Value = null,
-    error_message: ?*const fn (?*anyopaque) []const u8 = null,
+    typstModule: ?*const fn (?*anyopaque, std.mem.Allocator, TypstModule) anyerror!Value = null,
+    errorMessage: ?*const fn (?*anyopaque) []const u8 = null,
 };
 
 /// Scheduling has its own implementation state and lifetime.

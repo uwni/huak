@@ -153,7 +153,7 @@ test "aggregate VM every host return path fully checks nested values despite a m
         var program = try testProgram(&.{.{ .name = "script", .code = case.code, .parameters = &.{}, .result = .unit, .local_types = &.{} }}, &.{ .{ .handle = .{ .kind = .variable, .index = 0 } }, .{ .string = "sample" } }, &.{"text"}, &.{.text});
         defer program.deinit();
         var probe: Probe = .{ .owner = undefined };
-        var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .call_builtin = Probe.call, .field = Probe.field, .binary = Probe.binary, .typst = Probe.typst, .typst_batch = if (case.batch) Probe.batch else null } }, .{});
+        var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &probe, .vtable = &.{ .callBuiltin = Probe.call, .field = Probe.field, .binary = Probe.binary, .typst = Probe.typst, .typstBatch = if (case.batch) Probe.batch else null } }, .{});
         defer machine.deinit();
         probe.owner = machine.identity;
         try std.testing.expectError(error.RuntimeFailed, machine.execute(&.{}));

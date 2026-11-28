@@ -53,12 +53,12 @@ fn tableName(comptime namespace: ?Namespace) [:0]const u8 {
 }
 
 fn Domain(comptime namespace: ?Namespace) type {
-    var found: ?type = null;
+    var Found: ?type = null;
     inline for (domains) |domain| if (@hasDecl(domain, tableName(namespace))) {
-        if (found != null) @compileError("two builtin tables named " ++ tableName(namespace));
-        found = domain;
+        if (Found != null) @compileError("two builtin tables named " ++ tableName(namespace));
+        Found = domain;
     };
-    return found orelse @compileError("no builtin table named " ++ tableName(namespace));
+    return Found orelse @compileError("no builtin table named " ++ tableName(namespace));
 }
 
 fn table(comptime namespace: ?Namespace) @TypeOf(@field(Domain(namespace), tableName(namespace))) {

@@ -203,10 +203,10 @@ pub fn deinit(self: *Runtime) void {
     self.* = undefined;
 }
 
-const host_vtable: Machine.Host.VTable = .{ .call_builtin = call, .field = field, .binary = binary, .typst = typeset, .typst_batch = typesetBatch, .typst_module = makeTypstModule, .error_message = diagnostic };
+const host_vtable: Machine.Host.VTable = .{ .callBuiltin = call, .field = field, .binary = binary, .typst = typeset, .typstBatch = typesetBatch, .typstModule = makeTypstModule, .errorMessage = diagnostic };
 const single_host_vtable = blk: {
     var table = host_vtable;
-    table.typst_batch = null;
+    table.typstBatch = null;
     break :blk table;
 };
 

@@ -75,7 +75,7 @@ test "aggregate VM argument binding reorders only already evaluated operands" {
     defer program.deinit();
     program.argument_bindings = &.{.{ .slots = &.{ 1, 0 }, .parameter_count = 2 }};
     var log: Log = .{};
-    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &log, .vtable = &.{ .call_builtin = Log.call } }, .{});
+    var machine = try Machine.init(std.testing.allocator, &program, .{ .ptr = &log, .vtable = &.{ .callBuiltin = Log.call } }, .{});
     defer machine.deinit();
     _ = try machine.execute(&.{});
     try std.testing.expectEqualSlices(i64, &.{ 11, 22 }, &log.values);

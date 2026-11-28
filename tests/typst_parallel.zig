@@ -22,7 +22,7 @@ fn compile(library: *typst.Library, source: []const u8, optimize: bool, resolver
 fn host(runtime: *language.Runtime, batched: bool, table: *language.Machine.Host.VTable) language.Machine.Host {
     var result = runtime.host();
     table.* = result.vtable.*;
-    if (!batched) table.typst_batch = null;
+    if (!batched) table.typstBatch = null;
     result.vtable = table;
     return result;
 }

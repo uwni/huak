@@ -119,7 +119,7 @@ test "constant propagation respects host effects through direct calls user funct
         var program = try l.compiler.compile(t.allocator, source, "/native/main.huak", .{ .import_resolver = .{ .ptr = &resolver, .vtable = &.{ .resolve = ModuleResolver.resolve } }, .optimize = optimize }, &diagnostic);
         defer program.deinit();
         var mutation: Mutation = .{};
-        var machine = try l.Machine.init(t.allocator, &program, .{ .ptr = &mutation, .vtable = &.{ .call_builtin = Mutation.call } }, .{});
+        var machine = try l.Machine.init(t.allocator, &program, .{ .ptr = &mutation, .vtable = &.{ .callBuiltin = Mutation.call } }, .{});
         defer machine.deinit();
         mutation.machine = &machine;
         _ = try machine.execute(&.{});

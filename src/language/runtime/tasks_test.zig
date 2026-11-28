@@ -26,8 +26,8 @@ test "task snapshots isolate metadata and prohibit writes through borrowed owner
     defer child.deinit();
     try std.testing.expectEqual(@as(?std.Io, null), child.backends.workers.io);
     try std.testing.expect(parent.backends.workers.io != null);
-    try std.testing.expect(child.host().vtable.typst_batch == null);
-    try std.testing.expect(parent.host().vtable.typst_batch != null);
+    try std.testing.expect(child.host().vtable.typstBatch == null);
+    try std.testing.expect(parent.host().vtable.typstBatch != null);
     try std.testing.expect(child.path_values.items.ptr != parent.path_values.items.ptr);
     try std.testing.expectEqual(parent.path_values.items[0].segments.items.ptr, child.path_values.items[0].segments.items.ptr);
     try std.testing.expectEqual(parent.scene_values.items[0], child.scene_values.items[0]);
